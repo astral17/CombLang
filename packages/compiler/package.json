@@ -1,0 +1,19 @@
+{
+  "name": "@comblang/compiler",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./blueprint-json": "./src/blueprint-json.ts",
+    "./color-solver": "./src/color-solver.ts",
+    "./direct-plan": "./src/direct-plan.ts",
+    "./elaboration-transform": "./src/elaboration-transform.ts",
+    "./ir": "./src/ir.ts"
+  },
+  "dependencies": {
+    "@comblang/factorio": "0.0.0",
+    "@comblang/language": "0.0.0",
+    "@comblang/shared": "0.0.0"
+  }
+}

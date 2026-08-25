@@ -1,0 +1,10 @@
+{
+  "name": "@comblang/renderer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@comblang/shared": "0.0.0"
+  }
+}

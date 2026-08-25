@@ -1,0 +1,11 @@
+{
+  "name": "@comblang/language",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@comblang/shared": "0.0.0",
+    "typescript": "^5.9.2"
+  }
+}

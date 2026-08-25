@@ -1,0 +1,26 @@
+{
+  "name": "@comblang/web",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite"
+  },
+  "dependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.11.0",
+    "@codemirror/lang-javascript": "^6.2.5",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/lint": "^6.9.7",
+    "@codemirror/search": "^6.7.1",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.9",
+    "@comblang/compiler": "0.0.0",
+    "@comblang/factorio": "0.0.0",
+    "@comblang/language": "0.0.0",
+    "@comblang/runtime": "0.0.0",
+    "@comblang/shared": "0.0.0",
+    "@lezer/highlight": "^1.2.3"
+  }
+}

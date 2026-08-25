@@ -1,0 +1,229 @@
+import {
+  autocompletion,
+  closeBrackets,
+  closeBracketsKeymap,
+  completionKeymap,
+  snippetCompletion,
+  type Completion,
+  type CompletionContext,
+  type CompletionResult,
+} from '@codemirror/autocomplete';
+import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
+import { javascript, typescriptLanguage } from '@codemirror/lang-javascript';
+import {
+  bracketMatching,
+  foldGutter,
+  foldKeymap,
+  HighlightStyle,
+  indentOnInput,
+  syntaxHighlighting,
+} from '@codemirror/language';
+import {
+  lintGutter,
+  lintKeymap,
+  setDiagnostics,
+  type Diagnostic as EditorDiagnostic,
+} from '@codemirror/lint';
+import { highlightSelectionMatches, searchKeymap } from '@codemirror/search';
+import { EditorState } from '@codemirror/state';
+import {
+  drawSelection,
+  dropCursor,
+  EditorView,
+  highlightActiveLine,
+  highlightActiveLineGutter,
+  keymap,
+  lineNumbers,
+} from '@codemirror/view';
+import type { Diagnostic } from '@comblang/shared';
+import { tags } from '@lezer/highlight';
+
+const combLangHighlightStyle = HighlightStyle.define([
+  { tag: tags.keyword, color: '#c59770' },
+  {
+    tag: [tags.definition(tags.variableName), tags.definition(tags.propertyName)],
+    color: '#d2c39a',
+  },
+  { tag: tags.function(tags.variableName), color: '#a7bea5' },
+  { tag: [tags.typeName, tags.className], color: '#86aaa0' },
+  { tag: [tags.variableName, tags.propertyName], color: '#c8d0ca' },
+  { tag: [tags.string, tags.character], color: '#c58e7a' },
+  { tag: [tags.number, tags.bool, tags.null, tags.atom], color: '#b9aa7d' },
+  { tag: [tags.operator, tags.punctuation], color: '#aeb9b2' },
+  { tag: [tags.comment, tags.docComment], color: '#687a70', fontStyle: 'italic' },
+  { tag: tags.invalid, color: '#df857c', textDecoration: 'underline' },
+]);
+
+const dslCompletions: readonly Completion[] = [
+  snippetCompletion('new Network<${R}>()', {
+    label: 'Network',
+    detail: 'create a circuit network',
+    type: 'class',
+  }),
+  snippetCompletion('Signal("${virtual}", "${signal-A}")', {
+    label: 'Signal (typed)',
+    detail: 'typed Factorio signal identity',
+    type: 'function',
+  }),
+  snippetCompletion('Signal("${iron-plate}")', {
+    label: 'Signal (item)',
+    detail: 'Factorio item signal with default type',
+    type: 'function',
+  }),
+  snippetCompletion('CC(${1} * ${SIGNAL_A})', {
+    label: 'CC',
+    detail: 'constant combinator producer',
+    type: 'function',
+  }),
+  snippetCompletion('IF(${condition}, ${output})', {
+    label: 'IF',
+    detail: 'decider producer',
+    type: 'function',
+  }),
+  snippetCompletion('when(${condition}).then(${output})', {
+    label: 'when',
+    detail: 'fluent decider producer',
+    type: 'function',
+  }),
+  snippetCompletion('to(${first}, ${second})', {
+    label: 'to',
+    detail: 'multi-destination attachment',
+    type: 'function',
+  }),
+  { label: 'Each', detail: 'each signal wildcard', type: 'constant' },
+  { label: 'Anything', detail: 'anything wildcard', type: 'constant' },
+  { label: 'Any', detail: 'alias of Anything', type: 'constant' },
+  { label: 'Everything', detail: 'everything wildcard', type: 'constant' },
+  { label: 'All', detail: 'alias of Everything', type: 'constant' },
+];
+
+function dslCompletionSource(context: CompletionContext): CompletionResult | null {
+  const word = context.matchBefore(/[\w$]*$/);
+  if (word === null || (word.from === word.to && !context.explicit)) return null;
+  return { from: word.from, options: dslCompletions, validFor: /^[\w$]*$/ };
+}
+
+export function toEditorDiagnostics(
+  sourceLength: number,
+  diagnostics: readonly Diagnostic[],
+): readonly EditorDiagnostic[] {
+  return diagnostics.map((diagnostic) => {
+    const start = diagnostic.span?.start ?? 0;
+    const end = diagnostic.span?.end ?? start;
+    const from = Math.min(sourceLength, Math.max(0, start));
+    const to = Math.min(sourceLength, Math.max(from, end));
+    return {
+      from,
+      to,
+      severity: diagnostic.severity,
+      message: `${diagnostic.code}: ${diagnostic.message}`,
+    };
+  });
+}
+
+export interface SourceEditor {
+  readonly kind: SourceEditorKind;
+  getValue(): string;
+  setDiagnostics(diagnostics: readonly Diagnostic[]): void;
+  destroy(): void;
+}
+
+export type SourceEditorKind = 'codemirror' | 'native';
+export type SourceEditorMode = SourceEditorKind | 'auto';
+
+export function chooseSourceEditorKind(
+  mode: SourceEditorMode,
+  narrowCoarsePointer: boolean,
+): SourceEditorKind {
+  return mode === 'auto' ? (narrowCoarsePointer ? 'native' : 'codemirror') : mode;
+}
+
+export function createSourceEditor(
+  parent: HTMLElement,
+  initialValue: string,
+  onChange: () => void,
+  mode: SourceEditorMode = 'auto',
+): SourceEditor {
+  const kind = chooseSourceEditorKind(
+    mode,
+    window.matchMedia('(max-width: 850px) and (pointer: coarse)').matches,
+  );
+  if (kind === 'native') {
+    const textarea = document.createElement('textarea');
+    textarea.className = 'native-source-editor';
+    textarea.value = initialValue;
+    textarea.setAttribute('aria-label', 'CombLang source editor, main.factorio.ts');
+    textarea.autocapitalize = 'off';
+    textarea.autocomplete = 'off';
+    textarea.setAttribute('autocorrect', 'off');
+    textarea.spellcheck = false;
+    textarea.wrap = 'off';
+    textarea.addEventListener('input', onChange);
+    parent.append(textarea);
+    return {
+      kind,
+      getValue: () => textarea.value,
+      setDiagnostics: (diagnostics) => {
+        const errors = diagnostics.filter(({ severity }) => severity === 'error').length;
+        textarea.setAttribute('aria-invalid', String(errors > 0));
+        textarea.title = diagnostics.map(({ code, message }) => `${code}: ${message}`).join('\n');
+      },
+      destroy: () => textarea.remove(),
+    };
+  }
+
+  const state = EditorState.create({
+    doc: initialValue,
+    extensions: [
+      lineNumbers(),
+      history(),
+      foldGutter(),
+      drawSelection(),
+      dropCursor(),
+      EditorState.allowMultipleSelections.of(true),
+      indentOnInput(),
+      syntaxHighlighting(combLangHighlightStyle),
+      bracketMatching(),
+      closeBrackets(),
+      autocompletion(),
+      lintGutter(),
+      highlightActiveLine(),
+      highlightActiveLineGutter(),
+      highlightSelectionMatches(),
+      EditorView.lineWrapping,
+      javascript({ typescript: true }),
+      typescriptLanguage.data.of({ autocomplete: dslCompletionSource }),
+      EditorView.contentAttributes.of({
+        'aria-label': 'CombLang source editor, main.factorio.ts',
+        autocapitalize: 'off',
+        autocomplete: 'off',
+        autocorrect: 'off',
+        spellcheck: 'false',
+      }),
+      EditorView.updateListener.of((update) => {
+        if (update.docChanged) onChange();
+      }),
+      keymap.of([
+        ...closeBracketsKeymap,
+        ...defaultKeymap,
+        ...searchKeymap,
+        ...historyKeymap,
+        ...foldKeymap,
+        ...completionKeymap,
+        ...lintKeymap,
+        indentWithTab,
+      ]),
+    ],
+  });
+  const view = new EditorView({ state, parent });
+  return {
+    kind,
+    getValue: () => view.state.doc.toString(),
+    setDiagnostics: (diagnostics) => {
+      view.dispatch(
+        setDiagnostics(view.state, toEditorDiagnostics(view.state.doc.length, diagnostics)),
+      );
+    },
+    destroy: () => view.destroy(),
+  };
+}

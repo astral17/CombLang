@@ -1,0 +1,13 @@
+{
+  "name": "@comblang/runtime",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@comblang/compiler": "0.0.0",
+    "@comblang/factorio": "0.0.0",
+    "@comblang/simulator": "0.0.0",
+    "@comblang/shared": "0.0.0"
+  }
+}

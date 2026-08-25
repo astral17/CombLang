@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="CombLang browser-local compiler workbench for Factorio 2.1 circuit networks"
+    />
+    <title>CombLang circuit compiler workbench</title>
+  </head>
+  <body>
+    <main>
+      <section class="proof" aria-labelledby="proof-title">
+        <div class="proof-copy">
+          <p class="section-kicker">Current source · live circuit proof</p>
+          <h2 id="proof-title">Compiling the editor source…</h2>
+          <p id="proof-description">
+            A valid direct plan from the editor is elaborated and simulated here.
+          </p>
+          <dl class="proof-stats">
+            <div>
+              <dt id="proof-combinators">—</dt>
+              <dd>combinators</dd>
+            </div>
+            <div>
+              <dt id="proof-attachments">—</dt>
+              <dd>attachments</dd>
+            </div>
+            <div>
+              <dt id="proof-stages">—</dt>
+              <dd>tick stages</dd>
+            </div>
+            <div>
+              <dt id="proof-folds">—</dt>
+              <dd>folded ops</dd>
+            </div>
+          </dl>
+        </div>
+        <div class="waveform-card">
+          <div class="waveform-head"><strong>Waveform</strong><span>virtual / signal-A</span></div>
+          <div id="instance-paths" class="instance-paths" aria-label="Lowered call paths"></div>
+          <div id="waveform" class="waveform" aria-label="Current source waveform"></div>
+          <div
+            id="network-colors"
+            class="network-colors"
+            aria-label="Resolved network colors"
+          ></div>
+        </div>
+      </section>
+
+      <section class="workbench" aria-label="Compiler workbench">
+        <div class="pane">
+          <div class="pane-header">
+            <span>Source</span>
+            <div class="editor-meta">
+              <small id="editor-label">main.factorio.ts · CodeMirror 6</small>
+              <button id="editor-mode" type="button">Native editor</button>
+            </div>
+          </div>
+          <div id="source-editor" class="source-editor"></div>
+        </div>
+        <div class="pane result-pane">
+          <div class="result-header">
+            <h2>Generated JavaScript</h2>
+            <output id="status"></output>
+          </div>
+          <pre id="result" aria-live="polite"></pre>
+        </div>
+      </section>
+
+      <section class="blueprint-panel" aria-labelledby="blueprint-title">
+        <div class="result-header">
+          <div>
+            <p class="section-kicker">Current source · uncompressed export</p>
+            <h2 id="blueprint-title">Factorio blueprint JSON</h2>
+          </div>
+          <div class="blueprint-actions">
+            <output id="blueprint-status" data-state="pending">Waiting for compiler…</output>
+            <button id="copy-blueprint" type="button" disabled>Copy blueprint</button>
+          </div>
+        </div>
+        <pre id="blueprint-result" aria-live="polite">{}</pre>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

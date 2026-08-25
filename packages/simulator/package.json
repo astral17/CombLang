@@ -1,0 +1,11 @@
+{
+  "name": "@comblang/simulator",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "dependencies": {
+    "@comblang/factorio": "0.0.0",
+    "@comblang/shared": "0.0.0"
+  }
+}

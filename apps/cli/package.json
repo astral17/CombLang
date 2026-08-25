@@ -1,0 +1,15 @@
+{
+  "name": "@comblang/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build --config vite.config.ts"
+  },
+  "dependencies": {
+    "@comblang/compiler": "0.0.0",
+    "@comblang/language": "0.0.0",
+    "@comblang/runtime": "0.0.0",
+    "@comblang/shared": "0.0.0"
+  }
+}
