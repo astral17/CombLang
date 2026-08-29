@@ -2,7 +2,7 @@
 
 CombLang is an early implementation of a TypeScript-shaped structural HDL for Factorio 2.1 circuit networks. The checked-in design and implementation notes live in [`docs/architecture.md`](docs/architecture.md).
 
-The current repository implements the Phase 3 source compiler grown from the original Phase 0 skeleton:
+The current repository implements the Phase 3 source compiler and the first executable Phase 4 ownership slice grown from the original Phase 0 skeleton:
 
 - one parser API shared by Node and the browser;
 - stable source file IDs and half-open source spans;
@@ -15,6 +15,7 @@ The current repository implements the Phase 3 source compiler grown from the ori
 - arithmetic and decider combinator evaluation, including wildcard and one-tick device adapters;
 - a direct elaboration runtime that builds EG/NCIR, solves red/green constraints, and materializes a synchronous simulation;
 - package boundaries for compiler, runtime, layout, and renderer.
+- explicit zero-tick `destination.take(source)` Network union with runtime move tracking and EG/NCIR identity collapse.
 
 ## Roadmap
 
@@ -27,7 +28,7 @@ The current repository implements the Phase 3 source compiler grown from the ori
   - [ ] Track ownership, borrows, aliases, and moved state through lexical scopes, function calls, returns, destructuring, arrays, objects, and executed control flow.
   - [ ] Enforce the operation matrix: read-only borrows may be read, mutable borrows may receive producer attachments without being consumed, and only owned/moved values may participate in consuming transfer.
   - [ ] Add source-aware diagnostics for illegal copies, writes through `Readonly`, invalid borrow escapes, double moves, and use after move, with runtime checks for cases the semantic pass cannot prove.
-  - [ ] Choose and implement explicit zero-tick consuming network transfer; `a.take(b)` is the current syntax candidate, while `a += b` and implicit Network copying remain invalid.
+  - [x] Freeze and implement explicit zero-tick consuming network transfer as `a.take(b)`; `a += b` and implicit Network copying remain invalid.
   - [ ] Implement `pair(a, b)` as an immutable two-network input view, including `pair(a, b)[SIGNAL]`, wildcard selections, summed red/green reads, and opposite-color constraints.
   - [ ] Reject `pair(...)` as an attachment destination or ownership carrier; keep producer output fan-out expressed through `.to(...)`, `to(...) +=`, or contextual destructuring.
   - [ ] Unify single- and multi-destination attachment validation, output-signal binding, connector cardinality, color constraints, and source provenance across all supported producer forms.

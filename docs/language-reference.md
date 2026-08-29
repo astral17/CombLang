@@ -167,7 +167,25 @@ to(first, second, RESULT) += left[A] + right[B];
 (left + right).to(first, second, RESULT);
 ```
 
-A single fluent destination may use `Network[SIGNAL]`. Fan-out keeps destinations as plain Networks and passes the common output Signal as the final argument. `to(first, second)[SIGNAL]` and `.to(first[SIGNAL], second[SIGNAL])` are deliberately invalid because element access denotes one selected Network rather than a writable destination pair. The output binding adds no combinator. Two destinations share one physical output connector and therefore receive opposite wire colors. The right side of `Network += value` must be a combinator producer. Constants and `Network += Network` are deliberately rejected rather than invoking JavaScript object coercion; future ownership-aware transfer syntax will be explicit.
+A single fluent destination may use `Network[SIGNAL]`. Fan-out keeps destinations as plain Networks and passes the common output Signal as the final argument. `to(first, second)[SIGNAL]` and `.to(first[SIGNAL], second[SIGNAL])` are deliberately invalid because element access denotes one selected Network rather than a writable destination pair. The output binding adds no combinator. Two destinations share one physical output connector and therefore receive opposite wire colors. The right side of `Network += value` must be a combinator producer. Constants and `Network += Network` are deliberately rejected rather than invoking JavaScript object coercion.
+
+## Explicit Network transfer
+
+`destination.take(source)` physically unifies two logical Networks without adding a combinator or a tick:
+
+```ts
+const source: Network = input + 1;
+const destination = new Network();
+
+destination.take(source);
+const output: Network = destination * 2;
+```
+
+`destination` survives as the owner of the unified Network. `source` is consumed, and every later executed attempt to select it, read it in an expression, attach to it, or move it again reports `RT2012`. Runtime identity is shared by ordinary JavaScript aliases and containers, so an alias such as `const aliases = [source]` cannot bypass the check. The semantic pass validates only definite method-shape errors and leaves dynamic receiver/argument classification to execution.
+
+The direct plan retains the ordered transfer and its source/instance provenance. Before EG construction, lowering maps all earlier producer references to the surviving runtime handle; EG and NCIR therefore contain one physical Network for the union. Contradictory fixed colors such as `Network<R>` taking `Network<G>` report `RT2014`. Taking itself reports `RT2013`. An ordinary non-Network object may still define its own JavaScript `.take(...)` method.
+
+This first Phase 4 slice freezes the consuming-transfer spelling and runtime moved state. General ownership-copy rules, `Readonly`/`Ref`/`Move` capability enforcement, moves into and out of containers, and `pair(a, b)` remain planned Phase 4 work.
 
 Array or flat object destructuring provides the contextual fan-out form for a newly created producer:
 

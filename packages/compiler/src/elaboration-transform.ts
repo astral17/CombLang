@@ -506,6 +506,13 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
             spanLiteral(factory, node),
           ]);
         }
+        if (method === 'take') {
+          return dslCall(factory, 'take', [
+            ts.visitNode(receiver, visit) as ts.Expression,
+            ...node.arguments.map((argument) => ts.visitNode(argument, visit) as ts.Expression),
+            spanLiteral(factory, node),
+          ]);
+        }
         if (method === 'as' && node.arguments.length === 1) {
           return dslCall(factory, 'bindOutput', [
             ts.visitNode(receiver, visit) as ts.Expression,

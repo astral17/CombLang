@@ -48,4 +48,19 @@ if (false) {
       '3:3 - error CL1034: Network += requires a combinator producer',
     );
   });
+
+  test('preserves structured ownership diagnostics from executed aliases', async () => {
+    const path = await sourceFile(`const destination = new Network();
+const source = new Network();
+const aliases = [source];
+destination.take(source);
+const output: Network = aliases[0] + 1;`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path])).toBe(1);
+    const result = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: 'RT2012', severity: 'error', related: expect.any(Array) }),
+    ]);
+  });
 });

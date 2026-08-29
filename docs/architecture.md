@@ -1,6 +1,6 @@
 # Implementation boundaries
 
-This repository grew from the Phase 0 skeleton into the completed Phase 3 source compiler. Major folders are workspace packages, while finer-grained architecture folders (`language/parser`, `compiler/ir`, and so on) remain source modules inside those packages until scale justifies independent publishing.
+This repository grew from the Phase 0 skeleton into the completed Phase 3 source compiler and the first Phase 4 ownership slice. Major folders are workspace packages, while finer-grained architecture folders (`language/parser`, `compiler/ir`, and so on) remain source modules inside those packages until scale justifies independent publishing.
 
 Allowed dependency direction:
 
@@ -64,7 +64,7 @@ The same explicit selections are available as copy-count outputs. `Anything(netw
 
 `Any` and `All` are source aliases for `Anything` and `Everything`. Element access accepts the corresponding `ANY` and `ALL` tokens. All spellings normalize through one name resolver before condition or output lowering, so aliases never survive as distinct IR or runtime concepts.
 
-The first existing-destination source form is `output += Function(input)`. The compiler lowers the supported function body directly into the already declared output Network, so attachment itself remains zero-tick. It never interprets `Network += Network` as a merge; that form receives a dedicated diagnostic and will remain reserved for explicit ownership-aware merge syntax.
+The first existing-destination source form is `output += Function(input)`. The compiler lowers the supported function body directly into the already declared output Network, so attachment itself remains zero-tick. It never interprets `Network += Network` as a merge; that form receives a dedicated diagnostic. Explicit zero-tick physical union is spelled `destination.take(source)` and consumes the source Network.
 
 `Function(input).to(first, second)` is the first source-level topology form that makes color inference observable. Both attachments share one physical producer output, remain separate logical Networks, and therefore receive a `different` color constraint. The runtime either assigns one red and one green deterministically or reports `RT2010` when fixed colors make the pair impossible.
 

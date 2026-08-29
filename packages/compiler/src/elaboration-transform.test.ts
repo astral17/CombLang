@@ -115,4 +115,15 @@ getValues()[0] += 4;`,
     expect(program.code.match(/getState\(\)/g)).toHaveLength(1);
     expect(program.code.match(/getValues\(\)/g)).toHaveLength(1);
   });
+
+  test('routes one-argument .take calls through ownership-aware runtime dispatch', () => {
+    const source = parseFile({
+      path: 'take.factorio.ts',
+      text: `const destination = new Network();
+const source = new Network();
+destination.take(source);`,
+    });
+
+    expect(transformElaborationModule(source).code).toContain('__dsl.take(destination, source');
+  });
 });

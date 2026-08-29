@@ -42,10 +42,18 @@ worker.addEventListener('message', (event: MessageEvent<CompilerWorkerRequest>) 
       compilerDiagnostics = [
         ...semanticDiagnostics,
         {
-          code: error instanceof ElaborationOperationLimitError ? 'EX1003' : 'EX1001',
+          code:
+            error instanceof ElaborationOperationLimitError
+              ? 'EX1003'
+              : error instanceof ElaborationExecutionError
+                ? error.code
+                : 'EX1001',
           severity: 'error',
           message: error instanceof Error ? error.message : 'Elaboration execution failed.',
           ...(error instanceof ElaborationExecutionError ? { span: error.span } : {}),
+          ...(error instanceof ElaborationExecutionError && error.related !== undefined
+            ? { related: error.related }
+            : {}),
         },
       ];
     }

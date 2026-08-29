@@ -573,6 +573,9 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
           );
         }
       }
+      if (method === 'take' && isNetworkExpression(receiver) && node.arguments.length !== 1) {
+        report('CL1037', '.take(source) requires exactly one source Network.', node);
+      }
     }
     node.forEachChild(visit);
   };

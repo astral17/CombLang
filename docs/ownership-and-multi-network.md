@@ -1,6 +1,6 @@
 # Phase 4: ownership and multi-network design
 
-This document defines the intended semantic boundary for Phase 4. It is a design document, not a claim that the syntax below is already implemented. The [current language reference](language-reference.md) remains authoritative for executable CombLang source.
+This document defines the intended semantic boundary for Phase 4. The first executable slice, `destination.take(source)`, is now frozen and implemented; other syntax below remains design material unless the [current language reference](language-reference.md) says otherwise.
 
 Phase 4 makes physical circuit topology explicit in the type and runtime models. A `Network` is an affine handle to one logical wire network: it may be read many times, but ownership cannot be silently copied or consumed twice. The phase also adds an immutable view over the two wire colors without turning that view into another writable network.
 
@@ -89,15 +89,15 @@ Producer destructuring is not a Network copy. Forms such as `let [a, b] = input 
 
 CombLang needs an operation that physically unifies two logical Networks without adding a combinator or a tick. The source Network is consumed because both names would otherwise pretend to identify independent topology after the union.
 
-The current preferred candidate is:
+The accepted syntax is:
 
 ```ts
 destination.take(source);
 ```
 
-After the call, `destination` owns the unified Network and `source` is moved. The method name itself should be sufficient to communicate consumption; the older `destination.merge(move(source))` draft is intentionally not the documented target.
+After the call, `destination` owns the unified Network and `source` is moved. The transformed runtime tracks the actual handle through aliases and containers, the direct plan records an ordered transfer, and EG/NCIR lowering collapses both identities without adding hardware or a tick. The method name itself communicates consumption; the older `destination.merge(move(source))` draft is intentionally not the documented target.
 
-The exact spelling is still open, so Phase 4 begins by testing it against function parameters, array/object members, fluent readability, and diagnostics. These forms remain invalid regardless of the final choice:
+These forms remain invalid:
 
 ```ts
 destination += source; // Network is not a Producer
@@ -169,7 +169,6 @@ Phase 4 is complete when each capability transition and `pair` form has semantic
 
 - final public names for `Ref` and `Move`;
 - whether bare `Network` parameters are forbidden or mean owned transfer;
-- final consuming method name, with `take` currently preferred;
 - whether a public `Producer` annotation is useful and how its one-physical-object identity is exposed;
 - whether attachment through `+=` is restricted to `let` Network bindings;
 - explicit syntax for moving values into and out of array/object slots;

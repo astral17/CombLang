@@ -267,4 +267,17 @@ output += holder.dynamic + 3;`,
 
     expect(validateDslSemantics(parsed)).toEqual([]);
   });
+
+  test('validates .take arity only for a definite Network receiver', () => {
+    const parsed = parseFile({
+      path: 'take-arity.ts',
+      text: `const destination = new Network();
+destination.take();
+destination.take(new Network(), new Network());
+const ordinary = { take() {} };
+ordinary.take();`,
+    });
+
+    expect(validateDslSemantics(parsed).map(({ code }) => code)).toEqual(['CL1037', 'CL1037']);
+  });
 });

@@ -35,6 +35,8 @@ export class ElaborationExecutionError extends Error {
   constructor(
     message: string,
     readonly span: SourceSpan,
+    readonly code = 'EX1001',
+    readonly related: Diagnostic['related'] = undefined,
     options?: ErrorOptions,
   ) {
     super(message, options);
@@ -45,6 +47,8 @@ export class ElaborationExecutionError extends Error {
 interface NetworkValue {
   readonly kind: 'network';
   readonly name: string;
+  readonly declaration: SourceSpan;
+  movedAt?: SourceSpan;
 }
 
 interface SignalValue {
@@ -157,6 +161,7 @@ function isRawSpan(value: unknown): value is RawSpan {
 class ElaborationRecorder {
   readonly #fileId: SourceFileId;
   readonly #networks: DirectElaborationPlan['networks'][number][] = [];
+  readonly #networkTransfers: NonNullable<DirectElaborationPlan['networkTransfers']>[number][] = [];
   readonly #producers: DirectPlanProducer[] = [];
   readonly #diagnostics: Diagnostic[] = [];
   readonly #attachedProducers = new WeakSet<object>();
@@ -210,9 +215,10 @@ class ElaborationRecorder {
       kind: 'wildcard-token',
       value,
     }),
-    wildcard: (value: WildcardName, network: NetworkValue, _rawSpan: RawSpan): SelectedValue => {
+    wildcard: (value: WildcardName, network: NetworkValue, rawSpan: RawSpan): SelectedValue => {
       this.#recordDslCall();
       if (!this.#isNetwork(network)) throw new Error('Wildcard selection requires a Network.');
+      this.#assertLiveNetwork(network, rawSpan);
       return { kind: 'selected', network, selection: value };
     },
     constant: (...args: unknown[]): ProducerValue => {
@@ -239,6 +245,51 @@ class ElaborationRecorder {
       rawSpan: RawSpan,
     ): NetworkValue => {
       return this.#network(name ?? `$network:${++this.#anonymousOrdinal}`, rawSpan, fixedColor);
+    },
+    take: (...args: unknown[]): unknown => {
+      const rawSpan = args.at(-1);
+      const destination = args[0];
+      const values = args.slice(1, -1);
+      if (!isRawSpan(rawSpan)) throw new Error('.take(...) is missing provenance.');
+      if (!this.#isNetwork(destination)) {
+        if (
+          (typeof destination !== 'object' && typeof destination !== 'function') ||
+          destination === null ||
+          typeof (destination as { take?: unknown }).take !== 'function'
+        ) {
+          throw new Error(
+            '.take(source) requires a destination Network or an ordinary .take method.',
+          );
+        }
+        return (destination as { take: (...items: unknown[]) => unknown }).take(...values);
+      }
+      this.#recordDslCall();
+      if (values.length !== 1) {
+        throw new Error('.take(source) requires exactly one source Network.');
+      }
+      const source = values[0];
+      if (!this.#isNetwork(source)) {
+        throw new Error('.take(source) requires a source Network.');
+      }
+      this.#assertLiveNetwork(destination, rawSpan, 'destination');
+      this.#assertLiveNetwork(source, rawSpan, 'source');
+      if (destination === source) {
+        throw new ElaborationExecutionError(
+          'A Network cannot take itself.',
+          this.#span(rawSpan),
+          'RT2013',
+          [{ message: 'Network declared here.', span: destination.declaration }],
+        );
+      }
+      const provenance = this.#span(rawSpan);
+      this.#networkTransfers.push({
+        destination: destination.name,
+        source: source.name,
+        provenance,
+        instancePath: this.#path(),
+      });
+      source.movedAt = provenance;
+      return destination;
     },
     materialize: (
       producer: unknown,
@@ -299,13 +350,15 @@ class ElaborationRecorder {
         span: this.#span(rawSpan),
       });
     },
-    compare: (operator: string, left: unknown, right: unknown, _rawSpan: RawSpan): unknown => {
+    compare: (operator: string, left: unknown, right: unknown, rawSpan: RawSpan): unknown => {
       const comparator = comparatorMap[operator];
       if (comparator === undefined) throw new Error(`Unsupported comparator: ${operator}.`);
       if (!this.#isCircuitDslValue(left) && !this.#isCircuitDslValue(right)) {
         return this.#compareJavaScript(operator, left, right);
       }
       this.#recordDslCall();
+      this.#assertLiveValue(left, rawSpan);
+      this.#assertLiveValue(right, rawSpan);
       if (this.#isSelected(left) && this.#isSelected(right)) {
         if (!isSignal(left.selection) || !isSignal(right.selection)) {
           throw new Error('Signal-to-signal comparison requires concrete Signal selections.');
@@ -380,7 +433,7 @@ class ElaborationRecorder {
       if (outputValues.length === 0) {
         throw new Error('IF/when requires at least one output specification.');
       }
-      const outputs = outputValues.map((output) => this.#deciderOutput(output));
+      const outputs = outputValues.map((output) => this.#deciderOutput(output, rawSpan));
       return {
         kind: 'producer',
         producer: {
@@ -429,6 +482,7 @@ class ElaborationRecorder {
           'to(...) destinations must be Networks; pass an optional output Signal as the final argument.',
         );
       }
+      for (const network of values) this.#assertLiveNetwork(network, rawSpan, 'destination');
       return {
         kind: 'destinations',
         networks: values,
@@ -438,15 +492,15 @@ class ElaborationRecorder {
     select: (
       value: NetworkValue | DestinationValue,
       signal: SignalId | WildcardTokenValue,
-      _rawSpan: RawSpan,
+      rawSpan: RawSpan,
     ): SelectedValue | DestinationValue => {
       this.#recordDslCall();
-      return this.#select(value, signal);
+      return this.#select(value, signal, rawSpan);
     },
-    element: (value: unknown, key: unknown, _rawSpan: RawSpan): unknown => {
+    element: (value: unknown, key: unknown, rawSpan: RawSpan): unknown => {
       if (this.#isNetwork(value) || this.#isDestination(value)) {
         this.#recordDslCall();
-        return this.#select(value, key);
+        return this.#select(value, key, rawSpan);
       }
       if (value === null || value === undefined) {
         throw new TypeError(`Cannot read properties of ${String(value)}.`);
@@ -541,6 +595,8 @@ class ElaborationRecorder {
         return this.#binaryJavaScript(operator, left, right);
       }
       this.#recordDslCall();
+      this.#assertLiveValue(left, rawSpan);
+      this.#assertLiveValue(right, rawSpan);
       const signal = isSignal(left) ? left : isSignal(right) ? right : undefined;
       const signalCount =
         typeof left === 'number' ? left : typeof right === 'number' ? right : undefined;
@@ -593,6 +649,7 @@ class ElaborationRecorder {
     ): unknown => {
       const destination =
         this.#isNetwork(left) || this.#isSelected(left) || this.#isDestination(left);
+      if (destination) this.#assertLiveValue(left, rawSpan);
       if (destination && this.#isProducer(right)) {
         this.api.attach(left, right, rawSpan);
         return left;
@@ -646,6 +703,7 @@ class ElaborationRecorder {
       format: 'comblang-direct-plan',
       version: 1,
       networks: Object.freeze([...this.#networks]),
+      networkTransfers: Object.freeze([...this.#networkTransfers]),
       producers: Object.freeze([...this.#producers]),
       diagnostics: Object.freeze([...this.#diagnostics]),
     };
@@ -666,9 +724,13 @@ class ElaborationRecorder {
           }
           const rawSpan = args.at(-1);
           if (error instanceof Error && isRawSpan(rawSpan)) {
-            throw new ElaborationExecutionError(error.message, this.#span(rawSpan), {
-              cause: error,
-            });
+            throw new ElaborationExecutionError(
+              error.message,
+              this.#span(rawSpan),
+              'EX1001',
+              undefined,
+              { cause: error },
+            );
           }
           throw error;
         }
@@ -692,7 +754,7 @@ class ElaborationRecorder {
       source: this.#span(rawSpan),
       instancePath: this.#path(),
     });
-    return { kind: 'network', name: instanceName };
+    return { kind: 'network', name: instanceName, declaration: this.#span(rawSpan) };
   }
 
   #bindingNetwork(descriptor: BindingDescriptor, rawSpan: RawSpan): NetworkValue {
@@ -718,6 +780,7 @@ class ElaborationRecorder {
     if (networks.length === 0 || networks.length > 2) {
       throw new Error('A producer destructuring/attachment requires one or two Network outputs.');
     }
+    for (const network of networks) this.#assertLiveNetwork(network, rawSpan, 'destination');
     this.#producers.push({
       ...value.producer,
       destinations: networks.map((network) => ({
@@ -732,6 +795,19 @@ class ElaborationRecorder {
   #isNetwork(value: unknown): value is NetworkValue {
     return (
       typeof value === 'object' && value !== null && (value as NetworkValue).kind === 'network'
+    );
+  }
+
+  #assertLiveNetwork(network: NetworkValue, rawSpan: RawSpan, role = 'Network'): void {
+    if (network.movedAt === undefined) return;
+    throw new ElaborationExecutionError(
+      `Cannot use moved ${role} ${network.name}.`,
+      this.#span(rawSpan),
+      'RT2012',
+      [
+        { message: 'Network was moved here.', span: network.movedAt },
+        { message: 'Network was declared here.', span: network.declaration },
+      ],
     );
   }
 
@@ -775,7 +851,7 @@ class ElaborationRecorder {
     );
   }
 
-  #select(value: unknown, signal: unknown): SelectedValue {
+  #select(value: unknown, signal: unknown, rawSpan: RawSpan): SelectedValue {
     const selection =
       typeof signal === 'string'
         ? Signal('item', signal)
@@ -793,13 +869,18 @@ class ElaborationRecorder {
       );
     }
     if (!this.#isNetwork(value)) throw new Error('Signal selection requires a Network.');
+    this.#assertLiveNetwork(value, rawSpan);
     return { kind: 'selected', network: value, selection: selection as SignalId | WildcardName };
   }
 
   #arithmeticOperand(value: DslValue, rawSpan: RawSpan): PlanArithmeticOperand {
     if (typeof value === 'number') return { kind: 'constant', value };
-    if (this.#isNetwork(value)) return { kind: 'each', network: value.name };
+    if (this.#isNetwork(value)) {
+      this.#assertLiveNetwork(value, rawSpan);
+      return { kind: 'each', network: value.name };
+    }
     if (this.#isSelected(value)) {
+      this.#assertLiveNetwork(value.network, rawSpan);
       if (isSignal(value.selection)) {
         return { kind: 'signal', network: value.network.name, signal: value.selection };
       }
@@ -826,7 +907,10 @@ class ElaborationRecorder {
     );
   }
 
-  #deciderOutput(output: unknown): Extract<DirectPlanProducer, { kind: 'decider' }>['output'] {
+  #deciderOutput(
+    output: unknown,
+    rawSpan: RawSpan,
+  ): Extract<DirectPlanProducer, { kind: 'decider' }>['output'] {
     if (this.#isSignalValue(output)) {
       return { kind: 'signal-constant', signal: output.signal, value: output.value };
     }
@@ -837,6 +921,7 @@ class ElaborationRecorder {
       return { kind: 'each-constant', value: output.value };
     }
     if (this.#isSelected(output)) {
+      this.#assertLiveNetwork(output.network, rawSpan);
       return isSignal(output.selection)
         ? { kind: 'signal', network: output.network.name, signal: output.selection }
         : output.selection === 'each'
@@ -847,7 +932,10 @@ class ElaborationRecorder {
               wildcard: output.selection,
             };
     }
-    if (this.#isNetwork(output)) return { kind: 'each', network: output.name };
+    if (this.#isNetwork(output)) {
+      this.#assertLiveNetwork(output, rawSpan);
+      return { kind: 'each', network: output.name };
+    }
     throw new Error('Unsupported decider output specification.');
   }
 
@@ -927,6 +1015,14 @@ class ElaborationRecorder {
       this.#isCondition(value) ||
       this.#isProducer(value)
     );
+  }
+
+  #assertLiveValue(value: unknown, rawSpan: RawSpan): void {
+    if (this.#isNetwork(value)) this.#assertLiveNetwork(value, rawSpan);
+    if (this.#isSelected(value)) this.#assertLiveNetwork(value.network, rawSpan);
+    if (this.#isDestination(value)) {
+      for (const network of value.networks) this.#assertLiveNetwork(network, rawSpan);
+    }
   }
 
   #binaryJavaScript(operator: string, left: unknown, right: unknown): unknown {

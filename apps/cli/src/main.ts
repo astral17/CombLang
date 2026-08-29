@@ -78,10 +78,18 @@ async function check(fileNames: readonly string[], json: boolean): Promise<numbe
       diagnostics.push(...tryElaborateDirectPlan(plan).diagnostics);
     } catch (error) {
       diagnostics.push({
-        code: error instanceof ElaborationOperationLimitError ? 'EX1003' : 'EX1001',
+        code:
+          error instanceof ElaborationOperationLimitError
+            ? 'EX1003'
+            : error instanceof ElaborationExecutionError
+              ? error.code
+              : 'EX1001',
         severity: 'error',
         message: error instanceof Error ? error.message : 'Elaboration execution failed.',
         ...(error instanceof ElaborationExecutionError ? { span: error.span } : {}),
+        ...(error instanceof ElaborationExecutionError && error.related !== undefined
+          ? { related: error.related }
+          : {}),
       });
     }
   }

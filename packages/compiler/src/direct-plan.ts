@@ -71,6 +71,14 @@ export interface DirectPlanNetwork {
   readonly instancePath: readonly string[];
 }
 
+/** A zero-tick physical union. `source` is consumed and `destination` survives. */
+export interface DirectPlanNetworkTransfer {
+  readonly destination: string;
+  readonly source: string;
+  readonly provenance: SourceSpan;
+  readonly instancePath: readonly string[];
+}
+
 export interface DirectPlanArithmetic {
   readonly kind: 'arithmetic';
   readonly left: PlanArithmeticOperand;
@@ -119,6 +127,7 @@ export interface DirectElaborationPlan {
   readonly format: 'comblang-direct-plan';
   readonly version: 1;
   readonly networks: readonly DirectPlanNetwork[];
+  readonly networkTransfers?: readonly DirectPlanNetworkTransfer[];
   readonly producers: readonly DirectPlanProducer[];
   readonly diagnostics?: readonly Diagnostic[];
 }

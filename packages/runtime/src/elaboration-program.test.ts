@@ -3,7 +3,8 @@ import { signal } from '@comblang/factorio';
 import { parseFile, validateDslSemantics } from '@comblang/language';
 import { describe, expect, test } from 'vitest';
 
-import { elaborateDirectPlan } from './direct-plan.js';
+import { elaborateDirectPlan, tryElaborateDirectPlan } from './direct-plan.js';
+import { RuntimeDiagnosticError } from './elaboration.js';
 import {
   ElaborationExecutionError,
   ElaborationOperationLimitError,
@@ -864,5 +865,103 @@ do {
         .filter(({ kind }) => kind === 'arithmetic')
         .map(({ instancePath }) => instancePath.at(-1)),
     ).toEqual(['for key=first', 'for key=second', 'while #1', 'while #2', 'do #1', 'do #2']);
+  });
+
+  test('executes destination.take(source) as one zero-tick Network union', () => {
+    const parsed = parseFile({
+      path: 'take.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const input: Network = CC(5 * A);
+const source: Network = input + 1;
+const destination = new Network();
+destination.take(source);
+const output: Network = destination * 2;`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.networkTransfers).toEqual([
+      expect.objectContaining({ destination: 'destination', source: 'source' }),
+    ]);
+    const execution = elaborateDirectPlan(plan);
+    expect(execution.circuit.graph.networks).toHaveLength(3);
+    expect(execution.circuit.ir.networks).toHaveLength(3);
+    expect(() => execution.network('source')).toThrowError(RuntimeDiagnosticError);
+    const destination = execution.network('destination');
+    const sourceProducer = execution.circuit.graph.producers[1]!;
+    const outputProducer = execution.circuit.graph.producers[2]!;
+    expect(sourceProducer.destinations).toContain(destination.id);
+    expect(outputProducer.kind).toBe('arithmetic');
+    if (outputProducer.kind === 'arithmetic') {
+      expect(outputProducer.config.left).toEqual({ kind: 'each', network: destination.id });
+    }
+  });
+
+  test('reports dynamic use-after-move through an array alias with source provenance', () => {
+    const parsed = parseFile({
+      path: 'take-alias.factorio.ts',
+      text: `const destination = new Network();
+const source = new Network();
+const aliases = [source];
+destination.take(source);
+const output: Network = aliases[0] + 1;`,
+    });
+
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      throw new Error('Expected use-after-move failure.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ElaborationExecutionError);
+      const ownership = error as ElaborationExecutionError;
+      expect(ownership.code).toBe('RT2012');
+      expect(parsed.text.slice(ownership.span.start, ownership.span.end)).toBe('aliases[0] + 1');
+      expect(ownership.related).toHaveLength(2);
+      expect(
+        parsed.text.slice(ownership.related![0]!.span.start, ownership.related![0]!.span.end),
+      ).toBe('destination.take(source)');
+    }
+  });
+
+  test('reports a repeated move and a fixed-color transfer conflict', () => {
+    const repeated = parseFile({
+      path: 'double-move.factorio.ts',
+      text: `const a = new Network();
+const b = new Network();
+const c = new Network();
+a.take(b);
+c.take(b);`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(repeated))).toThrowError(
+      expect.objectContaining({ code: 'RT2012' }),
+    );
+
+    const conflicting = parseFile({
+      path: 'take-color.factorio.ts',
+      text: `const red = new Network<R>();
+const green = new Network<G>();
+red.take(green);`,
+    });
+    const result = tryElaborateDirectPlan(
+      executeElaborationProgram(transformElaborationModule(conflicting)),
+    );
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'RT2014',
+        span: expect.objectContaining({
+          start: conflicting.text.indexOf('red.take(green)'),
+        }),
+        related: expect.any(Array),
+      }),
+    ]);
+  });
+
+  test('preserves an ordinary JavaScript .take method', () => {
+    const parsed = parseFile({
+      path: 'ordinary-take.ts',
+      text: `const bag = { take(value) { return value + 1; } };
+const result = bag.take(2);
+if (result !== 3) throw new Error("ordinary take failed");`,
+    });
+
+    expect(executeElaborationProgram(transformElaborationModule(parsed)).networks).toEqual([]);
   });
 });
