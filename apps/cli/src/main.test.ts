@@ -78,4 +78,32 @@ Invalid(network);`);
       expect.objectContaining({ code: 'RT2016', severity: 'error', related: expect.any(Array) }),
     ]);
   });
+
+  test('reports caller-side use after a Move parameter transfer', async () => {
+    const path = await sourceFile(`function Pass(input: Move<Network>): Network { return input; }
+const input = new Network();
+const result = Pass(input);
+const output: Network = input + 1;`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path])).toBe(1);
+    const result = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: 'RT2012', severity: 'error', related: expect.any(Array) }),
+    ]);
+  });
+
+  test('reports a duplicate to(...) destination at the attachment statement', async () => {
+    const statement = 'to(a, a) += input + 0;';
+    const path = await sourceFile(`const input = new Network();
+const a = new Network();
+${statement}`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path])).toBe(1);
+    const result = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: 'RT2004', severity: 'error', span: expect.any(Object) }),
+    ]);
+  });
 });

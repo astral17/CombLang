@@ -17,6 +17,7 @@ The current repository implements the Phase 3 source compiler and the first exec
 - package boundaries for compiler, runtime, layout, and renderer.
 - explicit zero-tick `destination.take(source)` Network union with runtime move tracking and EG/NCIR identity collapse.
 - executable `Readonly<Network>` and `Ref<Network>` function borrows with alias-safe runtime enforcement, expiry checks, and color-qualified requirements.
+- explicit `Move<Network>` function transfer with caller-alias invalidation, owned returns, and recursive array/plain-object return handling.
 
 ## Roadmap
 
@@ -26,7 +27,7 @@ The current repository implements the Phase 3 source compiler and the first exec
 - [x] Phase 3 — executed source compiler: conservative semantic checks, DSL-sensitive JavaScript transformation, runtime elaboration, provenance, color solving, CLI validation, and the browser workbench.
 - [ ] Phase 4 — ownership and multi-network syntax
   - [x] Freeze and implement function-scoped `Readonly<Network>` and `Ref<Network>` capabilities, including color-qualified forms and runtime borrow views.
-  - [ ] Freeze owned bare-`Network` parameter and `Move<Network>` call/return semantics; local owned Networks retain their current behavior meanwhile.
+  - [x] Reject ambiguous bare-`Network` parameters and implement explicit `Move<Network>` call/return transfer, including color-qualified and array/plain-object returns.
   - [ ] Track ownership, borrows, aliases, and moved state through lexical scopes, function calls, returns, destructuring, arrays, objects, and executed control flow.
   - [x] Enforce the function-borrow operation matrix: read-only borrows may be read, mutable borrows may receive producer attachments, neither may be consumed, and escaped views expire.
   - [ ] Complete the owned/moved operation matrix across calls, returns, local aliases, and container ownership slots.
@@ -47,12 +48,12 @@ The current repository implements the Phase 3 source compiler and the first exec
 - [ ] Phase 10 — physical placement, wire reach verification, relays, and blueprint export.
 - [ ] Phase 11 — language-service and execution-environment polish: operator-domain hovers, completions, code actions, semantic tokens, exact native views, composition-safe textarea highlighting/completion and mobile symbol tools, optional reproducible-build policy, and a fully hardened module sandbox.
 
-Later phases still cover ownership/move semantics, testbenches, typed Factorio objects, exact constructors, the verified blueprint codec and exchange strings, schematic editing, physical placement, multi-file language services, reproducible builds, and a hardened sandbox.
+Later phases still cover the remaining ownership and multi-network semantics, testbenches, typed Factorio objects, exact constructors, the verified blueprint codec and exchange strings, schematic editing, physical placement, multi-file language services, reproducible builds, and a hardened sandbox.
 
 ## Documentation
 
 - [Getting started](docs/getting-started.md) — install, validate, build, and run the browser workbench.
-- [Current language reference](docs/language-reference.md) — the exact Phase 3 syntax implemented today, diagnostics, and known gaps.
+- [Current language reference](docs/language-reference.md) — the exact implemented syntax, diagnostics, and known gaps.
 - [Phase 4 ownership design](docs/ownership-and-multi-network.md) — planned affine ownership, borrows, consuming transfer, read-only `pair`, and implementation checkpoints.
 - [Native objects, Deciders, and parameters](docs/native-objects-deciders-and-parameters.md) — planned Phase 6–8 semantic domains and conformance requirements.
 - [Diagnostics](docs/diagnostics.md) — compiler/runtime code families and the most common actionable errors.

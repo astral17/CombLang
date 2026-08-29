@@ -317,4 +317,16 @@ ordinary.take();`,
 
     expect(validateDslSemantics(parsed)).toEqual([]);
   });
+
+  test('requires an explicit capability for Network parameters', () => {
+    const parsed = parseFile({
+      path: 'bare-parameter.ts',
+      text: `function Implicit(input: Network): Network { return input; }
+function Explicit(input: Move<Network>): Network { return input; }`,
+    });
+
+    expect(validateDslSemantics(parsed)).toEqual([
+      expect.objectContaining({ code: 'CL1041', message: expect.stringContaining('no implicit') }),
+    ]);
+  });
 });

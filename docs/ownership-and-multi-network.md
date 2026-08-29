@@ -1,6 +1,6 @@
 # Phase 4: ownership and multi-network design
 
-This document defines the intended semantic boundary for Phase 4. The first executable slice, `destination.take(source)`, is now frozen and implemented; other syntax below remains design material unless the [current language reference](language-reference.md) says otherwise.
+This document defines the intended semantic boundary for Phase 4. `destination.take(source)`, function-scoped `Readonly`/`Ref` borrows, and explicit `Move<Network>` call/return transfer are frozen and implemented. Other syntax below remains design material unless the [current language reference](language-reference.md) says otherwise.
 
 Phase 4 makes physical circuit topology explicit in the type and runtime models. A `Network` is an affine handle to one logical wire network: it may be read many times, but ownership cannot be silently copied or consumed twice. The phase also adds an immutable view over the two wire colors without turning that view into another writable network.
 
@@ -20,7 +20,7 @@ The current compiler permits producer attachment through both `const` and `let` 
 
 ## Capability model
 
-The planned capability wrappers are valid TypeScript type syntax. Their final public names are the first Phase 4 decision; the table describes the required semantics independently of spelling.
+The capability wrappers use valid TypeScript type syntax. Their public names and the operation matrix below are now frozen.
 
 | Form                | Meaning                                     | Read signals | Attach a producer | Consume or transfer |
 | ------------------- | ------------------------------------------- | ------------ | ----------------- | ------------------- |
@@ -39,7 +39,7 @@ Move<Network>;
 
 `const` only prevents rebinding a JavaScript variable. It does not turn an owned Network into `Readonly<Network>` and does not prevent a producer from being physically attached to that Network.
 
-Function parameters annotated as `Readonly<Network>` or `Ref<Network>` now receive runtime borrow views. Direct, provably invalid operations are also rejected by the conservative semantic pass. Local lifetime inference, `Move<Network>` transfer-on-call, and the complete container/control-flow ownership model remain unfinished, so parsing another capability-shaped annotation must not be interpreted as complete enforcement.
+Function parameters annotated as `Readonly<Network>` or `Ref<Network>` receive runtime borrow views. `Move<Network>` consumes the caller's ownership generation and may return a fresh owned view, directly or inside an array/plain object. Direct, provably invalid operations are also rejected by the conservative semantic pass. Local owned-copy inference, explicit container-slot replacement, and the complete closure/control-flow ownership model remain unfinished.
 
 ## Function boundaries
 
@@ -53,11 +53,18 @@ function Scale(input: Readonly<Network>): Network {
 function AddIndicator(output: Ref<Network>, input: Readonly<Network>): void {
   output += IF(input > 0, input);
 }
+
+function Advance(input: Move<Network>): Network {
+  input += input + 1;
+  return input;
+}
 ```
 
-A read-only parameter may feed arithmetic, conditions, selections, and typed Factorio inputs. A mutable reference may additionally receive producer outputs, but the callee cannot consume the caller's Network. Both views expire when the function returns; definite direct escapes are static errors and dynamically hidden escapes fail when used. Multiple shared borrows may overlap, while an overlapping mutable/shared borrow currently fails conservatively. Color-qualified borrow types add real color requirements to the underlying Network. An owned return value transfers ownership out of the function once owned-parameter semantics are completed.
+A read-only parameter may feed arithmetic, conditions, selections, and typed Factorio inputs. A mutable reference may additionally receive producer outputs, but the callee cannot consume the caller's Network. Both views expire when the function returns; definite direct escapes are static errors and dynamically hidden escapes fail when returned. Multiple shared borrows may overlap, while an overlapping mutable/shared borrow currently fails conservatively. Color-qualified capability types add real color requirements to the underlying Network.
 
-Bare `Network` parameters remain an open design question: they could mean implicit ownership transfer, but an explicit consuming mode is easier to audit. Phase 4 must settle this before enabling owned parameters.
+`Move<Network>` is the only owned parameter mode. It invalidates all caller aliases at entry, permits reads, writes, and consuming transfer, and gives returned ownership a new runtime generation. Arrays and plain objects recursively transfer owned members on return. A duplicated member such as `[input, input]` is a double move. If the callee neither returns the moved owner nor consumes it with `.take(...)`, the value is dropped; stale caller aliases remain invalid. Returning a Network owned by an outer caller without first accepting it through `Move` is rejected as an implicit steal.
+
+Bare `Network` parameters are forbidden because an implicit mode would hide whether the call borrows or consumes ownership. Bare `Network` remains valid for local bindings and return annotations.
 
 Borrowed values must not outlive their owner. The checker should reject a definite borrow escape. If ordinary JavaScript control flow or a dynamically selected container element prevents proof, the runtime must validate the actual handle state instead of the checker guessing.
 
@@ -81,7 +88,7 @@ for (let i = 0; i < stages.length; i++) {
 }
 ```
 
-The exact syntax for moving an already-owned value into or out of a container is not frozen. Whatever spelling is chosen must invalidate exactly the consumed slot or binding at runtime. Static analysis may reject only a definite duplicate, double move, or use-after-move.
+Passing a dynamically read slot to a `Move` parameter already invalidates that old slot at runtime, and owned Networks returned in arrays/plain objects receive fresh views. The explicit syntax for atomically taking or replacing an already-owned container slot is not frozen. Whatever spelling is chosen must invalidate exactly the consumed slot or binding at runtime. Static analysis may reject only a definite duplicate, double move, or use-after-move.
 
 Producer destructuring is not a Network copy. Forms such as `let [a, b] = input + 0` attach one physical producer output to two fresh logical destination Networks. Those Networks receive independent ownership and the existing opposite-color output constraint.
 
@@ -167,8 +174,6 @@ Phase 4 is complete when each capability transition and `pair` form has semantic
 
 ## Open decisions
 
-- final public names for `Ref` and `Move`;
-- whether bare `Network` parameters are forbidden or mean owned transfer;
 - whether a public `Producer` annotation is useful and how its one-physical-object identity is exposed;
 - whether attachment through `+=` is restricted to `let` Network bindings;
 - explicit syntax for moving values into and out of array/object slots;

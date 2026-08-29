@@ -140,4 +140,31 @@ destination.take(source);`,
     expect(code).toContain('__dsl.borrowParameter(input, "readonly", "input"');
     expect(code).toContain('__dsl.exitInstance({ start: 0');
   });
+
+  test('instruments Move parameters and owned returns', () => {
+    const source = parseFile({
+      path: 'move.factorio.ts',
+      text: `function Pass(input: Move<Network<G>>): Network {
+  return input;
+}`,
+    });
+    const code = transformElaborationModule(source).code;
+
+    expect(code).toContain('__dsl.moveParameter(input, "input", "green"');
+    expect(code).toContain('return __dsl.returnValue(input');
+  });
+
+  test('does not treat a nested callback return as the surrounding ownership boundary', () => {
+    const source = parseFile({
+      path: 'callback-return.factorio.ts',
+      text: `function Pick(input: Readonly<Network>): Network {
+  const values = [0].map(() => { return input; });
+  return values[0] + 0;
+}`,
+    });
+    const code = transformElaborationModule(source).code;
+
+    expect(code.match(/__dsl\.returnValue/g)).toHaveLength(1);
+    expect(code).toContain('return input;');
+  });
 });

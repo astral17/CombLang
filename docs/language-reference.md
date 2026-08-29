@@ -185,7 +185,7 @@ const output: Network = destination * 2;
 
 The direct plan retains the ordered transfer and its source/instance provenance. Before EG construction, lowering maps all earlier producer references to the surviving runtime handle; EG and NCIR therefore contain one physical Network for the union. Contradictory fixed colors such as `Network<R>` taking `Network<G>` report `RT2014`. Taking itself reports `RT2013`. An ordinary non-Network object may still define its own JavaScript `.take(...)` method.
 
-This first Phase 4 slice freezes the consuming-transfer spelling and runtime moved state. General ownership-copy rules, `Readonly`/`Ref`/`Move` capability enforcement, moves into and out of containers, and `pair(a, b)` remain planned Phase 4 work.
+This first transfer slice freezes the consuming-transfer spelling and runtime moved state. Function capabilities are described below. General local ownership-copy rules, explicit moves into and out of container slots, and `pair(a, b)` remain planned Phase 4 work.
 
 Array or flat object destructuring provides the contextual fan-out form for a newly created producer:
 
@@ -227,10 +227,11 @@ const output: Network = Scale(input);
 
 `Readonly<Network>` and `Ref<Network>` are executable function-parameter capabilities:
 
-| Parameter type                | Read signals | Receive producer attachment | Participate in `.take(...)` |
+| Parameter/value type          | Read signals | Receive producer attachment | Participate in `.take(...)` |
 | ----------------------------- | ------------ | --------------------------- | --------------------------- |
 | `Readonly<Network>`           | yes          | no                          | no                          |
 | `Ref<Network>`                | yes          | yes                         | no                          |
+| `Move<Network>`               | yes          | yes                         | yes                         |
 | owned Network created locally | yes          | yes                         | yes                         |
 
 ```ts
@@ -239,9 +240,25 @@ function Connect(output: Ref<Network<G>>, input: Readonly<Network<R>>): void {
 }
 ```
 
-The annotations create runtime views over the actual Network identity; they do not copy topology. Aliases and containers therefore cannot bypass the operation matrix. Multiple `Readonly` views may overlap, while a `Ref` is exclusive and currently cannot overlap either another `Ref` or a `Readonly` view. Both views expire on function return. Returning a borrowed parameter directly reports `CL1040`; a borrow hidden in a dynamic container reports `RT2017` if later used. `<R>`/`<G>` inside a capability is a real color requirement and a conflict reports `RT2018`.
+The annotations create runtime views over the actual Network identity; they do not copy topology. Aliases and containers therefore cannot bypass the operation matrix. Multiple `Readonly` views may overlap, while a `Ref` is exclusive and currently cannot overlap either another `Ref` or a `Readonly` view. Both views expire on function return. Returning a borrowed parameter directly reports `CL1040`; a borrow hidden in an executed array/object return reports `RT2017`. `<R>`/`<G>` inside a capability is a real color requirement and a conflict reports `RT2018`.
 
-This slice does not yet define transfer-on-call for `Move<Network>`, owned bare-`Network` parameters, or complete local/container lifetime inference. These remain Phase 4 work rather than implicit behavior.
+`Move<Network>` is the explicit consuming parameter mode:
+
+```ts
+function Advance(input: Move<Network<R>>): Network {
+  input += input + 1;
+  return input;
+}
+
+const seed: Network = CC(5 * Signal('virtual', 'signal-A'));
+const advanced = Advance(seed);
+```
+
+Entering `Advance` transfers ownership and immediately invalidates every caller-side alias and old array/object slot that contains `seed`; using one reports `RT2012`. The `Move` view may be read, written, or consumed with `.take(...)`. Returning it transfers a fresh owned view to the caller. Owned Networks nested in arrays and plain objects are transferred recursively, while attempting to return the same owner twice, such as `[input, input]`, is rejected as a duplicate move.
+
+Ownership is affine rather than mandatory-use: a function may consume or drop a `Move` parameter without returning it. The old caller views do not become valid again; trying to use dropped ownership reports `RT2019`. A function also cannot return a caller-owned Network that it never accepted through `Move`; that would be an implicit steal and reports `RT2019`. A bare `Network` parameter is deliberately invalid (`CL1041`) because it would not state whether the call borrows or consumes the value. Use `Readonly<Network>`, `Ref<Network>`, or `Move<Network>` explicitly.
+
+Complete local alias-copy rules and explicit move/replace operations for container slots remain Phase 4 work. Passing `array[i]` to `Move` is already checked dynamically and invalidates that old slot, but there is not yet dedicated syntax that replaces the slot with a returned owner in one operation.
 
 A structural function may instead declare local Networks, attach producers to them, and return one of those Networks. Each call receives independent local Networks:
 

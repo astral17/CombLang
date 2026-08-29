@@ -44,10 +44,10 @@ export class ElaborationExecutionError extends Error {
   }
 }
 
-type RuntimeNetworkCapability = 'owned' | 'readonly' | 'ref';
+type RuntimeNetworkCapability = 'owned' | 'readonly' | 'ref' | 'move';
 
 interface NetworkBorrow {
-  readonly capability: Exclude<RuntimeNetworkCapability, 'owned'>;
+  readonly capability: 'readonly' | 'ref';
   readonly parameter: string;
   readonly source: SourceSpan;
   readonly ownership: NetworkOwnershipState;
@@ -55,8 +55,24 @@ interface NetworkBorrow {
   releasedAt?: SourceSpan;
 }
 
+interface NetworkMove {
+  readonly ownership: NetworkOwnershipState;
+  readonly source: SourceSpan;
+  returned: boolean;
+}
+
+interface FunctionOwnershipFrame {
+  readonly owner: symbol;
+  readonly source: SourceSpan;
+  readonly borrows: NetworkBorrow[];
+  readonly moves: NetworkMove[];
+}
+
 interface NetworkOwnershipState {
-  movedAt?: SourceSpan;
+  consumedAt?: SourceSpan;
+  lastMove?: { readonly source: SourceSpan; readonly generation: number };
+  generation: number;
+  owner: symbol | 'top-level' | 'lost';
   colorRequirement?: { readonly color: 'red' | 'green'; readonly source: SourceSpan };
   readonlyBorrows: Set<NetworkBorrow>;
   mutableBorrow?: NetworkBorrow;
@@ -68,6 +84,7 @@ interface NetworkValue {
   readonly declaration: SourceSpan;
   readonly ownership: NetworkOwnershipState;
   readonly capability: RuntimeNetworkCapability;
+  readonly generation: number;
   readonly borrow?: NetworkBorrow;
 }
 
@@ -189,7 +206,7 @@ class ElaborationRecorder {
   readonly #networkNameCounts = new Map<string, number>();
   readonly #anonymousLoopCounts = new Map<string, number>();
   readonly #instancePath: string[] = [];
-  readonly #instanceBorrows: (NetworkBorrow[] | undefined)[] = [];
+  readonly #ownershipFrames: (FunctionOwnershipFrame | undefined)[] = [];
   readonly #dslCallBudget: number;
   #dslCalls = 0;
 
@@ -199,9 +216,14 @@ class ElaborationRecorder {
   }
 
   readonly api = Object.freeze({
-    enterFunction: (name: string, _rawSpan: RawSpan): void => {
+    enterFunction: (name: string, rawSpan: RawSpan): void => {
       this.#instancePath.push(`function ${name}`);
-      this.#instanceBorrows.push([]);
+      this.#ownershipFrames.push({
+        owner: Symbol(name),
+        source: this.#span(rawSpan),
+        borrows: [],
+        moves: [],
+      });
     },
     enterLoop: (name: string, value: unknown, _rawSpan: RawSpan): void => {
       if (value === undefined) {
@@ -211,20 +233,34 @@ class ElaborationRecorder {
       } else {
         this.#instancePath.push(`for ${name}=${String(value)}`);
       }
-      this.#instanceBorrows.push(undefined);
+      this.#ownershipFrames.push(undefined);
     },
     exitInstance: (rawSpan?: RawSpan): void => {
-      const borrows = this.#instanceBorrows.pop();
+      const frame = this.#ownershipFrames.pop();
       if (this.#instancePath.pop() === undefined) {
         throw new Error('Executed provenance stack underflow.');
       }
-      if (borrows !== undefined) {
-        for (const borrow of borrows.toReversed()) {
+      if (frame !== undefined) {
+        for (const borrow of frame.borrows.toReversed()) {
           borrow.active = false;
           if (isRawSpan(rawSpan)) borrow.releasedAt = this.#span(rawSpan);
           const ownership = borrow.ownership;
           if (borrow.capability === 'readonly') ownership.readonlyBorrows.delete(borrow);
           else if (ownership.mutableBorrow === borrow) delete ownership.mutableBorrow;
+        }
+        for (const move of frame.moves.toReversed()) {
+          if (
+            !move.returned &&
+            move.ownership.consumedAt === undefined &&
+            move.ownership.owner === frame.owner
+          ) {
+            move.ownership.generation += 1;
+            move.ownership.owner = 'lost';
+            move.ownership.lastMove = {
+              source: isRawSpan(rawSpan) ? this.#span(rawSpan) : frame.source,
+              generation: move.ownership.generation,
+            };
+          }
         }
       }
     },
@@ -300,7 +336,7 @@ class ElaborationRecorder {
       this.#assertReadableNetwork(value, rawSpan);
       if (fixedColor !== undefined)
         this.#requireNetworkColor(value, capability, fixedColor, rawSpan);
-      const frame = this.#instanceBorrows.at(-1);
+      const frame = this.#currentFunctionFrame();
       if (frame === undefined) {
         throw new Error('Network parameter borrow was created outside a function frame.');
       }
@@ -326,15 +362,57 @@ class ElaborationRecorder {
       };
       if (capability === 'readonly') ownership.readonlyBorrows.add(borrow);
       else ownership.mutableBorrow = borrow;
-      frame.push(borrow);
+      frame.borrows.push(borrow);
       return {
         kind: 'network',
         name: value.name,
         declaration: value.declaration,
         ownership,
         capability,
+        generation: value.generation,
         borrow,
       };
+    },
+    moveParameter: (
+      value: unknown,
+      parameter: string,
+      fixedColor: 'red' | 'green' | undefined,
+      rawSpan: RawSpan,
+    ): NetworkValue => {
+      if (!isRawSpan(rawSpan)) throw new Error('Invalid Move<Network> parameter descriptor.');
+      if (!this.#isNetwork(value)) {
+        throw new ElaborationExecutionError(
+          `Move<Network> parameter ${parameter} received a non-Network value.`,
+          this.#span(rawSpan),
+          'RT2015',
+        );
+      }
+      this.#recordDslCall();
+      this.#assertConsumableNetwork(value, rawSpan, 'source');
+      const frame = this.#currentFunctionFrame();
+      if (frame === undefined) {
+        throw new Error('Network ownership transfer was created outside a function frame.');
+      }
+      if (fixedColor !== undefined) this.#requireNetworkColor(value, 'move', fixedColor, rawSpan);
+      const ownership = value.ownership;
+      ownership.generation += 1;
+      ownership.owner = frame.owner;
+      ownership.lastMove = {
+        source: this.#span(rawSpan),
+        generation: ownership.generation,
+      };
+      frame.moves.push({ ownership, source: this.#span(rawSpan), returned: false });
+      return {
+        kind: 'network',
+        name: value.name,
+        declaration: value.declaration,
+        ownership,
+        capability: 'move',
+        generation: ownership.generation,
+      };
+    },
+    returnValue: (value: unknown, rawSpan: RawSpan): unknown => {
+      return this.#returnOwnedValue(value, rawSpan, new Map());
     },
     take: (...args: unknown[]): unknown => {
       const rawSpan = args.at(-1);
@@ -378,7 +456,7 @@ class ElaborationRecorder {
         provenance,
         instancePath: this.#path(),
       });
-      source.ownership.movedAt = provenance;
+      source.ownership.consumedAt = provenance;
       return destination;
     },
     materialize: (
@@ -850,12 +928,15 @@ class ElaborationRecorder {
       name: instanceName,
       declaration,
       ownership: {
+        generation: 0,
+        owner: this.#currentFunctionFrame()?.owner ?? 'top-level',
         readonlyBorrows: new Set(),
         ...(fixedColor === undefined
           ? {}
           : { colorRequirement: { color: fixedColor, source: declaration } }),
       },
       capability: 'owned',
+      generation: 0,
     };
   }
 
@@ -901,15 +982,29 @@ class ElaborationRecorder {
   }
 
   #assertReadableNetwork(network: NetworkValue, rawSpan: RawSpan, role = 'Network'): void {
-    const movedAt = network.ownership.movedAt;
-    if (movedAt !== undefined) {
+    const consumedAt = network.ownership.consumedAt;
+    if (consumedAt !== undefined) {
       throw new ElaborationExecutionError(
         `Cannot use moved ${role} ${network.name}.`,
         this.#span(rawSpan),
         'RT2012',
         [
-          { message: 'Network was moved here.', span: movedAt },
+          { message: 'Network was consumed here.', span: consumedAt },
           { message: 'Network was declared here.', span: network.declaration },
+        ],
+      );
+    }
+    if (network.generation !== network.ownership.generation) {
+      const move = network.ownership.lastMove;
+      throw new ElaborationExecutionError(
+        network.ownership.owner === 'lost'
+          ? `Cannot use Network ${network.name}; its moved ownership was not returned.`
+          : `Cannot use moved ${role} ${network.name}.`,
+        this.#span(rawSpan),
+        network.ownership.owner === 'lost' ? 'RT2019' : 'RT2012',
+        [
+          ...(move === undefined ? [] : [{ message: 'Ownership moved here.', span: move.source }]),
+          { message: 'Network declared here.', span: network.declaration },
         ],
       );
     }
@@ -939,7 +1034,7 @@ class ElaborationRecorder {
 
   #requireNetworkColor(
     network: NetworkValue,
-    capability: 'readonly' | 'ref',
+    capability: 'readonly' | 'ref' | 'move',
     color: 'red' | 'green',
     rawSpan: RawSpan,
   ): void {
@@ -947,7 +1042,7 @@ class ElaborationRecorder {
     if (existing?.color === color) return;
     if (existing !== undefined) {
       throw new ElaborationExecutionError(
-        `${capability === 'ref' ? 'Ref' : 'Readonly'}<Network<${color === 'red' ? 'R' : 'G'}>> conflicts with the existing ${existing.color} requirement for Network ${network.name}.`,
+        `${capability === 'ref' ? 'Ref' : capability === 'move' ? 'Move' : 'Readonly'}<Network<${color === 'red' ? 'R' : 'G'}>> conflicts with the existing ${existing.color} requirement for Network ${network.name}.`,
         this.#span(rawSpan),
         'RT2018',
         [{ message: 'Existing color requirement originates here.', span: existing.source }],
@@ -988,7 +1083,7 @@ class ElaborationRecorder {
 
   #assertConsumableNetwork(network: NetworkValue, rawSpan: RawSpan, role: string): void {
     this.#assertReadableNetwork(network, rawSpan, role);
-    if (network.capability !== 'owned') {
+    if (network.capability !== 'owned' && network.capability !== 'move') {
       throw new ElaborationExecutionError(
         `Cannot consume ${network.capability === 'readonly' ? 'Readonly<Network>' : 'Ref<Network>'} ${role} ${network.name}.`,
         this.#span(rawSpan),
@@ -1010,8 +1105,96 @@ class ElaborationRecorder {
     }
   }
 
+  #returnOwnedValue(value: unknown, rawSpan: RawSpan, seen: Map<object, unknown>): unknown {
+    if (this.#isNetwork(value)) return this.#returnOwnedNetwork(value, rawSpan);
+    if (typeof value !== 'object' || value === null) return value;
+    const previous = seen.get(value);
+    if (previous !== undefined) return previous;
+    if (Array.isArray(value)) {
+      const result: unknown[] = [];
+      seen.set(value, result);
+      let changed = false;
+      for (const item of value) {
+        const returned = this.#returnOwnedValue(item, rawSpan, seen);
+        result.push(returned);
+        if (returned !== item) changed = true;
+      }
+      return changed ? result : value;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== null) return value;
+    const result: Record<string, unknown> = {};
+    seen.set(value, result);
+    let changed = false;
+    for (const [key, item] of Object.entries(value)) {
+      const returned = this.#returnOwnedValue(item, rawSpan, seen);
+      result[key] = returned;
+      if (returned !== item) changed = true;
+    }
+    return changed ? result : value;
+  }
+
+  #returnOwnedNetwork(value: NetworkValue, rawSpan: RawSpan): NetworkValue {
+    this.#recordDslCall();
+    this.#assertReadableNetwork(value, rawSpan);
+    if (value.capability === 'readonly' || value.capability === 'ref') {
+      throw new ElaborationExecutionError(
+        `A ${value.capability === 'readonly' ? 'Readonly<Network>' : 'Ref<Network>'} borrow cannot escape its function.`,
+        this.#span(rawSpan),
+        'RT2017',
+        value.borrow === undefined
+          ? undefined
+          : [{ message: 'Borrow created here.', span: value.borrow.source }],
+      );
+    }
+    const frame = this.#currentFunctionFrame();
+    if (frame === undefined || value.ownership.owner !== frame.owner) {
+      throw new ElaborationExecutionError(
+        `Function cannot return Network ${value.name} because it does not own that value; accept it as Move<Network> first.`,
+        this.#span(rawSpan),
+        'RT2019',
+        [{ message: 'Network declared here.', span: value.declaration }],
+      );
+    }
+    const move = frame.moves.findLast(({ ownership }) => ownership === value.ownership);
+    if (move !== undefined) move.returned = true;
+    const caller = this.#parentFunctionFrame();
+    value.ownership.generation += 1;
+    value.ownership.owner = caller?.owner ?? 'top-level';
+    value.ownership.lastMove = {
+      source: this.#span(rawSpan),
+      generation: value.ownership.generation,
+    };
+    return {
+      kind: 'network',
+      name: value.name,
+      declaration: value.declaration,
+      ownership: value.ownership,
+      capability: 'owned',
+      generation: value.ownership.generation,
+    };
+  }
+
   #path(): readonly string[] {
     return Object.freeze([...this.#instancePath]);
+  }
+
+  #currentFunctionFrame(): FunctionOwnershipFrame | undefined {
+    return this.#ownershipFrames.findLast((frame) => frame !== undefined);
+  }
+
+  #parentFunctionFrame(): FunctionOwnershipFrame | undefined {
+    let foundCurrent = false;
+    for (let index = this.#ownershipFrames.length - 1; index >= 0; index -= 1) {
+      const frame = this.#ownershipFrames[index];
+      if (frame === undefined) continue;
+      if (!foundCurrent) {
+        foundCurrent = true;
+        continue;
+      }
+      return frame;
+    }
+    return undefined;
   }
 
   #isSignalValue(value: unknown): value is SignalValue {

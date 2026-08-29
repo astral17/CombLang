@@ -113,16 +113,16 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
       type: ts.TypeNode | undefined,
     ):
       | {
-          readonly capability: 'readonly' | 'ref';
+          readonly capability: 'readonly' | 'ref' | 'move';
           readonly color?: 'red' | 'green';
         }
       | undefined => {
       const text = type?.getText(file.ast).replaceAll(/\s/g, '') ?? '';
-      const match = /^(Readonly|Ref)<Network(?:<(.+)>)?>$/.exec(text);
+      const match = /^(Readonly|Ref|Move)<Network(?:<(.+)>)?>$/.exec(text);
       if (match === null) return undefined;
       const color = match[2] === 'R' ? 'red' : match[2] === 'G' ? 'green' : undefined;
       return {
-        capability: match[1] === 'Readonly' ? 'readonly' : 'ref',
+        capability: match[1] === 'Readonly' ? 'readonly' : match[1] === 'Ref' ? 'ref' : 'move',
         ...(color === undefined ? {} : { color }),
       };
     };
@@ -143,6 +143,12 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
         : type === 'Network<G>'
           ? factory.createStringLiteral('green')
           : factory.createVoidZero();
+    };
+    const belongsToFunctionDeclaration = (node: ts.Node): boolean => {
+      for (let parent = node.parent; parent !== undefined; parent = parent.parent) {
+        if (ts.isFunctionLike(parent)) return ts.isFunctionDeclaration(parent);
+      }
+      return false;
     };
     const bindingDescriptor = (
       name: ts.BindingName,
@@ -312,6 +318,20 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
         );
       }
 
+      if (
+        ts.isReturnStatement(node) &&
+        node.expression !== undefined &&
+        belongsToFunctionDeclaration(node)
+      ) {
+        return factory.updateReturnStatement(
+          node,
+          dslCall(factory, 'returnValue', [
+            ts.visitNode(node.expression, visit) as ts.Expression,
+            spanLiteral(factory, node),
+          ]),
+        );
+      }
+
       if (ts.isFunctionDeclaration(node) && node.body !== undefined) {
         const name = node.name?.text ?? '<anonymous>';
         const parameterBorrows = node.parameters.flatMap((parameter) => {
@@ -321,15 +341,24 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
             factory.createExpressionStatement(
               factory.createAssignment(
                 parameter.name,
-                dslCall(factory, 'borrowParameter', [
-                  parameter.name,
-                  factory.createStringLiteral(descriptor.capability),
-                  factory.createStringLiteral(parameter.name.text),
-                  descriptor.color === undefined
-                    ? factory.createVoidZero()
-                    : factory.createStringLiteral(descriptor.color),
-                  spanLiteral(factory, parameter),
-                ]),
+                descriptor.capability === 'move'
+                  ? dslCall(factory, 'moveParameter', [
+                      parameter.name,
+                      factory.createStringLiteral(parameter.name.text),
+                      descriptor.color === undefined
+                        ? factory.createVoidZero()
+                        : factory.createStringLiteral(descriptor.color),
+                      spanLiteral(factory, parameter),
+                    ])
+                  : dslCall(factory, 'borrowParameter', [
+                      parameter.name,
+                      factory.createStringLiteral(descriptor.capability),
+                      factory.createStringLiteral(parameter.name.text),
+                      descriptor.color === undefined
+                        ? factory.createVoidZero()
+                        : factory.createStringLiteral(descriptor.color),
+                      spanLiteral(factory, parameter),
+                    ]),
               ),
             ),
           ];

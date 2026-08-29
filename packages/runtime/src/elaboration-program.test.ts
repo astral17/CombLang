@@ -602,13 +602,15 @@ const biased = dx + 10;`,
     });
   });
 
-  test('selects a Network returned by ordinary JavaScript without a declaration annotation', () => {
+  test('selects an owned local Network returned without a receiving annotation', () => {
     const parsed = parseFile({
       path: 'runtime-selection.factorio.ts',
       text: `const A = Signal("virtual", "signal-A");
-function Identity(input) { return input; }
-const input = CC(5 * A);
-const inferred = Identity(input);
+function MakeInput() {
+  const input: Network = CC(5 * A);
+  return input;
+}
+const inferred = MakeInput();
 const output = IF(inferred[A] > 0, inferred[A]);`,
     });
     const plan = executeElaborationProgram(transformElaborationModule(parsed));
@@ -1065,7 +1067,7 @@ Invalid(network);`,
     );
   });
 
-  test('rejects a borrowed view that escapes through a dynamic container', () => {
+  test('rejects a borrowed view escaping through a dynamic container', () => {
     const parsed = parseFile({
       path: 'borrow-escape.factorio.ts',
       text: `function Leak(input: Readonly<Network>) { return [input]; }
@@ -1081,8 +1083,158 @@ const output: Network = escaped[0] + 1;`,
       expect(error).toBeInstanceOf(ElaborationExecutionError);
       const ownership = error as ElaborationExecutionError;
       expect(ownership.code).toBe('RT2017');
-      expect(parsed.text.slice(ownership.span.start, ownership.span.end)).toBe('escaped[0] + 1');
-      expect(ownership.related).toHaveLength(2);
+      expect(parsed.text.slice(ownership.span.start, ownership.span.end)).toBe('return [input];');
+      expect(ownership.related).toHaveLength(1);
     }
+  });
+
+  test('moves ownership into a Move parameter and returns a fresh owned view', () => {
+    const parsed = parseFile({
+      path: 'move-return.factorio.ts',
+      text: `function Advance(input: Move<Network<R>>): Network {
+  input += input + 1;
+  return input;
+}
+const input = new Network();
+const advanced = Advance(input);
+const output: Network = advanced * 2;`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.networks).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'input', fixedColor: 'red' })]),
+    );
+    expect(plan.producers).toMatchObject([
+      { kind: 'arithmetic', destinations: [{ network: 'input' }] },
+      { kind: 'arithmetic', left: { kind: 'each', network: 'input' } },
+    ]);
+
+    const conflicting = parseFile({
+      path: 'move-color-conflict.factorio.ts',
+      text: `function RequireGreen(input: Move<Network<G>>): Network { return input; }
+const input = new Network<R>();
+const output = RequireGreen(input);`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(conflicting))).toThrowError(
+      expect.objectContaining({ code: 'RT2018', related: expect.any(Array) }),
+    );
+  });
+
+  test('invalidates caller aliases and moved container slots', () => {
+    const alias = parseFile({
+      path: 'move-alias.factorio.ts',
+      text: `function Pass(input: Move<Network>): Network { return input; }
+const input = new Network();
+const alias = input;
+const result = Pass(input);
+const output: Network = alias + 1;`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(alias))).toThrowError(
+      expect.objectContaining({ code: 'RT2012' }),
+    );
+
+    const container = parseFile({
+      path: 'move-container.factorio.ts',
+      text: `function Pass(input: Move<Network>): Network { return input; }
+const values: Network[] = [new Network()];
+const result = Pass(values[0]);
+const output: Network = values[0] + 1;`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(container))).toThrowError(
+      expect.objectContaining({ code: 'RT2012' }),
+    );
+  });
+
+  test('lets Move parameters participate in take and rejects dropped ownership reuse', () => {
+    const merged = parseFile({
+      path: 'move-take.factorio.ts',
+      text: `function Combine(destination: Move<Network>, source: Move<Network>): Network {
+  destination.take(source);
+  return destination;
+}
+const destination = new Network();
+const source = new Network();
+const merged = Combine(destination, source);
+const output: Network = merged + 1;`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(merged));
+    expect(plan.networkTransfers).toEqual([
+      expect.objectContaining({ destination: 'destination', source: 'source' }),
+    ]);
+
+    const dropped = parseFile({
+      path: 'move-drop.factorio.ts',
+      text: `function Drop(input: Move<Network>): void {
+  input += CC(1 * Signal("virtual", "signal-A"));
+}
+const input = new Network();
+Drop(input);
+const output: Network = input + 1;`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(dropped))).toThrowError(
+      expect.objectContaining({ code: 'RT2019' }),
+    );
+  });
+
+  test('rejects returning a foreign owned Network without Move', () => {
+    const parsed = parseFile({
+      path: 'implicit-steal.factorio.ts',
+      text: `const input = new Network();
+function Steal(): Network { return input; }
+const stolen = Steal();`,
+    });
+
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+      expect.objectContaining({ code: 'RT2019' }),
+    );
+  });
+
+  test('transfers owned Networks returned inside arrays and objects', () => {
+    const parsed = parseFile({
+      path: 'move-container-return.factorio.ts',
+      text: `function Bundle(input: Move<Network>) {
+  const local = new Network();
+  return { input, local };
+}
+const input = new Network();
+const bundle = Bundle(input);
+const output: Network = bundle.input + bundle.local;`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.producers).toMatchObject([
+      {
+        kind: 'arithmetic',
+        left: { kind: 'each', network: 'input' },
+        right: { kind: 'each', network: 'local' },
+      },
+    ]);
+
+    const duplicate = parseFile({
+      path: 'duplicate-owner-return.factorio.ts',
+      text: `function Duplicate(input: Move<Network>) { return [input, input]; }
+const input = new Network();
+const values = Duplicate(input);`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(duplicate))).toThrowError(
+      expect.objectContaining({ code: 'RT2012' }),
+    );
+  });
+
+  test('keeps callback-local returns inside the surrounding borrow lifetime', () => {
+    const parsed = parseFile({
+      path: 'callback-borrow.factorio.ts',
+      text: `function Pick(input: Readonly<Network>): Network {
+  const values = [0].map(() => { return input; });
+  return values[0] + 0;
+}
+const input = new Network();
+const output: Network = Pick(input);`,
+    });
+
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    expect(plan.producers).toMatchObject([
+      { kind: 'arithmetic', left: { kind: 'each', network: 'input' } },
+    ]);
   });
 });

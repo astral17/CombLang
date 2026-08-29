@@ -113,7 +113,7 @@ This is deliberately pre-FCIR. Placement is a deterministic preview rather than 
 
 ## Next slice
 
-Phase 3's executed compiler path is complete. Phase 4 is underway: zero-tick consuming transfer and function-scoped `Readonly`/`Ref` borrow views are executable, while owned/move call boundaries and the immutable both-colors input view remain ahead. These features extend the ordinary-JavaScript execution model rather than replacing it. The design and acceptance criteria live in [Phase 4: ownership and multi-network design](ownership-and-multi-network.md).
+Phase 3's executed compiler path is complete. Phase 4 is underway: zero-tick consuming transfer, function-scoped `Readonly`/`Ref` borrow views, and explicit `Move<Network>` call/return ownership are executable. Complete local/container ownership rules and the immutable both-colors input view remain ahead. These features extend the ordinary-JavaScript execution model rather than replacing it. The design and acceptance criteria live in [Phase 4: ownership and multi-network design](ownership-and-multi-network.md).
 
 Later native-object, exact-Decider, and placement-time parameter domains are specified in [Native objects, Deciders, and blueprint parameters](native-objects-deciders-and-parameters.md). They extend configuration values without making the concrete circuit simulator symbolic.
 

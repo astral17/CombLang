@@ -46,6 +46,7 @@ The production CLI and browser first emit definite `CL` diagnostics from the con
 | `CL1038` | definite producer attachment through `Readonly<Network>`             | use an owned Network or a `Ref<Network>` parameter                         |
 | `CL1039` | definite attempt to consume a borrowed Network                       | pass owned destination and source values to `.take(...)`                   |
 | `CL1040` | definite function escape of a borrowed Network                       | return a producer or an independently owned Network                        |
+| `CL1041` | bare `Network` function parameter has ambiguous ownership            | choose `Readonly<Network>`, `Ref<Network>`, or `Move<Network>`             |
 | `CL2001` | producer has no user destination                                     | attach it, or keep the warning if intentional                              |
 | `EX1001` | transformed elaboration program threw                                | inspect the execution message and supported executed subset                |
 | `EX1002` | compile-time execution exceeded the worker time budget               | fix an infinite/expensive loop or reduce generated work                    |
@@ -79,5 +80,6 @@ The production CLI and browser first emit definite `CL` diagnostics from the con
 | `RT2016` | mutable/shared borrow overlap or alias access conflicts    |
 | `RT2017` | an escaped function borrow is used after its lifetime      |
 | `RT2018` | color-qualified borrow conflicts with an existing color    |
+| `RT2019` | ownership was dropped or returned without a valid transfer |
 
 `tryElaborateDirectPlan()` returns these runtime diagnostics without throwing. `elaborateDirectPlan()` throws `RuntimeDiagnosticError` carrying the same structured value.
