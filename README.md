@@ -16,6 +16,7 @@ The current repository implements the Phase 3 source compiler and the first exec
 - a direct elaboration runtime that builds EG/NCIR, solves red/green constraints, and materializes a synchronous simulation;
 - package boundaries for compiler, runtime, layout, and renderer.
 - explicit zero-tick `destination.take(source)` Network union with runtime move tracking and EG/NCIR identity collapse.
+- executable `Readonly<Network>` and `Ref<Network>` function borrows with alias-safe runtime enforcement, expiry checks, and color-qualified requirements.
 
 ## Roadmap
 
@@ -24,9 +25,11 @@ The current repository implements the Phase 3 source compiler and the first exec
 - [x] Phase 2 — direct elaboration runtime: EG/NCIR, session-bound handles, attachments, provenance, color solving, and the MemoCell integration slice.
 - [x] Phase 3 — executed source compiler: conservative semantic checks, DSL-sensitive JavaScript transformation, runtime elaboration, provenance, color solving, CLI validation, and the browser workbench.
 - [ ] Phase 4 — ownership and multi-network syntax
-  - [ ] Freeze the capability model and public names for owned `Network`, `Readonly<Network>`, `Ref<Network>`, and `Move<Network>` values, including color-qualified forms.
+  - [x] Freeze and implement function-scoped `Readonly<Network>` and `Ref<Network>` capabilities, including color-qualified forms and runtime borrow views.
+  - [ ] Freeze owned bare-`Network` parameter and `Move<Network>` call/return semantics; local owned Networks retain their current behavior meanwhile.
   - [ ] Track ownership, borrows, aliases, and moved state through lexical scopes, function calls, returns, destructuring, arrays, objects, and executed control flow.
-  - [ ] Enforce the operation matrix: read-only borrows may be read, mutable borrows may receive producer attachments without being consumed, and only owned/moved values may participate in consuming transfer.
+  - [x] Enforce the function-borrow operation matrix: read-only borrows may be read, mutable borrows may receive producer attachments, neither may be consumed, and escaped views expire.
+  - [ ] Complete the owned/moved operation matrix across calls, returns, local aliases, and container ownership slots.
   - [ ] Add source-aware diagnostics for illegal copies, writes through `Readonly`, invalid borrow escapes, double moves, and use after move, with runtime checks for cases the semantic pass cannot prove.
   - [x] Freeze and implement explicit zero-tick consuming network transfer as `a.take(b)`; `a += b` and implicit Network copying remain invalid.
   - [ ] Implement `pair(a, b)` as an immutable two-network input view, including `pair(a, b)[SIGNAL]`, wildcard selections, summed red/green reads, and opposite-color constraints.

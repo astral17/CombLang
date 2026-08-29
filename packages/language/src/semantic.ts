@@ -5,6 +5,7 @@ import type { Diagnostic, SourceSpan } from '@comblang/shared';
 import { spanForNode, type ParsedSourceFile } from './parser.js';
 
 export type DslValueType = 'network' | 'number' | 'boolean' | 'signal' | 'signal-value' | 'unknown';
+type NetworkCapability = 'owned' | 'readonly' | 'ref' | 'move';
 export type OperatorDomain =
   'circuit-arithmetic' | 'compile-time' | 'typed-constant' | 'unsupported';
 
@@ -17,16 +18,27 @@ export interface SemanticSummary {
   readonly operatorDomain?: OperatorDomain;
 }
 
+function networkCapabilityFromAnnotation(
+  node: ts.TypeNode | undefined,
+): NetworkCapability | undefined {
+  if (node === undefined) return undefined;
+  const text = node.getText().replaceAll(/\s/g, '');
+  if (/^Network(?:<.+>)?$/.test(text)) return 'owned';
+  const wrapper = /^(Readonly|Ref|Move)<Network(?:<.+>)?>$/.exec(text)?.[1];
+  return wrapper === 'Readonly'
+    ? 'readonly'
+    : wrapper === 'Ref'
+      ? 'ref'
+      : wrapper === 'Move'
+        ? 'move'
+        : undefined;
+}
+
 function typeFromAnnotation(node: ts.TypeNode | undefined): DslValueType {
   if (node === undefined) return 'unknown';
   if (node.kind === ts.SyntaxKind.NumberKeyword) return 'number';
   if (node.kind === ts.SyntaxKind.BooleanKeyword) return 'boolean';
-  const text = node.getText().replaceAll(/\s/g, '');
-  return text === 'Network' ||
-    /^Network<.+>$/.test(text) ||
-    /^Readonly<Network(?:<.+>)?>$/.test(text)
-    ? 'network'
-    : 'unknown';
+  return networkCapabilityFromAnnotation(node) === undefined ? 'unknown' : 'network';
 }
 
 function operatorText(kind: ts.SyntaxKind): string | undefined {
@@ -188,6 +200,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
   const diagnostics: Diagnostic[] = [];
   const networkScopes: Set<string>[] = [new Set()];
   const networkArrayScopes: Set<string>[] = [new Set()];
+  const capabilityScopes: Map<string, NetworkCapability>[] = [new Map()];
   const producerFunctions = new Set<string>();
   const dslBuiltinNames = new Set(['Signal', 'Network', 'CC', 'IF', 'to', 'when']);
   const shadowedDslBuiltins = new Set<string>();
@@ -246,6 +259,13 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     }
     return false;
   };
+  const lookupCapability = (name: string): NetworkCapability | undefined => {
+    for (let index = capabilityScopes.length - 1; index >= 0; index -= 1) {
+      const capability = capabilityScopes[index]!.get(name);
+      if (capability !== undefined) return capability;
+    }
+    return undefined;
+  };
   const isNetworkArrayExpression = (node: ts.Expression): boolean => {
     if (ts.isParenthesizedExpression(node)) return isNetworkArrayExpression(node.expression);
     if (ts.isIdentifier(node)) return lookupNetworkArray(node.text);
@@ -270,6 +290,12 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       return isNetworkExpression(node.expression) || isNetworkArrayExpression(node.expression);
     }
     return false;
+  };
+  const capabilityOfNetworkExpression = (node: ts.Expression): NetworkCapability | undefined => {
+    if (ts.isParenthesizedExpression(node)) return capabilityOfNetworkExpression(node.expression);
+    if (ts.isIdentifier(node)) return lookupCapability(node.text);
+    if (ts.isElementAccessExpression(node)) return capabilityOfNetworkExpression(node.expression);
+    return isNetworkExpression(node) ? 'owned' : undefined;
   };
   type ProducerCertainty = 'producer' | 'non-producer' | 'runtime';
   const producerCertainty = (node: ts.Expression): ProducerCertainty => {
@@ -364,9 +390,14 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     if (ts.isFunctionDeclaration(node)) {
       const scope = new Set<string>();
       const arrayScope = new Set<string>();
+      const capabilityScope = new Map<string, NetworkCapability>();
       for (const parameter of node.parameters) {
         if (ts.isIdentifier(parameter.name) && isNetworkType(parameter.type)) {
           scope.add(parameter.name.text);
+          capabilityScope.set(
+            parameter.name.text,
+            networkCapabilityFromAnnotation(parameter.type) ?? 'owned',
+          );
         }
         if (ts.isIdentifier(parameter.name) && isNetworkArrayType(parameter.type)) {
           arrayScope.add(parameter.name.text);
@@ -374,17 +405,21 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       }
       networkScopes.push(scope);
       networkArrayScopes.push(arrayScope);
+      capabilityScopes.push(capabilityScope);
       if (node.body !== undefined) visit(node.body);
       networkScopes.pop();
       networkArrayScopes.pop();
+      capabilityScopes.pop();
       return;
     }
     if (ts.isBlock(node)) {
       networkScopes.push(new Set());
       networkArrayScopes.push(new Set());
+      capabilityScopes.push(new Map());
       node.forEachChild(visit);
       networkScopes.pop();
       networkArrayScopes.pop();
+      capabilityScopes.pop();
       return;
     }
     if (
@@ -397,9 +432,11 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     ) {
       networkScopes.push(new Set());
       networkArrayScopes.push(new Set());
+      capabilityScopes.push(new Map());
       node.forEachChild(visit);
       networkScopes.pop();
       networkArrayScopes.pop();
+      capabilityScopes.pop();
       return;
     }
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
@@ -409,6 +446,16 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
           (isNetworkExpression(node.initializer) || isProducerExpression(node.initializer)))
       ) {
         networkScopes.at(-1)!.add(node.name.text);
+        capabilityScopes
+          .at(-1)!
+          .set(
+            node.name.text,
+            networkCapabilityFromAnnotation(node.type) ??
+              (node.initializer === undefined
+                ? undefined
+                : capabilityOfNetworkExpression(node.initializer)) ??
+              'owned',
+          );
       }
       if (
         isNetworkArrayType(node.type) ||
@@ -417,10 +464,21 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
         networkArrayScopes.at(-1)!.add(node.name.text);
       }
     }
+    if (ts.isReturnStatement(node) && node.expression !== undefined) {
+      const capability = capabilityOfNetworkExpression(node.expression);
+      if (capability === 'readonly' || capability === 'ref') {
+        report(
+          'CL1040',
+          `A ${capability === 'readonly' ? 'Readonly<Network>' : 'Ref<Network>'} borrow cannot escape its function.`,
+          node,
+        );
+      }
+    }
     if (
       ts.isBinaryExpression(node) &&
       node.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken &&
       isNetworkExpression(node.left) &&
+      capabilityOfNetworkExpression(node.left) !== 'readonly' &&
       producerCertainty(node.right) === 'non-producer'
     ) {
       diagnostics.push({
@@ -430,6 +488,27 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
           'Network += requires a combinator producer; constants and Networks are not implicit attachments.',
         span: spanForNode(file, node),
       });
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken &&
+      capabilityOfNetworkExpression(node.left) === 'readonly'
+    ) {
+      report('CL1038', 'Cannot attach a producer through Readonly<Network>.', node.left);
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken &&
+      ts.isCallExpression(node.left) &&
+      ts.isIdentifier(node.left.expression) &&
+      node.left.expression.text === 'to' &&
+      isDslBuiltin('to')
+    ) {
+      for (const argument of node.left.arguments) {
+        if (capabilityOfNetworkExpression(argument) === 'readonly') {
+          report('CL1038', 'Cannot attach a producer through Readonly<Network>.', argument);
+        }
+      }
     }
     if (
       ts.isElementAccessExpression(node) &&
@@ -575,6 +654,29 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       }
       if (method === 'take' && isNetworkExpression(receiver) && node.arguments.length !== 1) {
         report('CL1037', '.take(source) requires exactly one source Network.', node);
+      }
+      if (method === 'take' && isNetworkExpression(receiver) && node.arguments.length === 1) {
+        const destinationCapability = capabilityOfNetworkExpression(receiver);
+        const sourceCapability = capabilityOfNetworkExpression(node.arguments[0]!);
+        if (
+          destinationCapability === 'readonly' ||
+          destinationCapability === 'ref' ||
+          sourceCapability === 'readonly' ||
+          sourceCapability === 'ref'
+        ) {
+          report(
+            'CL1039',
+            'Network.take(...) requires owned destination and source values; borrows cannot be consumed.',
+            node,
+          );
+        }
+      }
+      if (method === 'to' && isProducerExpression(receiver)) {
+        for (const argument of node.arguments) {
+          if (capabilityOfNetworkExpression(argument) === 'readonly') {
+            report('CL1038', 'Cannot attach a producer through Readonly<Network>.', argument);
+          }
+        }
       }
     }
     node.forEachChild(visit);

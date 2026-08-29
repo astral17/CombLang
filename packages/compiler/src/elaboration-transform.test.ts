@@ -126,4 +126,18 @@ destination.take(source);`,
 
     expect(transformElaborationModule(source).code).toContain('__dsl.take(destination, source');
   });
+
+  test('rebinds Readonly and Ref parameters to runtime borrow views', () => {
+    const source = parseFile({
+      path: 'borrows.factorio.ts',
+      text: `function Connect(output: Ref<Network<G>>, input: Readonly<Network<R>>): void {
+  output += input + 1;
+}`,
+    });
+    const code = transformElaborationModule(source).code;
+
+    expect(code).toContain('__dsl.borrowParameter(output, "ref", "output"');
+    expect(code).toContain('__dsl.borrowParameter(input, "readonly", "input"');
+    expect(code).toContain('__dsl.exitInstance({ start: 0');
+  });
 });

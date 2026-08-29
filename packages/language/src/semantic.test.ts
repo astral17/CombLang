@@ -280,4 +280,41 @@ ordinary.take();`,
 
     expect(validateDslSemantics(parsed).map(({ code }) => code)).toEqual(['CL1037', 'CL1037']);
   });
+
+  test('enforces definite Readonly and Ref parameter capabilities', () => {
+    const parsed = parseFile({
+      path: 'capabilities.ts',
+      text: `function Invalid(readonlyOutput: Readonly<Network>, refOutput: Ref<Network>, input: Readonly<Network>): Network {
+  const alias = readonlyOutput;
+  readonlyOutput += input + 1;
+  alias += input + 1;
+  (input + 2).to(readonlyOutput);
+  to(readonlyOutput) += input + 3;
+  refOutput += input + 4;
+  refOutput.take(input);
+  return input;
+}`,
+    });
+
+    expect(validateDslSemantics(parsed).map(({ code }) => code)).toEqual([
+      'CL1038',
+      'CL1038',
+      'CL1038',
+      'CL1038',
+      'CL1039',
+      'CL1040',
+    ]);
+  });
+
+  test('recognizes color-qualified Ref and Move Network annotations', () => {
+    const parsed = parseFile({
+      path: 'capability-types.ts',
+      text: `function Connect(output: Ref<Network<G>>, input: Readonly<Network<R>>, owned: Move<Network>): void {
+  output += input + 1;
+  owned.take(new Network());
+}`,
+    });
+
+    expect(validateDslSemantics(parsed)).toEqual([]);
+  });
 });

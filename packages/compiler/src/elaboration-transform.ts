@@ -109,6 +109,23 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
 
   const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
     const { factory } = context;
+    const borrowDescriptorForType = (
+      type: ts.TypeNode | undefined,
+    ):
+      | {
+          readonly capability: 'readonly' | 'ref';
+          readonly color?: 'red' | 'green';
+        }
+      | undefined => {
+      const text = type?.getText(file.ast).replaceAll(/\s/g, '') ?? '';
+      const match = /^(Readonly|Ref)<Network(?:<(.+)>)?>$/.exec(text);
+      if (match === null) return undefined;
+      const color = match[2] === 'R' ? 'red' : match[2] === 'G' ? 'green' : undefined;
+      return {
+        capability: match[1] === 'Readonly' ? 'readonly' : 'ref',
+        ...(color === undefined ? {} : { color }),
+      };
+    };
     const networkCall = (node: ts.NewExpression, name?: string): ts.Expression => {
       const color = node.typeArguments?.[0]?.getText(file.ast);
       return dslCall(factory, 'network', [
@@ -189,7 +206,11 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
             ),
             undefined,
             factory.createBlock(
-              [factory.createExpressionStatement(dslCall(factory, 'exitInstance', []))],
+              [
+                factory.createExpressionStatement(
+                  dslCall(factory, 'exitInstance', [spanLiteral(factory, source)]),
+                ),
+              ],
               true,
             ),
           ),
@@ -293,6 +314,26 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
 
       if (ts.isFunctionDeclaration(node) && node.body !== undefined) {
         const name = node.name?.text ?? '<anonymous>';
+        const parameterBorrows = node.parameters.flatMap((parameter) => {
+          const descriptor = borrowDescriptorForType(parameter.type);
+          if (descriptor === undefined || !ts.isIdentifier(parameter.name)) return [];
+          return [
+            factory.createExpressionStatement(
+              factory.createAssignment(
+                parameter.name,
+                dslCall(factory, 'borrowParameter', [
+                  parameter.name,
+                  factory.createStringLiteral(descriptor.capability),
+                  factory.createStringLiteral(parameter.name.text),
+                  descriptor.color === undefined
+                    ? factory.createVoidZero()
+                    : factory.createStringLiteral(descriptor.color),
+                  spanLiteral(factory, parameter),
+                ]),
+              ),
+            ),
+          ];
+        });
         const body = factory.createBlock(
           [
             factory.createExpressionStatement(
@@ -303,14 +344,21 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
             ),
             factory.createTryStatement(
               factory.createBlock(
-                node.body.statements.map(
-                  (statement) => ts.visitNode(statement, visit) as ts.Statement,
-                ),
+                [
+                  ...parameterBorrows,
+                  ...node.body.statements.map(
+                    (statement) => ts.visitNode(statement, visit) as ts.Statement,
+                  ),
+                ],
                 true,
               ),
               undefined,
               factory.createBlock(
-                [factory.createExpressionStatement(dslCall(factory, 'exitInstance', []))],
+                [
+                  factory.createExpressionStatement(
+                    dslCall(factory, 'exitInstance', [spanLiteral(factory, node)]),
+                  ),
+                ],
                 true,
               ),
             ),

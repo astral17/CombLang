@@ -225,6 +225,24 @@ function Scale(input: Readonly<Network>): Network {
 const output: Network = Scale(input);
 ```
 
+`Readonly<Network>` and `Ref<Network>` are executable function-parameter capabilities:
+
+| Parameter type                | Read signals | Receive producer attachment | Participate in `.take(...)` |
+| ----------------------------- | ------------ | --------------------------- | --------------------------- |
+| `Readonly<Network>`           | yes          | no                          | no                          |
+| `Ref<Network>`                | yes          | yes                         | no                          |
+| owned Network created locally | yes          | yes                         | yes                         |
+
+```ts
+function Connect(output: Ref<Network<G>>, input: Readonly<Network<R>>): void {
+  output += input + 1;
+}
+```
+
+The annotations create runtime views over the actual Network identity; they do not copy topology. Aliases and containers therefore cannot bypass the operation matrix. Multiple `Readonly` views may overlap, while a `Ref` is exclusive and currently cannot overlap either another `Ref` or a `Readonly` view. Both views expire on function return. Returning a borrowed parameter directly reports `CL1040`; a borrow hidden in a dynamic container reports `RT2017` if later used. `<R>`/`<G>` inside a capability is a real color requirement and a conflict reports `RT2018`.
+
+This slice does not yet define transfer-on-call for `Move<Network>`, owned bare-`Network` parameters, or complete local/container lifetime inference. These remain Phase 4 work rather than implicit behavior.
+
 A structural function may instead declare local Networks, attach producers to them, and return one of those Networks. Each call receives independent local Networks:
 
 ```ts
@@ -240,7 +258,7 @@ const input = new Network();
 const output: Network = MemoCell(input);
 ```
 
-Returning a producer lets the caller materialize or attach it contextually. Returning an existing Network returns that runtime handle; other local Networks remain private unless returned or otherwise attached. A function that returns an ordinary value remains an ordinary JavaScript function, and an error is reported only if the executed value is later used in an operation that requires a Network, Signal, Condition, or Producer.
+Returning a producer lets the caller materialize or attach it contextually. Returning an independently owned local Network returns that runtime handle; other local Networks remain private unless returned or otherwise attached. A borrowed parameter cannot be promoted to an owned return. A function that returns an ordinary value remains an ordinary JavaScript function, and an error is reported only if the executed value is later used in an operation that requires a Network, Signal, Condition, or Producer.
 
 Each function declaration call receives an independent provenance scope, so generated Networks, producers, and attachments retain the dynamic function path. Async syntax may be parsed inside a function, but Promise-based circuit elaboration is not supported by the current synchronous executor. Imports and multi-module elaboration are not implemented yet.
 

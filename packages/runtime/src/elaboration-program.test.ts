@@ -602,11 +602,11 @@ const biased = dx + 10;`,
     });
   });
 
-  test('selects a Network returned at runtime without a declaration annotation', () => {
+  test('selects a Network returned by ordinary JavaScript without a declaration annotation', () => {
     const parsed = parseFile({
       path: 'runtime-selection.factorio.ts',
       text: `const A = Signal("virtual", "signal-A");
-function Identity(input: Readonly<Network>): Network { return input; }
+function Identity(input) { return input; }
 const input = CC(5 * A);
 const inferred = Identity(input);
 const output = IF(inferred[A] > 0, inferred[A]);`,
@@ -963,5 +963,126 @@ if (result !== 3) throw new Error("ordinary take failed");`,
     });
 
     expect(executeElaborationProgram(transformElaborationModule(parsed)).networks).toEqual([]);
+  });
+
+  test('allows Ref attachment and overlapping Readonly parameters', () => {
+    const parsed = parseFile({
+      path: 'valid-borrows.factorio.ts',
+      text: `function Connect(output: Ref<Network>, left: Readonly<Network>, right: Readonly<Network>): void {
+  output += left + right;
+}
+const input = new Network();
+const output = new Network();
+Connect(output, input, input);`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.producers).toMatchObject([
+      {
+        kind: 'arithmetic',
+        left: { kind: 'each', network: 'input' },
+        right: { kind: 'each', network: 'input' },
+        destinations: [{ network: 'output' }],
+      },
+    ]);
+  });
+
+  test('applies color-qualified borrow requirements to the underlying Network', () => {
+    const parsed = parseFile({
+      path: 'borrow-colors.factorio.ts',
+      text: `function Connect(output: Ref<Network<G>>, input: Readonly<Network<R>>): void {
+  output += input + 1;
+}
+const input = new Network();
+const output = new Network();
+Connect(output, input);`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.networks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'input', fixedColor: 'red' }),
+        expect.objectContaining({ name: 'output', fixedColor: 'green' }),
+      ]),
+    );
+
+    const conflicting = parseFile({
+      path: 'borrow-color-conflict.factorio.ts',
+      text: `function Read(input: Readonly<Network<R>>): Network { return input + 1; }
+const input = new Network<G>();
+const output: Network = Read(input);`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(conflicting))).toThrowError(
+      expect.objectContaining({ code: 'RT2018' }),
+    );
+  });
+
+  test('rejects writes and consuming transfer through borrowed parameters', () => {
+    const readonlyWrite = parseFile({
+      path: 'readonly-write.factorio.ts',
+      text: `function Write(output: Readonly<Network>, input: Readonly<Network>): void {
+  output += input + 1;
+}
+Write(new Network(), new Network());`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(readonlyWrite))).toThrowError(
+      expect.objectContaining({ code: 'RT2015' }),
+    );
+
+    const refTake = parseFile({
+      path: 'ref-take.factorio.ts',
+      text: `function Merge(destination: Ref<Network>, source: Readonly<Network>): void {
+  destination.take(source);
+}
+Merge(new Network(), new Network());`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(refTake))).toThrowError(
+      expect.objectContaining({ code: 'RT2015' }),
+    );
+  });
+
+  test('rejects overlapping mutable/shared borrows and writes through an outer alias', () => {
+    const overlap = parseFile({
+      path: 'borrow-overlap.factorio.ts',
+      text: `function Invalid(write: Ref<Network>, read: Readonly<Network>): void {}
+const network = new Network();
+Invalid(network, network);`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(overlap))).toThrowError(
+      expect.objectContaining({ code: 'RT2016' }),
+    );
+
+    const aliasWrite = parseFile({
+      path: 'borrow-alias.factorio.ts',
+      text: `const network = new Network();
+function Invalid(_read: Readonly<Network>): void {
+  network += CC(1 * Signal("virtual", "signal-A"));
+}
+Invalid(network);`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(aliasWrite))).toThrowError(
+      expect.objectContaining({ code: 'RT2016' }),
+    );
+  });
+
+  test('rejects a borrowed view that escapes through a dynamic container', () => {
+    const parsed = parseFile({
+      path: 'borrow-escape.factorio.ts',
+      text: `function Leak(input: Readonly<Network>) { return [input]; }
+const input = new Network();
+const escaped = Leak(input);
+const output: Network = escaped[0] + 1;`,
+    });
+
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      throw new Error('Expected borrow escape failure.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ElaborationExecutionError);
+      const ownership = error as ElaborationExecutionError;
+      expect(ownership.code).toBe('RT2017');
+      expect(parsed.text.slice(ownership.span.start, ownership.span.end)).toBe('escaped[0] + 1');
+      expect(ownership.related).toHaveLength(2);
+    }
   });
 });

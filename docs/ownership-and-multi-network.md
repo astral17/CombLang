@@ -39,7 +39,7 @@ Move<Network>;
 
 `const` only prevents rebinding a JavaScript variable. It does not turn an owned Network into `Readonly<Network>` and does not prevent a producer from being physically attached to that Network.
 
-The existing parser already accepts annotations such as `Readonly<Network>`. Until Phase 4 implements capability checking, that acceptance must not be interpreted as complete ownership enforcement.
+Function parameters annotated as `Readonly<Network>` or `Ref<Network>` now receive runtime borrow views. Direct, provably invalid operations are also rejected by the conservative semantic pass. Local lifetime inference, `Move<Network>` transfer-on-call, and the complete container/control-flow ownership model remain unfinished, so parsing another capability-shaped annotation must not be interpreted as complete enforcement.
 
 ## Function boundaries
 
@@ -55,7 +55,7 @@ function AddIndicator(output: Ref<Network>, input: Readonly<Network>): void {
 }
 ```
 
-A read-only parameter may feed arithmetic, conditions, selections, and typed Factorio inputs. A mutable reference may additionally receive producer outputs, but the callee cannot consume the caller's Network. An owned return value transfers ownership out of the function.
+A read-only parameter may feed arithmetic, conditions, selections, and typed Factorio inputs. A mutable reference may additionally receive producer outputs, but the callee cannot consume the caller's Network. Both views expire when the function returns; definite direct escapes are static errors and dynamically hidden escapes fail when used. Multiple shared borrows may overlap, while an overlapping mutable/shared borrow currently fails conservatively. Color-qualified borrow types add real color requirements to the underlying Network. An owned return value transfers ownership out of the function once owned-parameter semantics are completed.
 
 Bare `Network` parameters remain an open design question: they could mean implicit ownership transfer, but an explicit consuming mode is easier to audit. Phase 4 must settle this before enabling owned parameters.
 

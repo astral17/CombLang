@@ -44,11 +44,31 @@ export class ElaborationExecutionError extends Error {
   }
 }
 
+type RuntimeNetworkCapability = 'owned' | 'readonly' | 'ref';
+
+interface NetworkBorrow {
+  readonly capability: Exclude<RuntimeNetworkCapability, 'owned'>;
+  readonly parameter: string;
+  readonly source: SourceSpan;
+  readonly ownership: NetworkOwnershipState;
+  active: boolean;
+  releasedAt?: SourceSpan;
+}
+
+interface NetworkOwnershipState {
+  movedAt?: SourceSpan;
+  colorRequirement?: { readonly color: 'red' | 'green'; readonly source: SourceSpan };
+  readonlyBorrows: Set<NetworkBorrow>;
+  mutableBorrow?: NetworkBorrow;
+}
+
 interface NetworkValue {
   readonly kind: 'network';
   readonly name: string;
   readonly declaration: SourceSpan;
-  movedAt?: SourceSpan;
+  readonly ownership: NetworkOwnershipState;
+  readonly capability: RuntimeNetworkCapability;
+  readonly borrow?: NetworkBorrow;
 }
 
 interface SignalValue {
@@ -169,6 +189,7 @@ class ElaborationRecorder {
   readonly #networkNameCounts = new Map<string, number>();
   readonly #anonymousLoopCounts = new Map<string, number>();
   readonly #instancePath: string[] = [];
+  readonly #instanceBorrows: (NetworkBorrow[] | undefined)[] = [];
   readonly #dslCallBudget: number;
   #dslCalls = 0;
 
@@ -180,6 +201,7 @@ class ElaborationRecorder {
   readonly api = Object.freeze({
     enterFunction: (name: string, _rawSpan: RawSpan): void => {
       this.#instancePath.push(`function ${name}`);
+      this.#instanceBorrows.push([]);
     },
     enterLoop: (name: string, value: unknown, _rawSpan: RawSpan): void => {
       if (value === undefined) {
@@ -189,10 +211,21 @@ class ElaborationRecorder {
       } else {
         this.#instancePath.push(`for ${name}=${String(value)}`);
       }
+      this.#instanceBorrows.push(undefined);
     },
-    exitInstance: (): void => {
+    exitInstance: (rawSpan?: RawSpan): void => {
+      const borrows = this.#instanceBorrows.pop();
       if (this.#instancePath.pop() === undefined) {
         throw new Error('Executed provenance stack underflow.');
+      }
+      if (borrows !== undefined) {
+        for (const borrow of borrows.toReversed()) {
+          borrow.active = false;
+          if (isRawSpan(rawSpan)) borrow.releasedAt = this.#span(rawSpan);
+          const ownership = borrow.ownership;
+          if (borrow.capability === 'readonly') ownership.readonlyBorrows.delete(borrow);
+          else if (ownership.mutableBorrow === borrow) delete ownership.mutableBorrow;
+        }
       }
     },
     signal: (...args: unknown[]) => {
@@ -218,7 +251,7 @@ class ElaborationRecorder {
     wildcard: (value: WildcardName, network: NetworkValue, rawSpan: RawSpan): SelectedValue => {
       this.#recordDslCall();
       if (!this.#isNetwork(network)) throw new Error('Wildcard selection requires a Network.');
-      this.#assertLiveNetwork(network, rawSpan);
+      this.#assertReadableNetwork(network, rawSpan);
       return { kind: 'selected', network, selection: value };
     },
     constant: (...args: unknown[]): ProducerValue => {
@@ -246,6 +279,63 @@ class ElaborationRecorder {
     ): NetworkValue => {
       return this.#network(name ?? `$network:${++this.#anonymousOrdinal}`, rawSpan, fixedColor);
     },
+    borrowParameter: (
+      value: unknown,
+      capability: 'readonly' | 'ref',
+      parameter: string,
+      fixedColor: 'red' | 'green' | undefined,
+      rawSpan: RawSpan,
+    ): NetworkValue => {
+      if (!isRawSpan(rawSpan) || (capability !== 'readonly' && capability !== 'ref')) {
+        throw new Error('Invalid Network parameter capability descriptor.');
+      }
+      if (!this.#isNetwork(value)) {
+        throw new ElaborationExecutionError(
+          `${capability === 'readonly' ? 'Readonly<Network>' : 'Ref<Network>'} parameter ${parameter} received a non-Network value.`,
+          this.#span(rawSpan),
+          'RT2015',
+        );
+      }
+      this.#recordDslCall();
+      this.#assertReadableNetwork(value, rawSpan);
+      if (fixedColor !== undefined)
+        this.#requireNetworkColor(value, capability, fixedColor, rawSpan);
+      const frame = this.#instanceBorrows.at(-1);
+      if (frame === undefined) {
+        throw new Error('Network parameter borrow was created outside a function frame.');
+      }
+      const ownership = value.ownership;
+      const conflicting =
+        capability === 'readonly'
+          ? ownership.mutableBorrow
+          : (ownership.mutableBorrow ?? ownership.readonlyBorrows.values().next().value);
+      if (conflicting !== undefined) {
+        throw new ElaborationExecutionError(
+          `Cannot create ${capability === 'readonly' ? 'Readonly<Network>' : 'Ref<Network>'} parameter ${parameter} while Network ${value.name} is already borrowed.`,
+          this.#span(rawSpan),
+          'RT2016',
+          [{ message: 'Conflicting borrow created here.', span: conflicting.source }],
+        );
+      }
+      const borrow: NetworkBorrow = {
+        capability,
+        parameter,
+        source: this.#span(rawSpan),
+        ownership,
+        active: true,
+      };
+      if (capability === 'readonly') ownership.readonlyBorrows.add(borrow);
+      else ownership.mutableBorrow = borrow;
+      frame.push(borrow);
+      return {
+        kind: 'network',
+        name: value.name,
+        declaration: value.declaration,
+        ownership,
+        capability,
+        borrow,
+      };
+    },
     take: (...args: unknown[]): unknown => {
       const rawSpan = args.at(-1);
       const destination = args[0];
@@ -271,9 +361,9 @@ class ElaborationRecorder {
       if (!this.#isNetwork(source)) {
         throw new Error('.take(source) requires a source Network.');
       }
-      this.#assertLiveNetwork(destination, rawSpan, 'destination');
-      this.#assertLiveNetwork(source, rawSpan, 'source');
-      if (destination === source) {
+      this.#assertConsumableNetwork(destination, rawSpan, 'destination');
+      this.#assertConsumableNetwork(source, rawSpan, 'source');
+      if (destination.ownership === source.ownership) {
         throw new ElaborationExecutionError(
           'A Network cannot take itself.',
           this.#span(rawSpan),
@@ -288,7 +378,7 @@ class ElaborationRecorder {
         provenance,
         instancePath: this.#path(),
       });
-      source.movedAt = provenance;
+      source.ownership.movedAt = provenance;
       return destination;
     },
     materialize: (
@@ -357,8 +447,8 @@ class ElaborationRecorder {
         return this.#compareJavaScript(operator, left, right);
       }
       this.#recordDslCall();
-      this.#assertLiveValue(left, rawSpan);
-      this.#assertLiveValue(right, rawSpan);
+      this.#assertReadableValue(left, rawSpan);
+      this.#assertReadableValue(right, rawSpan);
       if (this.#isSelected(left) && this.#isSelected(right)) {
         if (!isSignal(left.selection) || !isSignal(right.selection)) {
           throw new Error('Signal-to-signal comparison requires concrete Signal selections.');
@@ -482,7 +572,7 @@ class ElaborationRecorder {
           'to(...) destinations must be Networks; pass an optional output Signal as the final argument.',
         );
       }
-      for (const network of values) this.#assertLiveNetwork(network, rawSpan, 'destination');
+      for (const network of values) this.#assertWritableNetwork(network, rawSpan, 'destination');
       return {
         kind: 'destinations',
         networks: values,
@@ -595,8 +685,8 @@ class ElaborationRecorder {
         return this.#binaryJavaScript(operator, left, right);
       }
       this.#recordDslCall();
-      this.#assertLiveValue(left, rawSpan);
-      this.#assertLiveValue(right, rawSpan);
+      this.#assertReadableValue(left, rawSpan);
+      this.#assertReadableValue(right, rawSpan);
       const signal = isSignal(left) ? left : isSignal(right) ? right : undefined;
       const signalCount =
         typeof left === 'number' ? left : typeof right === 'number' ? right : undefined;
@@ -649,7 +739,7 @@ class ElaborationRecorder {
     ): unknown => {
       const destination =
         this.#isNetwork(left) || this.#isSelected(left) || this.#isDestination(left);
-      if (destination) this.#assertLiveValue(left, rawSpan);
+      if (destination) this.#assertWritableValue(left, rawSpan);
       if (destination && this.#isProducer(right)) {
         this.api.attach(left, right, rawSpan);
         return left;
@@ -748,13 +838,25 @@ class ElaborationRecorder {
     const occurrence = (this.#networkNameCounts.get(name) ?? 0) + 1;
     this.#networkNameCounts.set(name, occurrence);
     const instanceName = occurrence === 1 ? name : `$instance:${occurrence}:${name}`;
+    const declaration = this.#span(rawSpan);
     this.#networks.push({
       name: instanceName,
       ...(fixedColor === undefined ? {} : { fixedColor }),
-      source: this.#span(rawSpan),
+      source: declaration,
       instancePath: this.#path(),
     });
-    return { kind: 'network', name: instanceName, declaration: this.#span(rawSpan) };
+    return {
+      kind: 'network',
+      name: instanceName,
+      declaration,
+      ownership: {
+        readonlyBorrows: new Set(),
+        ...(fixedColor === undefined
+          ? {}
+          : { colorRequirement: { color: fixedColor, source: declaration } }),
+      },
+      capability: 'owned',
+    };
   }
 
   #bindingNetwork(descriptor: BindingDescriptor, rawSpan: RawSpan): NetworkValue {
@@ -780,7 +882,7 @@ class ElaborationRecorder {
     if (networks.length === 0 || networks.length > 2) {
       throw new Error('A producer destructuring/attachment requires one or two Network outputs.');
     }
-    for (const network of networks) this.#assertLiveNetwork(network, rawSpan, 'destination');
+    for (const network of networks) this.#assertWritableNetwork(network, rawSpan, 'destination');
     this.#producers.push({
       ...value.producer,
       destinations: networks.map((network) => ({
@@ -798,17 +900,114 @@ class ElaborationRecorder {
     );
   }
 
-  #assertLiveNetwork(network: NetworkValue, rawSpan: RawSpan, role = 'Network'): void {
-    if (network.movedAt === undefined) return;
-    throw new ElaborationExecutionError(
-      `Cannot use moved ${role} ${network.name}.`,
-      this.#span(rawSpan),
-      'RT2012',
-      [
-        { message: 'Network was moved here.', span: network.movedAt },
-        { message: 'Network was declared here.', span: network.declaration },
-      ],
-    );
+  #assertReadableNetwork(network: NetworkValue, rawSpan: RawSpan, role = 'Network'): void {
+    const movedAt = network.ownership.movedAt;
+    if (movedAt !== undefined) {
+      throw new ElaborationExecutionError(
+        `Cannot use moved ${role} ${network.name}.`,
+        this.#span(rawSpan),
+        'RT2012',
+        [
+          { message: 'Network was moved here.', span: movedAt },
+          { message: 'Network was declared here.', span: network.declaration },
+        ],
+      );
+    }
+    if (network.borrow !== undefined && !network.borrow.active) {
+      throw new ElaborationExecutionError(
+        `Cannot use expired ${network.capability === 'readonly' ? 'Readonly<Network>' : 'Ref<Network>'} parameter ${network.borrow.parameter}.`,
+        this.#span(rawSpan),
+        'RT2017',
+        [
+          { message: 'Borrow created here.', span: network.borrow.source },
+          ...(network.borrow.releasedAt === undefined
+            ? []
+            : [{ message: 'Borrow ended here.', span: network.borrow.releasedAt }]),
+        ],
+      );
+    }
+    const mutableBorrow = network.ownership.mutableBorrow;
+    if (mutableBorrow !== undefined && network.borrow !== mutableBorrow) {
+      throw new ElaborationExecutionError(
+        `Cannot read Network ${network.name} while it is mutably borrowed.`,
+        this.#span(rawSpan),
+        'RT2016',
+        [{ message: 'Mutable borrow created here.', span: mutableBorrow.source }],
+      );
+    }
+  }
+
+  #requireNetworkColor(
+    network: NetworkValue,
+    capability: 'readonly' | 'ref',
+    color: 'red' | 'green',
+    rawSpan: RawSpan,
+  ): void {
+    const existing = network.ownership.colorRequirement;
+    if (existing?.color === color) return;
+    if (existing !== undefined) {
+      throw new ElaborationExecutionError(
+        `${capability === 'ref' ? 'Ref' : 'Readonly'}<Network<${color === 'red' ? 'R' : 'G'}>> conflicts with the existing ${existing.color} requirement for Network ${network.name}.`,
+        this.#span(rawSpan),
+        'RT2018',
+        [{ message: 'Existing color requirement originates here.', span: existing.source }],
+      );
+    }
+    const requirement = { color, source: this.#span(rawSpan) } as const;
+    network.ownership.colorRequirement = requirement;
+    const index = this.#networks.findLastIndex(({ name }) => name === network.name);
+    const declaration = this.#networks[index];
+    if (declaration === undefined) {
+      throw new Error(`Cannot find Network descriptor for color requirement: ${network.name}.`);
+    }
+    this.#networks[index] = { ...declaration, fixedColor: color };
+  }
+
+  #assertWritableNetwork(network: NetworkValue, rawSpan: RawSpan, role = 'Network'): void {
+    this.#assertReadableNetwork(network, rawSpan, role);
+    if (network.capability === 'readonly') {
+      throw new ElaborationExecutionError(
+        `Cannot attach a producer through Readonly<Network> parameter ${network.borrow?.parameter ?? network.name}.`,
+        this.#span(rawSpan),
+        'RT2015',
+        network.borrow === undefined
+          ? undefined
+          : [{ message: 'Readonly borrow created here.', span: network.borrow.source }],
+      );
+    }
+    const readonlyBorrow = network.ownership.readonlyBorrows.values().next().value;
+    if (readonlyBorrow !== undefined) {
+      throw new ElaborationExecutionError(
+        `Cannot write Network ${network.name} while it is read-only borrowed.`,
+        this.#span(rawSpan),
+        'RT2016',
+        [{ message: 'Readonly borrow created here.', span: readonlyBorrow.source }],
+      );
+    }
+  }
+
+  #assertConsumableNetwork(network: NetworkValue, rawSpan: RawSpan, role: string): void {
+    this.#assertReadableNetwork(network, rawSpan, role);
+    if (network.capability !== 'owned') {
+      throw new ElaborationExecutionError(
+        `Cannot consume ${network.capability === 'readonly' ? 'Readonly<Network>' : 'Ref<Network>'} ${role} ${network.name}.`,
+        this.#span(rawSpan),
+        'RT2015',
+        network.borrow === undefined
+          ? undefined
+          : [{ message: 'Borrow created here.', span: network.borrow.source }],
+      );
+    }
+    const activeBorrow =
+      network.ownership.mutableBorrow ?? network.ownership.readonlyBorrows.values().next().value;
+    if (activeBorrow !== undefined) {
+      throw new ElaborationExecutionError(
+        `Cannot consume Network ${network.name} while it is borrowed.`,
+        this.#span(rawSpan),
+        'RT2016',
+        [{ message: 'Borrow created here.', span: activeBorrow.source }],
+      );
+    }
   }
 
   #path(): readonly string[] {
@@ -869,18 +1068,18 @@ class ElaborationRecorder {
       );
     }
     if (!this.#isNetwork(value)) throw new Error('Signal selection requires a Network.');
-    this.#assertLiveNetwork(value, rawSpan);
+    this.#assertReadableNetwork(value, rawSpan);
     return { kind: 'selected', network: value, selection: selection as SignalId | WildcardName };
   }
 
   #arithmeticOperand(value: DslValue, rawSpan: RawSpan): PlanArithmeticOperand {
     if (typeof value === 'number') return { kind: 'constant', value };
     if (this.#isNetwork(value)) {
-      this.#assertLiveNetwork(value, rawSpan);
+      this.#assertReadableNetwork(value, rawSpan);
       return { kind: 'each', network: value.name };
     }
     if (this.#isSelected(value)) {
-      this.#assertLiveNetwork(value.network, rawSpan);
+      this.#assertReadableNetwork(value.network, rawSpan);
       if (isSignal(value.selection)) {
         return { kind: 'signal', network: value.network.name, signal: value.selection };
       }
@@ -921,7 +1120,7 @@ class ElaborationRecorder {
       return { kind: 'each-constant', value: output.value };
     }
     if (this.#isSelected(output)) {
-      this.#assertLiveNetwork(output.network, rawSpan);
+      this.#assertReadableNetwork(output.network, rawSpan);
       return isSignal(output.selection)
         ? { kind: 'signal', network: output.network.name, signal: output.selection }
         : output.selection === 'each'
@@ -933,7 +1132,7 @@ class ElaborationRecorder {
             };
     }
     if (this.#isNetwork(output)) {
-      this.#assertLiveNetwork(output, rawSpan);
+      this.#assertReadableNetwork(output, rawSpan);
       return { kind: 'each', network: output.name };
     }
     throw new Error('Unsupported decider output specification.');
@@ -1017,11 +1216,19 @@ class ElaborationRecorder {
     );
   }
 
-  #assertLiveValue(value: unknown, rawSpan: RawSpan): void {
-    if (this.#isNetwork(value)) this.#assertLiveNetwork(value, rawSpan);
-    if (this.#isSelected(value)) this.#assertLiveNetwork(value.network, rawSpan);
+  #assertReadableValue(value: unknown, rawSpan: RawSpan): void {
+    if (this.#isNetwork(value)) this.#assertReadableNetwork(value, rawSpan);
+    if (this.#isSelected(value)) this.#assertReadableNetwork(value.network, rawSpan);
     if (this.#isDestination(value)) {
-      for (const network of value.networks) this.#assertLiveNetwork(network, rawSpan);
+      for (const network of value.networks) this.#assertReadableNetwork(network, rawSpan);
+    }
+  }
+
+  #assertWritableValue(value: unknown, rawSpan: RawSpan): void {
+    if (this.#isNetwork(value)) this.#assertWritableNetwork(value, rawSpan);
+    if (this.#isSelected(value)) this.#assertWritableNetwork(value.network, rawSpan);
+    if (this.#isDestination(value)) {
+      for (const network of value.networks) this.#assertWritableNetwork(network, rawSpan);
     }
   }
 

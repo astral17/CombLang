@@ -43,6 +43,9 @@ The production CLI and browser first emit definite `CL` diagnostics from the con
 | `CL1035` | malformed `Network` construction or producer placement               | use `new Network()` or `.at(x, y, direction?)`                             |
 | `CL1036` | source is outside the Phase 3 single-file module boundary            | remove imports, exports, dynamic import, or top-level await                |
 | `CL1037` | definite malformed consuming Network transfer                        | write `destination.take(source)`                                           |
+| `CL1038` | definite producer attachment through `Readonly<Network>`             | use an owned Network or a `Ref<Network>` parameter                         |
+| `CL1039` | definite attempt to consume a borrowed Network                       | pass owned destination and source values to `.take(...)`                   |
+| `CL1040` | definite function escape of a borrowed Network                       | return a producer or an independently owned Network                        |
 | `CL2001` | producer has no user destination                                     | attach it, or keep the warning if intentional                              |
 | `EX1001` | transformed elaboration program threw                                | inspect the execution message and supported executed subset                |
 | `EX1002` | compile-time execution exceeded the worker time budget               | fix an infinite/expensive loop or reduce generated work                    |
@@ -72,5 +75,9 @@ The production CLI and browser first emit definite `CL` diagnostics from the con
 | `RT2012` | moved Network is used or consumed again                    |
 | `RT2013` | Network takes itself or an already unified alias           |
 | `RT2014` | transfer unifies contradictory fixed color requirements    |
+| `RT2015` | executed operation exceeds a Network capability            |
+| `RT2016` | mutable/shared borrow overlap or alias access conflicts    |
+| `RT2017` | an escaped function borrow is used after its lifetime      |
+| `RT2018` | color-qualified borrow conflicts with an existing color    |
 
 `tryElaborateDirectPlan()` returns these runtime diagnostics without throwing. `elaborateDirectPlan()` throws `RuntimeDiagnosticError` carrying the same structured value.

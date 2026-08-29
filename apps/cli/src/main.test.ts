@@ -63,4 +63,19 @@ const output: Network = aliases[0] + 1;`);
       expect.objectContaining({ code: 'RT2012', severity: 'error', related: expect.any(Array) }),
     ]);
   });
+
+  test('reports runtime borrow conflicts that conservative semantics cannot prove', async () => {
+    const path = await sourceFile(`const network = new Network();
+function Invalid(_read: Readonly<Network>): void {
+  network += CC(1 * Signal("virtual", "signal-A"));
+}
+Invalid(network);`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path])).toBe(1);
+    const result = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: 'RT2016', severity: 'error', related: expect.any(Array) }),
+    ]);
+  });
 });
