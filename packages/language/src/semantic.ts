@@ -231,6 +231,16 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
 
   const isNetworkType = (node: ts.TypeNode | undefined): boolean =>
     typeFromAnnotation(node) === 'network';
+  const producerHandleTypeName = (node: ts.TypeNode | undefined): string | undefined => {
+    const text = node?.getText(file.ast).replaceAll(/\s/g, '') ?? '';
+    return ['Producer', 'DeciderCombinator', 'ArithmeticCombinator', 'ConstantCombinator'].includes(
+      text,
+    )
+      ? text
+      : undefined;
+  };
+  const isProducerHandleType = (node: ts.TypeNode | undefined): boolean =>
+    producerHandleTypeName(node) !== undefined;
   const isNetworkArrayType = (node: ts.TypeNode | undefined): boolean => {
     const text = node?.getText(file.ast).replaceAll(/\s/g, '') ?? '';
     return (
@@ -368,6 +378,44 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
   };
   const isProducerExpression = (node: ts.Expression): boolean =>
     producerCertainty(node) === 'producer';
+  const producerKindOfExpression = (
+    node: ts.Expression,
+  ): 'arithmetic' | 'decider' | 'constant' | undefined => {
+    if (ts.isParenthesizedExpression(node)) return producerKindOfExpression(node.expression);
+    if (ts.isBinaryExpression(node) && operatorText(node.operatorToken.kind) !== undefined) {
+      return 'arithmetic';
+    }
+    if (!ts.isCallExpression(node)) return undefined;
+    if (ts.isIdentifier(node.expression)) {
+      if (node.expression.text === 'CC' && isDslBuiltin('CC')) return 'constant';
+      if (node.expression.text === 'IF' && isDslBuiltin('IF')) return 'decider';
+      return undefined;
+    }
+    if (ts.isPropertyAccessExpression(node.expression)) {
+      if (node.expression.name.text === 'then') return 'decider';
+      if (node.expression.name.text === 'as' || node.expression.name.text === 'at') {
+        return producerKindOfExpression(node.expression.expression);
+      }
+    }
+    return undefined;
+  };
+  const enclosingFunctionDeclaration = (node: ts.Node): ts.FunctionDeclaration | undefined => {
+    for (let parent = node.parent; parent !== undefined; parent = parent.parent) {
+      if (ts.isFunctionLike(parent)) {
+        return ts.isFunctionDeclaration(parent) ? parent : undefined;
+      }
+    }
+    return undefined;
+  };
+  const producerTypeAcceptsKind = (
+    type: string,
+    kind: 'arithmetic' | 'decider' | 'constant' | undefined,
+  ): boolean =>
+    kind === undefined ||
+    type === 'Producer' ||
+    (type === 'ArithmeticCombinator' && kind === 'arithmetic') ||
+    (type === 'DeciderCombinator' && kind === 'decider') ||
+    (type === 'ConstantCombinator' && kind === 'constant');
   const isDefinitelyNonSignal = (node: ts.Expression): boolean => {
     if (ts.isParenthesizedExpression(node)) return isDefinitelyNonSignal(node.expression);
     return (
@@ -464,6 +512,19 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       return;
     }
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+      const producerType = producerHandleTypeName(node.type);
+      if (
+        producerType !== undefined &&
+        node.initializer !== undefined &&
+        (producerCertainty(node.initializer) === 'non-producer' ||
+          !producerTypeAcceptsKind(producerType, producerKindOfExpression(node.initializer)))
+      ) {
+        report(
+          'CL1044',
+          `${node.type!.getText(file.ast)} requires a combinator producer initializer.`,
+          node,
+        );
+      }
       if (
         isNetworkType(node.type) &&
         node.initializer !== undefined &&
@@ -478,6 +539,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       if (
         isNetworkType(node.type) ||
         (node.initializer !== undefined &&
+          !isProducerHandleType(node.type) &&
           (isNetworkExpression(node.initializer) || isProducerExpression(node.initializer)))
       ) {
         networkScopes.at(-1)!.add(node.name.text);
@@ -500,6 +562,19 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       }
     }
     if (ts.isReturnStatement(node) && node.expression !== undefined) {
+      const owner = enclosingFunctionDeclaration(node);
+      const producerType = producerHandleTypeName(owner?.type);
+      if (
+        producerType !== undefined &&
+        (producerCertainty(node.expression) === 'non-producer' ||
+          !producerTypeAcceptsKind(producerType, producerKindOfExpression(node.expression)))
+      ) {
+        report(
+          'CL1044',
+          `${producerType} function must return a compatible combinator producer, not a materialized Network or another value.`,
+          node,
+        );
+      }
       if (isPairViewExpression(node.expression)) {
         report(
           'CL1042',
@@ -552,12 +627,26 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     if (
       ts.isBinaryExpression(node) &&
       node.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken &&
-      ts.isCallExpression(node.left) &&
-      ts.isIdentifier(node.left.expression) &&
-      node.left.expression.text === 'to' &&
+      ((ts.isCallExpression(node.left) &&
+        ts.isIdentifier(node.left.expression) &&
+        node.left.expression.text === 'to') ||
+        (ts.isElementAccessExpression(node.left) &&
+          ts.isCallExpression(node.left.expression) &&
+          ts.isIdentifier(node.left.expression.expression) &&
+          node.left.expression.expression.text === 'to')) &&
       isDslBuiltin('to')
     ) {
-      for (const argument of node.left.arguments) {
+      const destinationCall: ts.CallExpression = ts.isCallExpression(node.left)
+        ? node.left
+        : (node.left.expression as ts.CallExpression);
+      if (destinationCall.arguments.length < 1 || destinationCall.arguments.length > 2) {
+        report(
+          'CL1021',
+          'Free to(...) requires one or two Network destinations; bind a Signal with to(...)[SIGNAL].',
+          destinationCall,
+        );
+      }
+      for (const argument of destinationCall.arguments) {
         if (capabilityOfNetworkExpression(argument) === 'readonly') {
           report('CL1038', 'Cannot attach a producer through Readonly<Network>.', argument);
         }
@@ -692,6 +781,18 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
       const receiver = node.expression.expression;
       const method = node.expression.name.text;
+      if (
+        method === 'as' &&
+        ts.isCallExpression(receiver) &&
+        ts.isIdentifier(receiver.expression) &&
+        producerFunctions.has(receiver.expression.text)
+      ) {
+        report(
+          'CL1043',
+          `.as(SIGNAL) cannot cross the Network return boundary of ${receiver.expression.text}(...); bind the producer output inside that function.`,
+          node,
+        );
+      }
       if (method === 'then' && ts.isCallExpression(receiver)) {
         const whenCall = receiver;
         if (

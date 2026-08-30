@@ -142,6 +142,36 @@ const combined: Network = Each(pair(red, green)) + pair(red, green)[A];`,
     expect(code).toContain('__dsl.element(__dsl.pair(');
   });
 
+  test('preserves explicit combinator handles and selected free destinations', () => {
+    const source = parseFile({
+      path: 'producer-handle.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+let comb: DeciderCombinator = when(input > 0).then(input);
+const first = new Network();
+const second = new Network();
+to(first, second)[A] += comb;`,
+    });
+    const code = transformElaborationModule(source).code;
+
+    expect(code).toContain('let comb = __dsl.producerHandle(__dsl.decider(');
+    expect(code).not.toContain('__dsl.materialize(__dsl.decider(');
+    expect(code).toContain('__dsl.attach(__dsl.select(__dsl.destinations(first, second');
+  });
+
+  test('marks precise Producer returns as preserving the handle boundary', () => {
+    const source = parseFile({
+      path: 'producer-return.factorio.ts',
+      text: `function Gate(input: Readonly<Network>): DeciderCombinator {
+  return when(input > 0).then(input);
+}`,
+    });
+
+    expect(transformElaborationModule(source).code).toMatch(
+      /return __dsl\.returnValue\([\s\S]*?, "DeciderCombinator"\);/,
+    );
+  });
+
   test('rebinds Readonly and Ref parameters to runtime borrow views', () => {
     const source = parseFile({
       path: 'borrows.factorio.ts',

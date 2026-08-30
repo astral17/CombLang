@@ -32,4 +32,34 @@ const inputs = ${expression};`;
       conflict?.span === undefined ? undefined : text.slice(conflict.span.start, conflict.span.end),
     ).toBe(expression);
   });
+
+  test('rejects .as on a Network returned by a source function', () => {
+    const expression = 'Gate(input).as(A)';
+    const text = `const A = Signal('virtual', 'signal-A');
+function Gate(input: Readonly<Network>): Network {
+  return IF(input > 0, input);
+}
+const input = new Network();
+const output: Network = ${expression};`;
+    const result = compileSource({ path: 'main.factorio.ts', text });
+    const diagnostic = result.compilerDiagnostics.find(({ code }) => code === 'CL1043');
+
+    expect(result.plan).toBeUndefined();
+    expect(diagnostic).toMatchObject({ severity: 'error', span: expect.any(Object) });
+    expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(expression);
+  });
+
+  test('attaches an incompatible combinator return diagnostic to return', () => {
+    const returned = 'return tmp;';
+    const text = `function test(input: Readonly<Network>): ArithmeticCombinator {
+  let tmp = input + 0;
+  ${returned}
+}`;
+    const result = compileSource({ path: 'main.factorio.ts', text });
+    const diagnostic = result.compilerDiagnostics.find(({ code }) => code === 'CL1044');
+
+    expect(result.plan).toBeUndefined();
+    expect(diagnostic).toMatchObject({ severity: 'error', span: expect.any(Object) });
+    expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(returned);
+  });
 });

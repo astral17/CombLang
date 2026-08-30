@@ -96,6 +96,10 @@ const dslCompletions: readonly Completion[] = [
   { label: 'Everything', detail: 'everything wildcard', type: 'constant' },
   { label: 'All', detail: 'alias of Everything', type: 'constant' },
   { label: 'pair', detail: 'read both wire colors', type: 'function' },
+  { label: 'Producer', detail: 'unmaterialized combinator handle', type: 'type' },
+  { label: 'DeciderCombinator', detail: 'stored decider producer', type: 'type' },
+  { label: 'ArithmeticCombinator', detail: 'stored arithmetic producer', type: 'type' },
+  { label: 'ConstantCombinator', detail: 'stored constant producer', type: 'type' },
 ];
 
 function dslCompletionSource(context: CompletionContext): CompletionResult | null {

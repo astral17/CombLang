@@ -36,6 +36,21 @@ function spanLiteral(factory: ts.NodeFactory, node: ts.Node): ts.ObjectLiteralEx
   ]);
 }
 
+function isProducerHandleType(file: ParsedSourceFile, type: ts.TypeNode | undefined): boolean {
+  const text = type?.getText(file.ast).replaceAll(/\s/g, '') ?? '';
+  return ['Producer', 'DeciderCombinator', 'ArithmeticCombinator', 'ConstantCombinator'].includes(
+    text,
+  );
+}
+
+function producerHandleTypeName(
+  file: ParsedSourceFile,
+  type: ts.TypeNode | undefined,
+): string | undefined {
+  const text = type?.getText(file.ast).replaceAll(/\s/g, '') ?? '';
+  return isProducerHandleType(file, type) ? text : undefined;
+}
+
 /**
  * First executable-transform slice. Ordinary JavaScript control flow is deliberately
  * left to the JS engine; only DSL-sensitive nodes are replaced with allowlisted calls.
@@ -144,11 +159,13 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
           ? factory.createStringLiteral('green')
           : factory.createVoidZero();
     };
-    const belongsToFunctionDeclaration = (node: ts.Node): boolean => {
+    const enclosingFunctionDeclaration = (node: ts.Node): ts.FunctionDeclaration | undefined => {
       for (let parent = node.parent; parent !== undefined; parent = parent.parent) {
-        if (ts.isFunctionLike(parent)) return ts.isFunctionDeclaration(parent);
+        if (ts.isFunctionLike(parent)) {
+          return ts.isFunctionDeclaration(parent) ? parent : undefined;
+        }
       }
-      return false;
+      return undefined;
     };
     const bindingDescriptor = (
       name: ts.BindingName,
@@ -321,13 +338,17 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
       if (
         ts.isReturnStatement(node) &&
         node.expression !== undefined &&
-        belongsToFunctionDeclaration(node)
+        enclosingFunctionDeclaration(node) !== undefined
       ) {
+        const owner = enclosingFunctionDeclaration(node)!;
         return factory.updateReturnStatement(
           node,
           dslCall(factory, 'returnValue', [
             ts.visitNode(node.expression, visit) as ts.Expression,
             spanLiteral(factory, node),
+            producerHandleTypeName(file, owner.type) === undefined
+              ? factory.createVoidZero()
+              : factory.createStringLiteral(producerHandleTypeName(file, owner.type)!),
           ]),
         );
       }
@@ -514,7 +535,14 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
         } else {
           initializer = ts.visitNode(node.initializer, visit) as ts.Expression;
         }
-        if (!ts.isNewExpression(node.initializer)) {
+        const producerType = producerHandleTypeName(file, node.type);
+        if (producerType !== undefined) {
+          initializer = dslCall(factory, 'producerHandle', [
+            initializer,
+            factory.createStringLiteral(producerType),
+            spanLiteral(factory, node),
+          ]);
+        } else if (!ts.isNewExpression(node.initializer)) {
           initializer = dslCall(factory, 'materialize', [
             initializer,
             factory.createStringLiteral(node.name.text),
@@ -619,6 +647,23 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
       }
 
       if (ts.isBinaryExpression(node)) {
+        if (
+          node.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken &&
+          ts.isElementAccessExpression(node.left) &&
+          ts.isCallExpression(node.left.expression) &&
+          ts.isIdentifier(node.left.expression.expression) &&
+          node.left.expression.expression.text === 'to'
+        ) {
+          return dslCall(factory, 'attach', [
+            dslCall(factory, 'select', [
+              ts.visitNode(node.left.expression, visit) as ts.Expression,
+              ts.visitNode(node.left.argumentExpression, visit) as ts.Expression,
+              spanLiteral(factory, node.left),
+            ]),
+            ts.visitNode(node.right, visit) as ts.Expression,
+            spanLiteral(factory, node),
+          ]);
+        }
         if (
           node.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken &&
           ts.isCallExpression(node.left) &&

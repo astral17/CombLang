@@ -135,12 +135,13 @@ destination.take(pair(a, b)); // CL1042
 
 `pair` is intentionally different from producer fan-out:
 
-| Intent                                      | Form                                   |
-| ------------------------------------------- | -------------------------------------- |
-| read two input Networks on one connector    | `pair(a, b)`                           |
-| attach one producer to one selected Network | `producer.to(output[SIGNAL_A])`        |
-| attach one producer to two output Networks  | `producer.to(first, second, SIGNAL_A)` |
-| contextually create two output Networks     | `let [first, second] = producer`       |
+| Intent                                      | Form                                      |
+| ------------------------------------------- | ----------------------------------------- |
+| read two input Networks on one connector    | `pair(a, b)`                              |
+| attach one producer to one selected Network | `producer.to(output[SIGNAL_A])`           |
+| attach one producer to two output Networks  | `producer.to(first, second, SIGNAL_A)`    |
+| free two-Network selected destination       | `to(first, second)[SIGNAL_A] += producer` |
+| contextually create two output Networks     | `let [first, second] = producer`          |
 
 `pair(a, b)[SIGNAL]` is a read selection. Forms such as `.to(pair(a, b))` or `to(pair(a, b)[SIGNAL]) += producer` mix input and output concepts and are rejected. Dynamically aliased misuse receives `RT2020`. The serialized plan and NCIR retain both input Networks, the simulator sums both buses, and blueprint generation wires both resolved colors.
 
@@ -174,7 +175,7 @@ Phase 4 is complete when each capability transition and `pair` form has semantic
 
 ## Open decisions
 
-- whether a public `Producer` annotation is useful and how its one-physical-object identity is exposed;
+- whether producer handles need capabilities beyond the implemented `Producer`, `DeciderCombinator`, `ArithmeticCombinator`, and `ConstantCombinator` annotations;
 - whether attachment through `+=` is restricted to `let` Network bindings;
 - explicit syntax for moving values into and out of array/object slots;
 - whether `pair` is restricted to exactly two Networks permanently or later generalized under another name;

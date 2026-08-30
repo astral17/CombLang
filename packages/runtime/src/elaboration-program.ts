@@ -148,6 +148,8 @@ interface ProducerValue {
   readonly producer: WithoutDestinations<DirectPlanProducer>;
   /** Explicit `.as(...)` constraint; inferred arithmetic outputs remain overridable. */
   readonly boundOutputSignal?: SignalId;
+  /** A declared function returned this internal producer through its public Network boundary. */
+  readonly functionReturn?: SourceSpan;
 }
 
 type DslValue =
@@ -477,7 +479,11 @@ class ElaborationRecorder {
         generation: ownership.generation,
       };
     },
-    returnValue: (value: unknown, rawSpan: RawSpan): unknown => {
+    producerHandle: (value: unknown, expectedType: unknown, rawSpan: RawSpan): ProducerValue => {
+      return this.#producerHandle(value, expectedType, rawSpan);
+    },
+    returnValue: (value: unknown, rawSpan: RawSpan, producerType?: unknown): unknown => {
+      if (producerType !== undefined) return this.#producerHandle(value, producerType, rawSpan);
       return this.#returnOwnedValue(value, rawSpan, new Map());
     },
     take: (...args: unknown[]): unknown => {
@@ -729,7 +735,6 @@ class ElaborationRecorder {
       const rawSpan = args.at(-1);
       if (!isRawSpan(rawSpan)) throw new Error('to(...) is missing provenance.');
       const values = args.slice(0, -1);
-      const outputSignal = isSignal(values.at(-1)) ? (values.pop() as SignalId) : undefined;
       if (values.some((value) => this.#isPair(value) || this.#isPairSelection(value))) {
         throw new ElaborationExecutionError(
           'pair(a, b) is a read-only input view and cannot be a to(...) destination.',
@@ -738,15 +743,12 @@ class ElaborationRecorder {
         );
       }
       if (!values.every((value): value is NetworkValue => this.#isNetwork(value))) {
-        throw new Error(
-          'to(...) destinations must be Networks; pass an optional output Signal as the final argument.',
-        );
+        throw new Error('to(...) destinations must be Networks.');
       }
       for (const network of values) this.#assertWritableNetwork(network, rawSpan, 'destination');
       return {
         kind: 'destinations',
         networks: values,
-        ...(outputSignal === undefined ? {} : { signal: outputSignal }),
       };
     },
     select: (
@@ -767,9 +769,29 @@ class ElaborationRecorder {
       }
       return (value as Record<PropertyKey, unknown>)[key as PropertyKey];
     },
-    bindOutput: (producer: ProducerValue, signal: SignalId, _rawSpan: RawSpan): ProducerValue => {
+    bindOutput: (producer: unknown, signal: SignalId, rawSpan: RawSpan): ProducerValue => {
       this.#recordDslCall();
       if (!isSignal(signal)) throw new Error('.as(...) requires a Signal.');
+      if (!this.#isProducer(producer)) {
+        throw new ElaborationExecutionError(
+          '.as(SIGNAL) requires a direct arithmetic or decider producer, not a materialized Network.',
+          this.#span(rawSpan),
+          'RT2021',
+        );
+      }
+      if (producer.functionReturn !== undefined) {
+        throw new ElaborationExecutionError(
+          '.as(SIGNAL) cannot cross a function Network return boundary; bind the producer output inside that function.',
+          this.#span(rawSpan),
+          'RT2021',
+          [
+            {
+              message: 'Producer crossed the Network return boundary here.',
+              span: producer.functionReturn,
+            },
+          ],
+        );
+      }
       return this.#bindOutputSignal(producer, signal, true);
     },
     place: (...args: unknown[]): unknown => {
@@ -1223,6 +1245,11 @@ class ElaborationRecorder {
   }
 
   #returnOwnedValue(value: unknown, rawSpan: RawSpan, seen: Map<object, unknown>): unknown {
+    if (this.#isProducer(value)) {
+      return value.functionReturn === undefined
+        ? { ...value, functionReturn: this.#span(rawSpan) }
+        : value;
+    }
     if (this.#isPair(value) || this.#isPairSelection(value)) {
       throw new ElaborationExecutionError(
         'pair(a, b) is a read-only input view and cannot carry ownership across a return.',
@@ -1259,6 +1286,30 @@ class ElaborationRecorder {
       if (returned !== item) changed = true;
     }
     return changed ? result : value;
+  }
+
+  #producerHandle(value: unknown, expectedType: unknown, rawSpan: RawSpan): ProducerValue {
+    const expectedKinds = {
+      Producer: undefined,
+      DeciderCombinator: 'decider',
+      ArithmeticCombinator: 'arithmetic',
+      ConstantCombinator: 'constant',
+    } as const;
+    if (typeof expectedType !== 'string' || !(expectedType in expectedKinds)) {
+      throw new Error('Unknown Producer handle annotation.');
+    }
+    const expectedKind = expectedKinds[expectedType as keyof typeof expectedKinds];
+    if (
+      !this.#isProducer(value) ||
+      (expectedKind !== undefined && value.producer.kind !== expectedKind)
+    ) {
+      throw new ElaborationExecutionError(
+        `${expectedType} requires ${expectedKind === undefined ? 'a combinator producer' : `a ${expectedKind} combinator producer`}.`,
+        this.#span(rawSpan),
+        'RT2022',
+      );
+    }
+    return value;
   }
 
   #returnOwnedNetwork(value: NetworkValue, rawSpan: RawSpan): NetworkValue {
@@ -1368,7 +1419,7 @@ class ElaborationRecorder {
     );
   }
 
-  #select(value: unknown, signal: unknown, rawSpan: RawSpan): SelectedValue {
+  #select(value: unknown, signal: unknown, rawSpan: RawSpan): SelectedValue | DestinationValue {
     const selection =
       typeof signal === 'string'
         ? Signal('item', signal)
@@ -1381,9 +1432,13 @@ class ElaborationRecorder {
       throw new Error('Network selection requires a Signal or wildcard.');
     }
     if (this.#isDestination(value)) {
-      throw new Error(
-        'to(...)[SIGNAL] is not a valid destination; pass SIGNAL as the final to(...) argument.',
-      );
+      if (!isSignal(selection)) {
+        throw new Error('to(...)[SIGNAL] requires one concrete output Signal.');
+      }
+      if (value.signal !== undefined && !this.#sameSignal(value.signal, selection)) {
+        throw new Error('A to(...) destination already has a conflicting output Signal.');
+      }
+      return { ...value, signal: selection };
     }
     if (!this.#isNetwork(value) && !this.#isPair(value)) {
       throw new Error('Signal selection requires a Network or pair(a, b).');

@@ -22,7 +22,7 @@ function Bias(input: Readonly<Network>): Network {
 }
 
 function Gate(input: Readonly<Network>, threshold: Readonly<Network>): Network {
-  return IF(input[SIGNAL_A] > threshold[SIGNAL_A], input[SIGNAL_A]);
+  return IF(input[SIGNAL_A] > threshold[SIGNAL_A], input[SIGNAL_A]).as(SIGNAL_A);
 }
 
 const input = new Network<R>();
@@ -30,7 +30,7 @@ const middle = Scale(input);
 const biased = Bias(middle);
 const threshold = new Network();
 threshold += CC(40 * SIGNAL_A).at(0.5, 2.5, 4);
-let [output, mirror]: [Network, Network] = Gate(biased, threshold).as(SIGNAL_A);
+let [output, mirror]: [Network, Network] = Gate(biased, threshold);
 `;
 
 function tabDraftStorage(): SourceDraftStorage | undefined {

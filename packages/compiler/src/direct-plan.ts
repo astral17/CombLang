@@ -526,6 +526,20 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
       ts.isPropertyAccessExpression(expression.expression) &&
       expression.expression.name.text === 'as'
     ) {
+      const receiver = expression.expression.expression;
+      if (
+        ts.isCallExpression(receiver) &&
+        ts.isIdentifier(receiver.expression) &&
+        declaredFunctions.has(receiver.expression.text)
+      ) {
+        diagnostics.push({
+          code: 'CL1043',
+          severity: 'error',
+          message: `.as(SIGNAL) cannot cross the Network return boundary of ${receiver.expression.text}(...); bind the producer output inside that function.`,
+          span: spanForNode(file, expression),
+        });
+        return undefined;
+      }
       const signalExpression = expression.arguments[0];
       const selectedSignal =
         expression.arguments.length === 1 &&
@@ -1632,13 +1646,22 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
       let destinations: readonly string[] | undefined;
       if (ts.isIdentifier(destinationExpression)) {
         destinations = [destinationExpression.text];
+      } else if (
+        ts.isCallExpression(destinationExpression) &&
+        ts.isIdentifier(destinationExpression.expression) &&
+        destinationExpression.expression.text === 'to' &&
+        destinationExpression.arguments.every(ts.isIdentifier)
+      ) {
+        destinations = destinationExpression.arguments.map(
+          (argument) => (argument as ts.Identifier).text,
+        );
       }
       if (destinations === undefined) {
         diagnostics.push({
           code: 'CL1023',
           severity: 'error',
           message:
-            'A signal-constrained destination must be Network[SIGNAL]; pass SIGNAL as the final to(...) argument for fan-out.',
+            'A signal-constrained destination must be Network[SIGNAL] or to(first, second)[SIGNAL].',
           span: spanForNode(file, destinationSelection),
         });
         continue;
@@ -1665,12 +1688,6 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
     ) {
       const destinationCall = statement.expression.left;
       const destinationArguments = [...destinationCall.arguments];
-      const finalArgument = destinationArguments.at(-1);
-      const selectedSignal =
-        finalArgument !== undefined && ts.isIdentifier(finalArgument)
-          ? signals.get(finalArgument.text)
-          : undefined;
-      if (selectedSignal !== undefined) destinationArguments.pop();
       if (!destinationArguments.every(ts.isIdentifier)) {
         diagnostics.push({
           code: 'CL1021',
@@ -1687,9 +1704,9 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
         ts.isIdentifier(value.expression) &&
         templates.has(value.expression.text)
       ) {
-        lowerFunctionCall(value, destinations, spanForNode(file, statement), false, selectedSignal);
+        lowerFunctionCall(value, destinations, spanForNode(file, statement), false);
       } else {
-        lowerDirectProducer(value, destinations, spanForNode(file, statement), selectedSignal);
+        lowerDirectProducer(value, destinations, spanForNode(file, statement));
       }
       continue;
     }

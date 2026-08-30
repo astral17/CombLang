@@ -399,7 +399,7 @@ function Double(input: Readonly<Network>): Network {
 const input = new Network();
 const out = new Network();
 const mirror = new Network();
-to(out, mirror, RESULT) += Double(input);`,
+to(out, mirror)[RESULT] += Double(input);`,
     });
 
     const result = compileDirectPlan(file);
@@ -434,7 +434,7 @@ Double(input).to(out[RESULT]);`,
     });
   });
 
-  test('rejects element-access Signal binding on a fan-out destination', () => {
+  test('binds a fan-out output Signal through to(...)[SIGNAL]', () => {
     const file = parseFile({
       path: 'selected-fanout.factorio.ts',
       text: `const RESULT = Signal("virtual", "signal-C");
@@ -444,9 +444,13 @@ const mirror = new Network();
 to(out, mirror)[RESULT] += input + 1;`,
     });
 
-    expect(compileDirectPlan(file).diagnostics).toContainEqual(
-      expect.objectContaining({ code: 'CL1023', severity: 'error' }),
-    );
+    const result = compileDirectPlan(file);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.plan?.producers[0]).toMatchObject({
+      kind: 'arithmetic',
+      output: { kind: 'signal', signal: { name: 'signal-C' } },
+      destinations: [{ network: 'out' }, { network: 'mirror' }],
+    });
   });
 
   test('rejects an undeclared destination Signal binding', () => {
@@ -1153,6 +1157,22 @@ const output: Network = Constant(input);`,
 
     expect(compileDirectPlan(file).diagnostics).toContainEqual(
       expect.objectContaining({ code: 'CL1009', severity: 'error' }),
+    );
+  });
+
+  test('does not expose .as through a structural Network return', () => {
+    const file = parseFile({
+      path: 'function-return-as.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+function Gate(input: Readonly<Network>): Network {
+  return IF(input > 0, input);
+}
+const input = new Network();
+const output: Network = Gate(input).as(A);`,
+    });
+
+    expect(compileDirectPlan(file).diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'CL1043', severity: 'error' }),
     );
   });
 });

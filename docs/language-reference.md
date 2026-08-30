@@ -90,6 +90,8 @@ Without an explicit destination signal, arithmetic uses the first concrete input
 
 `expression.as(SIGNAL)` explicitly binds the output Signal of the same arithmetic or compact-decider producer. It does not allocate another combinator or tick. A destination such as `out[SIGNAL]` may repeat the same constraint, but conflicting Signal identities are rejected.
 
+`.as(...)` belongs to the producer expression, not to the resulting `Network`. A function declared to return `Network` therefore has to apply `.as(...)` inside its body. Calling `Gate(...).as(SIGNAL)` across that return boundary is `CL1043` (or `RT2021` when the boundary is only known during execution); assigning the result to a local Network cannot change this rule.
+
 ## Decider producers
 
 Compact and fluent spellings share the same one-decider lowering:
@@ -149,6 +151,15 @@ const gated = IF(input[A] > 0, input[A]);
 const scaled = gated * 2 + 1;
 ```
 
+An explicit combinator-handle annotation suppresses that automatic Network materialization when the producer must be configured or attached later:
+
+```ts
+let comb: DeciderCombinator = when(input > 0).then(input);
+output += comb.as(RESULT).at(10, 4);
+```
+
+`Producer` is the common handle type. The more precise public types are `DeciderCombinator`, `ArithmeticCombinator`, and `ConstantCombinator`; use the precise type when it is known. Declarations and function returns check both that the executed value is still an unmaterialized producer and that its physical combinator kind matches the annotation. A function may return one of these types to preserve the producer handle across its return boundary. Returning `Network` instead intentionally hides producer-only methods. Producer handles represent one physical entity and remain single-attachment values: storing one does not clone it, and attaching it twice is an error. `CL1044` reports a statically definite mismatch at its declaration or `return`; dynamically determined mismatches use `RT2022` at the same boundary.
+
 The elaboration runtime materializes those producer values under their declaration names. It leaves ordinary numbers, strings, arrays, objects, Signals, and existing Networks unchanged. Likewise, `value[SIGNAL]` is dispatched from the executed receiver, so a Network returned by an ordinary JavaScript function can be selected without repeating `: Network` on the receiving variable. A `Network[]` element read is classified from the value obtained at execution, so `output += networks[i] * 2` works inside compile-time loops. A heterogeneous or otherwise unknown collection is not rejected statically: execution succeeds for Network elements and reports an attachment error if it reaches a non-Network element. Ordinary JavaScript element reads remain reads. For `+=`, identifiers, properties, and array/object elements are classified from their executed value: a Network destination attaches a producer, while non-DSL values retain native JavaScript addition and assignment. A member receiver and computed key are each evaluated exactly once. Other element assignments and updates remain native JavaScript operations.
 
 Existing Networks use `+=`:
@@ -162,12 +173,12 @@ One producer can attach to two distinct Networks:
 
 ```ts
 to(first, second) += a + b;
-to(first, second, RESULT) += left[A] + right[B];
+to(first, second)[RESULT] += left[A] + right[B];
 (left + right).to(first[RESULT]);
 (left + right).to(first, second, RESULT);
 ```
 
-A single fluent destination may use `Network[SIGNAL]`. Fan-out keeps destinations as plain Networks and passes the common output Signal as the final argument. `to(first, second)[SIGNAL]` and `.to(first[SIGNAL], second[SIGNAL])` are deliberately invalid because element access denotes one selected Network rather than a writable destination pair. The output binding adds no combinator. Two destinations share one physical output connector and therefore receive opposite wire colors. The right side of `Network += value` must be a combinator producer. Constants and `Network += Network` are deliberately rejected rather than invoking JavaScript object coercion.
+A free destination set binds its output Signal as `to(first, second)[SIGNAL]`. The fluent producer form instead uses `.to(first, second, SIGNAL)`, because an element selection after `.to(...)` would occur after that method has already attached the producer. `.to(first[SIGNAL], second[SIGNAL])` remains invalid. The output binding adds no combinator. Two destinations share one physical output connector and therefore receive opposite wire colors. The right side of `Network += value` must be a combinator producer. Constants and `Network += Network` are deliberately rejected rather than invoking JavaScript object coercion.
 
 ## Explicit Network transfer
 

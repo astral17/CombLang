@@ -306,6 +306,51 @@ const second = new Network();
     expect(generateBlueprintJson(execution.circuit.ir).blueprint.entities).toHaveLength(4);
   });
 
+  test('does not leak .as across a function Network return boundary', () => {
+    const call = 'Gate(input).as(A)';
+    const parsed = parseFile({
+      path: 'function-return-as.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+function Gate(input: Readonly<Network>): Network {
+  return IF(input > 0, input);
+}
+const input = new Network();
+const output: Network = ${call};`,
+    });
+
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+      ElaborationExecutionError,
+    );
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected the function return boundary to reject .as(...).');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ElaborationExecutionError);
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2021');
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(call);
+      expect(failure.related).toHaveLength(1);
+    }
+  });
+
+  test('keeps .as valid inside the function that creates the producer', () => {
+    const parsed = parseFile({
+      path: 'local-producer-as.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+function Gate(input: Readonly<Network>): Network {
+  return IF(input > 0, input).as(A);
+}
+const input = new Network();
+const output: Network = Gate(input);`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.producers[0]).toMatchObject({
+      kind: 'decider',
+      output: { kind: 'signal', signal: { type: 'virtual', name: 'signal-A' } },
+    });
+  });
+
   test('binds one concrete output Signal through the final .to(...) argument', () => {
     const parsed = parseFile({
       path: 'selected-to.factorio.ts',
@@ -327,6 +372,108 @@ const second = new Network();
     const execution = elaborateDirectPlan(plan);
     const colors = new Map(execution.circuit.ir.networks.map(({ name, color }) => [name, color]));
     expect(colors.get('first')).not.toBe(colors.get('second'));
+  });
+
+  test('binds a free fan-out destination through to(...)[SIGNAL]', () => {
+    const parsed = parseFile({
+      path: 'selected-free-to.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const first = new Network();
+const second = new Network();
+to(first, second)[A] += input + 1;`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.producers[0]).toMatchObject({
+      kind: 'arithmetic',
+      output: { kind: 'signal', signal: { type: 'virtual', name: 'signal-A' } },
+      destinations: [{ network: 'first' }, { network: 'second' }],
+    });
+  });
+
+  test('stores an explicitly typed DeciderCombinator without materializing it', () => {
+    const parsed = parseFile({
+      path: 'stored-decider.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+let comb: DeciderCombinator = when(input > 0).then(input);
+const output = new Network();
+output += comb.as(A);`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.producers).toHaveLength(1);
+    expect(plan.producers[0]).toMatchObject({
+      kind: 'decider',
+      output: { kind: 'signal', signal: { type: 'virtual', name: 'signal-A' } },
+      destinations: [{ network: 'output' }],
+    });
+    expect(plan.networks.map(({ name }) => name)).not.toContain('comb');
+  });
+
+  test('preserves producer methods through a DeciderCombinator function return', () => {
+    const parsed = parseFile({
+      path: 'returned-decider.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+function Gate(input: Readonly<Network>): DeciderCombinator {
+  return when(input > 0).then(input);
+}
+const input = new Network();
+const output = new Network();
+output += Gate(input).as(A);`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.producers[0]).toMatchObject({
+      kind: 'decider',
+      output: { kind: 'signal', signal: { type: 'virtual', name: 'signal-A' } },
+      destinations: [{ network: 'output' }],
+    });
+  });
+
+  test('rejects a materialized Network at the combinator return boundary', () => {
+    const returned = 'return tmp;';
+    const parsed = parseFile({
+      path: 'materialized-producer-return.factorio.ts',
+      text: `function test(input: Readonly<Network>): ArithmeticCombinator {
+  let tmp = input + 0;
+  ${returned}
+}
+const input = new Network();
+const output = test(input);`,
+    });
+
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected the combinator return contract to reject a Network.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ElaborationExecutionError);
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2022');
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(returned);
+    }
+  });
+
+  test('checks the concrete combinator kind at annotated declarations', () => {
+    const declaration = 'let comb: ArithmeticCombinator = when(input > 0).then(input);';
+    const parsed = parseFile({
+      path: 'wrong-producer-kind.factorio.ts',
+      text: `const input = new Network();
+${declaration}`,
+    });
+
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected the concrete producer kind check to fail.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ElaborationExecutionError);
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2022');
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(
+        declaration.slice(4, -1),
+      );
+    }
   });
 
   test('binds one concrete output Signal through a single selected .to(...) destination', () => {
@@ -406,14 +553,14 @@ ${call};`,
     }
   });
 
-  test('binds a helper fan-out output Signal through the final to(...) argument', () => {
+  test('binds a helper fan-out output Signal through to(...)[SIGNAL]', () => {
     const parsed = parseFile({
       path: 'helper-signal-to.factorio.ts',
       text: `const A = Signal("virtual", "signal-A");
 const input = new Network();
 const first = new Network();
 const second = new Network();
-to(first, second, A) += input + 1;`,
+to(first, second)[A] += input + 1;`,
     });
     const plan = executeElaborationProgram(transformElaborationModule(parsed));
     expect(plan.producers[0]).toMatchObject({
@@ -470,7 +617,7 @@ const threshold = new Network();
 threshold += CC(40 * SIGNAL_A);
 const output = new Network();
 const mirror = new Network();
-to(output, mirror, SIGNAL_A) += Gate(biased, threshold);`,
+to(output, mirror)[SIGNAL_A] += Gate(biased, threshold);`,
     });
     const plan = executeElaborationProgram(transformElaborationModule(parsed));
     const execution = elaborateDirectPlan(plan);

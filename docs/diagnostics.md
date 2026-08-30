@@ -48,6 +48,8 @@ The production CLI and browser first emit definite `CL` diagnostics from the con
 | `CL1040` | definite function escape of a borrowed Network                       | return a producer or an independently owned Network                        |
 | `CL1041` | bare `Network` function parameter has ambiguous ownership            | choose `Readonly<Network>`, `Ref<Network>`, or `Move<Network>`             |
 | `CL1042` | definite misuse of immutable `pair(a, b)` input view                 | use pair only for reads; use `to`/`.to` for output fan-out                 |
+| `CL1043` | `.as(...)` crosses a function's `Network` return boundary            | bind the producer output Signal inside the function                        |
+| `CL1044` | combinator-handle annotation has a definite non-producer initializer | initialize it with arithmetic, `CC`, `IF`, or `when(...).then(...)`        |
 | `CL2001` | producer has no user destination                                     | attach it, or keep the warning if intentional                              |
 | `EX1001` | transformed elaboration program threw                                | inspect the execution message and supported executed subset                |
 | `EX1002` | compile-time execution exceeded the worker time budget               | fix an infinite/expensive loop or reduce generated work                    |
@@ -55,33 +57,35 @@ The production CLI and browser first emit definite `CL` diagnostics from the con
 
 ## Common runtime diagnostics
 
-| Code     | Meaning                                                        |
-| -------- | -------------------------------------------------------------- |
-| `RT1001` | unsupported direct-plan format or version                      |
-| `RT1002` | duplicate Network descriptor                                   |
-| `RT1003` | producer references an unknown input Network                   |
-| `RT1004` | attachment references an unknown destination Network           |
-| `RT1005` | a requested named Network does not exist                       |
-| `RT1099` | unexpected lower-level failure contained at the result API     |
-| `RT2001` | foreign or invalid runtime Network handle                      |
-| `RT2002` | unknown or foreign runtime producer handle                     |
-| `RT2003` | attachment has no destination                                  |
-| `RT2004` | attachment repeats a destination Network                       |
-| `RT2005` | output connector has more than two destinations                |
-| `RT2006` | producer was attached more than once                           |
-| `RT2007` | producer has no destination during elaboration                 |
-| `RT2008` | invalid empty native condition group                           |
-| `RT2009` | a physical connector needs more than two logical Networks      |
-| `RT2010` | red/green color constraints are mutually inconsistent          |
-| `RT2011` | transfer references an unknown Network                         |
-| `RT2012` | moved Network is used or consumed again                        |
-| `RT2013` | Network takes itself or an already unified alias               |
-| `RT2014` | transfer unifies contradictory fixed color requirements        |
-| `RT2015` | executed operation exceeds a Network capability                |
-| `RT2016` | mutable/shared borrow overlap or alias access conflicts        |
-| `RT2017` | an escaped function borrow is used after its lifetime          |
-| `RT2018` | color-qualified borrow conflicts with an existing color        |
-| `RT2019` | ownership was dropped or returned without a valid transfer     |
-| `RT2020` | pair input is repeated, malformed, or used as ownership/output |
+| Code     | Meaning                                                           |
+| -------- | ----------------------------------------------------------------- |
+| `RT1001` | unsupported direct-plan format or version                         |
+| `RT1002` | duplicate Network descriptor                                      |
+| `RT1003` | producer references an unknown input Network                      |
+| `RT1004` | attachment references an unknown destination Network              |
+| `RT1005` | a requested named Network does not exist                          |
+| `RT1099` | unexpected lower-level failure contained at the result API        |
+| `RT2001` | foreign or invalid runtime Network handle                         |
+| `RT2002` | unknown or foreign runtime producer handle                        |
+| `RT2003` | attachment has no destination                                     |
+| `RT2004` | attachment repeats a destination Network                          |
+| `RT2005` | output connector has more than two destinations                   |
+| `RT2006` | producer was attached more than once                              |
+| `RT2007` | producer has no destination during elaboration                    |
+| `RT2008` | invalid empty native condition group                              |
+| `RT2009` | a physical connector needs more than two logical Networks         |
+| `RT2010` | red/green color constraints are mutually inconsistent             |
+| `RT2011` | transfer references an unknown Network                            |
+| `RT2012` | moved Network is used or consumed again                           |
+| `RT2013` | Network takes itself or an already unified alias                  |
+| `RT2014` | transfer unifies contradictory fixed color requirements           |
+| `RT2015` | executed operation exceeds a Network capability                   |
+| `RT2016` | mutable/shared borrow overlap or alias access conflicts           |
+| `RT2017` | an escaped function borrow is used after its lifetime             |
+| `RT2018` | color-qualified borrow conflicts with an existing color           |
+| `RT2019` | ownership was dropped or returned without a valid transfer        |
+| `RT2020` | pair input is repeated, malformed, or used as ownership/output    |
+| `RT2021` | `.as(...)` target crossed a function or materialization boundary  |
+| `RT2022` | a Producer annotation received the wrong value or combinator kind |
 
 `tryElaborateDirectPlan()` returns these runtime diagnostics without throwing. `elaborateDirectPlan()` throws `RuntimeDiagnosticError` carrying the same structured value.

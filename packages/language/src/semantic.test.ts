@@ -77,6 +77,87 @@ output += Delay(input);`,
     expect(validateDslSemantics(parsed)).toEqual([]);
   });
 
+  test('rejects .as after a declared Network return boundary', () => {
+    const call = 'Gate(input).as(A)';
+    const parsed = parseFile({
+      path: 'function-return-as.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+function Gate(input: Readonly<Network>): Network {
+  return IF(input > 0, input);
+}
+const input = new Network();
+const output: Network = ${call};`,
+    });
+    const diagnostics = validateDslSemantics(parsed);
+
+    expect(diagnostics).toContainEqual(expect.objectContaining({ code: 'CL1043' }));
+    const diagnostic = diagnostics.find(({ code }) => code === 'CL1043')!;
+    expect(parsed.text.slice(diagnostic.span!.start, diagnostic.span!.end)).toBe(call);
+  });
+
+  test('accepts stored Producer handles and rejects definite non-producer initializers', () => {
+    const valid = parseFile({
+      path: 'stored-producer.ts',
+      text: `const input = new Network();
+let comb: DeciderCombinator = when(input > 0).then(input);
+const output = new Network();
+output += comb;`,
+    });
+    const invalid = parseFile({
+      path: 'invalid-stored-producer.ts',
+      text: `let comb: DeciderCombinator = 5;`,
+    });
+
+    expect(validateDslSemantics(valid)).toEqual([]);
+    expect(validateDslSemantics(invalid)).toContainEqual(
+      expect.objectContaining({ code: 'CL1044', severity: 'error' }),
+    );
+  });
+
+  test('reports a materialized Network at its incompatible combinator return', () => {
+    const returned = 'return tmp;';
+    const parsed = parseFile({
+      path: 'materialized-producer-return.ts',
+      text: `function test(input: Readonly<Network>): ArithmeticCombinator {
+  let tmp = input + 0;
+  ${returned}
+}`,
+    });
+    const diagnostic = validateDslSemantics(parsed).find(({ code }) => code === 'CL1044');
+
+    expect(diagnostic).toMatchObject({ severity: 'error', span: expect.any(Object) });
+    expect(parsed.text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(returned);
+  });
+
+  test('rejects a definitely wrong concrete combinator kind', () => {
+    const parsed = parseFile({
+      path: 'wrong-producer-kind.ts',
+      text: `const input = new Network();
+function test(): ArithmeticCombinator {
+  return when(input > 0).then(input);
+}`,
+    });
+
+    expect(validateDslSemantics(parsed)).toContainEqual(
+      expect.objectContaining({ code: 'CL1044', severity: 'error' }),
+    );
+  });
+
+  test('reserves the third Signal argument for fluent .to(...) only', () => {
+    const parsed = parseFile({
+      path: 'free-to-third-argument.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const first = new Network();
+const second = new Network();
+to(first, second, A) += input + 0;`,
+    });
+
+    expect(validateDslSemantics(parsed)).toContainEqual(
+      expect.objectContaining({ code: 'CL1021', severity: 'error' }),
+    );
+  });
+
   test('checks definite DSL call arity without executing the branch', () => {
     const parsed = parseFile({
       path: 'invalid-builtins.ts',
