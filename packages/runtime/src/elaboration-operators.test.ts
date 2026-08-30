@@ -1,4 +1,4 @@
-import type { SignalId } from '@comblang/factorio';
+import { Signal, type SignalId } from '@comblang/factorio';
 import { sourceFileId, sourceSpan } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
@@ -11,25 +11,25 @@ import { RuntimeValueRegistry, type DslValue, type NetworkValue } from './elabor
 function dispatchFixture() {
   const registry = new RuntimeValueRegistry();
   const source = sourceSpan(sourceFileId('operator-policy.factorio.ts'), 0, 1);
-  const network = registry.brand({
-    kind: 'network',
-    name: 'input',
-    declaration: source,
-    ownership: {
+  const network = registry.brandNetwork(
+    {
+      kind: 'network',
+      name: 'input',
+      declaration: source,
+      capability: 'owned',
       generation: 0,
-      owner: 'top-level',
-      readonlyBorrows: new Set(),
     },
-    capability: 'owned',
-    generation: 0,
-  });
+    {
+      ownership: {
+        generation: 0,
+        owner: 'top-level',
+        readonlyBorrows: new Set(),
+      },
+    },
+  );
+  const signal = registry.brandSignal(Signal('virtual', 'signal-A'));
   let calls = 0;
-  const isSignal = (value: unknown): value is SignalId =>
-    typeof value === 'object' &&
-    value !== null &&
-    'type' in value &&
-    'name' in value &&
-    !('kind' in value);
+  const isSignal = (value: unknown): value is SignalId => registry.hasSignal(value);
   const context: ElaborationOperatorDispatchContext<number> = {
     isCircuitDslValue: (value): value is DslValue =>
       isSignal(value) ||
@@ -43,6 +43,8 @@ function dispatchFixture() {
       registry.hasKind(value, 'condition') ||
       registry.hasKind(value, 'producer'),
     isSignal,
+    isSignalId: (value): value is SignalId =>
+      typeof value === 'object' && value !== null && 'type' in value && 'name' in value,
     isSelected: (value) => registry.hasKind(value, 'selected'),
     isNetwork: (value): value is NetworkValue => registry.hasKind(value, 'network'),
     isPair: (value) => registry.hasKind(value, 'pair'),
@@ -79,7 +81,7 @@ function dispatchFixture() {
     producerMetadata: () => ({ source, instancePath: [] }),
     brand: (value) => registry.brand(value),
   };
-  return { context, network, calls: () => calls };
+  return { context, network, signal, calls: () => calls };
 }
 
 describe('elaboration operator policy', () => {
@@ -135,6 +137,19 @@ describe('elaboration operator policy', () => {
     expect(operators.dispatchBinary('+', 2, 3, 0, fixture.context)).toBe(5);
     expect(fixture.calls()).toBe(0);
 
+    const lookalike = { type: 'virtual', name: 'signal-A' };
+    expect(
+      Number.isNaN(operators.dispatchBinary('*', 2, lookalike, 0, fixture.context) as number),
+    ).toBe(true);
+    expect(fixture.calls()).toBe(0);
+
+    expect(operators.dispatchBinary('*', 2, fixture.signal, 0, fixture.context)).toMatchObject({
+      kind: 'signal-value',
+      signal: { type: 'virtual', name: 'signal-A' },
+      value: 2,
+    });
+    expect(fixture.calls()).toBe(1);
+
     expect(operators.dispatchBinary('*', fixture.network, 2, 0, fixture.context)).toMatchObject({
       kind: 'producer',
       producer: {
@@ -143,13 +158,13 @@ describe('elaboration operator policy', () => {
         operation: 'multiply',
       },
     });
-    expect(fixture.calls()).toBe(1);
+    expect(fixture.calls()).toBe(2);
     expect(operators.dispatchComparison('<', 0, fixture.network, 0, fixture.context)).toMatchObject(
       {
         kind: 'condition',
         condition: { kind: 'compare-each', comparator: '>', constant: 0 },
       },
     );
-    expect(fixture.calls()).toBe(2);
+    expect(fixture.calls()).toBe(3);
   });
 });

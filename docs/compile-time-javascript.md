@@ -12,6 +12,8 @@ CombLang executes a synchronous TypeScript-shaped JavaScript subset during elabo
 - ordinary methods named `.as`, `.to`, `.at`, or `.take` when the executed receiver is not a DSL handle;
 - TypeScript annotations, capability types, and numeric enums erased before execution.
 
+Control-flow tests remain JavaScript tests; they do not describe circuit branches. A nominal circuit `Condition` such as `input > 0` is therefore rejected with `RT2024` when used directly by `if`, a conditional expression, `while`, `do…while`, or a `for` condition. Use `IF(input > 0, ...)` or `when(input > 0).then(...)` to create a decider. Ordinary values retain exact JavaScript truthiness, including unary `!` for numbers, strings, `null`, arrays, and objects.
+
 Optional element and property-call chains remain native JavaScript and preserve nullish short-circuiting. They are not DSL invocation syntax: use a direct DSL selection or method call when the receiver is a Network or Producer.
 
 The v1 language reserves all free DSL identifiers. User variables, parameters, destructuring bindings, functions, classes, and enums cannot be named `Signal`, `Network`, `CC`, `IF`, `to`, `when`, `pair`, `Each`/`EACH`, `Anything`/`Any`/`ANYTHING`/`ANY`, or `Everything`/`All`/`EVERYTHING`/`ALL`; such a binding reports `CL1045`. Property names and methods are not free identifiers, so ordinary `object.to(...)`, `object.as(...)`, `object.at(...)`, and `object.take(...)` remain valid. A future lexical symbol-resolution phase may relax this policy.

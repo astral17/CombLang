@@ -362,6 +362,11 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
         value: identifier ?? factory.createVoidZero(),
       };
     };
+    const controlTest = (expression: ts.Expression, visit: ts.Visitor): ts.Expression =>
+      dslCall(factory, 'controlTest', [
+        ts.visitNode(expression, visit) as ts.Expression,
+        spanLiteral(factory, expression),
+      ]);
     const isWriteTarget = (node: ts.ElementAccessExpression): boolean => {
       const parent = node.parent;
       if (ts.isBinaryExpression(parent) && parent.left === node) {
@@ -567,6 +572,28 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
         );
       }
 
+      if (ts.isIfStatement(node)) {
+        return factory.updateIfStatement(
+          node,
+          controlTest(node.expression, visit),
+          ts.visitNode(node.thenStatement, visit) as ts.Statement,
+          node.elseStatement === undefined
+            ? undefined
+            : (ts.visitNode(node.elseStatement, visit) as ts.Statement),
+        );
+      }
+
+      if (ts.isConditionalExpression(node)) {
+        return factory.updateConditionalExpression(
+          node,
+          controlTest(node.condition, visit),
+          node.questionToken,
+          ts.visitNode(node.whenTrue, visit) as ts.Expression,
+          node.colonToken,
+          ts.visitNode(node.whenFalse, visit) as ts.Expression,
+        );
+      }
+
       if (ts.isForStatement(node)) {
         const declaration =
           node.initializer !== undefined && ts.isVariableDeclarationList(node.initializer)
@@ -588,9 +615,7 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
           node.initializer === undefined
             ? undefined
             : (ts.visitNode(node.initializer, visit) as ts.ForInitializer),
-          node.condition === undefined
-            ? undefined
-            : (ts.visitNode(node.condition, visit) as ts.Expression),
+          node.condition === undefined ? undefined : controlTest(node.condition, visit),
           node.incrementor === undefined
             ? undefined
             : (ts.visitNode(node.incrementor, visit) as ts.Expression),
@@ -611,7 +636,7 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
       if (ts.isWhileStatement(node)) {
         return factory.updateWhileStatement(
           node,
-          ts.visitNode(node.expression, visit) as ts.Expression,
+          controlTest(node.expression, visit),
           instrumentLoopBody(node.statement, 'while', factory.createVoidZero(), node, visit),
         );
       }
@@ -620,7 +645,7 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
         return factory.updateDoStatement(
           node,
           instrumentLoopBody(node.statement, 'do', factory.createVoidZero(), node, visit),
-          ts.visitNode(node.expression, visit) as ts.Expression,
+          controlTest(node.expression, visit),
         );
       }
 

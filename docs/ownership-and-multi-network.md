@@ -80,6 +80,8 @@ const values = [a];
 
 `a`, `alias`, and `values[0]` may all be read or used as topology destinations while that generation is current. Moving or consuming the Network through any one of them invalidates every stale alias. A genuinely independent Network requires `new Network()` or contextual materialization from another producer.
 
+Executed Network values are frozen nominal handles. Mutable ownership and borrow state is stored in a session-local `WeakMap`, not as an `ownership` or `borrow` property on the source-visible object. Consequently reflection cannot replace the owner, generation snapshot, capability, or borrow lifecycle, and copying visible fields cannot forge a valid handle. Plans and diagnostics still retain the same Network names and declaration provenance.
+
 Arrays and objects remain supported. They may own Networks, and reading `arr[i]` or `record.output` may borrow the contained handle for circuit expressions and producer attachment. Phase 4 must preserve that identity through dynamic indexing:
 
 ```ts

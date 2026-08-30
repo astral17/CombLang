@@ -17,6 +17,7 @@ import {
   type DslValue,
   type FunctionOwnershipFrame,
   type NetworkOwnershipState,
+  type NetworkRuntimeState,
   type NetworkValue,
   type PairSelectedValue,
   type PairValue,
@@ -24,6 +25,7 @@ import {
   type RuntimeObjectKind,
   type RuntimeObjectValue,
   type SelectedValue,
+  type SignalHandle,
   type SignalValue,
   type WildcardCountValue,
   type WildcardName,
@@ -33,7 +35,7 @@ import {
   elaborationOperatorPolicy as operators,
   type ElaborationOperatorDispatchContext,
 } from './elaboration-operators.js';
-import { elaborationOwnershipPolicy as ownership } from './elaboration-ownership.js';
+import { createElaborationOwnershipPolicy } from './elaboration-ownership.js';
 
 interface RawSpan {
   readonly start: number;
@@ -55,7 +57,7 @@ export interface ElaborationExecutionOptions {
 
 export { ElaborationExecutionError, ElaborationOperationLimitError };
 
-function isSignal(value: unknown): value is SignalId {
+function isSignalId(value: unknown): value is SignalId {
   return (
     typeof value === 'object' &&
     value !== null &&
@@ -85,6 +87,7 @@ class ElaborationRecorder {
   readonly #producerAttachments = new WeakMap<object, SourceSpan>();
   readonly #knownProducers = new Map<object, ProducerValue>();
   readonly #runtimeValues = new RuntimeValueRegistry();
+  readonly #ownership = createElaborationOwnershipPolicy((network) => this.#networkState(network));
   #unusedProducersFinalized = false;
   #anonymousOrdinal = 0;
   readonly #networkNameCounts = new Map<string, number>();
@@ -95,7 +98,8 @@ class ElaborationRecorder {
   #dslCalls = 0;
   readonly #operatorContext: ElaborationOperatorDispatchContext<RawSpan> = {
     isCircuitDslValue: (value): value is DslValue => this.#isCircuitDslValue(value),
-    isSignal,
+    isSignal: (value): value is SignalId => this.#isSignal(value),
+    isSignalId,
     isSelected: (value): value is SelectedValue => this.#isSelected(value),
     isNetwork: (value): value is NetworkValue => this.#isNetwork(value),
     isPair: (value): value is PairValue => this.#isPair(value),
@@ -139,7 +143,7 @@ class ElaborationRecorder {
         throw new Error('Executed provenance stack underflow.');
       }
       if (frame !== undefined) {
-        ownership.releaseFrame(frame, isRawSpan(rawSpan) ? this.#span(rawSpan) : undefined);
+        this.#ownership.releaseFrame(frame, isRawSpan(rawSpan) ? this.#span(rawSpan) : undefined);
       }
     },
     signal: (...args: unknown[]) => {
@@ -154,9 +158,9 @@ class ElaborationRecorder {
       if (!values.every((value) => typeof value === 'string')) {
         throw new Error('Signal(...) arguments must evaluate to strings.');
       }
-      if (values.length === 1) return Signal(values[0] as string);
+      if (values.length === 1) return this.#signalHandle(Signal(values[0] as string));
       const [type, name, quality] = values as [SignalId['type'], string, string?];
-      return Signal(type, name, quality);
+      return this.#signalHandle(Signal(type, name, quality));
     },
     wildcardToken: (value: WildcardName): WildcardTokenValue =>
       this.#runtimeValue({
@@ -221,7 +225,7 @@ class ElaborationRecorder {
         );
       }
       for (const value of values) this.#assertReadableNetwork(value, rawSpan);
-      if (values[0]!.ownership === values[1]!.ownership) {
+      if (this.#networkState(values[0]!).ownership === this.#networkState(values[1]!).ownership) {
         throw new ElaborationExecutionError(
           'pair(a, b) requires two distinct logical Networks.',
           this.#span(rawSpan),
@@ -260,14 +264,14 @@ class ElaborationRecorder {
       }
       this.#recordDslCall();
       const source = this.#span(rawSpan);
-      ownership.assertReadable(value, source);
+      this.#ownership.assertReadable(value, source);
       if (fixedColor !== undefined)
         this.#requireNetworkColor(value, capability, fixedColor, rawSpan);
       const frame = this.#currentFunctionFrame();
       if (frame === undefined) {
         throw new Error('Network parameter borrow was created outside a function frame.');
       }
-      const borrow = ownership.borrow(value, capability, parameter, source, frame);
+      const borrow = this.#ownership.borrow(value, capability, parameter, source, frame);
       this.#capabilityUses.push({
         network: value.name,
         capability,
@@ -276,15 +280,16 @@ class ElaborationRecorder {
         provenance: borrow.source,
         instancePath: this.#path(),
       });
-      return this.#runtimeValue({
-        kind: 'network',
-        name: value.name,
-        declaration: value.declaration,
-        ownership: value.ownership,
-        capability,
-        generation: value.generation,
-        borrow,
-      });
+      return this.#networkValue(
+        {
+          kind: 'network',
+          name: value.name,
+          declaration: value.declaration,
+          capability,
+          generation: value.generation,
+        },
+        { ownership: this.#networkState(value).ownership, borrow },
+      );
     },
     moveParameter: (
       value: unknown,
@@ -309,13 +314,14 @@ class ElaborationRecorder {
       }
       this.#recordDslCall();
       const source = this.#span(rawSpan);
-      ownership.assertConsumable(value, source, 'source');
+      this.#ownership.assertConsumable(value, source, 'source');
       const frame = this.#currentFunctionFrame();
       if (frame === undefined) {
         throw new Error('Network ownership transfer was created outside a function frame.');
       }
       if (fixedColor !== undefined) this.#requireNetworkColor(value, 'move', fixedColor, rawSpan);
-      ownership.moveToFrame(value, source, frame);
+      const state = this.#networkState(value);
+      this.#ownership.moveToFrame(value, source, frame);
       this.#capabilityUses.push({
         network: value.name,
         capability: 'move',
@@ -324,14 +330,16 @@ class ElaborationRecorder {
         provenance: source,
         instancePath: this.#path(),
       });
-      return this.#runtimeValue({
-        kind: 'network',
-        name: value.name,
-        declaration: value.declaration,
-        ownership: value.ownership,
-        capability: 'move',
-        generation: value.ownership.generation,
-      });
+      return this.#networkValue(
+        {
+          kind: 'network',
+          name: value.name,
+          declaration: value.declaration,
+          capability: 'move',
+          generation: state.ownership.generation,
+        },
+        { ownership: state.ownership },
+      );
     },
     producerHandle: (value: unknown, expectedType: unknown, rawSpan: RawSpan): ProducerValue => {
       return this.#producerHandle(value, expectedType, rawSpan);
@@ -378,7 +386,7 @@ class ElaborationRecorder {
       }
       this.#assertConsumableNetwork(destination, rawSpan, 'destination');
       this.#assertConsumableNetwork(source, rawSpan, 'source');
-      if (destination.ownership === source.ownership) {
+      if (this.#networkState(destination).ownership === this.#networkState(source).ownership) {
         throw new ElaborationExecutionError(
           'A Network cannot take itself.',
           this.#span(rawSpan),
@@ -393,7 +401,7 @@ class ElaborationRecorder {
         provenance,
         instancePath: this.#path(),
       });
-      ownership.consume(source, provenance);
+      this.#ownership.consume(source, provenance);
       return destination;
     },
     materialize: (
@@ -505,6 +513,16 @@ class ElaborationRecorder {
     compare: (operator: string, left: unknown, right: unknown, rawSpan: RawSpan): unknown => {
       return operators.dispatchComparison(operator, left, right, rawSpan, this.#operatorContext);
     },
+    controlTest: (value: unknown, rawSpan: RawSpan): unknown => {
+      if (this.#isCondition(value)) {
+        throw new ElaborationExecutionError(
+          'A circuit Condition cannot be used as a JavaScript control-flow test; use IF(...) or when(...).then(...) to create circuit logic.',
+          this.#span(rawSpan),
+          'RT2024',
+        );
+      }
+      return value;
+    },
     decider: (...args: unknown[]): ProducerValue => {
       this.#recordDslCall();
       const rawSpan = args.at(-1);
@@ -549,8 +567,8 @@ class ElaborationRecorder {
         condition: { kind: operator, conditions: [left.condition, right.condition] },
       });
     },
-    not: (value: ConditionValue | boolean, _rawSpan: RawSpan): ConditionValue | boolean => {
-      if (typeof value === 'boolean') return !value;
+    not: (value: unknown, _rawSpan: RawSpan): unknown => {
+      if (!this.#isCondition(value)) return !value;
       this.#recordDslCall();
       return this.#runtimeValue({
         kind: 'condition',
@@ -609,7 +627,7 @@ class ElaborationRecorder {
         return (producer as { as: (value: unknown) => unknown }).as(signal);
       }
       this.#recordDslCall();
-      if (!isSignal(signal)) throw new Error('.as(...) requires a Signal.');
+      if (!this.#isSignal(signal)) throw new Error('.as(...) requires a Signal.');
       if (producer.functionReturn !== undefined) {
         throw new ElaborationExecutionError(
           '.as(SIGNAL) cannot cross a function Network return boundary; bind the producer output inside that function.',
@@ -692,7 +710,7 @@ class ElaborationRecorder {
         return (producer as { to: (...items: unknown[]) => unknown }).to(...values);
       }
       this.#recordDslCall();
-      let outputSignal = isSignal(values.at(-1)) ? (values.pop() as SignalId) : undefined;
+      let outputSignal = this.#isSignal(values.at(-1)) ? (values.pop() as SignalHandle) : undefined;
       let destinations: readonly NetworkValue[];
       if (values.length === 1 && this.#isSelected(values[0])) {
         const selected = values[0];
@@ -703,7 +721,7 @@ class ElaborationRecorder {
             'RT2020',
           );
         }
-        if (outputSignal !== undefined || !isSignal(selected.selection)) {
+        if (outputSignal !== undefined || !isSignalId(selected.selection)) {
           throw new Error('A selected .to(...) destination must bind exactly one concrete Signal.');
         }
         outputSignal = selected.selection;
@@ -782,7 +800,7 @@ class ElaborationRecorder {
         this.#isDestination(destination)
           ? destination.signal
           : this.#isSelected(destination)
-            ? isSignal(destination.selection)
+            ? isSignalId(destination.selection)
               ? destination.selection
               : (() => {
                   throw new Error('A destination can bind only a concrete Signal.');
@@ -879,21 +897,24 @@ class ElaborationRecorder {
       source: declaration,
       instancePath: this.#path(),
     });
-    return this.#runtimeValue({
-      kind: 'network',
-      name: instanceName,
-      declaration,
-      ownership: {
-        generation: 0,
-        owner: this.#currentFunctionFrame()?.owner ?? 'top-level',
-        readonlyBorrows: new Set(),
-        ...(fixedColor === undefined
-          ? {}
-          : { colorRequirement: { color: fixedColor, source: declaration } }),
-      },
-      capability: 'owned',
+    const ownership: NetworkOwnershipState = {
       generation: 0,
-    });
+      owner: this.#currentFunctionFrame()?.owner ?? 'top-level',
+      readonlyBorrows: new Set(),
+      ...(fixedColor === undefined
+        ? {}
+        : { colorRequirement: { color: fixedColor, source: declaration } }),
+    };
+    return this.#networkValue(
+      {
+        kind: 'network',
+        name: instanceName,
+        declaration,
+        capability: 'owned',
+        generation: 0,
+      },
+      { ownership },
+    );
   }
 
   #bindingNetwork(descriptor: BindingDescriptor, rawSpan: RawSpan): NetworkValue {
@@ -984,8 +1005,18 @@ class ElaborationRecorder {
     return this.#hasRuntimeKind(value, 'network');
   }
 
+  #networkValue<T extends NetworkValue>(value: T, state: NetworkRuntimeState): T {
+    return this.#runtimeValues.brandNetwork(value, state);
+  }
+
+  #networkState(value: NetworkValue): NetworkRuntimeState {
+    const state = this.#runtimeValues.networkState(value);
+    if (state === undefined) throw new Error('Network handle is missing opaque runtime state.');
+    return state;
+  }
+
   #assertReadableNetwork(network: NetworkValue, rawSpan: RawSpan, role = 'Network'): void {
-    ownership.assertReadable(network, this.#span(rawSpan), role);
+    this.#ownership.assertReadable(network, this.#span(rawSpan), role);
   }
 
   #requireNetworkColor(
@@ -994,7 +1025,7 @@ class ElaborationRecorder {
     color: 'red' | 'green',
     rawSpan: RawSpan,
   ): void {
-    if (!ownership.requireColor(network, capability, color, this.#span(rawSpan))) return;
+    if (!this.#ownership.requireColor(network, capability, color, this.#span(rawSpan))) return;
     const index = this.#networks.findLastIndex(({ name }) => name === network.name);
     const declaration = this.#networks[index];
     if (declaration === undefined) {
@@ -1004,11 +1035,11 @@ class ElaborationRecorder {
   }
 
   #assertWritableNetwork(network: NetworkValue, rawSpan: RawSpan, role = 'Network'): void {
-    ownership.assertWritable(network, this.#span(rawSpan), role);
+    this.#ownership.assertWritable(network, this.#span(rawSpan), role);
   }
 
   #assertConsumableNetwork(network: NetworkValue, rawSpan: RawSpan, role: string): void {
-    ownership.assertConsumable(network, this.#span(rawSpan), role);
+    this.#ownership.assertConsumable(network, this.#span(rawSpan), role);
   }
 
   #returnOwnedValue(value: unknown, rawSpan: RawSpan, seen: Map<object, unknown>): unknown {
@@ -1091,15 +1122,18 @@ class ElaborationRecorder {
       );
     }
     const caller = this.#parentFunctionFrame();
-    ownership.returnToCaller(value, this.#span(rawSpan), frame, caller);
-    return this.#runtimeValue({
-      kind: 'network',
-      name: value.name,
-      declaration: value.declaration,
-      ownership: value.ownership,
-      capability: 'owned',
-      generation: value.ownership.generation,
-    });
+    const state = this.#networkState(value);
+    this.#ownership.returnToCaller(value, this.#span(rawSpan), frame, caller);
+    return this.#networkValue(
+      {
+        kind: 'network',
+        name: value.name,
+        declaration: value.declaration,
+        capability: 'owned',
+        generation: state.ownership.generation,
+      },
+      { ownership: state.ownership },
+    );
   }
 
   #path(): readonly string[] {
@@ -1128,6 +1162,14 @@ class ElaborationRecorder {
     return this.#hasRuntimeKind(value, 'signal-value');
   }
 
+  #isSignal(value: unknown): value is SignalHandle {
+    return this.#runtimeValues.hasSignal(value);
+  }
+
+  #signalHandle(value: SignalId): SignalHandle {
+    return this.#runtimeValues.brandSignal(value);
+  }
+
   #isSelected(value: unknown): value is SelectedValue {
     return this.#hasRuntimeKind(value, 'selected');
   }
@@ -1153,31 +1195,32 @@ class ElaborationRecorder {
   }
 
   #select(value: unknown, signal: unknown, rawSpan: RawSpan): SelectedValue | DestinationValue {
-    const selection =
+    const concreteSignal =
       typeof signal === 'string'
         ? Signal('item', signal)
-        : this.#isWildcardToken(signal)
-          ? signal.value
-          : signal;
+        : this.#isSignal(signal)
+          ? signal
+          : undefined;
+    const selection = concreteSignal ?? (this.#isWildcardToken(signal) ? signal.value : signal);
     const isWildcard =
       selection === 'each' || selection === 'anything' || selection === 'everything';
-    if (!isSignal(selection) && !isWildcard) {
+    if (concreteSignal === undefined && !isWildcard) {
       throw new Error('Network selection requires a Signal or wildcard.');
     }
     if (this.#isDestination(value)) {
-      if (!isSignal(selection)) {
+      if (concreteSignal === undefined) {
         throw new Error('to(...)[SIGNAL] requires one concrete output Signal.');
       }
-      if (value.signal !== undefined && !sameSignal(value.signal, selection)) {
+      if (value.signal !== undefined && !sameSignal(value.signal, concreteSignal)) {
         throw new Error('A to(...) destination already has a conflicting output Signal.');
       }
-      return this.#runtimeValue({ ...value, signal: selection });
+      return this.#runtimeValue({ ...value, signal: concreteSignal });
     }
     if (!this.#isNetwork(value) && !this.#isPair(value)) {
       throw new Error('Signal selection requires a Network or pair(a, b).');
     }
     this.#assertReadableValue(value, rawSpan);
-    return this.#selectedValue(value, selection as SignalId | WildcardName);
+    return this.#selectedValue(value, concreteSignal ?? (selection as WildcardName));
   }
 
   #selectedValue(
@@ -1234,7 +1277,7 @@ class ElaborationRecorder {
     }
     if (this.#isSelected(value)) {
       this.#assertReadableValue(value, rawSpan);
-      if (isSignal(value.selection)) {
+      if (isSignalId(value.selection)) {
         return { kind: 'signal', ...this.#planNetworkRef(value), signal: value.selection };
       }
       if (value.selection === 'each') return { kind: 'each', ...this.#planNetworkRef(value) };
@@ -1279,7 +1322,7 @@ class ElaborationRecorder {
     }
     if (this.#isSelected(output)) {
       this.#assertReadableValue(output, rawSpan);
-      return isSignal(output.selection)
+      return isSignalId(output.selection)
         ? { kind: 'signal', ...this.#planNetworkRef(output), signal: output.selection }
         : output.selection === 'each'
           ? { kind: 'each', ...this.#planNetworkRef(output) }
@@ -1417,7 +1460,7 @@ class ElaborationRecorder {
 
   #isCircuitDslValue(value: unknown): value is DslValue {
     return (
-      isSignal(value) ||
+      this.#isSignal(value) ||
       this.#isNetwork(value) ||
       this.#isPair(value) ||
       this.#isSelected(value) ||

@@ -40,9 +40,13 @@ export interface NetworkValue {
   readonly kind: 'network';
   readonly name: string;
   readonly declaration: SourceSpan;
-  readonly ownership: NetworkOwnershipState;
   readonly capability: RuntimeNetworkCapability;
   readonly generation: number;
+}
+
+/** Mutable Network state kept outside the source-visible, frozen handle. */
+export interface NetworkRuntimeState {
+  readonly ownership: NetworkOwnershipState;
   readonly borrow?: NetworkBorrow;
 }
 
@@ -51,6 +55,9 @@ export interface SignalValue {
   readonly signal: SignalId;
   readonly value: number;
 }
+
+/** Source-visible Signal identity registered by one executed elaboration session. */
+export interface SignalHandle extends SignalId {}
 
 export type WildcardName = 'each' | 'anything' | 'everything';
 
@@ -117,19 +124,44 @@ export type DslValue =
   | WildcardCountValue
   | ConditionValue
   | ProducerValue
-  | SignalId
+  | SignalHandle
   | number;
 
-export type RuntimeObjectValue = Exclude<DslValue, SignalId | number>;
+export type RuntimeObjectValue = Exclude<DslValue, SignalHandle | number>;
 export type RuntimeObjectKind = RuntimeObjectValue['kind'];
 
 /** Nominal, session-local identity for runtime-only DSL values. */
 export class RuntimeValueRegistry {
   readonly #kinds = new WeakMap<object, RuntimeObjectKind>();
+  readonly #networks = new WeakMap<NetworkValue, NetworkRuntimeState>();
+  readonly #signals = new WeakSet<object>();
 
   brand<T extends RuntimeObjectValue>(value: T): T {
+    if (value.kind === 'network') {
+      throw new Error('Network handles require opaque runtime state.');
+    }
     this.#kinds.set(value, value.kind);
     return value;
+  }
+
+  brandNetwork<T extends NetworkValue>(value: T, state: NetworkRuntimeState): T {
+    this.#kinds.set(value, 'network');
+    this.#networks.set(value, state);
+    Object.freeze(value.declaration);
+    return Object.freeze(value);
+  }
+
+  networkState(value: NetworkValue): NetworkRuntimeState | undefined {
+    return this.#networks.get(value);
+  }
+
+  brandSignal<T extends SignalHandle>(value: T): T {
+    this.#signals.add(value);
+    return value;
+  }
+
+  hasSignal(value: unknown): value is SignalHandle {
+    return typeof value === 'object' && value !== null && this.#signals.has(value);
   }
 
   hasKind<K extends RuntimeObjectKind>(

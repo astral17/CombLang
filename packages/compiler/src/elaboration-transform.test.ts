@@ -55,6 +55,7 @@ for (let i = 0; i < 10; i++) {
             : false
           : { operator, left, right },
       ),
+      controlTest: vi.fn((value) => value),
       decider: vi.fn((condition, value) => ({ producer: 'decider', condition, value })),
       attach: vi.fn(),
       addAssign: vi.fn((left, right, assign) => {
@@ -81,6 +82,25 @@ for (let i = 0; i < 10; i++) {
       dsl.compare.mock.calls.filter((call) => typeof call[1] === 'object').map((call) => call[2]),
     ).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(program.code).toContain('__dsl.compare("<", i, 10');
+    expect(program.code).toContain('__dsl.controlTest(__dsl.compare("<", i, 10');
+  });
+
+  test('guards JavaScript control-flow tests and routes unary not through runtime dispatch', () => {
+    const source = parseFile({
+      path: 'control-flow.factorio.ts',
+      text: `if (condition) yes(); else no();
+const selected = condition ? yes() : no();
+while (condition) work();
+do work(); while (condition);
+for (; condition;) work();
+for (;;) break;
+const inverted = !value;`,
+    });
+    const code = transformElaborationModule(source).code;
+
+    expect(code.match(/__dsl\.controlTest\(condition/g)).toHaveLength(5);
+    expect(code).toContain('for (;;)');
+    expect(code).toContain('__dsl.not(value');
   });
 
   test('routes reads through runtime dispatch while preserving ordinary element writes', () => {

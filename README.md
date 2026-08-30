@@ -54,6 +54,14 @@ The current repository implements the Phase 3 source compiler and the first exec
   - [x] Extract ownership validation and state transitions behind an explicit, independently tested policy interface.
   - [x] Extract operator normalization, condition inversion, nominal JavaScript-versus-DSL dispatch, producer construction, and exact native fallback evaluation behind a tested policy interface.
   - [x] Decide default Producer versus future Entity-handle materialization using Scale, Distance, MemoCell, RGB indicator, RequesterChest, and Assembler benchmarks.
+- [ ] Phase 4.6 — JavaScript/DSL boundary correctness and opacity
+  - [x] Reject circuit `Condition` values in JavaScript `if`, ternary, `while`, `do…while`, and `for` tests while preserving ordinary truthiness and unary `!` behavior.
+  - [x] Make source-level Signal handles nominal without changing structural Signal IDs in IR and blueprint data.
+  - [x] Move mutable Network ownership state behind an opaque runtime boundary.
+  - [ ] Preserve nested DSL transformation inside optional chains and make the generated runtime bridge hygienic.
+  - [ ] Remove observable coercion from loop provenance and reject unsupported asynchronous elaboration syntax.
+  - [ ] Finalize unused Producers by identity without consuming a still-live alias at an expression statement.
+  - [ ] Introduce concrete configuration-value categories, canonical circuit-int normalization, and a discriminated Decider output model before typed objects and exact constructors.
 - [ ] Phase 5 — testbench: drive/expect/tick, mocks and models, Unknown values, waveforms, and debug hierarchy.
 - [ ] Phase 6 — typed Factorio objects: shared circuit inputs, native single-comparison `enable`, Roboport, Lamp, Constant, logistics entities, belts, displays, and train stops.
 - [ ] Phase 7 — exact constructors and native-config stress: Arithmetic, full Decider normal/else output lists, duplicate outputs, `Everything`, Selector, raw entities, LUTs, and large generated configurations.
@@ -77,7 +85,7 @@ Later phases still cover the remaining ownership and multi-network semantics, te
 - [Compile-time JavaScript](docs/compile-time-javascript.md) — supported metaprogramming subset and explicit compatibility limits.
 - [Security model](docs/security-model.md) — current trusted-source assumption and Worker/CLI isolation limits.
 
-Signal identity is structural. `Signal("chest")` is the same default-item shorthand as `network["chest"]` and produces the internal identity `{ type: "item", name: "chest" }`; blueprint JSON omits that default `item` type. Explicit namespaces use `Signal("virtual", "signal-A")`, while `Signal("virtual", "signal-A", "normal")` also carries quality. The lowercase `signal(...)` helper remains a compatibility alias for internal/runtime code. Broader import-time omission/defaulting rules still require Phase 8 Factorio conformance fixtures.
+Signal IDs in plans, IR, and blueprint data have structural identity. Source values returned by `Signal(...)` are nevertheless nominal handles registered to the current elaboration session, so an ordinary `{ type, name }` configuration object cannot accidentally enter DSL dispatch. `Signal("chest")` is the same default-item shorthand as `network["chest"]` and produces the internal identity `{ type: "item", name: "chest" }`; blueprint JSON omits that default `item` type. Explicit namespaces use `Signal("virtual", "signal-A")`, while `Signal("virtual", "signal-A", "normal")` also carries quality. The lowercase `signal(...)` helper remains a compatibility alias for internal/runtime code. Broader import-time omission/defaulting rules still require Phase 8 Factorio conformance fixtures.
 
 The source compiler recognizes top-level Signal declarations and specific Network selection in compact deciders. For example, `IF(input[SIGNAL_A] > 40, input[SIGNAL_A])` tests and copies only signal A; unrelated signals on the same circuit network are not emitted. Arithmetic may bind its physical output explicitly with `out[RESULT] += left[A] + right[B]`, `.to(out[RESULT])`, or `.to(out, mirror, RESULT)`. Without an explicit destination binding, the first concrete signal operand from left to right is the deterministic fallback.
 

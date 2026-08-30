@@ -19,7 +19,10 @@ import type {
 
 export interface ElaborationOperatorDispatchContext<Source> {
   isCircuitDslValue(value: unknown): value is DslValue;
+  /** Nominal source-level Signal handle. */
   isSignal(value: unknown): value is SignalId;
+  /** Structural Signal ID already admitted into a selected/IR value. */
+  isSignalId(value: unknown): value is SignalId;
   isSelected(value: unknown): value is SelectedValue;
   isNetwork(value: unknown): value is NetworkValue;
   isPair(value: unknown): value is PairValue;
@@ -179,7 +182,7 @@ function dispatchComparison<Source>(
   context.assertReadable(left, source);
   context.assertReadable(right, source);
   if (context.isSelected(left) && context.isSelected(right)) {
-    if (!context.isSignal(left.selection) || !context.isSignal(right.selection)) {
+    if (!context.isSignalId(left.selection) || !context.isSignalId(right.selection)) {
       throw new Error('Signal-to-signal comparison requires concrete Signal selections.');
     }
     return context.brand({
@@ -199,7 +202,7 @@ function dispatchComparison<Source>(
     const normalized = context.isSelected(left) ? comparator : reverseComparators[comparator];
     return context.brand({
       kind: 'condition',
-      condition: context.isSignal(selected.selection)
+      condition: context.isSignalId(selected.selection)
         ? {
             kind: 'compare-signal',
             ...context.planNetworkRef(selected),
@@ -291,9 +294,9 @@ function dispatchBinary<Source>(
   const operation = arithmeticOperations[operator];
   if (operation === undefined) throw new Error(`Unsupported arithmetic operator: ${operator}.`);
   const concreteOutput =
-    context.isSelected(left) && context.isSignal(left.selection)
+    context.isSelected(left) && context.isSignalId(left.selection)
       ? left.selection
-      : context.isSelected(right) && context.isSignal(right.selection)
+      : context.isSelected(right) && context.isSignalId(right.selection)
         ? right.selection
         : undefined;
   return context.brand({

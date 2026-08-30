@@ -2,15 +2,25 @@ import { sourceFileId, sourceSpan } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
 import { ElaborationExecutionError } from './elaboration-errors.js';
-import { elaborationOwnershipPolicy as ownership } from './elaboration-ownership.js';
+import { createElaborationOwnershipPolicy } from './elaboration-ownership.js';
 import type {
   FunctionOwnershipFrame,
   NetworkOwnershipState,
+  NetworkRuntimeState,
   NetworkValue,
 } from './elaboration-values.js';
+import { RuntimeValueRegistry } from './elaboration-values.js';
 
 const file = sourceFileId('ownership-policy.factorio.ts');
 const span = (start: number) => sourceSpan(file, start, start + 1);
+
+const registry = new RuntimeValueRegistry();
+const stateFor = (network: NetworkValue): NetworkRuntimeState => {
+  const state = registry.networkState(network);
+  if (state === undefined) throw new Error('Missing test Network state.');
+  return state;
+};
+const ownership = createElaborationOwnershipPolicy(stateFor);
 
 function ownedNetwork(state?: NetworkOwnershipState): NetworkValue {
   const ownership =
@@ -20,14 +30,28 @@ function ownedNetwork(state?: NetworkOwnershipState): NetworkValue {
       owner: 'top-level',
       readonlyBorrows: new Set(),
     } satisfies NetworkOwnershipState);
-  return {
-    kind: 'network',
-    name: 'value',
-    declaration: span(0),
-    ownership,
-    capability: 'owned',
-    generation: ownership.generation,
-  };
+  return registry.brandNetwork(
+    {
+      kind: 'network',
+      name: 'value',
+      declaration: span(0),
+      capability: 'owned',
+      generation: ownership.generation,
+    },
+    { ownership },
+  );
+}
+
+function view(
+  value: NetworkValue,
+  capability: NetworkValue['capability'],
+  borrow?: NetworkRuntimeState['borrow'],
+): NetworkValue {
+  const state = stateFor(value);
+  return registry.brandNetwork(
+    { ...value, capability, generation: state.ownership.generation },
+    { ownership: state.ownership, ...(borrow === undefined ? {} : { borrow }) },
+  );
 }
 
 function frame(name: string): FunctionOwnershipFrame {
@@ -39,18 +63,14 @@ describe('elaboration ownership policy', () => {
     const value = ownedNetwork();
     const current = frame('borrow');
     const borrow = ownership.borrow(value, 'readonly', 'input', span(20), current);
-    const view: NetworkValue = {
-      ...value,
-      capability: 'readonly',
-      borrow,
-    };
+    const readonlyView = view(value, 'readonly', borrow);
 
-    ownership.assertReadable(view, span(21));
-    expect(() => ownership.assertWritable(view, span(22))).toThrowError(
+    ownership.assertReadable(readonlyView, span(21));
+    expect(() => ownership.assertWritable(readonlyView, span(22))).toThrowError(
       expect.objectContaining({ code: 'RT2015' }),
     );
     ownership.releaseFrame(current, span(23));
-    expect(() => ownership.assertReadable(view, span(24))).toThrowError(
+    expect(() => ownership.assertReadable(readonlyView, span(24))).toThrowError(
       expect.objectContaining({ code: 'RT2017' }),
     );
   });
@@ -63,13 +83,9 @@ describe('elaboration ownership policy', () => {
       expect.objectContaining({ code: 'RT2012' }),
     );
 
-    const moved: NetworkValue = {
-      ...original,
-      capability: 'move',
-      generation: original.ownership.generation,
-    };
+    const moved = view(original, 'move');
     ownership.returnToCaller(moved, span(32), current, undefined);
-    expect(original.ownership.owner).toBe('top-level');
+    expect(stateFor(original).ownership.owner).toBe('top-level');
     expect(current.moves[0]?.returned).toBe(true);
   });
 
@@ -77,11 +93,7 @@ describe('elaboration ownership policy', () => {
     const value = ownedNetwork();
     const current = frame('drop');
     ownership.moveToFrame(value, span(40), current);
-    const moved: NetworkValue = {
-      ...value,
-      capability: 'move',
-      generation: value.ownership.generation,
-    };
+    const moved = view(value, 'move');
     ownership.releaseFrame(current);
 
     try {

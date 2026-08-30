@@ -17,6 +17,8 @@ const QUALITY_A = Signal('virtual', 'signal-A', 'legendary');
 
 `Signal("chest")` normalizes internally to `{ type: "item", name: "chest" }`. Factorio blueprint JSON omits the default item `type`, so the exported field contains only `name`. The optional third string carries Factorio quality. Literal non-string arguments are rejected by the semantic checker; dynamic arguments are accepted until elaboration and then validated from their executed values.
 
+The source value returned by `Signal(...)` is a nominal handle registered to the current elaboration session. A plain JavaScript object with `type` and `name` fields remains an ordinary object and is not accepted as a Signal operand or Network selection. Once a valid handle enters a direct plan, its identity is serialized as the structural `{ type, name, quality? }` Signal ID used by IR, simulation, and blueprint JSON. Name-only `network["chest"]` remains an explicit shorthand and does not require constructing a handle first.
+
 ## Networks and colors
 
 ```ts
@@ -359,6 +361,8 @@ for (let i = 0; i < 10; i++) {
 ```
 
 The JavaScript engine executes the loop. It produces one constant combinator and ten decider combinators; the compiler does not statically unroll or pattern-match ten copies. The same executable path is used with and without loops; the web compiler has no static-lowering fallback.
+
+An executed circuit comparison produces a circuit `Condition`, not a JavaScript boolean. Using one directly as an `if`/ternary/`while`/`do…while`/`for` test is `RT2024`; this prevents the branded runtime object from silently acting as truthy. Circuit branching belongs in `IF(...)` or `when(...).then(...)`. Conditions still support `!`, while `!` applied to an ordinary value keeps native JavaScript truthiness.
 
 `for…of`, `for…in`, `while`, and `do…while` use that same runtime path. Their bodies are instrumented for provenance rather than statically interpreted, so arrays and object configuration can control generated hardware. Entering or iterating a loop does not consume the numeric DSL-call limit.
 

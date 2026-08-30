@@ -746,6 +746,117 @@ ${declaration}`,
     );
   });
 
+  test('keeps Signal-shaped ordinary objects in the JavaScript value domain', () => {
+    const parsed = parseFile({
+      path: 'signal-lookalike.factorio.ts',
+      text: `const lookalike = { type: "virtual", name: "signal-A" };
+const product = 5 * lookalike;
+if (!Number.isNaN(product)) throw new Error("Signal lookalike entered DSL dispatch");`,
+    });
+
+    expect(executeElaborationProgram(transformElaborationModule(parsed)).producers).toEqual([]);
+  });
+
+  test('does not accept a structural Signal lookalike as a Network selection', () => {
+    const parsed = parseFile({
+      path: 'forged-signal.factorio.ts',
+      text: `const lookalike = { type: "virtual", name: "signal-A" };
+const input = new Network();
+input[lookalike];`,
+    });
+
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrow(
+      /Network selection requires a Signal or wildcard/,
+    );
+  });
+
+  test('exposes a frozen Network handle without mutable ownership internals', () => {
+    const parsed = parseFile({
+      path: 'opaque-network.factorio.ts',
+      text: `const input = new Network();
+if ("ownership" in input || "borrow" in input || !Object.isFrozen(input)) {
+  throw new Error("Network internals are visible");
+}
+if (Reflect.set(input, "generation", 99) || Reflect.set(input, "ownership", {})) {
+  throw new Error("Network handle accepted mutation");
+}
+const output = input + 1;`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.producers).toMatchObject([{ kind: 'arithmetic' }]);
+    expect(plan.networks.map(({ name }) => name)).toEqual(['input', 'output']);
+  });
+
+  test('cannot revive a moved Network alias by mutating its frozen generation snapshot', () => {
+    const expression = 'alias + 0';
+    const parsed = parseFile({
+      path: 'opaque-moved-network.factorio.ts',
+      text: `function Pass(input: Move<Network>): Network { return input; }
+let input = new Network();
+const alias = input;
+input = Pass(input);
+Reflect.set(alias, "generation", input.generation);
+${expression};`,
+    });
+
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected the stale Network alias to remain invalid.');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'RT2012', span: expect.any(Object) });
+      const failure = error as ElaborationExecutionError;
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(expression);
+    }
+  });
+
+  test.each([
+    ['if', 'if (input > 0) {}', 'input > 0'],
+    ['conditional expression', 'const value = input > 0 ? 1 : 2;', 'input > 0'],
+    ['while', 'while (input > 0) {}', 'input > 0'],
+    ['do-while', 'do {} while (input > 0);', 'input > 0'],
+    ['for condition', 'for (; input > 0;) {}', 'input > 0'],
+  ])(
+    'rejects a circuit Condition used by JavaScript %s control flow',
+    (_kind, statement, testText) => {
+      const parsed = parseFile({
+        path: 'circuit-control-flow.factorio.ts',
+        text: `const input = new Network();\n${statement}`,
+      });
+
+      try {
+        executeElaborationProgram(transformElaborationModule(parsed));
+        expect.fail('Expected circuit Condition control flow to be rejected.');
+      } catch (error) {
+        expect(error).toMatchObject({ code: 'RT2024', span: expect.any(Object) });
+        const failure = error as ElaborationExecutionError;
+        expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(testText);
+      }
+    },
+  );
+
+  test('preserves JavaScript truthiness for unary not and guarded control-flow tests', () => {
+    const parsed = parseFile({
+      path: 'ordinary-truthiness.factorio.ts',
+      text: `const zero = !0;
+const empty = !"";
+const nil = !null;
+const object = !{};
+const array = ![];
+const one = !1;
+const selected = zero ? 7 : 9;
+let iterations = 0;
+while (iterations < 2) iterations++;
+do iterations++; while (false);
+for (let i = 0; i < 2; i++) iterations++;
+if (!zero || !empty || !nil || object || array || one || selected !== 7 || iterations !== 5) {
+  throw new Error("ordinary JavaScript truthiness changed");
+}`,
+    });
+
+    expect(executeElaborationProgram(transformElaborationModule(parsed)).producers).toEqual([]);
+  });
+
   test('validates later writes to direct, array, and object Producer slots', () => {
     const parsed = parseFile({
       path: 'producer-assignments.factorio.ts',
