@@ -68,6 +68,37 @@ Repeated outputs are intentional. For example, copying `A` and emitting constant
 
 Permanent self-initializing topology is preferred over temporary combinators that are deleted after startup. Entity lifecycle and topology mutation must not be introduced implicitly by a convenience form.
 
+## Constant-combinator sections
+
+The current `CC(5 * A, 7 * B)` form denotes one physical constant combinator with one default section. Factorio 2.1 sections additionally carry an ordered index, optional group, floating-point multiplier, and active state; the whole combinator has a separate `is_on` state.
+
+The planned ergonomic extension is:
+
+```ts
+const constants: ConstantCombinator = CC(
+  CC.section({ multiplier: 2 }, 5 * A, 7 * B),
+  CC.section({ group: 'backup', active: false }, 1 * C),
+);
+```
+
+Raw filters remain the one-section shorthand. A call uses either only raw filters or only `CC.section(...)` values; mixing the two forms is rejected instead of guessing which section owns a filter. Section indices come from source order. Multiplication outside the constructor, such as `2 * CC(...)`, is not section configuration because it would read as circuit arithmetic.
+
+The planned exact form keeps native configuration visible:
+
+```ts
+const constants = Constant({
+  isOn: true,
+  sections: [
+    {
+      multiplier: 2,
+      filters: [5 * A, 7 * B],
+    },
+  ],
+});
+```
+
+`multiplier` accepts a finite JavaScript number at elaboration time, but its exact Factorio float conversion and count-rounding behavior must be locked with exported blueprint and in-game behavior fixtures before implementation in Phase 7. The convenience and exact forms must still create one physical entity and no ticks.
+
 ## Blueprint parameter values
 
 Blueprint parameters are placement-time configuration, not runtime circuit objects. Candidate declarations include:

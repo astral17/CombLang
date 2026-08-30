@@ -134,7 +134,9 @@ out += CC(5 * A);
 to(first, second) += CC(5 * A, -2 * B);
 ```
 
-Each argument is an int32 literal multiplied by a declared Signal value. A Signal may occur only once in one `CC` call.
+Each argument is a finite safe-integer value multiplied by a declared Signal value; the count is canonicalized to signed int32. A Signal may occur only once in one `CC` call.
+
+This implemented form creates one default Factorio 2.1 section. Multiple sections, section `multiplier`/`group`/`active`, and the entity-wide `isOn` switch are planned for the Phase 7 exact Constant surface. Their accepted design is documented in [Native objects, Deciders, and blueprint parameters](native-objects-deciders-and-parameters.md); `CC.section(...)` is not executable syntax yet.
 
 ## Materialization and attachment
 

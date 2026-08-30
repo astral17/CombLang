@@ -36,6 +36,47 @@ const output: Network = Scale(input);`,
     expect(executed.capabilityUses).toEqual(plan.capabilityUses);
   });
 
+  test('carries every Phase 4 descriptor through executed source into EG and NCIR', () => {
+    const parsed = parseFile({
+      path: 'phase-4-acceptance.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+function Inspect(input: Readonly<Network<R>>, output: Ref<Network<G>>): void {
+  output += input + 1;
+}
+function Pass(input: Move<Network>): Network { return input; }
+const red = new Network<R>();
+const green = new Network<G>();
+Inspect(red, green);
+const observed: Network = pair(red, green)[A] + 0;
+let moving = new Network();
+moving = Pass(moving);
+const destination = new Network();
+const source = new Network();
+destination.take(source);`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const executed = elaborateDirectPlan(plan);
+
+    expect(plan.capabilityUses).toMatchObject([
+      { network: 'red', capability: 'readonly', parameter: 'input', fixedColor: 'red' },
+      { network: 'green', capability: 'ref', parameter: 'output', fixedColor: 'green' },
+      { network: 'moving', capability: 'move', parameter: 'input' },
+    ]);
+    expect(plan.networkPairs).toMatchObject([{ networks: ['red', 'green'] }]);
+    expect(plan.networkTransfers).toMatchObject([{ destination: 'destination', source: 'source' }]);
+    expect(executed.capabilityUses).toEqual(plan.capabilityUses);
+    expect(executed.circuit.graph.networks.map(({ name }) => name)).toContain('destination');
+    expect(executed.circuit.ir.networks.map(({ name }) => name)).not.toContain('source');
+    expect(executed.circuit.ir.producers).toContainEqual(
+      expect.objectContaining({
+        kind: 'arithmetic',
+        config: expect.objectContaining({
+          left: expect.objectContaining({ kind: 'signal', refKind: 'pair' }),
+        }),
+      }),
+    );
+  });
+
   test('compiles and retains a value through a source-level MemoCell', () => {
     const parsed = parseFile({
       path: 'memo-cell.factorio.ts',

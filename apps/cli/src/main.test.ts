@@ -63,6 +63,24 @@ const output: Network = Scale(input);`);
     ]);
   });
 
+  test('reports successful transfer and pair descriptors as JSON audit data', async () => {
+    const path = await sourceFile(`const A = Signal("virtual", "signal-A");
+const red = new Network<R>();
+const green = new Network<G>();
+const observed: Network = pair(red, green)[A] + 0;
+const destination = new Network();
+const source = new Network();
+destination.take(source);`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path])).toBe(0);
+    const result = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(result.networkPairs).toMatchObject([{ networks: ['red', 'green'] }]);
+    expect(result.networkTransfers).toMatchObject([
+      { destination: 'destination', source: 'source' },
+    ]);
+  });
+
   test('reports semantic errors in branches that execution would skip', async () => {
     const path = await sourceFile(`const output = new Network();
 if (false) {

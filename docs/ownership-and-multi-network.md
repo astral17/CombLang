@@ -195,6 +195,19 @@ Runtime enforcement must use the same diagnostic result path as other elaboratio
 
 Phase 4 is complete when each capability transition and `pair` form has semantic, transformed-runtime, EG/NCIR, CLI, and end-to-end tests; uncertain static cases are proven by runtime tests; and no candidate syntax is described as implemented before those tests pass.
 
+The completion audit is checked at these boundaries:
+
+| Boundary                        | Executable evidence                                                                                                                                                                                         |
+| ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Conservative semantic certainty | `packages/language/src/semantic.test.ts` covers capability declarations, definite writes/consumption, aliases, containers, bare parameters, and definite `pair` misuse.                                     |
+| Source transformation           | `packages/compiler/src/elaboration-transform.test.ts` covers borrow/move rebinding, dynamic slots, attachment forms, and pair selection dispatch.                                                           |
+| Executed ownership authority    | `packages/runtime/src/elaboration-program.test.ts` covers successful and invalid Readonly/Ref/Move transitions, stale aliases, containers, closures, `take`, every supported pair read, and dynamic misuse. |
+| EG/NCIR lowering                | `packages/runtime/src/direct-plan.test.ts` carries capability, transfer, and pair descriptors together through source execution, identity collapse, pair operands, color solving, and simulation.           |
+| User-facing pipelines           | `apps/cli/src/main.test.ts` and `apps/web/src/compile-source.test.ts` verify successful descriptor serialization plus structured source-aware failures.                                                     |
+| Cross-layer dispatch contract   | `packages/runtime/src/language-contract.test.ts` proves ordinary JavaScript names remain native while DSL handles reach one physical plan.                                                                  |
+
+This matrix closes Phase 4. Future Entity handles and object ports build on it in Phase 6 rather than reopening Network ownership semantics.
+
 ## Open decisions
 
 - whether producer handles need capabilities beyond the implemented `Producer`, `DeciderCombinator`, `ArithmeticCombinator`, and `ConstantCombinator` annotations;

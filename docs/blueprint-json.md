@@ -54,6 +54,7 @@ This is an early preview rather than the Phase 8 codec:
 - nested condition-group conformance still needs captured in-game fixtures;
 - entity defaults and schema details will be tightened against Factorio import tests;
 - omission/defaulting rules outside the implemented default-item `Signal(name)` case still need captured import/export conformance fixtures;
+- constant combinators currently export one default section; multiple sections, groups, section multipliers/active state, and entity-wide `is_on` await the Phase 7 exact Constant model and fixtures;
 - source Networks without a physical producing endpoint cannot create an external blueprint connection by themselves.
 
 The workbench shows and copies this readable JSON, but it is still a preview rather than a finished exchange-string export or verified round-trip codec.

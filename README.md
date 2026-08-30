@@ -2,7 +2,7 @@
 
 CombLang is an early implementation of a TypeScript-shaped structural HDL for Factorio 2.1 circuit networks. The checked-in design and implementation notes live in [`docs/architecture.md`](docs/architecture.md).
 
-The current repository implements the Phase 3 source compiler and the first executable Phase 4 ownership slice grown from the original Phase 0 skeleton:
+The current repository implements the Phase 3 source compiler, the complete Phase 4 ownership/multi-network surface, and its 4.5/4.6 boundary-hardening passes grown from the original Phase 0 skeleton:
 
 - one parser API shared by Node and the browser;
 - stable source file IDs and half-open source spans;
@@ -27,42 +27,28 @@ The current repository implements the Phase 3 source compiler and the first exec
 - [x] Phase 1 — Factorio semantics kernel: int32 values, sparse buses, arithmetic/decider semantics, wildcards, and synchronous simulation.
 - [x] Phase 2 — direct elaboration runtime: EG/NCIR, session-bound handles, attachments, provenance, color solving, and the MemoCell integration slice.
 - [x] Phase 3 — executed source compiler: conservative semantic checks, DSL-sensitive JavaScript transformation, runtime elaboration, provenance, color solving, CLI validation, and the browser workbench.
-- [ ] Phase 4 — ownership and multi-network syntax
-  - [x] Freeze and implement function-scoped `Readonly<Network>` and `Ref<Network>` capabilities, including color-qualified forms and runtime borrow views.
-  - [x] Reject ambiguous bare-`Network` parameters and implement explicit `Move<Network>` call/return transfer, including color-qualified and array/plain-object returns.
-  - [x] Track ownership, borrows, aliases, and moved state through lexical scopes, function calls, returns, destructuring, arrays, objects, closures, and executed control flow.
-  - [x] Enforce the function-borrow operation matrix: read-only borrows may be read, mutable borrows may receive producer attachments, neither may be consumed, and escaped views expire.
-  - [x] Complete the owned/moved operation matrix across calls, returns, local aliases, and container ownership slots; ordinary assignment replaces a slot with the fresh owner returned from a consuming call.
-  - [x] Add source-aware diagnostics for invalid alias reuse, writes through `Readonly`, borrow escapes, double moves, dropped ownership, and use after move, with runtime checks for cases the semantic pass cannot prove.
-  - [x] Freeze and implement explicit zero-tick consuming network transfer as `a.take(b)`; `a += b` and independent ownership cloning remain invalid, while ordinary aliases share one ownership token.
-  - [x] Implement `pair(a, b)` as an immutable two-network input view, including `pair(a, b)[SIGNAL]`, wildcard selections, summed red/green reads, and opposite-color constraints.
-  - [x] Reject `pair(...)` as an attachment destination or ownership carrier; keep producer output fan-out expressed through `.to(...)`, `to(...) +=`, or contextual destructuring.
-  - [x] Unify single- and multi-destination attachment validation, output-signal binding, connector cardinality, color constraints, and source provenance across all supported producer forms.
-  - [x] Carry capability and multi-network descriptors through the transformed runtime, serialized direct-plan boundary, EG/NCIR lowering, CLI, and browser result model.
-  - [x] Freeze Producer identity and its public `Producer`/specific-combinator type surface; validate declarations, calls, returns, destructuring, and typed slot assignments while fluent wrappers and containers retain one physical identity.
-  - [x] Keep topology `+=` valid through both `const` and `let` bindings: JavaScript binding mutability is separate from Network topology capability.
-  - [ ] Add focused semantic/runtime tests, end-to-end compiler cases, diagnostics documentation, and executable language examples for every ownership transition and `pair` form.
-- [x] Phase 4.5 — semantic/runtime hardening before typed objects
-  - [x] Use canonical quality-aware Signal equality and cover output-binding conflicts end to end.
-  - [x] Preserve ordinary `.as`/`.to` dispatch, JavaScript optional-chain semantics, and add a semantic-transform-runtime contract suite.
-  - [x] Isolate the private TypeScript syntax-erasure API, pin its compiler version, and cover the boundary plus production builds.
-  - [x] Reserve free DSL identifiers for v1 and enforce one shared name table consistently across semantic preflight and transform.
-  - [x] Brand runtime values in a session-local registry so guards are nominal and ordinary configuration objects cannot forge DSL handles.
-  - [x] Replace the compatibility `network + networks?` representation with a discriminated single/pair selection reference.
-  - [x] Share one DSL type-annotation parser across semantic preflight and transform for Network capabilities/colors, Producer handles, and arrays.
-  - [x] Extract runtime value shapes and their nominal session registry from the elaboration coordinator.
-  - [x] Extract ownership validation and state transitions behind an explicit, independently tested policy interface.
-  - [x] Extract operator normalization, condition inversion, nominal JavaScript-versus-DSL dispatch, producer construction, and exact native fallback evaluation behind a tested policy interface.
-  - [x] Decide default Producer versus future Entity-handle materialization using Scale, Distance, MemoCell, RGB indicator, RequesterChest, and Assembler benchmarks.
-- [x] Phase 4.6 — JavaScript/DSL boundary correctness and opacity
-  - [x] Reject circuit `Condition` values in JavaScript `if`, ternary, `while`, `do…while`, and `for` tests while preserving ordinary truthiness and unary `!` behavior.
-  - [x] Make source-level Signal handles nominal without changing structural Signal IDs in IR and blueprint data.
-  - [x] Move mutable Network ownership state behind an opaque runtime boundary.
-  - [x] Preserve nested DSL transformation inside optional chains and make the generated runtime bridge hygienic.
-  - [x] Remove observable coercion from loop provenance and reject unsupported asynchronous elaboration syntax.
-  - [x] Finalize unused Producers by identity without consuming a still-live alias at an expression statement.
-  - [x] Introduce concrete configuration-value categories, canonical circuit-int normalization, and a discriminated Decider output model before typed objects and exact constructors.
-- [ ] Phase 5 — testbench: drive/expect/tick, mocks and models, Unknown values, waveforms, and debug hierarchy.
+- [x] Phase 4 — ownership, multi-network syntax, Producer identity, semantic/runtime boundary hardening, opaque session values, and complete CLI/browser/EG/NCIR acceptance coverage.
+- [ ] Phase 5 — deterministic testbench, external-world adapters, Unknown propagation, traces, and debug hierarchy
+  - [ ] Define a browser/Node-neutral `TestSession` over an already elaborated circuit; test operations must never mutate EG/NCIR topology or re-execute source elaboration.
+  - [ ] Freeze the synchronous test clock: every participant reads snapshot `T`, all combinators and reactive models evaluate independently, and their writes commit together to `T+1` regardless of traversal order.
+  - [ ] Introduce the MVP whole-bus lattice `Known(SparseBus) | Unknown(origins)` and preserve ordered, deduplicated dependency origins through network aggregation and downstream combinators.
+  - [ ] Keep ordinary production simulation on the concrete fast path while allowing a test session to opt into Known/Unknown propagation without widening `SparseBus` itself.
+  - [ ] Implement persistent `drive(network, values)`, replacement, `clear(network)`, and one-boundary `pulse(network, values)` external broadcasters with canonical Signal identity and int32 conversion.
+  - [ ] Define whether testbench drives bypass source-level Network capabilities: the test environment acts as an external circuit participant, while stale/moved handles and session-crossing handles remain invalid.
+  - [ ] Implement signal and whole-bus assertions: exact value/bus, partial containment, empty/support checks, known/unknown checks, and failures that report tick, target, expected/actual values, and Unknown dependency chains.
+  - [ ] Implement `tick()`, `tick(count)`, scheduled `at(tick, callback)`, bounded `run(count)`, and `settle({ maxTicks })`; settling must use observed state equality and fail clearly for oscillation/non-convergence.
+  - [ ] Build a shared `DebugIndex` from lexical bindings, source spans, function-call instance paths, loop provenance, Networks, and physical Producers without exposing function locals to ordinary production code.
+  - [ ] Implement `instantiate(fn, ...args)` so `dut.value` has topology identical to an ordinary call while `dut.$` retains only a test/debug scope root.
+  - [ ] Provide the v1 string/query hierarchy for `network(name)`, `combinator(name/index)`, nested calls, and repeated loop instances; ambiguous and missing queries must be deterministic diagnostics rather than first-match guesses.
+  - [ ] Add structural assertions over the debug scope: physical producer counts by kind, Network/Producer presence, placement/config inspection, and zero-tick/tick-latency expectations without advancing simulation.
+  - [ ] Define the generic object circuit-adapter protocol before typed Phase 6 objects: connector input snapshots, output injection, instance identity, and default-output resolution, proven with a test-only adapter.
+  - [ ] Implement persistent manual `mock(entity).output(bus)` injection through the entity's real output connector selection; replacement/clear must preserve normal network aggregation and self-contamination behavior.
+  - [ ] Implement reactive `model(entity, { initialState, step })`; the runner invokes `step({ input, state, tick })` exactly once per tick and commits returned output/state only at the next boundary.
+  - [ ] Resolve unmodeled object output in the order explicit mock/model → per-instance default → class default → global policy, with strict `Unknown` as the default and explicit `zero`/custom policies.
+  - [ ] Implement trace registration for selected signals, whole Networks, object inputs, and object outputs; store tick-zero plus sparse/delta changes and expose deterministic JSON/timeline queries without coupling storage to a chart renderer.
+  - [ ] Surface test results, assertion diagnostics, debug queries, and waveform data consistently through runtime APIs, CLI JSON, and the browser result model; keep visual waveform rendering a consumer of the shared trace model.
+  - [ ] Add focused kernel/lattice/mock/model/query tests plus end-to-end feedback, pulse, settle, Unknown-chain, hierarchy, structural, CLI, and browser cases; use a MemoCell testbench and a test-only object adapter as Phase 5 acceptance programs.
+  - [ ] Document the executable testbench language/API and its separation from compile-time assertions, Factorio conformance fixtures, and future Phase 6 typed-object state adapters.
 - [ ] Phase 6 — typed Factorio objects: shared circuit inputs, native single-comparison `enable`, Roboport, Lamp, Constant, logistics entities, belts, displays, and train stops.
 - [ ] Phase 7 — exact constructors and native-config stress: Arithmetic, full Decider normal/else output lists, duplicate outputs, `Everything`, Selector, raw entities, LUTs, and large generated configurations.
 - [ ] Phase 8 — parameter-ready configuration IR, placement-time `BlueprintFormula`, dependent blueprint parameters, FCIR, and the Factorio 2.1 codec with fixture-backed semantic round trips.
@@ -70,13 +56,13 @@ The current repository implements the Phase 3 source compiler and the first exec
 - [ ] Phase 10 — physical placement, wire reach verification, relays, and blueprint export.
 - [ ] Phase 11 — language-service and execution-environment polish: operator-domain hovers, completions, code actions, semantic tokens, exact native views, composition-safe textarea highlighting/completion and mobile symbol tools, optional reproducible-build policy, and a fully hardened module sandbox.
 
-Later phases still cover the remaining ownership and multi-network semantics, testbenches, typed Factorio objects, exact constructors, the verified blueprint codec and exchange strings, schematic editing, physical placement, multi-file language services, reproducible builds, and a hardened sandbox.
+Later phases cover testbenches, typed Factorio objects, exact constructors, the verified blueprint codec and exchange strings, schematic editing, physical placement, multi-file language services, reproducible builds, and a hardened sandbox.
 
 ## Documentation
 
 - [Getting started](docs/getting-started.md) — install, validate, build, and run the browser workbench.
 - [Current language reference](docs/language-reference.md) — the exact implemented syntax, diagnostics, and known gaps.
-- [Phase 4 ownership design](docs/ownership-and-multi-network.md) — planned affine ownership, borrows, consuming transfer, read-only `pair`, and implementation checkpoints.
+- [Phase 4 ownership design](docs/ownership-and-multi-network.md) — completed affine ownership, borrows, consuming transfer, read-only `pair`, and its acceptance matrix.
 - [Native objects, Deciders, and parameters](docs/native-objects-deciders-and-parameters.md) — planned Phase 6–8 semantic domains and conformance requirements.
 - [Producer and Entity materialization policy](docs/producer-materialization-policy.md) — the Phase 4.5 benchmark decision for inferred Networks, explicit combinator handles, and future typed-object identity.
 - [Diagnostics](docs/diagnostics.md) — compiler/runtime code families and the most common actionable errors.
