@@ -201,6 +201,12 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
   const networkScopes: Set<string>[] = [new Set()];
   const networkArrayScopes: Set<string>[] = [new Set()];
   const capabilityScopes: Map<string, NetworkCapability>[] = [new Map()];
+  interface ProducerSlotType {
+    readonly direct?: string;
+    readonly element?: string;
+    readonly properties?: ReadonlyMap<string, string>;
+  }
+  const producerSlotScopes: Map<string, ProducerSlotType | undefined>[] = [new Map()];
   const producerFunctions = new Set<string>();
   const producerParameterTypes = new Map<string, readonly (string | undefined)[]>();
   const dslBuiltinNames = new Set(['Signal', 'Network', 'CC', 'IF', 'to', 'when', 'pair']);
@@ -242,6 +248,37 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
   };
   const isProducerHandleType = (node: ts.TypeNode | undefined): boolean =>
     producerHandleTypeName(node) !== undefined;
+  const producerArrayElementTypeName = (node: ts.TypeNode | undefined): string | undefined => {
+    const text = node?.getText(file.ast).replaceAll(/\s/g, '') ?? '';
+    const element = text.endsWith('[]') ? text.slice(0, -2) : /^Array<(.+)>$/.exec(text)?.[1];
+    return element !== undefined &&
+      ['Producer', 'DeciderCombinator', 'ArithmeticCombinator', 'ConstantCombinator'].includes(
+        element,
+      )
+      ? element
+      : undefined;
+  };
+  const propertyNameText = (node: ts.PropertyName): string | undefined =>
+    ts.isIdentifier(node) || ts.isStringLiteral(node) || ts.isNumericLiteral(node)
+      ? node.text
+      : undefined;
+  const producerSlotTypeFromAnnotation = (
+    node: ts.TypeNode | undefined,
+  ): ProducerSlotType | undefined => {
+    const direct = producerHandleTypeName(node);
+    if (direct !== undefined) return { direct };
+    const element = producerArrayElementTypeName(node);
+    if (element !== undefined) return { element };
+    if (node === undefined || !ts.isTypeLiteralNode(node)) return undefined;
+    const properties = new Map<string, string>();
+    for (const member of node.members) {
+      if (!ts.isPropertySignature(member)) continue;
+      const name = propertyNameText(member.name);
+      const type = producerHandleTypeName(member.type);
+      if (name !== undefined && type !== undefined) properties.set(name, type);
+    }
+    return properties.size === 0 ? undefined : { properties };
+  };
   const isNetworkArrayType = (node: ts.TypeNode | undefined): boolean => {
     const text = node?.getText(file.ast).replaceAll(/\s/g, '') ?? '';
     return (
@@ -276,6 +313,28 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       if (capability !== undefined) return capability;
     }
     return undefined;
+  };
+  const lookupProducerSlot = (name: string): ProducerSlotType | undefined => {
+    for (let index = producerSlotScopes.length - 1; index >= 0; index -= 1) {
+      const scope = producerSlotScopes[index]!;
+      if (scope.has(name)) return scope.get(name);
+    }
+    return undefined;
+  };
+  const producerTypeForAssignment = (target: ts.Expression): string | undefined => {
+    if (ts.isIdentifier(target)) return lookupProducerSlot(target.text)?.direct;
+    if (!ts.isPropertyAccessExpression(target) && !ts.isElementAccessExpression(target)) {
+      return undefined;
+    }
+    if (!ts.isIdentifier(target.expression)) return undefined;
+    const slot = lookupProducerSlot(target.expression.text);
+    if (slot === undefined) return undefined;
+    if (ts.isPropertyAccessExpression(target)) return slot.properties?.get(target.name.text);
+    if (slot.element !== undefined) return slot.element;
+    const argument = target.argumentExpression;
+    const property =
+      ts.isStringLiteral(argument) || ts.isNumericLiteral(argument) ? argument.text : undefined;
+    return property === undefined ? undefined : slot.properties?.get(property);
   };
   const isNetworkArrayExpression = (node: ts.Expression): boolean => {
     if (ts.isParenthesizedExpression(node)) return isNetworkArrayExpression(node.expression);
@@ -459,7 +518,14 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       const scope = new Set<string>();
       const arrayScope = new Set<string>();
       const capabilityScope = new Map<string, NetworkCapability>();
+      const producerSlotScope = new Map<string, ProducerSlotType | undefined>();
       for (const parameter of node.parameters) {
+        if (ts.isIdentifier(parameter.name)) {
+          producerSlotScope.set(
+            parameter.name.text,
+            producerSlotTypeFromAnnotation(parameter.type),
+          );
+        }
         if (ts.isIdentifier(parameter.name) && isNetworkType(parameter.type)) {
           scope.add(parameter.name.text);
           const capability = networkCapabilityFromAnnotation(parameter.type) ?? 'owned';
@@ -479,20 +545,24 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       networkScopes.push(scope);
       networkArrayScopes.push(arrayScope);
       capabilityScopes.push(capabilityScope);
+      producerSlotScopes.push(producerSlotScope);
       if (node.body !== undefined) visit(node.body);
       networkScopes.pop();
       networkArrayScopes.pop();
       capabilityScopes.pop();
+      producerSlotScopes.pop();
       return;
     }
     if (ts.isBlock(node)) {
       networkScopes.push(new Set());
       networkArrayScopes.push(new Set());
       capabilityScopes.push(new Map());
+      producerSlotScopes.push(new Map());
       node.forEachChild(visit);
       networkScopes.pop();
       networkArrayScopes.pop();
       capabilityScopes.pop();
+      producerSlotScopes.pop();
       return;
     }
     if (
@@ -506,13 +576,16 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       networkScopes.push(new Set());
       networkArrayScopes.push(new Set());
       capabilityScopes.push(new Map());
+      producerSlotScopes.push(new Map());
       node.forEachChild(visit);
       networkScopes.pop();
       networkArrayScopes.pop();
       capabilityScopes.pop();
+      producerSlotScopes.pop();
       return;
     }
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+      producerSlotScopes.at(-1)!.set(node.name.text, producerSlotTypeFromAnnotation(node.type));
       const producerType = producerHandleTypeName(node.type);
       if (
         producerType !== undefined &&
@@ -589,6 +662,20 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
           'CL1040',
           `A ${capability === 'readonly' ? 'Readonly<Network>' : 'Ref<Network>'} borrow cannot escape its function.`,
           node,
+        );
+      }
+    }
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+      const producerType = producerTypeForAssignment(node.left);
+      if (
+        producerType !== undefined &&
+        (producerCertainty(node.right) === 'non-producer' ||
+          !producerTypeAcceptsKind(producerType, producerKindOfExpression(node.right)))
+      ) {
+        report(
+          'CL1044',
+          `${producerType} assignment requires a compatible unmaterialized combinator producer.`,
+          node.right,
         );
       }
     }

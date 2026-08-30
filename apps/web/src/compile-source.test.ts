@@ -100,4 +100,33 @@ const output = Configure(values[0]);`;
     expect(diagnostic).toMatchObject({ severity: 'error', span: expect.any(Object) });
     expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(parameter);
   });
+
+  test('reports a dynamic Producer tuple mismatch at its destructuring boundary', () => {
+    const declaration = 'let [producer]: [ArithmeticCombinator] = values;';
+    const text = `const input = new Network();
+const values = [when(input > 0).then(input)];
+${declaration}`;
+    const result = compileSource({ path: 'main.factorio.ts', text });
+    const diagnostic = result.compilerDiagnostics.find(({ code }) => code === 'RT2022');
+
+    expect(result.plan).toBeUndefined();
+    expect(diagnostic).toMatchObject({ severity: 'error', span: expect.any(Object) });
+    expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(
+      declaration.slice(4, -1),
+    );
+  });
+
+  test('reports a dynamic Producer mismatch at its typed assignment boundary', () => {
+    const assigned = 'values[0]';
+    const text = `const input = new Network();
+const values = [when(input > 0).then(input)];
+let slots: ArithmeticCombinator[] = [];
+slots[0] = ${assigned};`;
+    const result = compileSource({ path: 'main.factorio.ts', text });
+    const diagnostic = result.compilerDiagnostics.find(({ code }) => code === 'RT2022');
+
+    expect(result.plan).toBeUndefined();
+    expect(diagnostic).toMatchObject({ severity: 'error', span: expect.any(Object) });
+    expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(assigned);
+  });
 });

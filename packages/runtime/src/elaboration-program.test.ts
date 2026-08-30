@@ -598,6 +598,119 @@ const output = Configure(values[0]);`,
     }
   });
 
+  test('validates Producer handles in typed array and object destructuring', () => {
+    const parsed = parseFile({
+      path: 'producer-destructuring.factorio.ts',
+      text: `const input = new Network();
+const arithmetic: ArithmeticCombinator = input + 0;
+const decider: DeciderCombinator = when(input > 0).then(input);
+const values = [arithmetic, decider];
+let [firstProducer, secondProducer]: [ArithmeticCombinator, DeciderCombinator] = values;
+const record = {producer: secondProducer, label: 'gate'};
+let {producer, label}: {producer: DeciderCombinator, label: string} = record;
+const first = new Network();
+const second = new Network();
+first += firstProducer;
+second += producer;`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.diagnostics).toEqual([]);
+    expect(plan.producers).toMatchObject([
+      { kind: 'arithmetic', destinations: [{ network: 'first' }] },
+      { kind: 'decider', destinations: [{ network: 'second' }] },
+    ]);
+  });
+
+  test('rejects a wrong dynamic Producer kind in typed destructuring', () => {
+    const declaration = 'let [producer]: [ArithmeticCombinator] = values;';
+    const parsed = parseFile({
+      path: 'wrong-producer-destructuring.factorio.ts',
+      text: `const input = new Network();
+const values = [when(input > 0).then(input)];
+${declaration}`,
+    });
+
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected typed Producer destructuring to validate the concrete kind.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ElaborationExecutionError);
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2022');
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(
+        declaration.slice(4, -1),
+      );
+    }
+  });
+
+  test('does not reinterpret one Producer as several Producer handles', () => {
+    const declaration =
+      'let [first, second]: [ArithmeticCombinator, ArithmeticCombinator] = input + 0;';
+    const parsed = parseFile({
+      path: 'cloned-producer-destructuring.factorio.ts',
+      text: `const input = new Network();
+${declaration}`,
+    });
+
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+      'A single Producer cannot be destructured into Producer handles',
+    );
+  });
+
+  test('validates later writes to direct, array, and object Producer slots', () => {
+    const parsed = parseFile({
+      path: 'producer-assignments.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+let direct: ArithmeticCombinator;
+direct = input + 0;
+let slots: DeciderCombinator[] = [];
+slots[0] = when(input > 0).then(input);
+let record: {constant: ConstantCombinator} = {};
+record.constant = CC(1 * A);
+{
+  let direct = 1;
+  direct = 2;
+}
+const first = new Network();
+const second = new Network();
+const third = new Network();
+first += direct;
+second += slots[0];
+third += record.constant;`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.diagnostics).toEqual([]);
+    expect(plan.producers).toMatchObject([
+      { kind: 'arithmetic', destinations: [{ network: 'first' }] },
+      { kind: 'decider', destinations: [{ network: 'second' }] },
+      { kind: 'constant', destinations: [{ network: 'third' }] },
+    ]);
+  });
+
+  test('checks a dynamically selected value at a typed Producer assignment boundary', () => {
+    const assigned = 'values[0]';
+    const parsed = parseFile({
+      path: 'dynamic-producer-assignment.factorio.ts',
+      text: `const input = new Network();
+const values = [when(input > 0).then(input)];
+let slots: ArithmeticCombinator[] = [];
+slots[0] = ${assigned};`,
+    });
+
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected the typed Producer assignment check to fail.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ElaborationExecutionError);
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2022');
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(assigned);
+    }
+  });
+
   test('binds one concrete output Signal through a single selected .to(...) destination', () => {
     const parsed = parseFile({
       path: 'single-selected-to.factorio.ts',

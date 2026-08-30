@@ -51,6 +51,20 @@ function producerHandleTypeName(
   return isProducerHandleType(file, type) ? text : undefined;
 }
 
+function producerArrayElementTypeName(
+  file: ParsedSourceFile,
+  type: ts.TypeNode | undefined,
+): string | undefined {
+  const text = type?.getText(file.ast).replaceAll(/\s/g, '') ?? '';
+  const element = text.endsWith('[]') ? text.slice(0, -2) : /^Array<(.+)>$/.exec(text)?.[1];
+  return element === undefined ||
+    !['Producer', 'DeciderCombinator', 'ArithmeticCombinator', 'ConstantCombinator'].includes(
+      element,
+    )
+    ? undefined
+    : element;
+}
+
 /**
  * First executable-transform slice. Ordinary JavaScript control flow is deliberately
  * left to the JS engine; only DSL-sensitive nodes are replaced with allowlisted calls.
@@ -122,6 +136,107 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
   };
   collectRuntimeNetworkBindings(file.ast);
 
+  interface ProducerSlotDeclaration {
+    readonly name: string;
+    readonly type: ts.TypeNode | undefined;
+    readonly scope: ts.Node;
+    readonly start: number;
+  }
+  const producerSlots: ProducerSlotDeclaration[] = [];
+  const slotScope = (node: ts.Node): ts.Node => {
+    for (let parent = node.parent; parent !== undefined; parent = parent.parent) {
+      if (
+        ts.isFunctionLike(parent) ||
+        ts.isBlock(parent) ||
+        ts.isSourceFile(parent) ||
+        ts.isForStatement(parent) ||
+        ts.isForInStatement(parent) ||
+        ts.isForOfStatement(parent) ||
+        ts.isCatchClause(parent)
+      ) {
+        return parent;
+      }
+    }
+    return file.ast;
+  };
+  const collectProducerSlots = (node: ts.Node): void => {
+    if ((ts.isVariableDeclaration(node) || ts.isParameter(node)) && ts.isIdentifier(node.name)) {
+      producerSlots.push({
+        name: node.name.text,
+        type: node.type,
+        scope: slotScope(node),
+        start: node.getStart(file.ast),
+      });
+    }
+    node.forEachChild(collectProducerSlots);
+  };
+  collectProducerSlots(file.ast);
+  const isWithin = (node: ts.Node, scope: ts.Node): boolean => {
+    for (let current: ts.Node | undefined = node; current !== undefined; current = current.parent) {
+      if (current === scope) return true;
+    }
+    return false;
+  };
+  const scopeDepth = (node: ts.Node): number => {
+    let depth = 0;
+    for (let current = node.parent; current !== undefined; current = current.parent) depth += 1;
+    return depth;
+  };
+  const producerTypeForProperty = (
+    type: ts.TypeNode | undefined,
+    property: string,
+  ): string | undefined => {
+    if (type === undefined || !ts.isTypeLiteralNode(type)) return undefined;
+    const member = type.members.find(
+      (candidate): candidate is ts.PropertySignature =>
+        ts.isPropertySignature(candidate) &&
+        (ts.isIdentifier(candidate.name) ||
+        ts.isStringLiteral(candidate.name) ||
+        ts.isNumericLiteral(candidate.name)
+          ? candidate.name.text
+          : candidate.name.getText(file.ast)) === property,
+    );
+    return producerHandleTypeName(file, member?.type);
+  };
+  const producerTypeForAssignment = (
+    target: ts.Expression,
+    assignment: ts.BinaryExpression,
+  ): string | undefined => {
+    const base = ts.isIdentifier(target)
+      ? target
+      : (ts.isPropertyAccessExpression(target) || ts.isElementAccessExpression(target)) &&
+          ts.isIdentifier(target.expression)
+        ? target.expression
+        : undefined;
+    if (base === undefined) return undefined;
+    const declaration = producerSlots
+      .filter(
+        (candidate) =>
+          candidate.name === base.text &&
+          candidate.start <= assignment.getStart(file.ast) &&
+          isWithin(assignment, candidate.scope),
+      )
+      .sort(
+        (left, right) =>
+          scopeDepth(right.scope) - scopeDepth(left.scope) || right.start - left.start,
+      )[0];
+    if (declaration === undefined) return undefined;
+    if (ts.isIdentifier(target)) return producerHandleTypeName(file, declaration.type);
+    if (ts.isElementAccessExpression(target)) {
+      const elementType = producerArrayElementTypeName(file, declaration.type);
+      if (elementType !== undefined) return elementType;
+      const argument = target.argumentExpression;
+      const property =
+        ts.isStringLiteral(argument) || ts.isNumericLiteral(argument) ? argument.text : undefined;
+      return property === undefined
+        ? undefined
+        : producerTypeForProperty(declaration.type, property);
+    }
+    return ts.isPropertyAccessExpression(target)
+      ? producerTypeForProperty(declaration.type, target.name.text)
+      : undefined;
+  };
+
   const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
     const { factory } = context;
     const borrowDescriptorForType = (
@@ -184,6 +299,14 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
                   ),
                 ]),
             factory.createPropertyAssignment('color', colorForType(type)),
+            ...(producerHandleTypeName(file, type) === undefined
+              ? []
+              : [
+                  factory.createPropertyAssignment(
+                    'producerType',
+                    factory.createStringLiteral(producerHandleTypeName(file, type)!),
+                  ),
+                ]),
           ])
         : factory.createNull();
     const tupleElementType = (
@@ -672,6 +795,21 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
       }
 
       if (ts.isBinaryExpression(node)) {
+        if (node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+          const producerType = producerTypeForAssignment(node.left, node);
+          if (producerType !== undefined) {
+            return factory.updateBinaryExpression(
+              node,
+              ts.visitNode(node.left, visit) as ts.Expression,
+              node.operatorToken,
+              dslCall(factory, 'producerHandle', [
+                ts.visitNode(node.right, visit) as ts.Expression,
+                factory.createStringLiteral(producerType),
+                spanLiteral(factory, node.right),
+              ]),
+            );
+          }
+        }
         if (
           node.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken &&
           ts.isElementAccessExpression(node.left) &&

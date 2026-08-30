@@ -215,6 +215,43 @@ to(first, second)[A] += comb;`,
     expect(code).toContain('"Producer"');
   });
 
+  test('carries concrete Producer types into destructuring descriptors', () => {
+    const source = parseFile({
+      path: 'producer-destructuring.factorio.ts',
+      text: `let [arithmetic]: [ArithmeticCombinator] = values;
+let {gate}: {gate: DeciderCombinator} = record;`,
+    });
+    const code = transformElaborationModule(source).code;
+
+    expect(code).toContain('producerType: "ArithmeticCombinator"');
+    expect(code).toContain('producerType: "DeciderCombinator"');
+  });
+
+  test('validates later writes to typed Producer slots without leaking across shadows', () => {
+    const source = parseFile({
+      path: 'producer-assignments.factorio.ts',
+      text: `let direct: ArithmeticCombinator;
+direct = dynamicValue;
+let slots: DeciderCombinator[] = [];
+slots[0] = dynamicValue;
+let record: {constant: ConstantCombinator} = {};
+record.constant = dynamicValue;
+{
+  let direct = 1;
+  direct = 2;
+}`,
+    });
+    const code = transformElaborationModule(source).code;
+
+    expect(code).toContain('direct = __dsl.producerHandle(dynamicValue, "ArithmeticCombinator"');
+    expect(code).toContain('slots[0] = __dsl.producerHandle(dynamicValue, "DeciderCombinator"');
+    expect(code).toContain(
+      'record.constant = __dsl.producerHandle(dynamicValue, "ConstantCombinator"',
+    );
+    expect(code).toContain('direct = 2;');
+    expect(code.match(/__dsl\.producerHandle/g)).toHaveLength(3);
+  });
+
   test('instruments Move parameters and owned returns', () => {
     const source = parseFile({
       path: 'move.factorio.ts',

@@ -213,4 +213,42 @@ const output: Network = Identity(producer);`);
       producerCount: 1,
     });
   });
+
+  test('checks concrete Producer types through container destructuring', async () => {
+    const path = await sourceFile(`const input = new Network();
+const arithmetic: ArithmeticCombinator = input + 0;
+const decider: DeciderCombinator = when(input > 0).then(input);
+const values = [arithmetic, decider];
+let [firstProducer, secondProducer]: [ArithmeticCombinator, DeciderCombinator] = values;
+const first = new Network();
+const second = new Network();
+first += firstProducer;
+second += secondProducer;`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path])).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      diagnostics: [],
+      producerCount: 2,
+    });
+  });
+
+  test('checks concrete Producer types on later typed slot assignments', async () => {
+    const path = await sourceFile(`const input = new Network();
+let direct: ArithmeticCombinator;
+direct = input + 0;
+let slots: DeciderCombinator[] = [];
+slots[0] = when(input > 0).then(input);
+const first = new Network();
+const second = new Network();
+first += direct;
+second += slots[0];`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path])).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      diagnostics: [],
+      producerCount: 2,
+    });
+  });
 });

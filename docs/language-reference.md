@@ -158,9 +158,36 @@ let comb: DeciderCombinator = when(input > 0).then(input);
 output += comb.as(RESULT).at(10, 4);
 ```
 
-`Producer` is the common handle type. The more precise public types are `DeciderCombinator`, `ArithmeticCombinator`, and `ConstantCombinator`; use the precise type when it is known. Declarations, function parameters, and function returns check both that the executed value is still an unmaterialized producer and that its physical combinator kind matches the annotation. Passing a handle through a typed parameter preserves its physical identity. A function may return one of these types to preserve the producer handle across its return boundary. Returning `Network` instead intentionally hides producer-only methods. Producer handles represent one physical entity and remain single-attachment values: storing one does not clone it, fluent `.as(...)`/`.at(...)` wrappers retain the same physical identity, and attaching any alias twice is `RT2006`.
+`Producer` is the common handle type. The more precise public types are `DeciderCombinator`, `ArithmeticCombinator`, and `ConstantCombinator`; use the precise type when it is known. Declarations, later writes to supported typed slots, function parameters, and function returns check both that the executed value is still an unmaterialized producer and that its physical combinator kind matches the annotation. Passing a handle through a typed parameter preserves its physical identity. A function may return one of these types to preserve the producer handle across its return boundary. Returning `Network` instead intentionally hides producer-only methods. Producer handles represent one physical entity and remain single-attachment values: storing one does not clone it, fluent `.as(...)`/`.at(...)` wrappers retain the same physical identity, and attaching any alias twice is `RT2006`.
 
-Producers may pass through dynamically indexed arrays and ordinary objects. Assignment itself is not treated as a discarded producer expression because later use cannot be decided there. After the executed module finishes, the runtime checks every created physical producer identity: a value later returned or attached has no warning, while a producer still abandoned in a container receives `CL2001` and an internal unused sink so its topology is still validated. `CL1044` reports a statically definite annotation mismatch at a declaration, argument, or `return`; dynamically determined mismatches use `RT2022` at the executed type boundary.
+Producers may pass through dynamically indexed arrays and ordinary objects. Assignment itself is not treated as a discarded producer expression because later use cannot be decided there. After the executed module finishes, the runtime checks every created physical producer identity: a value later returned or attached has no warning, while a producer still abandoned in a container receives `CL2001` and an internal unused sink so its topology is still validated. `CL1044` reports a statically definite annotation mismatch at a declaration, assignment, argument, or `return`; dynamically determined mismatches use `RT2022` at the executed type boundary.
+
+Flat array and object destructuring may validate handles individually without materializing them:
+
+```ts
+const handles = [arithmetic, gate];
+let [a, d]: [ArithmeticCombinator, DeciderCombinator] = handles;
+
+const record = { producer: d, label: 'gate' };
+let { producer }: { producer: DeciderCombinator } = record;
+```
+
+These annotations validate the executed slot values and retain their original physical identities. Destructuring one bare producer into several producer handles is rejected because that spelling would imply cloning; put independently created handles in an ordinary container first. Network producer-destructuring remains the distinct output-fan-out operation described below.
+
+A direct handle variable, a concrete producer array, or a flat inline typed object property also validates every later assignment:
+
+```ts
+let arithmetic: ArithmeticCombinator;
+arithmetic = input + 0;
+
+let gates: DeciderCombinator[] = [];
+gates[0] = when(input > 0).then(input);
+
+let table: { seed: ConstantCombinator } = {};
+table.seed = CC(1 * A);
+```
+
+A definitely wrong kind is `CL1044`. If the right side comes from a dynamic call or container read, the semantic checker does not guess; the executed assignment validates it and reports `RT2022` on that expression when necessary. Lexical shadowing is respected. This slice recognizes direct annotations, `ProducerType[]`/`Array<ProducerType>`, and flat inline object property annotations; general named TypeScript type resolution remains later language-service work.
 
 The elaboration runtime materializes those producer values under their declaration names. It leaves ordinary numbers, strings, arrays, objects, Signals, and existing Networks unchanged. Likewise, `value[SIGNAL]` is dispatched from the executed receiver, so a Network returned by an ordinary JavaScript function can be selected without repeating `: Network` on the receiving variable. A `Network[]` element read is classified from the value obtained at execution, so `output += networks[i] * 2` works inside compile-time loops. A heterogeneous or otherwise unknown collection is not rejected statically: execution succeeds for Network elements and reports an attachment error if it reaches a non-Network element. Ordinary JavaScript element reads remain reads. For `+=`, identifiers, properties, and array/object elements are classified from their executed value: a Network destination attaches a producer, while non-DSL values retain native JavaScript addition and assignment. A member receiver and computed key are each evaluated exactly once. Other element assignments and updates remain native JavaScript operations.
 

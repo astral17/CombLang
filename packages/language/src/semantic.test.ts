@@ -170,6 +170,48 @@ const output = Configure();`,
     );
   });
 
+  test('checks definite writes to typed Producer variables and container slots', () => {
+    const wrongDirect = 'when(input > 0).then(input)';
+    const wrongArray = 'CC(1 * A)';
+    const wrongProperty = 'input + 0';
+    const parsed = parseFile({
+      path: 'wrong-producer-assignments.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+let direct: ArithmeticCombinator;
+direct = ${wrongDirect};
+let slots: DeciderCombinator[] = [];
+slots[0] = ${wrongArray};
+let record: {constant: ConstantCombinator} = {};
+record.constant = ${wrongProperty};`,
+    });
+    const diagnostics = validateDslSemantics(parsed).filter(({ code }) => code === 'CL1044');
+
+    expect(diagnostics).toHaveLength(3);
+    expect(diagnostics.map(({ span }) => parsed.text.slice(span!.start, span!.end))).toEqual([
+      wrongDirect,
+      wrongArray,
+      wrongProperty,
+    ]);
+  });
+
+  test('defers uncertain Producer assignments to runtime and respects lexical shadows', () => {
+    const parsed = parseFile({
+      path: 'dynamic-producer-assignments.ts',
+      text: `let value: ArithmeticCombinator;
+const values = getValues();
+value = values[0];
+{
+  let value = 1;
+  value = 2;
+}
+let slots: ArithmeticCombinator[] = [];
+slots[0] = values[1];`,
+    });
+
+    expect(validateDslSemantics(parsed)).toEqual([]);
+  });
+
   test('reserves the third Signal argument for fluent .to(...) only', () => {
     const parsed = parseFile({
       path: 'free-to-third-argument.ts',

@@ -139,6 +139,7 @@ interface BindingDescriptor {
   readonly name: string;
   readonly color?: 'red' | 'green';
   readonly property?: string;
+  readonly producerType?: string;
 }
 
 type WithoutDestinations<T> = T extends unknown ? Omit<T, 'destinations'> : never;
@@ -563,8 +564,34 @@ class ElaborationRecorder {
       descriptors: readonly (BindingDescriptor | null)[],
       rawSpan: RawSpan,
     ): unknown => {
-      if (!this.#isProducer(value)) return value;
       if (!Array.isArray(descriptors)) throw new Error('Invalid array binding descriptors.');
+      const hasProducerBindings = descriptors.some(
+        (descriptor) => descriptor?.producerType !== undefined,
+      );
+      if (!this.#isProducer(value)) {
+        if (!hasProducerBindings) return value;
+        if (!Array.isArray(value)) {
+          throw new ElaborationExecutionError(
+            'Producer tuple bindings require an executed array value.',
+            this.#span(rawSpan),
+            'RT2022',
+          );
+        }
+        const result = [...value];
+        for (const [index, descriptor] of descriptors.entries()) {
+          if (descriptor?.producerType !== undefined) {
+            result[index] = this.#producerHandle(result[index], descriptor.producerType, rawSpan);
+          }
+        }
+        return result;
+      }
+      if (hasProducerBindings) {
+        throw new ElaborationExecutionError(
+          'A single Producer cannot be destructured into Producer handles; put handles in an ordinary array first.',
+          this.#span(rawSpan),
+          'RT2022',
+        );
+      }
       const bindings = descriptors.map((descriptor) =>
         descriptor === null ? undefined : this.#bindingNetwork(descriptor, rawSpan),
       );
@@ -577,8 +604,39 @@ class ElaborationRecorder {
       descriptors: readonly (BindingDescriptor | null)[],
       rawSpan: RawSpan,
     ): unknown => {
-      if (!this.#isProducer(value)) return value;
       if (!Array.isArray(descriptors)) throw new Error('Invalid object binding descriptors.');
+      const producerDescriptors = descriptors.filter(
+        (descriptor): descriptor is BindingDescriptor => descriptor?.producerType !== undefined,
+      );
+      if (!this.#isProducer(value)) {
+        if (producerDescriptors.length === 0) return value;
+        if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+          throw new ElaborationExecutionError(
+            'Producer object bindings require an executed object value.',
+            this.#span(rawSpan),
+            'RT2022',
+          );
+        }
+        const snapshot = Object.assign({}, value) as Record<string, unknown>;
+        for (const descriptor of producerDescriptors) {
+          if (descriptor.property === undefined) {
+            throw new Error('Producer object bindings require flat named properties.');
+          }
+          snapshot[descriptor.property] = this.#producerHandle(
+            snapshot[descriptor.property],
+            descriptor.producerType,
+            rawSpan,
+          );
+        }
+        return snapshot;
+      }
+      if (producerDescriptors.length !== 0) {
+        throw new ElaborationExecutionError(
+          'A single Producer cannot be destructured into Producer handles; put handles in an ordinary object first.',
+          this.#span(rawSpan),
+          'RT2022',
+        );
+      }
       const entries = descriptors.map((descriptor) => {
         if (descriptor === null || descriptor.property === undefined) {
           throw new Error('Producer object binding requires flat named properties.');
