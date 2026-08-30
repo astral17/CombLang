@@ -92,6 +92,8 @@ Passing a dynamically read slot to a `Move` parameter already invalidates that o
 
 Producer destructuring is not a Network copy. Forms such as `let [a, b] = input + 0` attach one physical producer output to two fresh logical destination Networks. Those Networks receive independent ownership and the existing opposite-color output constraint.
 
+Producer handles have their own affine physical identity. `Producer` is the common annotation; `ArithmeticCombinator`, `DeciderCombinator`, and `ConstantCombinator` additionally validate the native entity kind at declarations, function parameters, and returns. Passing through a parameter or `.as(...)`/`.at(...)` creates no entity and does not change identity. Exactly one attachment operation may consume that identity; physical fan-out must name both destinations in that one operation. Producers may travel through dynamic array/object slots. Only the completed execution can decide whether such a value was later attached, so `CL2001` is emitted during finalization for identities that remain unused rather than at the slot assignment.
+
 ## Explicit consuming transfer
 
 CombLang needs an operation that physically unifies two logical Networks without adding a combinator or a tick. The source Network is consumed because both names would otherwise pretend to identify independent topology after the union.

@@ -476,6 +476,128 @@ ${declaration}`,
     }
   });
 
+  test('preserves producers assigned into dynamic array and object slots', () => {
+    const parsed = parseFile({
+      path: 'container-producer.factorio.ts',
+      text: `function fromArray(input: Readonly<Network>): ArithmeticCombinator {
+  let tmp = [];
+  tmp[1] = input + 0;
+  return tmp[1];
+}
+function fromObject(input: Readonly<Network>): ArithmeticCombinator {
+  let tmp = {};
+  tmp.value = input + 1;
+  return tmp.value;
+}
+const input = new Network();
+const first: Network = fromArray(input);
+const second: Network = fromObject(input);`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.diagnostics).toEqual([]);
+    expect(plan.producers).toMatchObject([
+      { kind: 'arithmetic', destinations: [{ network: 'first' }] },
+      { kind: 'arithmetic', destinations: [{ network: 'second' }] },
+    ]);
+  });
+
+  test('warns after execution when a producer remains unused in a dynamic container', () => {
+    const expression = 'input + 0';
+    const parsed = parseFile({
+      path: 'unused-container-producer.factorio.ts',
+      text: `const input = new Network();
+const tmp = [];
+tmp[1] = ${expression};`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const warning = plan.diagnostics?.find(({ code }) => code === 'CL2001');
+
+    expect(plan.producers).toHaveLength(1);
+    expect(plan.producers[0]).toMatchObject({
+      kind: 'arithmetic',
+      destinations: [{ network: '$unused:1' }],
+    });
+    expect(warning).toMatchObject({ severity: 'warning', span: expect.any(Object) });
+    expect(parsed.text.slice(warning!.span!.start, warning!.span!.end)).toBe(expression);
+  });
+
+  test('keeps one physical Producer identity across aliases and fluent wrappers', () => {
+    const secondAttachment = 'second += configured;';
+    const parsed = parseFile({
+      path: 'producer-identity.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const producer: ArithmeticCombinator = input + 0;
+const configured: ArithmeticCombinator = producer.as(A);
+const first = new Network();
+const second = new Network();
+first += producer;
+${secondAttachment}`,
+    });
+
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected one physical Producer to reject a second attachment.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ElaborationExecutionError);
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2006');
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(
+        secondAttachment.slice(0, -1),
+      );
+      expect(failure.related).toHaveLength(2);
+    }
+  });
+
+  test('preserves Producer identity and concrete kind through function parameters', () => {
+    const parsed = parseFile({
+      path: 'producer-parameter.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+function Configure(value: ArithmeticCombinator): ArithmeticCombinator {
+  return value.as(A);
+}
+const input = new Network();
+const producer: ArithmeticCombinator = input + 0;
+const configured: ArithmeticCombinator = Configure(producer);
+const output = new Network();
+output += configured;`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.diagnostics).toEqual([]);
+    expect(plan.producers).toMatchObject([
+      {
+        kind: 'arithmetic',
+        output: { kind: 'signal', signal: { type: 'virtual', name: 'signal-A' } },
+        destinations: [{ network: 'output' }],
+      },
+    ]);
+  });
+
+  test('checks a dynamically selected value at the Producer parameter boundary', () => {
+    const parameter = 'value: ArithmeticCombinator';
+    const parsed = parseFile({
+      path: 'dynamic-producer-parameter.factorio.ts',
+      text: `function Configure(${parameter}): ArithmeticCombinator {
+  return value;
+}
+const input = new Network();
+const values = [when(input > 0).then(input)];
+const output = Configure(values[0]);`,
+    });
+
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected the concrete Producer parameter kind check to fail.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ElaborationExecutionError);
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2022');
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(parameter);
+    }
+  });
+
   test('binds one concrete output Signal through a single selected .to(...) destination', () => {
     const parsed = parseFile({
       path: 'single-selected-to.factorio.ts',

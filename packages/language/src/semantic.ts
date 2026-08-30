@@ -202,6 +202,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
   const networkArrayScopes: Set<string>[] = [new Set()];
   const capabilityScopes: Map<string, NetworkCapability>[] = [new Map()];
   const producerFunctions = new Set<string>();
+  const producerParameterTypes = new Map<string, readonly (string | undefined)[]>();
   const dslBuiltinNames = new Set(['Signal', 'Network', 'CC', 'IF', 'to', 'when', 'pair']);
   const shadowedDslBuiltins = new Set<string>();
 
@@ -249,12 +250,12 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     );
   };
   for (const statement of file.ast.statements) {
-    if (
-      ts.isFunctionDeclaration(statement) &&
-      statement.name !== undefined &&
-      isNetworkType(statement.type)
-    ) {
-      producerFunctions.add(statement.name.text);
+    if (ts.isFunctionDeclaration(statement) && statement.name !== undefined) {
+      if (isNetworkType(statement.type)) producerFunctions.add(statement.name.text);
+      producerParameterTypes.set(
+        statement.name.text,
+        statement.parameters.map((parameter) => producerHandleTypeName(parameter.type)),
+      );
     }
   }
   const lookupNetwork = (name: string): boolean => {
@@ -723,6 +724,32 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     }
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
       const name = node.expression.text;
+      const producerParameters = producerParameterTypes.get(name);
+      if (producerParameters !== undefined) {
+        for (const [index, producerType] of producerParameters.entries()) {
+          const argument = node.arguments[index];
+          if (producerType !== undefined && argument === undefined) {
+            report(
+              'CL1044',
+              `${producerType} parameter requires a combinator producer argument.`,
+              node,
+            );
+            continue;
+          }
+          if (
+            producerType !== undefined &&
+            argument !== undefined &&
+            (producerCertainty(argument) === 'non-producer' ||
+              !producerTypeAcceptsKind(producerType, producerKindOfExpression(argument)))
+          ) {
+            report(
+              'CL1044',
+              `${producerType} parameter requires a compatible unmaterialized combinator producer.`,
+              argument,
+            );
+          }
+        }
+      }
       if (
         name === 'Signal' &&
         isDslBuiltin(name) &&
@@ -752,11 +779,11 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       if (
         name === 'to' &&
         isDslBuiltin(name) &&
-        (node.arguments.length < 1 || node.arguments.length > 3)
+        (node.arguments.length < 1 || node.arguments.length > 2)
       ) {
         report(
           'CL1021',
-          'to(...) requires one or two Network destinations and an optional output Signal.',
+          'to(...) requires one or two Network destinations; bind a Signal with to(...)[SIGNAL].',
           node,
         );
       }

@@ -172,6 +172,21 @@ to(first, second)[A] += comb;`,
     );
   });
 
+  test('does not discard a producer stored by an ordinary assignment', () => {
+    const source = parseFile({
+      path: 'producer-slot.factorio.ts',
+      text: `function test(input: Readonly<Network>): ArithmeticCombinator {
+  let tmp = [];
+  tmp[1] = input + 0;
+  return tmp[1];
+}`,
+    });
+    const code = transformElaborationModule(source).code;
+
+    expect(code).toContain('tmp[1] = __dsl.binary(');
+    expect(code).not.toContain('__dsl.discard(tmp[1] =');
+  });
+
   test('rebinds Readonly and Ref parameters to runtime borrow views', () => {
     const source = parseFile({
       path: 'borrows.factorio.ts',
@@ -184,6 +199,20 @@ to(first, second)[A] += comb;`,
     expect(code).toContain('__dsl.borrowParameter(output, "ref", "output"');
     expect(code).toContain('__dsl.borrowParameter(input, "readonly", "input"');
     expect(code).toContain('__dsl.exitInstance({ start: 0');
+  });
+
+  test('validates concrete Producer parameters in the function prologue', () => {
+    const source = parseFile({
+      path: 'producer-parameter.factorio.ts',
+      text: `function Configure(value: ArithmeticCombinator): Producer {
+  return value;
+}`,
+    });
+    const code = transformElaborationModule(source).code;
+
+    expect(code).toContain('value = __dsl.producerHandle(value, "ArithmeticCombinator"');
+    expect(code).toContain('return __dsl.returnValue(value');
+    expect(code).toContain('"Producer"');
   });
 
   test('instruments Move parameters and owned returns', () => {

@@ -151,4 +151,66 @@ const output = test(input);`);
       '3:3 - error CL1044: ArithmeticCombinator function must return',
     );
   });
+
+  test('keeps a producer stored in a dynamic container slot live', async () => {
+    const path = await sourceFile(`function test(input: Readonly<Network>): ArithmeticCombinator {
+  let tmp = [];
+  tmp[1] = input + 0;
+  return tmp[1];
+}
+const input = new Network();
+const output: Network = test(input);`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path])).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      diagnostics: [],
+      producerCount: 1,
+    });
+  });
+
+  test('reports repeated Producer attachment through a fluent alias', async () => {
+    const path = await sourceFile(`const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const producer: ArithmeticCombinator = input + 0;
+const configured: ArithmeticCombinator = producer.as(A);
+const first = new Network();
+const second = new Network();
+first += producer;
+second += configured;`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path])).toBe(1);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0])).diagnostics).toEqual([
+      expect.objectContaining({ code: 'RT2006', related: expect.any(Array) }),
+    ]);
+  });
+
+  test('warns only after execution for an unused producer in a container', async () => {
+    const path = await sourceFile(`const input = new Network();
+const tmp = [];
+tmp[1] = input + 0;`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path])).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0])).diagnostics).toEqual([
+      expect.objectContaining({ code: 'CL2001', severity: 'warning' }),
+    ]);
+  });
+
+  test('passes a stored Producer through a concrete function parameter', async () => {
+    const path = await sourceFile(`function Identity(value: ArithmeticCombinator): Producer {
+  return value;
+}
+const input = new Network();
+const producer: ArithmeticCombinator = input + 0;
+const output: Network = Identity(producer);`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path])).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      diagnostics: [],
+      producerCount: 1,
+    });
+  });
 });

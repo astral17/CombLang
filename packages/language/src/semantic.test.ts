@@ -143,6 +143,33 @@ function test(): ArithmeticCombinator {
     );
   });
 
+  test('checks statically known concrete Producer function arguments', () => {
+    const call = 'Configure(when(input > 0).then(input))';
+    const parsed = parseFile({
+      path: 'wrong-producer-parameter.ts',
+      text: `function Configure(value: ArithmeticCombinator): Producer {
+  return value;
+}
+const input = new Network();
+const output: Network = ${call};`,
+    });
+    const diagnostic = validateDslSemantics(parsed).find(({ code }) => code === 'CL1044');
+
+    expect(diagnostic).toMatchObject({ severity: 'error', span: expect.any(Object) });
+    expect(parsed.text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(
+      'when(input > 0).then(input)',
+    );
+
+    const missing = parseFile({
+      path: 'missing-producer-parameter.ts',
+      text: `function Configure(value: ArithmeticCombinator): Producer { return value; }
+const output = Configure();`,
+    });
+    expect(validateDslSemantics(missing)).toContainEqual(
+      expect.objectContaining({ code: 'CL1044', severity: 'error' }),
+    );
+  });
+
   test('reserves the third Signal argument for fluent .to(...) only', () => {
     const parsed = parseFile({
       path: 'free-to-third-argument.ts',

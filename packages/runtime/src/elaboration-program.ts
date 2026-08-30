@@ -145,6 +145,8 @@ type WithoutDestinations<T> = T extends unknown ? Omit<T, 'destinations'> : neve
 
 interface ProducerValue {
   readonly kind: 'producer';
+  /** Shared identity of one physical entity across fluent wrapper values. */
+  readonly identity: object;
   readonly producer: WithoutDestinations<DirectPlanProducer>;
   /** Explicit `.as(...)` constraint; inferred arithmetic outputs remain overridable. */
   readonly boundOutputSignal?: SignalId;
@@ -216,7 +218,9 @@ class ElaborationRecorder {
   readonly #networkPairs: NonNullable<DirectElaborationPlan['networkPairs']>[number][] = [];
   readonly #producers: DirectPlanProducer[] = [];
   readonly #diagnostics: Diagnostic[] = [];
-  readonly #attachedProducers = new WeakSet<object>();
+  readonly #producerAttachments = new WeakMap<object, SourceSpan>();
+  readonly #knownProducers = new Map<object, ProducerValue>();
+  #unusedProducersFinalized = false;
   #anonymousOrdinal = 0;
   readonly #networkNameCounts = new Map<string, number>();
   readonly #anonymousLoopCounts = new Map<string, number>();
@@ -321,6 +325,7 @@ class ElaborationRecorder {
       }
       return {
         kind: 'producer',
+        identity: {},
         producer: {
           kind: 'constant',
           outputs: outputs.map(({ signal, value }) => ({ signal, value })),
@@ -588,18 +593,8 @@ class ElaborationRecorder {
       return Object.fromEntries(entries);
     },
     discard: (value: unknown, rawSpan: RawSpan): void => {
-      if (!this.#isProducer(value) || this.#attachedProducers.has(value)) return;
-      this.#recordDslCall();
-      const ordinal = this.#diagnostics.filter(({ code }) => code === 'CL2001').length + 1;
-      const sink = this.#network(`$unused:${ordinal}`, rawSpan);
-      this.#attach(sink, value, rawSpan);
-      this.#diagnostics.push({
-        code: 'CL2001',
-        severity: 'warning',
-        message:
-          'This producer has no destination; its topology is checked, but its output is unused.',
-        span: this.#span(rawSpan),
-      });
+      if (!this.#isProducer(value) || this.#producerAttachments.has(value.identity)) return;
+      this.#discardProducer(value, this.#span(rawSpan));
     },
     compare: (operator: string, left: unknown, right: unknown, rawSpan: RawSpan): unknown => {
       const comparator = comparatorMap[operator];
@@ -695,6 +690,7 @@ class ElaborationRecorder {
       const outputs = outputValues.map((output) => this.#deciderOutput(output, rawSpan));
       return {
         kind: 'producer',
+        identity: {},
         producer: {
           kind: 'decider',
           condition: condition.condition,
@@ -814,7 +810,7 @@ class ElaborationRecorder {
         return (producer as { at: (...values: unknown[]) => unknown }).at(...args.slice(1, -1));
       }
       this.#recordDslCall();
-      if (this.#attachedProducers.has(producer)) {
+      if (this.#producerAttachments.has(producer.identity)) {
         throw new Error('.at(...) must be applied before .to(...) or another attachment.');
       }
       if (
@@ -841,6 +837,7 @@ class ElaborationRecorder {
       };
       return {
         kind: 'producer',
+        identity: producer.identity,
         producer: { ...producer.producer, placement },
       };
     },
@@ -923,6 +920,7 @@ class ElaborationRecorder {
       const concreteOutput = this.#firstConcreteSignal(left as DslValue, right as DslValue);
       return {
         kind: 'producer',
+        identity: {},
         producer: {
           kind: 'arithmetic',
           left: this.#arithmeticOperand(left as DslValue, rawSpan),
@@ -1005,6 +1003,7 @@ class ElaborationRecorder {
   });
 
   plan(): DirectElaborationPlan {
+    this.#finalizeUnusedProducers();
     return {
       format: 'comblang-direct-plan',
       version: 1,
@@ -1021,7 +1020,9 @@ class ElaborationRecorder {
       name,
       (...args: unknown[]) => {
         try {
-          return (operation as (...values: unknown[]) => unknown)(...args);
+          const result = (operation as (...values: unknown[]) => unknown)(...args);
+          if (this.#isProducer(result)) this.#knownProducers.set(result.identity, result);
+          return result;
         } catch (error) {
           if (
             error instanceof ElaborationOperationLimitError ||
@@ -1048,6 +1049,31 @@ class ElaborationRecorder {
 
   #span(raw: RawSpan): SourceSpan {
     return { fileId: this.#fileId, start: raw.start, end: raw.end };
+  }
+
+  #finalizeUnusedProducers(): void {
+    if (this.#unusedProducersFinalized) return;
+    this.#unusedProducersFinalized = true;
+    for (const producer of this.#knownProducers.values()) {
+      if (!this.#producerAttachments.has(producer.identity)) {
+        this.#discardProducer(producer, producer.producer.source);
+      }
+    }
+  }
+
+  #discardProducer(producer: ProducerValue, source: SourceSpan): void {
+    this.#recordDslCall();
+    const ordinal = this.#diagnostics.filter(({ code }) => code === 'CL2001').length + 1;
+    const rawSpan = { start: source.start, end: source.end };
+    const sink = this.#network(`$unused:${ordinal}`, rawSpan);
+    this.#attach(sink, producer, rawSpan);
+    this.#diagnostics.push({
+      code: 'CL2001',
+      severity: 'warning',
+      message:
+        'This producer has no destination; its topology is checked, but its output is unused.',
+      span: source,
+    });
   }
 
   #network(name: string, rawSpan: RawSpan, fixedColor?: 'red' | 'green'): NetworkValue {
@@ -1102,6 +1128,18 @@ class ElaborationRecorder {
     if (networks.length === 0 || networks.length > 2) {
       throw new Error('A producer destructuring/attachment requires one or two Network outputs.');
     }
+    const previousAttachment = this.#producerAttachments.get(value.identity);
+    if (previousAttachment !== undefined) {
+      throw new ElaborationExecutionError(
+        'One Producer handle cannot be attached more than once; use one two-destination attachment for physical fan-out.',
+        this.#span(rawSpan),
+        'RT2006',
+        [
+          { message: 'Producer was first attached here.', span: previousAttachment },
+          { message: 'Physical producer was created here.', span: value.producer.source },
+        ],
+      );
+    }
     for (const network of networks) this.#assertWritableNetwork(network, rawSpan, 'destination');
     this.#producers.push({
       ...value.producer,
@@ -1111,7 +1149,7 @@ class ElaborationRecorder {
         instancePath: this.#path(),
       })),
     } as unknown as DirectPlanProducer);
-    this.#attachedProducers.add(value);
+    this.#producerAttachments.set(value.identity, this.#span(rawSpan));
   }
 
   #isNetwork(value: unknown): value is NetworkValue {
@@ -1576,6 +1614,7 @@ class ElaborationRecorder {
     if (value.producer.kind === 'arithmetic') {
       return {
         kind: 'producer',
+        identity: value.identity,
         producer: { ...value.producer, output: { kind: 'signal', signal } },
         ...(explicit || value.boundOutputSignal !== undefined ? { boundOutputSignal: signal } : {}),
       };
@@ -1593,6 +1632,7 @@ class ElaborationRecorder {
     if (output.kind === 'each') {
       return {
         kind: 'producer',
+        identity: value.identity,
         producer: {
           ...value.producer,
           output: {
@@ -1607,6 +1647,7 @@ class ElaborationRecorder {
     if (output.kind === 'each-constant') {
       return {
         kind: 'producer',
+        identity: value.identity,
         producer: {
           ...value.producer,
           output: { kind: 'signal-constant', signal, value: output.value },

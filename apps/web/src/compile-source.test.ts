@@ -62,4 +62,42 @@ const output: Network = ${expression};`;
     expect(diagnostic).toMatchObject({ severity: 'error', span: expect.any(Object) });
     expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(returned);
   });
+
+  test('attaches repeated Producer use to the second attachment', () => {
+    const repeated = 'second += configured;';
+    const text = `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const producer: ArithmeticCombinator = input + 0;
+const configured: ArithmeticCombinator = producer.as(A);
+const first = new Network();
+const second = new Network();
+first += producer;
+${repeated}`;
+    const result = compileSource({ path: 'main.factorio.ts', text });
+    const diagnostic = result.compilerDiagnostics.find(({ code }) => code === 'RT2006');
+
+    expect(result.plan).toBeUndefined();
+    expect(diagnostic).toMatchObject({
+      severity: 'error',
+      span: expect.any(Object),
+      related: expect.any(Array),
+    });
+    expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(repeated.slice(0, -1));
+  });
+
+  test('reports a dynamic concrete Producer parameter mismatch at its boundary', () => {
+    const parameter = 'value: ArithmeticCombinator';
+    const text = `function Configure(${parameter}): ArithmeticCombinator {
+  return value;
+}
+const input = new Network();
+const values = [when(input > 0).then(input)];
+const output = Configure(values[0]);`;
+    const result = compileSource({ path: 'main.factorio.ts', text });
+    const diagnostic = result.compilerDiagnostics.find(({ code }) => code === 'RT2022');
+
+    expect(result.plan).toBeUndefined();
+    expect(diagnostic).toMatchObject({ severity: 'error', span: expect.any(Object) });
+    expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(parameter);
+  });
 });

@@ -326,6 +326,15 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
       }
 
       if (ts.isExpressionStatement(node)) {
+        if (
+          ts.isBinaryExpression(node.expression) &&
+          node.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken
+        ) {
+          return factory.updateExpressionStatement(
+            node,
+            ts.visitNode(node.expression, visit) as ts.Expression,
+          );
+        }
         return factory.updateExpressionStatement(
           node,
           dslCall(factory, 'discard', [
@@ -355,9 +364,25 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
 
       if (ts.isFunctionDeclaration(node) && node.body !== undefined) {
         const name = node.name?.text ?? '<anonymous>';
-        const parameterBorrows = node.parameters.flatMap((parameter) => {
+        const parameterBindings = node.parameters.flatMap((parameter) => {
+          if (!ts.isIdentifier(parameter.name)) return [];
+          const producerType = producerHandleTypeName(file, parameter.type);
+          if (producerType !== undefined) {
+            return [
+              factory.createExpressionStatement(
+                factory.createAssignment(
+                  parameter.name,
+                  dslCall(factory, 'producerHandle', [
+                    parameter.name,
+                    factory.createStringLiteral(producerType),
+                    spanLiteral(factory, parameter),
+                  ]),
+                ),
+              ),
+            ];
+          }
           const descriptor = borrowDescriptorForType(parameter.type);
-          if (descriptor === undefined || !ts.isIdentifier(parameter.name)) return [];
+          if (descriptor === undefined) return [];
           return [
             factory.createExpressionStatement(
               factory.createAssignment(
@@ -395,7 +420,7 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
             factory.createTryStatement(
               factory.createBlock(
                 [
-                  ...parameterBorrows,
+                  ...parameterBindings,
                   ...node.body.statements.map(
                     (statement) => ts.visitNode(statement, visit) as ts.Statement,
                   ),
