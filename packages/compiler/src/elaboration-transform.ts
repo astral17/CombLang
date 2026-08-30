@@ -548,9 +548,13 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
             spanLiteral(factory, node),
           ]);
         }
-        const mapped = { Signal: 'signal', CC: 'constant', IF: 'decider', to: 'destinations' }[
-          node.expression.text
-        ];
+        const mapped = {
+          Signal: 'signal',
+          CC: 'constant',
+          IF: 'decider',
+          to: 'destinations',
+          pair: 'pair',
+        }[node.expression.text];
         if (mapped !== undefined) {
           return dslCall(factory, mapped, [
             ...node.arguments.map((argument) => ts.visitNode(argument, visit) as ts.Expression),

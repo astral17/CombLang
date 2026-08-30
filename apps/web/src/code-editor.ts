@@ -95,6 +95,7 @@ const dslCompletions: readonly Completion[] = [
   { label: 'Any', detail: 'alias of Anything', type: 'constant' },
   { label: 'Everything', detail: 'everything wildcard', type: 'constant' },
   { label: 'All', detail: 'alias of Everything', type: 'constant' },
+  { label: 'pair', detail: 'read both wire colors', type: 'function' },
 ];
 
 function dslCompletionSource(context: CompletionContext): CompletionResult | null {

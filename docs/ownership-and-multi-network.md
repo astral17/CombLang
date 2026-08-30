@@ -1,6 +1,6 @@
 # Phase 4: ownership and multi-network design
 
-This document defines the intended semantic boundary for Phase 4. `destination.take(source)`, function-scoped `Readonly`/`Ref` borrows, and explicit `Move<Network>` call/return transfer are frozen and implemented. Other syntax below remains design material unless the [current language reference](language-reference.md) says otherwise.
+This document defines the intended semantic boundary for Phase 4. `destination.take(source)`, function-scoped `Readonly`/`Ref` borrows, explicit `Move<Network>` call/return transfer, and immutable `pair(a, b)` input views are frozen and implemented. Other syntax below remains design material unless the [current language reference](language-reference.md) says otherwise.
 
 Phase 4 makes physical circuit topology explicit in the type and runtime models. A `Network` is an affine handle to one logical wire network: it may be read many times, but ownership cannot be silently copied or consumed twice. The phase also adds an immutable view over the two wire colors without turning that view into another writable network.
 
@@ -104,7 +104,7 @@ destination.take(source);
 
 After the call, `destination` owns the unified Network and `source` is moved. The transformed runtime tracks the actual handle through aliases and containers, the direct plan records an ordered transfer, and EG/NCIR lowering collapses both identities without adding hardware or a tick. The method name itself communicates consumption; the older `destination.merge(move(source))` draft is intentionally not the documented target.
 
-These forms remain invalid:
+These forms are invalid:
 
 ```ts
 destination += source; // Network is not a Producer
@@ -126,11 +126,11 @@ Everything(pair(a, b));
 
 The two Networks remain distinct and must resolve to opposite wire colors. Factorio then sums matching signal values across the red and green wires. `pair` borrows both inputs and never consumes or merges them.
 
-The view is immutable. It may appear wherever a producer or typed object accepts a both-colors input, but it cannot be used as a destination or ownership carrier:
+The implemented view is immutable. It may appear wherever an implemented producer accepts a both-colors input, but it cannot be used as a destination or ownership carrier:
 
 ```ts
-pair(a, b) += producer; // planned error
-destination.take(pair(a, b)); // planned error
+pair(a, b) += producer; // CL1042
+destination.take(pair(a, b)); // CL1042
 ```
 
 `pair` is intentionally different from producer fan-out:
@@ -142,7 +142,7 @@ destination.take(pair(a, b)); // planned error
 | attach one producer to two output Networks  | `producer.to(first, second, SIGNAL_A)` |
 | contextually create two output Networks     | `let [first, second] = producer`       |
 
-`pair(a, b)[SIGNAL]` is a read selection. Forms such as `.to(pair(a, b))` or `to(pair(a, b)[SIGNAL]) += producer` would mix input and output concepts and must be rejected.
+`pair(a, b)[SIGNAL]` is a read selection. Forms such as `.to(pair(a, b))` or `to(pair(a, b)[SIGNAL]) += producer` mix input and output concepts and are rejected. Dynamically aliased misuse receives `RT2020`. The serialized plan and NCIR retain both input Networks, the simulator sums both buses, and blueprint generation wires both resolved colors.
 
 ## Static and runtime enforcement
 

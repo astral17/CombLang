@@ -40,10 +40,13 @@ function conditionNetworks(condition: PlanDeciderCondition): readonly string[] {
     condition.kind === 'compare-signal' ||
     condition.kind === 'compare-wildcard'
   ) {
-    return [condition.network];
+    return condition.networks ?? [condition.network];
   }
   if (condition.kind === 'compare-signals') {
-    return [condition.left.network, condition.right.network];
+    return [
+      ...(condition.left.networks ?? [condition.left.network]),
+      ...(condition.right.networks ?? [condition.right.network]),
+    ];
   }
   return condition.conditions.flatMap(conditionNetworks);
 }
@@ -58,14 +61,14 @@ function producerInputNetworks(
       ...conditionNetworks(producer.condition),
       ...outputs.flatMap((output) =>
         output.kind === 'each' || output.kind === 'signal' || output.kind === 'wildcard'
-          ? [output.network]
+          ? (output.networks ?? [output.network])
           : [],
       ),
     ];
   }
   return [producer.left, producer.right]
     .filter((operand) => operand.kind === 'each' || operand.kind === 'signal')
-    .map((operand) => operand.network);
+    .flatMap((operand) => operand.networks ?? [operand.network]);
 }
 
 function criticalPathStages(plan: DirectElaborationPlan): number {

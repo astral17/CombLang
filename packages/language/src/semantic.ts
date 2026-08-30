@@ -202,7 +202,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
   const networkArrayScopes: Set<string>[] = [new Set()];
   const capabilityScopes: Map<string, NetworkCapability>[] = [new Map()];
   const producerFunctions = new Set<string>();
-  const dslBuiltinNames = new Set(['Signal', 'Network', 'CC', 'IF', 'to', 'when']);
+  const dslBuiltinNames = new Set(['Signal', 'Network', 'CC', 'IF', 'to', 'when', 'pair']);
   const shadowedDslBuiltins = new Set<string>();
 
   const collectBindingShadows = (name: ts.BindingName): void => {
@@ -290,6 +290,25 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       return isNetworkExpression(node.expression) || isNetworkArrayExpression(node.expression);
     }
     return false;
+  };
+  const isPairViewExpression = (node: ts.Expression): boolean => {
+    if (ts.isParenthesizedExpression(node)) return isPairViewExpression(node.expression);
+    if (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'pair' &&
+      isDslBuiltin('pair')
+    ) {
+      return true;
+    }
+    if (ts.isElementAccessExpression(node)) return isPairViewExpression(node.expression);
+    return (
+      ts.isCallExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      ['Each', 'Anything', 'Any', 'Everything', 'All'].includes(node.expression.text) &&
+      node.arguments.length === 1 &&
+      isPairViewExpression(node.arguments[0]!)
+    );
   };
   const capabilityOfNetworkExpression = (node: ts.Expression): NetworkCapability | undefined => {
     if (ts.isParenthesizedExpression(node)) return capabilityOfNetworkExpression(node.expression);
@@ -446,6 +465,17 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     }
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
       if (
+        isNetworkType(node.type) &&
+        node.initializer !== undefined &&
+        isPairViewExpression(node.initializer)
+      ) {
+        report(
+          'CL1042',
+          'pair(a, b) is a read-only input view and cannot be stored as an owned Network.',
+          node,
+        );
+      }
+      if (
         isNetworkType(node.type) ||
         (node.initializer !== undefined &&
           (isNetworkExpression(node.initializer) || isProducerExpression(node.initializer)))
@@ -470,6 +500,13 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       }
     }
     if (ts.isReturnStatement(node) && node.expression !== undefined) {
+      if (isPairViewExpression(node.expression)) {
+        report(
+          'CL1042',
+          'pair(a, b) is a read-only input view and cannot carry ownership across a return.',
+          node,
+        );
+      }
       const capability = capabilityOfNetworkExpression(node.expression);
       if (capability === 'readonly' || capability === 'ref') {
         report(
@@ -478,6 +515,17 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
           node,
         );
       }
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      node.operatorToken.kind === ts.SyntaxKind.PlusEqualsToken &&
+      isPairViewExpression(node.left)
+    ) {
+      report(
+        'CL1042',
+        'pair(a, b) is a read-only input view and cannot receive a producer attachment.',
+        node.left,
+      );
     }
     if (
       ts.isBinaryExpression(node) &&
@@ -623,6 +671,23 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
           node,
         );
       }
+      if (name === 'pair' && isDslBuiltin(name) && node.arguments.length !== 2) {
+        report('CL1042', 'pair(a, b) requires exactly two Network values.', node);
+      }
+      if (
+        name === 'pair' &&
+        isDslBuiltin(name) &&
+        node.arguments.length === 2 &&
+        ts.isIdentifier(node.arguments[0]!) &&
+        ts.isIdentifier(node.arguments[1]!) &&
+        node.arguments[0]!.text === node.arguments[1]!.text &&
+        isNetworkExpression(node.arguments[0]!)
+      ) {
+        report('CL1042', 'pair(a, b) requires two distinct logical Networks.', node);
+      }
+      if (name === 'to' && isDslBuiltin(name) && node.arguments.some(isPairViewExpression)) {
+        report('CL1042', 'pair(a, b) cannot be a to(...) destination.', node);
+      }
     }
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
       const receiver = node.expression.expression;
@@ -661,6 +726,9 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
         report('CL1037', '.take(source) requires exactly one source Network.', node);
       }
       if (method === 'take' && isNetworkExpression(receiver) && node.arguments.length === 1) {
+        if (node.arguments.some(isPairViewExpression)) {
+          report('CL1042', 'pair(a, b) cannot participate in .take(...).', node);
+        }
         const destinationCapability = capabilityOfNetworkExpression(receiver);
         const sourceCapability = capabilityOfNetworkExpression(node.arguments[0]!);
         if (
@@ -676,7 +744,13 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
           );
         }
       }
+      if (method === 'take' && isPairViewExpression(receiver)) {
+        report('CL1042', 'pair(a, b) cannot participate in .take(...).', node);
+      }
       if (method === 'to' && isProducerExpression(receiver)) {
+        if (node.arguments.some(isPairViewExpression)) {
+          report('CL1042', 'pair(a, b) cannot be a .to(...) destination.', node);
+        }
         for (const argument of node.arguments) {
           if (capabilityOfNetworkExpression(argument) === 'readonly') {
             report('CL1038', 'Cannot attach a producer through Readonly<Network>.', argument);

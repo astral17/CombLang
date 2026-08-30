@@ -1,5 +1,7 @@
 import { compileDirectPlan } from '@comblang/compiler/direct-plan';
+import { transformElaborationModule } from '@comblang/compiler/elaboration-transform';
 import { parseFile } from '@comblang/language';
+import { executeElaborationProgram } from '@comblang/runtime';
 import { describe, expect, test } from 'vitest';
 
 import { runSourcePlanDemo } from './source-demo.js';
@@ -360,5 +362,23 @@ const output: Network = IF(Any(input) > 0, All(input));`,
 
     expect(compiled.diagnostics).toEqual([]);
     expect(demo).toMatchObject({ combinators: 1, stages: 1, outputValue: 7 });
+  });
+
+  test('simulates an executed pair as a summed two-color input view', () => {
+    const parsed = parseFile({
+      path: 'pair.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const red: Network<R> = CC(2 * A);
+const green: Network<G> = CC(3 * A);
+const inputs = pair(red, green);
+const output: Network = inputs[A] + 0;`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const demo = runSourcePlanDemo(plan);
+    const colors = new Map(demo.colors.map(({ name, color }) => [name, color]));
+
+    expect(demo).toMatchObject({ combinators: 3, stages: 2, outputValue: 5 });
+    expect(colors.get('red')).toBe('red');
+    expect(colors.get('green')).toBe('green');
   });
 });

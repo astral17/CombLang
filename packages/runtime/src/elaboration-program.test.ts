@@ -1,5 +1,5 @@
 import { generateBlueprintJson, transformElaborationModule } from '@comblang/compiler';
-import { signal } from '@comblang/factorio';
+import { signal, SparseBus } from '@comblang/factorio';
 import { parseFile, validateDslSemantics } from '@comblang/language';
 import { describe, expect, test } from 'vitest';
 
@@ -657,6 +657,121 @@ const output = input["iron-plate"] + 1;`,
       },
     });
     expect(JSON.stringify(entity)).not.toContain('"type":"item"');
+  });
+
+  test('reads and simulates both pair wire colors in arithmetic and wildcard deciders', () => {
+    const parsed = parseFile({
+      path: 'pair-input.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const B = Signal("virtual", "signal-B");
+const red: Network<R> = CC(2 * A, 1 * B);
+const green: Network<G> = CC(3 * A, 4 * B);
+const sum: Network = pair(red, green)[A] + 0;
+const copied: Network = IF(Anything(pair(red, green)) > 0, Everything(pair(red, green)));`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.networkPairs).toHaveLength(3);
+    expect(plan.producers[2]).toMatchObject({
+      kind: 'arithmetic',
+      left: { kind: 'signal', network: 'red', networks: ['red', 'green'] },
+    });
+    expect(plan.producers[3]).toMatchObject({
+      kind: 'decider',
+      condition: {
+        kind: 'compare-wildcard',
+        wildcard: 'anything',
+        networks: ['red', 'green'],
+      },
+      output: { kind: 'wildcard', wildcard: 'everything', networks: ['red', 'green'] },
+    });
+
+    const execution = elaborateDirectPlan(plan);
+    const A = signal('virtual', 'signal-A');
+    const B = signal('virtual', 'signal-B');
+    const simulation = execution.circuit.createSimulation();
+    simulation.step();
+    const snapshot = simulation.step();
+    expect(snapshot.read(execution.network('sum').id).get(A)).toBe(5);
+    expect(snapshot.read(execution.network('copied').id)).toEqual(
+      new SparseBus([
+        [A, 5],
+        [B, 5],
+      ]),
+    );
+
+    const blueprint = generateBlueprintJson(execution.circuit.ir).blueprint;
+    expect(blueprint.wires).toEqual(
+      expect.arrayContaining([
+        [1, 1, 3, 1],
+        [2, 2, 3, 2],
+      ]),
+    );
+  });
+
+  test('enforces standalone pair colors and rejects dynamic destination/ownership misuse', () => {
+    const conflicting = parseFile({
+      path: 'pair-color.factorio.ts',
+      text: `const first = new Network<R>();
+const second = new Network<R>();
+const inputs = pair(first, second);`,
+    });
+    const conflictPlan = executeElaborationProgram(transformElaborationModule(conflicting));
+    const result = tryElaborateDirectPlan(conflictPlan);
+    const conflict = result.diagnostics[0];
+    expect(conflict).toMatchObject({ code: 'RT2010', severity: 'error', span: expect.any(Object) });
+    expect(
+      conflict?.span === undefined
+        ? undefined
+        : conflicting.text.slice(conflict.span.start, conflict.span.end),
+    ).toBe('pair(first, second)');
+
+    const destination = parseFile({
+      path: 'pair-destination.factorio.ts',
+      text: `const a = new Network();
+const b = new Network();
+const inputs = pair(a, b);
+inputs += a + 0;`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(destination))).toThrowError(
+      expect.objectContaining({ code: 'RT2020' }),
+    );
+
+    const escaped = parseFile({
+      path: 'pair-return.factorio.ts',
+      text: `function Leak(a: Readonly<Network>, b: Readonly<Network>) {
+  const inputs = pair(a, b);
+  return inputs;
+}
+const a = new Network();
+const b = new Network();
+const escaped = Leak(a, b);`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(escaped))).toThrowError(
+      expect.objectContaining({ code: 'RT2020' }),
+    );
+
+    const repeated = parseFile({
+      path: 'pair-repeated.factorio.ts',
+      text: `const input = new Network();
+const invalid = pair(input, input);`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(repeated))).toThrowError(
+      expect.objectContaining({ code: 'RT2020' }),
+    );
+
+    const stale = parseFile({
+      path: 'pair-stale.factorio.ts',
+      text: `function Pass(input: Move<Network>): Network { return input; }
+const first = new Network();
+const second = new Network();
+const inputs = pair(first, second);
+const moved = Pass(first);
+const output: Network = inputs + 0;`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(stale))).toThrowError(
+      expect.objectContaining({ code: 'RT2012' }),
+    );
   });
 
   test('materializes loop-local Networks and feeds them into arithmetic producers', () => {

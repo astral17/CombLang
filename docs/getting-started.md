@@ -2,7 +2,7 @@
 
 CombLang currently implements the Phase 3 source compiler and the first Phase 4 ownership slice of a TypeScript-shaped structural HDL for Factorio 2.1 circuit networks. The browser workbench can parse, lower, color, simulate, and generate an early uncompressed blueprint JSON preview for the supported source subset locally. Exchange-string encoding and the verified Phase 8 blueprint codec are not implemented yet.
 
-The executable examples include [`examples/scale/main.factorio.ts`](../examples/scale/main.factorio.ts) for ordinary composition, [`examples/take/main.factorio.ts`](../examples/take/main.factorio.ts) for zero-tick network union, [`examples/borrow/main.factorio.ts`](../examples/borrow/main.factorio.ts) for non-owning function capabilities, and [`examples/move/main.factorio.ts`](../examples/move/main.factorio.ts) for explicit ownership transfer across a call.
+The executable examples include [`examples/scale/main.factorio.ts`](../examples/scale/main.factorio.ts) for ordinary composition, [`examples/take/main.factorio.ts`](../examples/take/main.factorio.ts) for zero-tick network union, [`examples/borrow/main.factorio.ts`](../examples/borrow/main.factorio.ts) for non-owning function capabilities, [`examples/move/main.factorio.ts`](../examples/move/main.factorio.ts) for explicit ownership transfer across a call, and [`examples/pair/main.factorio.ts`](../examples/pair/main.factorio.ts) for reading both circuit-wire colors through one immutable input view.
 
 ## Requirements
 

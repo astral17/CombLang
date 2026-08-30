@@ -106,4 +106,18 @@ ${statement}`);
       expect.objectContaining({ code: 'RT2004', severity: 'error', span: expect.any(Object) }),
     ]);
   });
+
+  test('checks a both-colors pair input through the executed pipeline', async () => {
+    const path = await sourceFile(`const A = Signal("virtual", "signal-A");
+const red: Network<R> = CC(2 * A);
+const green: Network<G> = CC(3 * A);
+const output: Network = pair(red, green)[A] + 0;`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path])).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      diagnostics: [],
+      producerCount: 3,
+    });
+  });
 });

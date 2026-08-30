@@ -8,6 +8,8 @@ import type { ArithmeticOperation, CircuitColor, LogicalArithmeticOutput } from 
 
 export interface PlanNetworkRef {
   readonly network: string;
+  /** Both physical input wires for a `pair`; `network` remains the primary compatibility view. */
+  readonly networks?: readonly [string, string];
 }
 
 export interface PlanAttachment extends PlanNetworkRef {
@@ -29,31 +31,28 @@ export type PlanArithmeticOperand =
 export type PlanComparator = '>' | '<' | '=' | '>=' | '<=' | '!=';
 
 export type PlanDeciderCondition =
-  | {
+  | ({
       readonly kind: 'compare-each';
-      readonly network: string;
       readonly comparator: PlanComparator;
       readonly constant: number;
-    }
-  | {
+    } & PlanNetworkRef)
+  | ({
       readonly kind: 'compare-signal';
-      readonly network: string;
       readonly signal: SignalId;
       readonly comparator: PlanComparator;
       readonly constant: number;
-    }
-  | {
+    } & PlanNetworkRef)
+  | ({
       readonly kind: 'compare-wildcard';
-      readonly network: string;
       readonly wildcard: 'anything' | 'everything';
       readonly comparator: PlanComparator;
       readonly constant: number;
-    }
+    } & PlanNetworkRef)
   | {
       readonly kind: 'compare-signals';
-      readonly left: { readonly network: string; readonly signal: SignalId };
+      readonly left: PlanNetworkRef & { readonly signal: SignalId };
       readonly comparator: PlanComparator;
-      readonly right: { readonly network: string; readonly signal: SignalId };
+      readonly right: PlanNetworkRef & { readonly signal: SignalId };
     }
   | {
       readonly kind: 'and';
@@ -79,6 +78,13 @@ export interface DirectPlanNetworkTransfer {
   readonly instancePath: readonly string[];
 }
 
+/** A read-only input connector view whose members must use opposite wire colors. */
+export interface DirectPlanNetworkPair {
+  readonly networks: readonly [string, string];
+  readonly provenance: SourceSpan;
+  readonly instancePath: readonly string[];
+}
+
 export interface DirectPlanArithmetic {
   readonly kind: 'arithmetic';
   readonly left: PlanArithmeticOperand;
@@ -95,15 +101,14 @@ export interface DirectPlanDecider {
   readonly kind: 'decider';
   readonly condition: PlanDeciderCondition;
   readonly output:
-    | { readonly kind: 'each'; readonly network: string }
+    | ({ readonly kind: 'each' } & PlanNetworkRef)
     | { readonly kind: 'each-constant'; readonly value: number }
     | { readonly kind: 'signal-constant'; readonly signal: SignalId; readonly value: number }
-    | {
+    | ({
         readonly kind: 'wildcard';
-        readonly network: string;
         readonly wildcard: 'anything' | 'everything';
-      }
-    | { readonly kind: 'signal'; readonly network: string; readonly signal: SignalId };
+      } & PlanNetworkRef)
+    | ({ readonly kind: 'signal'; readonly signal: SignalId } & PlanNetworkRef);
   /** Multiple native Factorio 2.x output filters. `output` remains the first-filter compatibility view. */
   readonly outputs?: readonly DirectPlanDecider['output'][];
   readonly destinations: readonly PlanAttachment[];
@@ -128,6 +133,7 @@ export interface DirectElaborationPlan {
   readonly version: 1;
   readonly networks: readonly DirectPlanNetwork[];
   readonly networkTransfers?: readonly DirectPlanNetworkTransfer[];
+  readonly networkPairs?: readonly DirectPlanNetworkPair[];
   readonly producers: readonly DirectPlanProducer[];
   readonly diagnostics?: readonly Diagnostic[];
 }

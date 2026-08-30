@@ -185,7 +185,24 @@ const output: Network = destination * 2;
 
 The direct plan retains the ordered transfer and its source/instance provenance. Before EG construction, lowering maps all earlier producer references to the surviving runtime handle; EG and NCIR therefore contain one physical Network for the union. Contradictory fixed colors such as `Network<R>` taking `Network<G>` report `RT2014`. Taking itself reports `RT2013`. An ordinary non-Network object may still define its own JavaScript `.take(...)` method.
 
-This first transfer slice freezes the consuming-transfer spelling and runtime moved state. Function capabilities are described below. General local ownership-copy rules, explicit moves into and out of container slots, and `pair(a, b)` remain planned Phase 4 work.
+This first transfer slice freezes the consuming-transfer spelling and runtime moved state. Function capabilities and both-colors input views are described below. General local ownership-copy rules and explicit moves into and out of container slots remain planned Phase 4 work.
+
+## Both-colors input views
+
+`pair(a, b)` creates an immutable view of two distinct logical Networks on one physical input connector. The two Networks are constrained to opposite wire colors, and matching signal values are summed exactly as Factorio sums its red and green circuit inputs:
+
+```ts
+const inputs = pair(red, green);
+const selected: Network = inputs[A] + 0;
+const doubled: Network = Each(inputs) * 2;
+const copied: Network = IF(Anything(inputs) > 0, Everything(inputs));
+```
+
+The view works as a bare Each input, through `pair(a, b)[SIGNAL]`, and with `Each`, `Anything`/`Any`, or `Everything`/`All`. Arithmetic, decider conditions, and copy-count outputs retain both input Networks in the direct plan and NCIR. Simulation reads both buses, while blueprint JSON wires each resolved color to the matching input connector. Constructing the view records its color constraint even if the view is saved before a producer uses it.
+
+`pair` neither merges nor owns its inputs. It cannot receive a producer, be passed to `.to(...)` or `to(...)`, participate in `.take(...)`, satisfy `Move<Network>`, or escape a function as an ownership carrier. Definite source forms report `CL1042`; dynamically aliased forms report `RT2020`. `pair(a, a)` and aliases of the same Network are invalid. Moving either input invalidates older pair views through the ordinary `RT2012` ownership-generation check.
+
+Output fan-out remains a separate operation: use `producer.to(first, second)`, `to(first, second) += producer`, or contextual tuple/object destructuring. A pair is only an input-side view.
 
 Array or flat object destructuring provides the contextual fan-out form for a newly created producer:
 

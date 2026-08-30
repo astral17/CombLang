@@ -37,6 +37,7 @@ The returned object has the normal top-level shape:
 - every constant producer becomes a Factorio 2.x section-based `constant-combinator`;
 - current resolved Signal IDs always have an internal type; export emits name and optional quality, keeps non-item types, and omits the default item type;
 - resolved red/green logical Networks select physical connector IDs;
+- `pair(a, b)` inputs connect both resolved colors to the matching input connectors without adding or merging entities;
 - endpoints belonging to one logical Network are connected as a deterministic wire chain;
 - producers with `.at(x, y, direction?)` use their explicit Factorio position and a direction resolved from a numeric constant or TypeScript enum value;
 - remaining entities are placed in one deterministic horizontal row.

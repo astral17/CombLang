@@ -18,6 +18,7 @@ The current repository implements the Phase 3 source compiler and the first exec
 - explicit zero-tick `destination.take(source)` Network union with runtime move tracking and EG/NCIR identity collapse.
 - executable `Readonly<Network>` and `Ref<Network>` function borrows with alias-safe runtime enforcement, expiry checks, and color-qualified requirements.
 - explicit `Move<Network>` function transfer with caller-alias invalidation, owned returns, and recursive array/plain-object return handling.
+- immutable `pair(a, b)` both-colors input views with summed signal reads, opposite-color constraints, simulation, and blueprint wiring.
 
 ## Roadmap
 
@@ -33,8 +34,8 @@ The current repository implements the Phase 3 source compiler and the first exec
   - [ ] Complete the owned/moved operation matrix across calls, returns, local aliases, and container ownership slots.
   - [ ] Add source-aware diagnostics for illegal copies, writes through `Readonly`, invalid borrow escapes, double moves, and use after move, with runtime checks for cases the semantic pass cannot prove.
   - [x] Freeze and implement explicit zero-tick consuming network transfer as `a.take(b)`; `a += b` and implicit Network copying remain invalid.
-  - [ ] Implement `pair(a, b)` as an immutable two-network input view, including `pair(a, b)[SIGNAL]`, wildcard selections, summed red/green reads, and opposite-color constraints.
-  - [ ] Reject `pair(...)` as an attachment destination or ownership carrier; keep producer output fan-out expressed through `.to(...)`, `to(...) +=`, or contextual destructuring.
+  - [x] Implement `pair(a, b)` as an immutable two-network input view, including `pair(a, b)[SIGNAL]`, wildcard selections, summed red/green reads, and opposite-color constraints.
+  - [x] Reject `pair(...)` as an attachment destination or ownership carrier; keep producer output fan-out expressed through `.to(...)`, `to(...) +=`, or contextual destructuring.
   - [ ] Unify single- and multi-destination attachment validation, output-signal binding, connector cardinality, color constraints, and source provenance across all supported producer forms.
   - [ ] Carry capability and multi-network descriptors through the transformed runtime, serialized direct-plan boundary, EG/NCIR lowering, CLI, and browser result model.
   - [ ] Freeze Producer identity and its public type surface so reusing one producer fans out one physical output instead of cloning hardware.

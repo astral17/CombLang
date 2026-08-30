@@ -97,7 +97,18 @@ interface SignalValue {
 interface SelectedValue {
   readonly kind: 'selected';
   readonly network: NetworkValue;
+  readonly networks?: readonly [NetworkValue, NetworkValue];
   readonly selection: SignalId | WildcardName;
+}
+
+interface PairSelectedValue extends SelectedValue {
+  readonly networks: readonly [NetworkValue, NetworkValue];
+}
+
+interface PairValue {
+  readonly kind: 'pair';
+  readonly networks: readonly [NetworkValue, NetworkValue];
+  readonly source: SourceSpan;
 }
 
 type WildcardName = 'each' | 'anything' | 'everything';
@@ -141,6 +152,7 @@ interface ProducerValue {
 
 type DslValue =
   | NetworkValue
+  | PairValue
   | SelectedValue
   | DestinationValue
   | SignalValue
@@ -199,6 +211,7 @@ class ElaborationRecorder {
   readonly #fileId: SourceFileId;
   readonly #networks: DirectElaborationPlan['networks'][number][] = [];
   readonly #networkTransfers: NonNullable<DirectElaborationPlan['networkTransfers']>[number][] = [];
+  readonly #networkPairs: NonNullable<DirectElaborationPlan['networkPairs']>[number][] = [];
   readonly #producers: DirectPlanProducer[] = [];
   readonly #diagnostics: Diagnostic[] = [];
   readonly #attachedProducers = new WeakSet<object>();
@@ -284,11 +297,17 @@ class ElaborationRecorder {
       kind: 'wildcard-token',
       value,
     }),
-    wildcard: (value: WildcardName, network: NetworkValue, rawSpan: RawSpan): SelectedValue => {
+    wildcard: (
+      value: WildcardName,
+      network: NetworkValue | PairValue,
+      rawSpan: RawSpan,
+    ): SelectedValue => {
       this.#recordDslCall();
-      if (!this.#isNetwork(network)) throw new Error('Wildcard selection requires a Network.');
-      this.#assertReadableNetwork(network, rawSpan);
-      return { kind: 'selected', network, selection: value };
+      if (!this.#isNetwork(network) && !this.#isPair(network)) {
+        throw new Error('Wildcard selection requires a Network or pair(a, b).');
+      }
+      this.#assertReadableValue(network, rawSpan);
+      return this.#selectedValue(network, value);
     },
     constant: (...args: unknown[]): ProducerValue => {
       this.#recordDslCall();
@@ -314,6 +333,46 @@ class ElaborationRecorder {
       rawSpan: RawSpan,
     ): NetworkValue => {
       return this.#network(name ?? `$network:${++this.#anonymousOrdinal}`, rawSpan, fixedColor);
+    },
+    pair: (...args: unknown[]): PairValue => {
+      this.#recordDslCall();
+      const rawSpan = args.at(-1);
+      const values = args.slice(0, -1);
+      if (!isRawSpan(rawSpan)) throw new Error('pair(a, b) is missing provenance.');
+      if (values.length !== 2) {
+        throw new ElaborationExecutionError(
+          'pair(a, b) requires exactly two Network values.',
+          this.#span(rawSpan),
+          'RT2020',
+        );
+      }
+      if (!values.every((value): value is NetworkValue => this.#isNetwork(value))) {
+        throw new ElaborationExecutionError(
+          'pair(a, b) requires two Network values.',
+          this.#span(rawSpan),
+          'RT2020',
+        );
+      }
+      for (const value of values) this.#assertReadableNetwork(value, rawSpan);
+      if (values[0]!.ownership === values[1]!.ownership) {
+        throw new ElaborationExecutionError(
+          'pair(a, b) requires two distinct logical Networks.',
+          this.#span(rawSpan),
+          'RT2020',
+          [{ message: 'The repeated Network is declared here.', span: values[0]!.declaration }],
+        );
+      }
+      const pair: PairValue = {
+        kind: 'pair',
+        networks: values as [NetworkValue, NetworkValue],
+        source: this.#span(rawSpan),
+      };
+      this.#networkPairs.push({
+        networks: [values[0]!.name, values[1]!.name],
+        provenance: pair.source,
+        instancePath: this.#path(),
+      });
+      return pair;
     },
     borrowParameter: (
       value: unknown,
@@ -380,6 +439,13 @@ class ElaborationRecorder {
       rawSpan: RawSpan,
     ): NetworkValue => {
       if (!isRawSpan(rawSpan)) throw new Error('Invalid Move<Network> parameter descriptor.');
+      if (this.#isPair(value) || this.#isPairSelection(value)) {
+        throw new ElaborationExecutionError(
+          'pair(a, b) is a read-only input view and cannot transfer ownership.',
+          this.#span(rawSpan),
+          'RT2020',
+        );
+      }
       if (!this.#isNetwork(value)) {
         throw new ElaborationExecutionError(
           `Move<Network> parameter ${parameter} received a non-Network value.`,
@@ -419,6 +485,17 @@ class ElaborationRecorder {
       const destination = args[0];
       const values = args.slice(1, -1);
       if (!isRawSpan(rawSpan)) throw new Error('.take(...) is missing provenance.');
+      if (
+        this.#isPair(destination) ||
+        this.#isPairSelection(destination) ||
+        values.some((value) => this.#isPair(value) || this.#isPairSelection(value))
+      ) {
+        throw new ElaborationExecutionError(
+          'pair(a, b) is a read-only input view and cannot participate in .take(...).',
+          this.#span(rawSpan),
+          'RT2020',
+        );
+      }
       if (!this.#isNetwork(destination)) {
         if (
           (typeof destination !== 'object' && typeof destination !== 'function') ||
@@ -535,9 +612,9 @@ class ElaborationRecorder {
           kind: 'condition',
           condition: {
             kind: 'compare-signals',
-            left: { network: left.network.name, signal: left.selection },
+            left: { ...this.#planNetworkRef(left), signal: left.selection },
             comparator,
-            right: { network: right.network.name, signal: right.selection },
+            right: { ...this.#planNetworkRef(right), signal: right.selection },
           },
         };
       }
@@ -553,7 +630,7 @@ class ElaborationRecorder {
           condition: isSignal(selected.selection)
             ? {
                 kind: 'compare-signal',
-                network: selected.network.name,
+                ...this.#planNetworkRef(selected),
                 signal: selected.selection,
                 comparator: normalized,
                 constant: selectedConstant,
@@ -561,31 +638,39 @@ class ElaborationRecorder {
             : selected.selection === 'each'
               ? {
                   kind: 'compare-each',
-                  network: selected.network.name,
+                  ...this.#planNetworkRef(selected),
                   comparator: normalized,
                   constant: selectedConstant,
                 }
               : {
                   kind: 'compare-wildcard',
-                  network: selected.network.name,
+                  ...this.#planNetworkRef(selected),
                   wildcard: selected.selection,
                   comparator: normalized,
                   constant: selectedConstant,
                 },
         };
       }
-      const network = this.#isNetwork(left) ? left : this.#isNetwork(right) ? right : undefined;
+      const network =
+        this.#isNetwork(left) || this.#isPair(left)
+          ? left
+          : this.#isNetwork(right) || this.#isPair(right)
+            ? right
+            : undefined;
       const constant =
         typeof left === 'number' ? left : typeof right === 'number' ? right : undefined;
       if (network === undefined || constant === undefined) {
-        throw new Error('The first executable comparison slice requires Network vs number.');
+        throw new Error('The executable comparison slice requires Network/pair(a, b) vs number.');
       }
-      const normalized = this.#isNetwork(left) ? comparator : this.#reverseComparator(comparator);
+      const normalized =
+        this.#isNetwork(left) || this.#isPair(left)
+          ? comparator
+          : this.#reverseComparator(comparator);
       return {
         kind: 'condition',
         condition: {
           kind: 'compare-each',
-          network: network.name,
+          ...this.#planNetworkRef(network),
           comparator: normalized,
           constant,
         },
@@ -645,6 +730,13 @@ class ElaborationRecorder {
       if (!isRawSpan(rawSpan)) throw new Error('to(...) is missing provenance.');
       const values = args.slice(0, -1);
       const outputSignal = isSignal(values.at(-1)) ? (values.pop() as SignalId) : undefined;
+      if (values.some((value) => this.#isPair(value) || this.#isPairSelection(value))) {
+        throw new ElaborationExecutionError(
+          'pair(a, b) is a read-only input view and cannot be a to(...) destination.',
+          this.#span(rawSpan),
+          'RT2020',
+        );
+      }
       if (!values.every((value): value is NetworkValue => this.#isNetwork(value))) {
         throw new Error(
           'to(...) destinations must be Networks; pass an optional output Signal as the final argument.',
@@ -658,7 +750,7 @@ class ElaborationRecorder {
       };
     },
     select: (
-      value: NetworkValue | DestinationValue,
+      value: NetworkValue | PairValue | DestinationValue,
       signal: SignalId | WildcardTokenValue,
       rawSpan: RawSpan,
     ): SelectedValue | DestinationValue => {
@@ -666,7 +758,7 @@ class ElaborationRecorder {
       return this.#select(value, signal, rawSpan);
     },
     element: (value: unknown, key: unknown, rawSpan: RawSpan): unknown => {
-      if (this.#isNetwork(value) || this.#isDestination(value)) {
+      if (this.#isNetwork(value) || this.#isPair(value) || this.#isDestination(value)) {
         this.#recordDslCall();
         return this.#select(value, key, rawSpan);
       }
@@ -742,6 +834,13 @@ class ElaborationRecorder {
       }
       if (values.length === 1 && this.#isSelected(values[0])) {
         const selected = values[0];
+        if (this.#isPairSelection(selected)) {
+          throw new ElaborationExecutionError(
+            'pair(a, b) is a read-only input view and cannot be a .to(...) destination.',
+            this.#span(rawSpan),
+            'RT2020',
+          );
+        }
         if (outputSignal !== undefined || !isSignal(selected.selection)) {
           throw new Error('A selected .to(...) destination must bind exactly one concrete Signal.');
         }
@@ -750,6 +849,13 @@ class ElaborationRecorder {
       } else if (values.every((value): value is NetworkValue => this.#isNetwork(value))) {
         destinations = values;
       } else {
+        if (values.some((value) => this.#isPair(value))) {
+          throw new ElaborationExecutionError(
+            'pair(a, b) is a read-only input view and cannot be a .to(...) destination.',
+            this.#span(rawSpan),
+            'RT2020',
+          );
+        }
         throw new Error(
           '.to(...) permits Network[SIGNAL] only for one destination; use .to(first, second, SIGNAL) for fan-out.',
         );
@@ -816,7 +922,10 @@ class ElaborationRecorder {
       rawSpan: RawSpan,
     ): unknown => {
       const destination =
-        this.#isNetwork(left) || this.#isSelected(left) || this.#isDestination(left);
+        this.#isNetwork(left) ||
+        this.#isPair(left) ||
+        this.#isSelected(left) ||
+        this.#isDestination(left);
       if (destination) this.#assertWritableValue(left, rawSpan);
       if (destination && this.#isProducer(right)) {
         this.api.attach(left, right, rawSpan);
@@ -837,11 +946,18 @@ class ElaborationRecorder {
       return result;
     },
     attach: (
-      destination: NetworkValue | SelectedValue | DestinationValue,
+      destination: NetworkValue | PairValue | SelectedValue | DestinationValue,
       producer: ProducerValue,
       rawSpan: RawSpan,
     ): void => {
       this.#recordDslCall();
+      if (this.#isPair(destination) || this.#isPairSelection(destination)) {
+        throw new ElaborationExecutionError(
+          'pair(a, b) is a read-only input view and cannot receive a producer attachment.',
+          this.#span(rawSpan),
+          'RT2020',
+        );
+      }
       const destinations = this.#isDestination(destination)
         ? destination.networks
         : this.#isSelected(destination)
@@ -872,6 +988,7 @@ class ElaborationRecorder {
       version: 1,
       networks: Object.freeze([...this.#networks]),
       networkTransfers: Object.freeze([...this.#networkTransfers]),
+      networkPairs: Object.freeze([...this.#networkPairs]),
       producers: Object.freeze([...this.#producers]),
       diagnostics: Object.freeze([...this.#diagnostics]),
     };
@@ -1106,6 +1223,16 @@ class ElaborationRecorder {
   }
 
   #returnOwnedValue(value: unknown, rawSpan: RawSpan, seen: Map<object, unknown>): unknown {
+    if (this.#isPair(value) || this.#isPairSelection(value)) {
+      throw new ElaborationExecutionError(
+        'pair(a, b) is a read-only input view and cannot carry ownership across a return.',
+        this.#span(rawSpan),
+        'RT2020',
+        this.#isPair(value)
+          ? [{ message: 'The pair view was created here.', span: value.source }]
+          : undefined,
+      );
+    }
     if (this.#isNetwork(value)) return this.#returnOwnedNetwork(value, rawSpan);
     if (typeof value !== 'object' || value === null) return value;
     const previous = seen.get(value);
@@ -1209,6 +1336,14 @@ class ElaborationRecorder {
     );
   }
 
+  #isPair(value: unknown): value is PairValue {
+    return typeof value === 'object' && value !== null && (value as PairValue).kind === 'pair';
+  }
+
+  #isPairSelection(value: unknown): value is PairSelectedValue {
+    return this.#isSelected(value) && value.networks !== undefined;
+  }
+
   #isWildcardToken(value: unknown): value is WildcardTokenValue {
     return (
       typeof value === 'object' &&
@@ -1250,9 +1385,48 @@ class ElaborationRecorder {
         'to(...)[SIGNAL] is not a valid destination; pass SIGNAL as the final to(...) argument.',
       );
     }
-    if (!this.#isNetwork(value)) throw new Error('Signal selection requires a Network.');
-    this.#assertReadableNetwork(value, rawSpan);
-    return { kind: 'selected', network: value, selection: selection as SignalId | WildcardName };
+    if (!this.#isNetwork(value) && !this.#isPair(value)) {
+      throw new Error('Signal selection requires a Network or pair(a, b).');
+    }
+    this.#assertReadableValue(value, rawSpan);
+    return this.#selectedValue(value, selection as SignalId | WildcardName);
+  }
+
+  #selectedValue(
+    value: NetworkValue | PairValue,
+    selection: SignalId | WildcardName,
+  ): SelectedValue {
+    return this.#isPair(value)
+      ? {
+          kind: 'selected',
+          network: value.networks[0],
+          networks: value.networks,
+          selection,
+        }
+      : { kind: 'selected', network: value, selection };
+  }
+
+  #planNetworkRef(value: NetworkValue | PairValue | SelectedValue): {
+    readonly network: string;
+    readonly networks?: readonly [string, string];
+  } {
+    if (this.#isPair(value)) {
+      return {
+        network: value.networks[0].name,
+        networks: [value.networks[0].name, value.networks[1].name],
+      };
+    }
+    if (this.#isNetwork(value)) return { network: value.name };
+    return {
+      network: value.network.name,
+      ...(value.networks === undefined
+        ? {}
+        : { networks: [value.networks[0].name, value.networks[1].name] }),
+    };
+  }
+
+  #readableNetworks(value: PairValue | SelectedValue): readonly NetworkValue[] {
+    return this.#isPair(value) ? value.networks : (value.networks ?? [value.network]);
   }
 
   #arithmeticOperand(value: DslValue, rawSpan: RawSpan): PlanArithmeticOperand {
@@ -1261,12 +1435,16 @@ class ElaborationRecorder {
       this.#assertReadableNetwork(value, rawSpan);
       return { kind: 'each', network: value.name };
     }
+    if (this.#isPair(value)) {
+      this.#assertReadableValue(value, rawSpan);
+      return { kind: 'each', ...this.#planNetworkRef(value) };
+    }
     if (this.#isSelected(value)) {
-      this.#assertReadableNetwork(value.network, rawSpan);
+      this.#assertReadableValue(value, rawSpan);
       if (isSignal(value.selection)) {
-        return { kind: 'signal', network: value.network.name, signal: value.selection };
+        return { kind: 'signal', ...this.#planNetworkRef(value), signal: value.selection };
       }
-      if (value.selection === 'each') return { kind: 'each', network: value.network.name };
+      if (value.selection === 'each') return { kind: 'each', ...this.#planNetworkRef(value) };
       throw new Error('Anything/Everything cannot be arithmetic operands.');
     }
     if (this.#isProducer(value)) {
@@ -1303,16 +1481,20 @@ class ElaborationRecorder {
       return { kind: 'each-constant', value: output.value };
     }
     if (this.#isSelected(output)) {
-      this.#assertReadableNetwork(output.network, rawSpan);
+      this.#assertReadableValue(output, rawSpan);
       return isSignal(output.selection)
-        ? { kind: 'signal', network: output.network.name, signal: output.selection }
+        ? { kind: 'signal', ...this.#planNetworkRef(output), signal: output.selection }
         : output.selection === 'each'
-          ? { kind: 'each', network: output.network.name }
+          ? { kind: 'each', ...this.#planNetworkRef(output) }
           : {
               kind: 'wildcard',
-              network: output.network.name,
+              ...this.#planNetworkRef(output),
               wildcard: output.selection,
             };
+    }
+    if (this.#isPair(output)) {
+      this.#assertReadableValue(output, rawSpan);
+      return { kind: 'each', ...this.#planNetworkRef(output) };
     }
     if (this.#isNetwork(output)) {
       this.#assertReadableNetwork(output, rawSpan);
@@ -1358,7 +1540,12 @@ class ElaborationRecorder {
         kind: 'producer',
         producer: {
           ...value.producer,
-          output: { kind: 'signal', network: output.network, signal },
+          output: {
+            kind: 'signal',
+            network: output.network,
+            ...(output.networks === undefined ? {} : { networks: output.networks }),
+            signal,
+          },
         },
       };
     }
@@ -1389,6 +1576,7 @@ class ElaborationRecorder {
     return (
       isSignal(value) ||
       this.#isNetwork(value) ||
+      this.#isPair(value) ||
       this.#isSelected(value) ||
       this.#isDestination(value) ||
       this.#isSignalValue(value) ||
@@ -1401,7 +1589,13 @@ class ElaborationRecorder {
 
   #assertReadableValue(value: unknown, rawSpan: RawSpan): void {
     if (this.#isNetwork(value)) this.#assertReadableNetwork(value, rawSpan);
-    if (this.#isSelected(value)) this.#assertReadableNetwork(value.network, rawSpan);
+    if (this.#isPair(value)) {
+      for (const network of value.networks) this.#assertReadableNetwork(network, rawSpan);
+    }
+    if (this.#isSelected(value)) {
+      for (const network of this.#readableNetworks(value))
+        this.#assertReadableNetwork(network, rawSpan);
+    }
     if (this.#isDestination(value)) {
       for (const network of value.networks) this.#assertReadableNetwork(network, rawSpan);
     }
@@ -1409,6 +1603,13 @@ class ElaborationRecorder {
 
   #assertWritableValue(value: unknown, rawSpan: RawSpan): void {
     if (this.#isNetwork(value)) this.#assertWritableNetwork(value, rawSpan);
+    if (this.#isPair(value) || this.#isPairSelection(value)) {
+      throw new ElaborationExecutionError(
+        'pair(a, b) is a read-only input view and cannot receive producer attachments.',
+        this.#span(rawSpan),
+        'RT2020',
+      );
+    }
     if (this.#isSelected(value)) this.#assertWritableNetwork(value.network, rawSpan);
     if (this.#isDestination(value)) {
       for (const network of value.networks) this.#assertWritableNetwork(network, rawSpan);

@@ -22,10 +22,16 @@ export interface CircuitNetworkNode {
   readonly provenance: Provenance;
 }
 
+export interface LogicalNetworkRef {
+  readonly network: NetworkId;
+  /** Both input wires for a pair; `network` is the primary compatibility view. */
+  readonly networks?: readonly [NetworkId, NetworkId];
+}
+
 export type LogicalArithmeticOperand =
   | { readonly kind: 'constant'; readonly value: number }
-  | { readonly kind: 'signal'; readonly signal: SignalId; readonly network: NetworkId }
-  | { readonly kind: 'each'; readonly network: NetworkId };
+  | ({ readonly kind: 'signal'; readonly signal: SignalId } & LogicalNetworkRef)
+  | ({ readonly kind: 'each' } & LogicalNetworkRef);
 
 export type LogicalArithmeticOutput =
   { readonly kind: 'signal'; readonly signal: SignalId } | { readonly kind: 'each' };
@@ -62,11 +68,11 @@ export type Quantifier = 'each' | 'anything' | 'everything';
 
 export type LogicalScalarOperand =
   | { readonly kind: 'constant'; readonly value: number }
-  | { readonly kind: 'signal'; readonly signal: SignalId; readonly network: NetworkId };
+  | ({ readonly kind: 'signal'; readonly signal: SignalId } & LogicalNetworkRef);
 
 export type LogicalConditionLeft =
   | Extract<LogicalScalarOperand, { kind: 'signal' }>
-  | { readonly kind: 'wildcard'; readonly value: Quantifier; readonly network: NetworkId };
+  | ({ readonly kind: 'wildcard'; readonly value: Quantifier } & LogicalNetworkRef);
 
 export type LogicalDeciderCondition =
   | {
@@ -85,6 +91,7 @@ export type LogicalDeciderOutputSignal =
 export interface LogicalDeciderOutput {
   readonly signal: LogicalDeciderOutputSignal;
   readonly input?: NetworkId;
+  readonly inputs?: readonly [NetworkId, NetworkId];
   readonly copyCountFromInput?: boolean;
   readonly constant?: number;
 }

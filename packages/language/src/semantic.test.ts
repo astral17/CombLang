@@ -329,4 +329,32 @@ function Explicit(input: Move<Network>): Network { return input; }`,
       expect.objectContaining({ code: 'CL1041', message: expect.stringContaining('no implicit') }),
     ]);
   });
+
+  test('rejects definite pair ownership and destination misuse', () => {
+    const parsed = parseFile({
+      path: 'pair-misuse.ts',
+      text: `const a = new Network();
+const b = new Network();
+const input = pair(a, b);
+const owner: Network = pair(a, b);
+pair(a, b) += a + 0;
+to(pair(a, b)) += a + 0;
+(a + 0).to(pair(a, b));
+a.take(pair(a, b));
+function Leak(): Network { return pair(a, b); }
+pair(a);
+pair(a, a);`,
+    });
+
+    expect(validateDslSemantics(parsed).map(({ code }) => code)).toEqual([
+      'CL1042',
+      'CL1042',
+      'CL1042',
+      'CL1042',
+      'CL1042',
+      'CL1042',
+      'CL1042',
+      'CL1042',
+    ]);
+  });
 });

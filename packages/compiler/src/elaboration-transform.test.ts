@@ -127,6 +127,21 @@ destination.take(source);`,
     expect(transformElaborationModule(source).code).toContain('__dsl.take(destination, source');
   });
 
+  test('routes pair views and their selections through runtime dispatch', () => {
+    const source = parseFile({
+      path: 'pair.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const red = new Network<R>();
+const green = new Network<G>();
+const combined: Network = Each(pair(red, green)) + pair(red, green)[A];`,
+    });
+    const code = transformElaborationModule(source).code;
+
+    expect(code.match(/__dsl\.pair\(/g)).toHaveLength(2);
+    expect(code).toContain('__dsl.wildcard("each", __dsl.pair(');
+    expect(code).toContain('__dsl.element(__dsl.pair(');
+  });
+
   test('rebinds Readonly and Ref parameters to runtime borrow views', () => {
     const source = parseFile({
       path: 'borrows.factorio.ts',

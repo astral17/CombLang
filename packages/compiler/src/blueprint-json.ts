@@ -181,21 +181,33 @@ function producerInputs(producer: CircuitProducerNode): NetworkId[] {
   const add = (network: NetworkId | undefined) => {
     if (network !== undefined && !inputs.includes(network)) inputs.push(network);
   };
+  const addRef = (value: {
+    readonly network: NetworkId;
+    readonly networks?: readonly NetworkId[];
+  }) => {
+    for (const network of value.networks ?? [value.network]) add(network);
+  };
   if (producer.kind === 'arithmetic') {
-    if (producer.config.left.kind !== 'constant') add(producer.config.left.network);
-    if (producer.config.right.kind !== 'constant') add(producer.config.right.network);
+    if (producer.config.left.kind !== 'constant') addRef(producer.config.left);
+    if (producer.config.right.kind !== 'constant') addRef(producer.config.right);
   } else if (producer.kind === 'decider') {
     const walk = (condition: LogicalDeciderCondition) => {
       if (condition.kind === 'and' || condition.kind === 'or') {
         condition.conditions.forEach(walk);
       } else {
-        add(condition.left.network);
-        if (condition.right.kind === 'signal') add(condition.right.network);
+        addRef(condition.left);
+        if (condition.right.kind === 'signal') addRef(condition.right);
       }
     };
     walk(producer.config.condition);
-    producer.config.outputs.forEach((output) => add(output.input));
-    producer.config.elseOutputs?.forEach((output) => add(output.input));
+    producer.config.outputs.forEach((output) => {
+      for (const network of output.inputs ?? (output.input === undefined ? [] : [output.input]))
+        add(network);
+    });
+    producer.config.elseOutputs?.forEach((output) => {
+      for (const network of output.inputs ?? (output.input === undefined ? [] : [output.input]))
+        add(network);
+    });
   }
   return inputs;
 }

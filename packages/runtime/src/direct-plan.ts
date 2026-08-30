@@ -1,5 +1,9 @@
-import type { DirectElaborationPlan, PlanArithmeticOperand } from '@comblang/compiler/direct-plan';
-import type { PlanDeciderCondition } from '@comblang/compiler/direct-plan';
+import type {
+  DirectElaborationPlan,
+  PlanArithmeticOperand,
+  PlanDeciderCondition,
+  PlanNetworkRef,
+} from '@comblang/compiler/direct-plan';
 import type { Diagnostic, SourceSpan } from '@comblang/shared';
 
 import {
@@ -37,17 +41,10 @@ function lowerOperand(
   source: SourceSpan,
 ): RuntimeArithmeticOperand {
   if (operand.kind === 'constant') return operand;
-  const network = networks.get(operand.network);
-  if (network === undefined) {
-    throw runtimeFailure(
-      'RT1003',
-      `Direct plan references unknown Network: ${operand.network}.`,
-      source,
-    );
-  }
+  const reference = lowerNetworkRef(operand, networks, source);
   return operand.kind === 'each'
-    ? { kind: 'each', network }
-    : { kind: 'signal', signal: operand.signal, network };
+    ? { kind: 'each', ...reference }
+    : { kind: 'signal', signal: operand.signal, ...reference };
 }
 
 function requiredNetwork(
@@ -69,6 +66,59 @@ function requiredNetwork(
   return network;
 }
 
+function lowerNetworkRef(
+  value: PlanNetworkRef,
+  networks: ReadonlyMap<string, NetworkHandle>,
+  source: SourceSpan,
+): {
+  readonly network: NetworkHandle;
+  readonly networks?: readonly [NetworkHandle, NetworkHandle];
+} {
+  if (
+    value.networks !== undefined &&
+    (value.networks.length !== 2 ||
+      value.networks[0] !== value.network ||
+      value.networks[0] === value.networks[1])
+  ) {
+    throw runtimeFailure(
+      'RT2020',
+      'A pair input descriptor requires two distinct Networks and its primary Network first.',
+      source,
+    );
+  }
+  const network = requiredNetwork(value.network, networks, source);
+  const pair =
+    value.networks === undefined
+      ? undefined
+      : (value.networks.map((name) => requiredNetwork(name, networks, source)) as [
+          NetworkHandle,
+          NetworkHandle,
+        ]);
+  if (pair !== undefined && pair[0] === pair[1]) {
+    throw runtimeFailure(
+      'RT2020',
+      'A pair input descriptor resolves to one logical Network after transfer.',
+      source,
+    );
+  }
+  return {
+    network,
+    ...(pair === undefined ? {} : { networks: pair }),
+  };
+}
+
+function lowerOutputInputs(
+  value: PlanNetworkRef,
+  networks: ReadonlyMap<string, NetworkHandle>,
+  source: SourceSpan,
+): { readonly input: NetworkHandle; readonly inputs?: readonly [NetworkHandle, NetworkHandle] } {
+  const reference = lowerNetworkRef(value, networks, source);
+  return {
+    input: reference.network,
+    ...(reference.networks === undefined ? {} : { inputs: reference.networks }),
+  };
+}
+
 function lowerCondition(
   condition: PlanDeciderCondition,
   networks: ReadonlyMap<string, NetworkHandle>,
@@ -86,13 +136,13 @@ function lowerCondition(
       left: {
         kind: 'signal',
         signal: condition.left.signal,
-        network: requiredNetwork(condition.left.network, networks, source),
+        ...lowerNetworkRef(condition.left, networks, source),
       },
       comparator: condition.comparator,
       right: {
         kind: 'signal',
         signal: condition.right.signal,
-        network: requiredNetwork(condition.right.network, networks, source),
+        ...lowerNetworkRef(condition.right, networks, source),
       },
     };
   }
@@ -102,7 +152,7 @@ function lowerCondition(
       left: {
         kind: 'wildcard',
         value: condition.wildcard,
-        network: requiredNetwork(condition.network, networks, source),
+        ...lowerNetworkRef(condition, networks, source),
       },
       comparator: condition.comparator,
       right: { kind: 'constant', value: condition.constant },
@@ -114,7 +164,7 @@ function lowerCondition(
         left: {
           kind: 'signal',
           signal: condition.signal,
-          network: requiredNetwork(condition.network, networks, source),
+          ...lowerNetworkRef(condition, networks, source),
         },
         comparator: condition.comparator,
         right: { kind: 'constant', value: condition.constant },
@@ -124,7 +174,7 @@ function lowerCondition(
         left: {
           kind: 'wildcard',
           value: 'each',
-          network: requiredNetwork(condition.network, networks, source),
+          ...lowerNetworkRef(condition, networks, source),
         },
         comparator: condition.comparator,
         right: { kind: 'constant', value: condition.constant },
@@ -243,6 +293,20 @@ function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
   }
   for (const declaration of plan.networks)
     networks.set(declaration.name, handlesByRoot.get(find(declaration.name))!);
+  for (const descriptor of plan.networkPairs ?? []) {
+    if (!Array.isArray(descriptor.networks) || descriptor.networks.length !== 2) {
+      throw runtimeFailure(
+        'RT2020',
+        'A pair descriptor requires exactly two Networks.',
+        descriptor.provenance,
+      );
+    }
+    runtime.pair(
+      requiredNetwork(descriptor.networks[0], networks, descriptor.provenance),
+      requiredNetwork(descriptor.networks[1], networks, descriptor.provenance),
+      { source: descriptor.provenance, instancePath: descriptor.instancePath },
+    );
+  }
   for (const descriptor of plan.producers) {
     const provenance = {
       source: descriptor.source,
@@ -272,7 +336,7 @@ function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
                   output.kind === 'signal'
                     ? {
                         signal: { kind: 'signal', signal: output.signal },
-                        input: requiredNetwork(output.network, networks, descriptor.source),
+                        ...lowerOutputInputs(output, networks, descriptor.source),
                         copyCountFromInput: true,
                       }
                     : output.kind === 'each-constant'
@@ -293,12 +357,12 @@ function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
                                 kind: 'wildcard',
                                 value: output.wildcard,
                               },
-                              input: requiredNetwork(output.network, networks, descriptor.source),
+                              ...lowerOutputInputs(output, networks, descriptor.source),
                               copyCountFromInput: true,
                             }
                           : {
                               signal: { kind: 'wildcard', value: 'each' },
-                              input: requiredNetwork(output.network, networks, descriptor.source),
+                              ...lowerOutputInputs(output, networks, descriptor.source),
                               copyCountFromInput: true,
                             },
                 ),
