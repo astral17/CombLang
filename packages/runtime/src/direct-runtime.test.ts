@@ -80,6 +80,36 @@ describe('direct elaboration runtime', () => {
     expect(simulation.step().read(out.id).get(A)).toBe(42);
   });
 
+  test('creates a handle-safe test session without changing elaborated topology', () => {
+    const runtime = new DslRuntime();
+    const input = runtime.network({ name: 'input' });
+    const output = runtime.network({ name: 'output' });
+    const copy = runtime.arithmetic({
+      left: { kind: 'each', refKind: 'single', network: input },
+      operation: 'add',
+      right: { kind: 'constant', value: 0 },
+      output: { kind: 'each' },
+    });
+    runtime.attach(copy, output);
+    const circuit = runtime.elaborate();
+    const graphBefore = JSON.stringify(circuit.graph);
+    const irBefore = JSON.stringify(circuit.ir);
+    const testSession = circuit.createTestSession();
+
+    testSession.drive(input, [[A, 12]]).tick();
+    expect(testSession.read(input).get(A)).toBe(12);
+    expect(testSession.read(output).get(A)).toBe(0);
+    testSession.tick();
+    expect(testSession.read(output).get(A)).toBe(12);
+    expect(JSON.stringify(circuit.graph)).toBe(graphBefore);
+    expect(JSON.stringify(circuit.ir)).toBe(irBefore);
+
+    const foreign = new DslRuntime().network();
+    expect(captureRuntimeDiagnostic(() => testSession.drive(foreign, [[A, 1]]))).toMatchObject({
+      diagnostic: { code: 'RT2001' },
+    });
+  });
+
   test('rejects an impossible fixed-color attachment', () => {
     const runtime = new DslRuntime();
     const input = runtime.network();

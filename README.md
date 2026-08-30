@@ -29,14 +29,14 @@ The current repository implements the Phase 3 source compiler, the complete Phas
 - [x] Phase 3 — executed source compiler: conservative semantic checks, DSL-sensitive JavaScript transformation, runtime elaboration, provenance, color solving, CLI validation, and the browser workbench.
 - [x] Phase 4 — ownership, multi-network syntax, Producer identity, semantic/runtime boundary hardening, opaque session values, and complete CLI/browser/EG/NCIR acceptance coverage.
 - [ ] Phase 5 — deterministic testbench, external-world adapters, Unknown propagation, traces, and debug hierarchy
-  - [ ] Define a browser/Node-neutral `TestSession` over an already elaborated circuit; test operations must never mutate EG/NCIR topology or re-execute source elaboration.
+  - [x] Define a browser/Node-neutral `TestSession` over an already elaborated circuit; test operations must never mutate EG/NCIR topology or re-execute source elaboration.
   - [ ] Freeze the synchronous test clock: every participant reads snapshot `T`, all combinators and reactive models evaluate independently, and their writes commit together to `T+1` regardless of traversal order.
   - [ ] Introduce the MVP whole-bus lattice `Known(SparseBus) | Unknown(origins)` and preserve ordered, deduplicated dependency origins through network aggregation and downstream combinators.
   - [ ] Keep ordinary production simulation on the concrete fast path while allowing a test session to opt into Known/Unknown propagation without widening `SparseBus` itself.
-  - [ ] Implement persistent `drive(network, values)`, replacement, `clear(network)`, and one-boundary `pulse(network, values)` external broadcasters with canonical Signal identity and int32 conversion.
+  - [x] Implement persistent `drive(network, values)`, replacement, `clear(network)`, and one-boundary `pulse(network, values)` external broadcasters with canonical Signal identity and int32 conversion.
   - [ ] Define whether testbench drives bypass source-level Network capabilities: the test environment acts as an external circuit participant, while stale/moved handles and session-crossing handles remain invalid.
   - [ ] Implement signal and whole-bus assertions: exact value/bus, partial containment, empty/support checks, known/unknown checks, and failures that report tick, target, expected/actual values, and Unknown dependency chains.
-  - [ ] Implement `tick()`, `tick(count)`, scheduled `at(tick, callback)`, bounded `run(count)`, and `settle({ maxTicks })`; settling must use observed state equality and fail clearly for oscillation/non-convergence.
+  - [x] Implement `tick()`, `tick(count)`, scheduled `at(tick, callback)`, bounded `run(count)`, and `settle({ maxTicks })`; settling uses observed whole-circuit state equality and fails clearly for oscillation/non-convergence.
   - [ ] Build a shared `DebugIndex` from lexical bindings, source spans, function-call instance paths, loop provenance, Networks, and physical Producers without exposing function locals to ordinary production code.
   - [ ] Implement `instantiate(fn, ...args)` so `dut.value` has topology identical to an ordinary call while `dut.$` retains only a test/debug scope root.
   - [ ] Provide the v1 string/query hierarchy for `network(name)`, `combinator(name/index)`, nested calls, and repeated loop instances; ambiguous and missing queries must be deterministic diagnostics rather than first-match guesses.

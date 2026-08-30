@@ -21,6 +21,7 @@ import {
   ConstantCombinatorDevice,
   DeciderCombinatorDevice,
   SimulationKernel,
+  TestSession,
   type ArithmeticCombinatorConfig,
   type ArithmeticOperand,
   type DeciderCombinatorConfig,
@@ -188,6 +189,7 @@ export interface ElaboratedCircuit {
   readonly graph: ElaborationGraph;
   readonly ir: NativeCircuitIr;
   createSimulation(initial?: readonly SimulationInitialValue[]): SimulationKernel;
+  createTestSession(): TestSession<NetworkHandle>;
 }
 
 interface RuntimeProvenanceOptions {
@@ -457,6 +459,10 @@ export class DslRuntime {
       ir,
       createSimulation: (initial: readonly SimulationInitialValue[] = []) =>
         this.#createSimulation(ir, initial),
+      createTestSession: () =>
+        new TestSession<NetworkHandle>(this.#createSimulation(ir, []), {
+          resolveNetwork: (network) => this.#networkId(network),
+        }),
     });
   }
 
