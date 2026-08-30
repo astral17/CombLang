@@ -545,7 +545,7 @@ const output: Network = Gate(input);`,
         kind: 'decider',
         config: {
           condition: { left: { kind: 'signal', signal: A } },
-          outputs: [{ signal: { kind: 'signal', signal: A } }],
+          outputs: [{ mode: 'copy', signal: { kind: 'signal', signal: A } }],
         },
       },
     ]);

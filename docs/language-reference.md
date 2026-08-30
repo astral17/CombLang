@@ -2,7 +2,7 @@
 
 This document describes the syntax implemented by the completed Phase 3 compiler and the current Phase 4 ownership/multi-network runtime. It is intentionally narrower than the eventual language.
 
-Phase 3 elaborates one self-contained source file synchronously. Static or dynamic imports, exports, `import.meta`, and top-level `await` report `CL1036` before execution. An `async` function declaration is syntactically accepted, but the current elaborator does not await Promises and therefore does not support asynchronous circuit generation. Multi-file linking belongs to a later compiler phase. This boundary is separate from the fully hardened sandbox deferred to Phase 11.
+Phase 3 elaborates one self-contained source file synchronously. Static or dynamic imports, exports, `import.meta`, `async` functions/arrows/methods, `await`, and `for await…of` report `CL1036` before execution. The executable envelope independently blocks async syntax if semantic preflight is bypassed, so a delayed microtask cannot mutate an already finalized circuit plan. Multi-file linking belongs to a later compiler phase. This boundary is separate from the fully hardened sandbox deferred to Phase 11.
 
 ## Signals
 
@@ -114,7 +114,7 @@ Here bare Networks mean `Each(network)` in output context. The compiler validate
 
 Output entries remain ordered and are not deduplicated. Two entries targeting the same SignalID intentionally sum on the output Network, matching native Factorio behavior.
 
-Conditions support signed int32 constants on either side, explicit signal-to-signal comparisons, `&&`, `||`, parentheses, and `!`. Boolean normalization does not allocate extra combinators.
+Conditions support finite safe-integer constants on either side; each is canonicalized to signed int32 when it enters the circuit configuration. They also support explicit signal-to-signal comparisons, `&&`, `||`, parentheses, and `!`. Boolean normalization does not allocate extra combinators.
 
 Constant-count Each output is a decider output specification, not multiplication hardware:
 
@@ -122,7 +122,7 @@ Constant-count Each output is a decider output specification, not multiplication
 const colors: Network = IF(input > 0, 0x00ff00 * EACH);
 ```
 
-The decider emits the constant for every active `Each` candidate. The count must fit signed int32.
+The decider emits the constant for every active `Each` candidate. The count must be a finite safe integer and is canonicalized to signed int32.
 
 An ergonomic `.else(...)` branch and the exact `Decider({...})` constructor are not implemented yet.
 
@@ -162,7 +162,7 @@ output += comb.as(RESULT).at(10, 4);
 
 `Producer` is the common handle type. The more precise public types are `DeciderCombinator`, `ArithmeticCombinator`, and `ConstantCombinator`; use the precise type when it is known. Declarations, later writes to supported typed slots, function parameters, and function returns check both that the executed value is still an unmaterialized producer and that its physical combinator kind matches the annotation. Passing a handle through a typed parameter preserves its physical identity. A function may return one of these types to preserve the producer handle across its return boundary. Returning `Network` instead intentionally hides producer-only methods. Producer handles represent one physical entity and remain single-attachment values: storing one does not clone it, fluent `.as(...)`/`.at(...)` wrappers retain the same physical identity, and attaching any alias twice is `RT2006`.
 
-Producers may pass through dynamically indexed arrays and ordinary objects. Assignment itself is not treated as a discarded producer expression because later use cannot be decided there. After the executed module finishes, the runtime checks every created physical producer identity: a value later returned or attached has no warning, while a producer still abandoned in a container receives `CL2001` and an internal unused sink so its topology is still validated. `CL1044` reports a statically definite annotation mismatch at a declaration, assignment, argument, or `return`; dynamically determined mismatches use `RT2022` at the executed type boundary.
+Producers may pass through dynamically indexed arrays and ordinary objects. Assignment and ignored expression results are not treated as immediately discarded producers because they may be aliases of a handle attached later. After the executed module finishes, the runtime checks every created physical producer identity: a value later returned or attached has no warning, while a producer still abandoned in a container or expression receives `CL2001` and an internal unused sink so its topology is still validated. `CL1044` reports a statically definite annotation mismatch at a declaration, assignment, argument, or `return`; dynamically determined mismatches use `RT2022` at the executed type boundary.
 
 Flat array and object destructuring may validate handles individually without materializing them:
 
@@ -340,7 +340,7 @@ const output: Network = MemoCell(input);
 
 Returning a producer lets the caller materialize or attach it contextually. Returning an independently owned local Network returns that runtime handle; other local Networks remain private unless returned or otherwise attached. A borrowed parameter cannot be promoted to an owned return. A function that returns an ordinary value remains an ordinary JavaScript function, and an error is reported only if the executed value is later used in an operation that requires a Network, Signal, Condition, or Producer.
 
-Each function declaration call receives an independent provenance scope, so generated Networks, producers, and attachments retain the dynamic function path. Async syntax may be parsed inside a function, but Promise-based circuit elaboration is not supported by the current synchronous executor. Imports and multi-module elaboration are not implemented yet.
+Each function declaration call receives an independent provenance scope, so generated Networks, producers, and attachments retain the dynamic function path. Async syntax is rejected before execution; imports and multi-module elaboration are not implemented yet.
 
 ## Executed compile-time control flow
 

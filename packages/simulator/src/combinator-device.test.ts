@@ -56,9 +56,9 @@ describe('combinator simulation devices', () => {
           },
           outputs: [
             {
+              mode: 'constant',
               signal: { kind: 'signal', signal: a },
-              copyCountFromInput: false,
-              constant: 1,
+              value: 1,
             },
           ],
         },

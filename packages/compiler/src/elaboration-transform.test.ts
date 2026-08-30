@@ -18,6 +18,33 @@ const call = maybe?.to(value);`,
     expect(code).not.toContain('__dsl.attachTo');
   });
 
+  test('transforms DSL-sensitive descendants without lowering the optional operation itself', () => {
+    const source = parseFile({
+      path: 'optional-descendants.ts',
+      text: `const call = helper?.use(input + 1);
+const element = helper?.[input[SIGNAL_A]];`,
+    });
+    const code = transformElaborationModule(source).code;
+
+    expect(code).toContain('helper?.use(__dsl.binary("+", input, 1');
+    expect(code).toContain('helper?.[__dsl.element(input, SIGNAL_A');
+    expect(code).not.toContain('__dsl.attachTo(helper');
+  });
+
+  test('chooses a runtime bridge identifier absent from the entire source', () => {
+    const source = parseFile({
+      path: 'bridge-hygiene.ts',
+      text: `const __dsl = 1;
+const first = __dsl_1;
+const input = new Network();`,
+    });
+    const program = transformElaborationModule(source);
+
+    expect(program.runtimeParameter).toBe('__dsl_2');
+    expect(program.code).toContain('const __dsl = __dsl_2.materialize(1');
+    expect(program.code).toContain('__dsl_2.network(');
+  });
+
   test('leaves a compile-time for loop to the JS engine while rewriting DSL operations', () => {
     const source = parseFile({
       path: 'loop.factorio.ts',
@@ -67,12 +94,11 @@ for (let i = 0; i < 10; i++) {
         assign(result);
         return result;
       }),
-      discard: vi.fn(),
     };
 
     // The production executor will run the same code in a terminable Worker;
     // this fixture proves that iteration is performed by JavaScript, not AST unrolling.
-    Function('__dsl', `"use strict";\n${program.code}`)(dsl);
+    Function(program.runtimeParameter, `"use strict";\n${program.code}`)(dsl);
 
     expect(dsl.constant).toHaveBeenCalledTimes(1);
     expect(dsl.compare).toHaveBeenCalledTimes(21);
@@ -206,7 +232,7 @@ to(first, second)[A] += comb;`,
     );
   });
 
-  test('does not discard a producer stored by an ordinary assignment', () => {
+  test('leaves expression results to identity-based runtime finalization', () => {
     const source = parseFile({
       path: 'producer-slot.factorio.ts',
       text: `function test(input: Readonly<Network>): ArithmeticCombinator {
@@ -218,7 +244,7 @@ to(first, second)[A] += comb;`,
     const code = transformElaborationModule(source).code;
 
     expect(code).toContain('tmp[1] = __dsl.binary(');
-    expect(code).not.toContain('__dsl.discard(tmp[1] =');
+    expect(code).not.toContain('__dsl.discard');
   });
 
   test('rebinds Readonly and Ref parameters to runtime borrow views', () => {

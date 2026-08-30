@@ -48,9 +48,9 @@ function buildMemoCell(runtime: DslRuntime, input: NetworkHandle) {
     },
     outputs: [
       {
+        mode: 'copy',
         signal: { kind: 'wildcard', value: 'each' },
         input: { refKind: 'single', network: mem },
-        copyCountFromInput: true,
       },
     ],
   });
@@ -186,7 +186,7 @@ describe('direct elaboration runtime', () => {
       runtime.decider(
         {
           condition: { kind: 'and', conditions: [] },
-          outputs: [{ signal: { kind: 'wildcard', value: 'each' } }],
+          outputs: [{ mode: 'copy', signal: { kind: 'wildcard', value: 'each' } }],
         },
         { source },
       ),

@@ -634,15 +634,20 @@ const output: Network = IF(input > 0, 0x00ff00 * EACH);`,
     ]);
   });
 
-  test('validates constant EACH decider output counts', () => {
+  test('canonicalizes constant EACH decider output counts', () => {
     const parsed = parseFile({
       path: 'invalid-constant-each-output.factorio.ts',
       text: `const input = new Network();
 const output: Network = IF(input > 0, 2147483648 * EACH);`,
     });
 
-    expect(compileDirectPlan(parsed).diagnostics).toContainEqual(
-      expect.objectContaining({ code: 'CL1027', severity: 'error' }),
+    const result = compileDirectPlan(parsed);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.plan?.producers).toContainEqual(
+      expect.objectContaining({
+        kind: 'decider',
+        output: { kind: 'each-constant', value: -2_147_483_648 },
+      }),
     );
   });
 
@@ -1129,7 +1134,6 @@ const output: Network = Invalid(input);`,
   test.each([
     ['fractional result', 'input * (1 / 2)', 'CL1007'],
     ['division by zero', 'input * (1 / 0)', 'CL1007'],
-    ['out-of-range circuit constant', 'input + (2147483647 + 1)', 'CL1008'],
   ])('reports invalid compile-time arithmetic: %s', (_case, expression, code) => {
     const file = parseFile({
       path: 'invalid-fold.factorio.ts',
@@ -1142,6 +1146,26 @@ const output: Network = Invalid(input);`,
 
     expect(compileDirectPlan(file).diagnostics).toContainEqual(
       expect.objectContaining({ code, severity: 'error' }),
+    );
+  });
+
+  test('canonicalizes a folded safe integer at the circuit operand boundary', () => {
+    const file = parseFile({
+      path: 'wrapped-fold.factorio.ts',
+      text: `function Wrapped(input: Readonly<Network>): Network {
+  return input + (2147483647 + 1);
+}
+const input = new Network();
+const output: Network = Wrapped(input);`,
+    });
+    const result = compileDirectPlan(file);
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.plan?.producers).toContainEqual(
+      expect.objectContaining({
+        kind: 'arithmetic',
+        right: { kind: 'constant', value: -2_147_483_648 },
+      }),
     );
   });
 

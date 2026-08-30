@@ -1,7 +1,11 @@
-import type { SignalId } from '@comblang/factorio';
+import type { CircuitValue, SignalId } from '@comblang/factorio';
 import type { NetworkId, ProducerId, SourceSpan } from '@comblang/shared';
 
 export type CircuitColor = 'red' | 'green';
+
+/** Concrete Phase 4 configuration domains; Phase 8 may add symbolic variants above this seam. */
+export type ConcreteConfigSignal = SignalId;
+export type ConcreteConfigNumber = CircuitValue;
 
 export interface Provenance {
   readonly source?: SourceSpan;
@@ -27,12 +31,12 @@ export type LogicalNetworkRef =
   | { readonly refKind: 'pair'; readonly networks: readonly [NetworkId, NetworkId] };
 
 export type LogicalArithmeticOperand =
-  | { readonly kind: 'constant'; readonly value: number }
-  | ({ readonly kind: 'signal'; readonly signal: SignalId } & LogicalNetworkRef)
+  | { readonly kind: 'constant'; readonly value: ConcreteConfigNumber }
+  | ({ readonly kind: 'signal'; readonly signal: ConcreteConfigSignal } & LogicalNetworkRef)
   | ({ readonly kind: 'each' } & LogicalNetworkRef);
 
 export type LogicalArithmeticOutput =
-  { readonly kind: 'signal'; readonly signal: SignalId } | { readonly kind: 'each' };
+  { readonly kind: 'signal'; readonly signal: ConcreteConfigSignal } | { readonly kind: 'each' };
 
 export type ArithmeticOperation =
   | 'add'
@@ -56,8 +60,8 @@ export interface ArithmeticProducerConfig {
 
 export interface ConstantProducerConfig {
   readonly outputs: readonly {
-    readonly signal: SignalId;
-    readonly value: number;
+    readonly signal: ConcreteConfigSignal;
+    readonly value: ConcreteConfigNumber;
   }[];
 }
 
@@ -65,8 +69,8 @@ export type Comparator = '>' | '<' | '=' | '>=' | '<=' | '!=';
 export type Quantifier = 'each' | 'anything' | 'everything';
 
 export type LogicalScalarOperand =
-  | { readonly kind: 'constant'; readonly value: number }
-  | ({ readonly kind: 'signal'; readonly signal: SignalId } & LogicalNetworkRef);
+  | { readonly kind: 'constant'; readonly value: ConcreteConfigNumber }
+  | ({ readonly kind: 'signal'; readonly signal: ConcreteConfigSignal } & LogicalNetworkRef);
 
 export type LogicalConditionLeft =
   | Extract<LogicalScalarOperand, { kind: 'signal' }>
@@ -83,18 +87,26 @@ export type LogicalDeciderCondition =
   | { readonly kind: 'or'; readonly conditions: readonly LogicalDeciderCondition[] };
 
 export type LogicalDeciderOutputSignal =
-  | { readonly kind: 'signal'; readonly signal: SignalId }
+  | { readonly kind: 'signal'; readonly signal: ConcreteConfigSignal }
   | { readonly kind: 'wildcard'; readonly value: Quantifier };
 
-export interface LogicalDeciderOutput {
-  readonly signal: LogicalDeciderOutputSignal;
-  readonly input?: LogicalNetworkRef;
-  readonly copyCountFromInput?: boolean;
-  readonly constant?: number;
-}
+export type LogicalDeciderOutput =
+  | {
+      readonly mode: 'copy';
+      readonly signal: LogicalDeciderOutputSignal;
+      readonly input?: LogicalNetworkRef;
+    }
+  | {
+      readonly mode: 'constant';
+      readonly signal: LogicalDeciderOutputSignal;
+      readonly value: ConcreteConfigNumber;
+      readonly input?: LogicalNetworkRef;
+    };
+
+export type ConcreteConfigCondition = LogicalDeciderCondition;
 
 export interface DeciderProducerConfig {
-  readonly condition: LogicalDeciderCondition;
+  readonly condition: ConcreteConfigCondition;
   readonly outputs: readonly LogicalDeciderOutput[];
   readonly elseOutputs?: readonly LogicalDeciderOutput[];
 }

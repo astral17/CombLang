@@ -1,4 +1,4 @@
-import { sameSignal, Signal, type SignalId } from '@comblang/factorio';
+import { circuitConstant, sameSignal, Signal, type SignalId } from '@comblang/factorio';
 import type {
   DirectElaborationPlan,
   DirectPlanProducer,
@@ -10,6 +10,7 @@ import type {
 import type { Diagnostic, SourceFileId, SourceSpan } from '@comblang/shared';
 
 import { ElaborationExecutionError, ElaborationOperationLimitError } from './elaboration-errors.js';
+import { ElaborationProvenanceFormatter } from './elaboration-provenance.js';
 import {
   RuntimeValueRegistry,
   type ConditionValue,
@@ -92,6 +93,7 @@ class ElaborationRecorder {
   #anonymousOrdinal = 0;
   readonly #networkNameCounts = new Map<string, number>();
   readonly #anonymousLoopCounts = new Map<string, number>();
+  readonly #provenanceFormatter = new ElaborationProvenanceFormatter();
   readonly #instancePath: string[] = [];
   readonly #ownershipFrames: (FunctionOwnershipFrame | undefined)[] = [];
   readonly #dslCallBudget: number;
@@ -133,7 +135,7 @@ class ElaborationRecorder {
         this.#anonymousLoopCounts.set(name, occurrence);
         this.#instancePath.push(`${name} #${occurrence}`);
       } else {
-        this.#instancePath.push(`for ${name}=${String(value)}`);
+        this.#instancePath.push(`for ${name}=${this.#provenanceFormatter.format(value)}`);
       }
       this.#ownershipFrames.push(undefined);
     },
@@ -505,10 +507,6 @@ class ElaborationRecorder {
         rawSpan,
       );
       return Object.fromEntries(entries);
-    },
-    discard: (value: unknown, rawSpan: RawSpan): void => {
-      if (!this.#isProducer(value) || this.#producerAttachments.has(value.identity)) return;
-      this.#discardProducer(value, this.#span(rawSpan));
     },
     compare: (operator: string, left: unknown, right: unknown, rawSpan: RawSpan): unknown => {
       return operators.dispatchComparison(operator, left, right, rawSpan, this.#operatorContext);
@@ -1266,7 +1264,7 @@ class ElaborationRecorder {
   }
 
   #arithmeticOperand(value: DslValue, rawSpan: RawSpan): PlanArithmeticOperand {
-    if (typeof value === 'number') return { kind: 'constant', value };
+    if (typeof value === 'number') return { kind: 'constant', value: circuitConstant(value) };
     if (this.#isNetwork(value)) {
       this.#assertReadableNetwork(value, rawSpan);
       return { kind: 'each', refKind: 'single', network: value.name };
@@ -1515,14 +1513,20 @@ export function executeElaborationProgram(
   program: ElaborationJavaScript,
   options: ElaborationExecutionOptions = {},
 ): DirectElaborationPlan {
-  if (program.format !== 'comblang-elaboration-js' || program.version !== 1) {
+  if (program.format !== 'comblang-elaboration-js' || program.version !== 2) {
     throw new Error('Unsupported elaboration JavaScript format.');
+  }
+  if (!/^[$A-Z_a-z][$0-9A-Z_a-z]*$/.test(program.runtimeParameter)) {
+    throw new Error('Invalid elaboration runtime parameter.');
+  }
+  if (program.containsUnsupportedAsync) {
+    throw new Error('Asynchronous syntax is not supported by synchronous elaboration.');
   }
   const dslCallBudget = options.dslCallBudget ?? options.operationBudget ?? 100_000;
   if (!Number.isSafeInteger(dslCallBudget) || dslCallBudget <= 0) {
     throw new Error('Elaboration DSL call budget must be a positive safe integer.');
   }
   const recorder = new ElaborationRecorder(program.fileId, dslCallBudget);
-  Function('__dsl', `"use strict";\n${program.code}`)(recorder.executionApi());
+  Function(program.runtimeParameter, `"use strict";\n${program.code}`)(recorder.executionApi());
   return recorder.plan();
 }

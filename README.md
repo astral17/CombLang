@@ -54,14 +54,14 @@ The current repository implements the Phase 3 source compiler and the first exec
   - [x] Extract ownership validation and state transitions behind an explicit, independently tested policy interface.
   - [x] Extract operator normalization, condition inversion, nominal JavaScript-versus-DSL dispatch, producer construction, and exact native fallback evaluation behind a tested policy interface.
   - [x] Decide default Producer versus future Entity-handle materialization using Scale, Distance, MemoCell, RGB indicator, RequesterChest, and Assembler benchmarks.
-- [ ] Phase 4.6 — JavaScript/DSL boundary correctness and opacity
+- [x] Phase 4.6 — JavaScript/DSL boundary correctness and opacity
   - [x] Reject circuit `Condition` values in JavaScript `if`, ternary, `while`, `do…while`, and `for` tests while preserving ordinary truthiness and unary `!` behavior.
   - [x] Make source-level Signal handles nominal without changing structural Signal IDs in IR and blueprint data.
   - [x] Move mutable Network ownership state behind an opaque runtime boundary.
-  - [ ] Preserve nested DSL transformation inside optional chains and make the generated runtime bridge hygienic.
-  - [ ] Remove observable coercion from loop provenance and reject unsupported asynchronous elaboration syntax.
-  - [ ] Finalize unused Producers by identity without consuming a still-live alias at an expression statement.
-  - [ ] Introduce concrete configuration-value categories, canonical circuit-int normalization, and a discriminated Decider output model before typed objects and exact constructors.
+  - [x] Preserve nested DSL transformation inside optional chains and make the generated runtime bridge hygienic.
+  - [x] Remove observable coercion from loop provenance and reject unsupported asynchronous elaboration syntax.
+  - [x] Finalize unused Producers by identity without consuming a still-live alias at an expression statement.
+  - [x] Introduce concrete configuration-value categories, canonical circuit-int normalization, and a discriminated Decider output model before typed objects and exact constructors.
 - [ ] Phase 5 — testbench: drive/expect/tick, mocks and models, Unknown values, waveforms, and debug hierarchy.
 - [ ] Phase 6 — typed Factorio objects: shared circuit inputs, native single-comparison `enable`, Roboport, Lamp, Constant, logistics entities, belts, displays, and train stops.
 - [ ] Phase 7 — exact constructors and native-config stress: Arithmetic, full Decider normal/else output lists, duplicate outputs, `Everything`, Selector, raw entities, LUTs, and large generated configurations.
@@ -97,7 +97,7 @@ The earlier static direct-plan compiler remains as a regression oracle for diffe
 
 Nested left-associative circuit arithmetic is lowered structurally. For example, `input * 10 + 5` creates two arithmetic combinators, an explicit temporary Network, and a two-tick waveform; it is never collapsed or reassociated.
 
-Ordinary integer-only subexpressions are evaluated during elaboration. Thus `input * (2 + 3)` emits one physical arithmetic combinator with constant `5`, while invalid compile-time arithmetic and constants outside signed `int32` are reported before runtime execution.
+Ordinary integer-only subexpressions are evaluated during elaboration. Thus `input * (2 + 3)` emits one physical arithmetic combinator with constant `5`. At the executed circuit boundary, finite safe integers are canonicalized to signed int32 (`4294967295` becomes `-1`); fractions, non-finite numbers, and unsafe integers are rejected.
 
 Arithmetic functions may bind those values to local `const` names before the return expression. Bindings can depend on earlier bindings and are memoized per function call; purely numeric bindings remain compile-time, while circular definitions receive a dedicated diagnostic. The homepage example exposes both physical producer/tick counts and folded-operation counts.
 
@@ -107,9 +107,9 @@ Multiple arithmetic Network functions can be composed through typed top-level Ne
 
 Lowered graph nodes and attachments carry stable function-call instance paths (for example, `Scale:middle`) for source-aware diagnostics and future nested visualizations.
 
-The compact `IF(condition, output)` source form supports Network, concrete-signal, and wildcard selections; signed int32 constants; signal-to-signal comparisons; bounded `&&`/`||` groups; and boolean negation. Comparisons are canonicalized before the complete predicate lowers to exactly one decider combinator, retaining one-tick behavior and rejecting invalid native condition/output combinations.
+The compact `IF(condition, output)` source form supports Network, concrete-signal, and wildcard selections; safe-integer constants canonicalized to signed int32; signal-to-signal comparisons; bounded `&&`/`||` groups; and boolean negation. Comparisons are canonicalized before the complete predicate lowers to exactly one decider combinator, retaining one-tick behavior and rejecting invalid native condition/output combinations.
 
-In decider output context, `IF(input > 0, 0x00ff00 * EACH)` is a typed output specification rather than circuit arithmetic. The one decider emits the constant count for every signal that satisfies its `Each` condition; it does not allocate an arithmetic combinator or add a tick. Counts must fit signed int32; malformed forms are rejected before a circuit is produced.
+In decider output context, `IF(input > 0, 0x00ff00 * EACH)` is a typed output specification rather than circuit arithmetic. The one decider emits the constant count for every signal that satisfies its `Each` condition; it does not allocate an arithmetic combinator or add a tick. Counts use the same safe-integer-to-int32 configuration boundary; malformed forms are rejected before a circuit is produced.
 
 An existing top-level Network can receive a supported function producer through `output += Scale(input)`. This records a zero-tick output attachment to the declared Network rather than materializing another Network or combinator. `Network += Network`, unknown destinations, and unsupported right-hand values fail explicitly.
 
@@ -121,7 +121,7 @@ Direct producer attachment follows the architecture syntax: `out += IF(condition
 
 Typed top-level declarations provide the contextual materialization counterpart to attachment syntax: `const sum: Network = a + b`, `const gated: Network = IF(...)`, and `const gated: Network = when(...).then(...)` create the named destination directly. They use the same producer lowering, topology checks, color constraints, and synchronous tick semantics as `destination += producer`; no extra attachment combinator is introduced.
 
-The current constant-combinator form is `CC(count * SIGNAL, ...)`, where every signal is a declared `Signal(...)` value and every count is a signed int32 constant. It can initialize a contextual Network with `const constants: Network = CC(5 * A, 7 * B)`, drive an existing Network with `out += CC(5 * A)`, or fan out with `to(first, second) += CC(5 * A)`. `CC` is a synchronous source device with no input connector and repeats the configured signal values on every tick; malformed entries and duplicate signals are rejected before a circuit is produced.
+The current constant-combinator form is `CC(count * SIGNAL, ...)`, where every signal is a declared `Signal(...)` value and every count is a finite safe integer canonicalized to signed int32. It can initialize a contextual Network with `const constants: Network = CC(5 * A, 7 * B)`, drive an existing Network with `out += CC(5 * A)`, or fan out with `to(first, second) += CC(5 * A)`. `CC` is a synchronous source device with no input connector and repeats the configured signal values on every tick; malformed entries and duplicate signals are rejected before a circuit is produced.
 
 A combinator producer may request an exact blueprint position before it is attached: `const placed = (input + 1).at(10.5, -2, 8)` or `out += CC(5 * A).at(0.5, 2.5)`. Coordinates are finite Factorio blueprint coordinates; the optional direction accepts a numeric compile-time constant or TypeScript enum value, must resolve to an integer from 0 through 15, and defaults to `4`. Producers without `.at(...)` retain deterministic automatic preview placement. Reach-aware routing, footprint collision diagnostics, and physical relay insertion remain Phase 10 work.
 

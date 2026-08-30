@@ -20,6 +20,27 @@ for (let i = 0; i < 10; i++) {
 }`;
 
 describe('executed elaboration program', () => {
+  test('validates the versioned hygienic runtime bridge metadata', () => {
+    const program = transformElaborationModule(
+      parseFile({ path: 'runtime-envelope.factorio.ts', text: 'const input = new Network();' }),
+    );
+
+    expect(() =>
+      executeElaborationProgram({ ...program, version: 1 } as unknown as typeof program),
+    ).toThrow(/Unsupported elaboration JavaScript format/);
+    expect(() => executeElaborationProgram({ ...program, runtimeParameter: 'bridge) {}' })).toThrow(
+      /Invalid elaboration runtime parameter/,
+    );
+
+    const asyncProgram = transformElaborationModule(
+      parseFile({ path: 'async-envelope.factorio.ts', text: 'async function later() {}' }),
+    );
+    expect(asyncProgram.containsUnsupportedAsync).toBe(true);
+    expect(() => executeElaborationProgram(asyncProgram)).toThrow(
+      /Asynchronous syntax is not supported/,
+    );
+  });
+
   test('serializes executed capability uses with pair and transfer descriptors', () => {
     const parsed = parseFile({
       path: 'capability-boundary.factorio.ts',
@@ -65,6 +86,22 @@ for (let i = 0; i < 100; i++) { CC(i * A); }`,
       parseFile({ path: 'empty-loop.factorio.ts', text: 'for (let i = 0; i < 1000; i++) {}' }),
     );
     expect(executeElaborationProgram(emptyLoop, { dslCallBudget: 1 }).producers).toHaveLength(0);
+  });
+
+  test('formats object loop provenance by stable identity', () => {
+    const parsed = parseFile({
+      path: 'safe-loop-provenance.factorio.ts',
+      text: `const object = {};
+const input = new Network();
+for (const value of [object]) {
+  const output: Network = input + 1;
+}`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.producers).toMatchObject([
+      { kind: 'arithmetic', instancePath: ['for value=object#1'] },
+    ]);
   });
 
   test('records standalone producers in an unused sink with a source warning', () => {
@@ -242,6 +279,44 @@ if (skippedElement !== undefined || skippedCall !== undefined || keyCalls !== 1 
     });
 
     expect(executeElaborationProgram(transformElaborationModule(parsed)).producers).toEqual([]);
+  });
+
+  test('keeps transformed DSL arguments behind native optional-call short-circuiting', () => {
+    const parsed = parseFile({
+      path: 'optional-dsl-arguments.factorio.ts',
+      text: `const input = new Network();
+const missing = undefined;
+missing?.use(input + 1);
+const helper = { use: (value) => value };
+const output = helper?.use(input + 2);`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.producers).toMatchObject([
+      {
+        kind: 'arithmetic',
+        right: { kind: 'constant', value: 2 },
+        destinations: [{ network: 'output' }],
+      },
+    ]);
+  });
+
+  test('executes DSL code when user source binds or references former bridge names', () => {
+    const parsed = parseFile({
+      path: 'runtime-bridge-hygiene.factorio.ts',
+      text: `const __dsl = 7;
+const mentioned = typeof __dsl_1;
+if (__dsl !== 7 || mentioned !== "undefined") throw new Error("user bindings changed");
+const A = Signal("virtual", "signal-A");
+const input = CC(5 * A);`,
+    });
+    const program = transformElaborationModule(parsed);
+    const plan = executeElaborationProgram(program);
+
+    expect(program.runtimeParameter).toBe('__dsl_2');
+    expect(plan.producers).toMatchObject([
+      { kind: 'constant', outputs: [{ signal: { name: 'signal-A' }, value: 5 }] },
+    ]);
   });
 
   test('carries explicit .at placement into blueprint JSON', () => {
@@ -608,6 +683,26 @@ tmp[1] = ${expression};`,
     });
     expect(warning).toMatchObject({ severity: 'warning', span: expect.any(Object) });
     expect(parsed.text.slice(warning!.span!.start, warning!.span!.end)).toBe(expression);
+  });
+
+  test('does not finalize an ignored Producer alias before a later attachment', () => {
+    const parsed = parseFile({
+      path: 'ignored-producer-alias.factorio.ts',
+      text: `function same(value: ArithmeticCombinator): ArithmeticCombinator {
+  return value;
+}
+const input = new Network();
+const producer: ArithmeticCombinator = input + 1;
+same(producer);
+const output = new Network();
+producer.to(output);`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.diagnostics).toEqual([]);
+    expect(plan.producers).toMatchObject([
+      { kind: 'arithmetic', destinations: [{ network: 'output' }] },
+    ]);
   });
 
   test('keeps one physical Producer identity across aliases and fluent wrappers', () => {
@@ -1680,6 +1775,55 @@ ${assignment};`,
       ...Array.from({ length: 10 }, () => 'decider-combinator'),
     ]);
   });
+
+  test('normalizes every executed configuration number at the circuit boundary', () => {
+    const parsed = parseFile({
+      path: 'circuit-constant-boundary.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const input: Network = CC(4294967295 * A);
+const arithmetic = new Network();
+arithmetic += input + 2147483648;
+const decider = new Network();
+decider += IF(input > 4294967295, 4294967295 * A);`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.producers).toMatchObject([
+      { kind: 'constant', outputs: [{ value: -1 }] },
+      { kind: 'arithmetic', right: { kind: 'constant', value: -2_147_483_648 } },
+      {
+        kind: 'decider',
+        condition: { kind: 'compare-each', constant: -1 },
+        output: { kind: 'signal-constant', value: -1 },
+      },
+    ]);
+  });
+
+  test.each(['1.5', 'NaN', 'Infinity', '9007199254740992'])(
+    'rejects non-canonical circuit configuration number %s',
+    (value) => {
+      const expression = `${value} * A`;
+      const parsed = parseFile({
+        path: 'invalid-circuit-constant.factorio.ts',
+        text: `const A = Signal("virtual", "signal-A");
+const output: Network = CC(${expression});`,
+      });
+
+      try {
+        executeElaborationProgram(transformElaborationModule(parsed));
+        expect.fail('Expected the invalid circuit configuration number to fail.');
+      } catch (error) {
+        expect(error).toBeInstanceOf(ElaborationExecutionError);
+        expect((error as ElaborationExecutionError).message).toContain('safe integers');
+        expect(
+          parsed.text.slice(
+            (error as ElaborationExecutionError).span.start,
+            (error as ElaborationExecutionError).span.end,
+          ),
+        ).toBe(expression);
+      }
+    },
+  );
 
   test('executes arrays, objects, branches, and every ordinary JavaScript loop family', () => {
     const parsed = parseFile({

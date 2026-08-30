@@ -22,7 +22,7 @@ The production CLI and browser first emit definite `CL` diagnostics from the con
 | Code     | Meaning                                                                   | Typical correction                                                         |
 | -------- | ------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
 | `CL1001` | unsupported function call shape in the bootstrap compiler                 | use the executed path for ordinary functions or a supported bootstrap form |
-| `CL1008` | circuit constant is outside signed int32                                  | keep the literal in `-2147483648..2147483647`                              |
+| `CL1008` | circuit constant cannot be normalized from a finite safe integer          | remove fractions/non-finite values or keep JavaScript arithmetic safe      |
 | `CL1010` | circular local binding                                                    | remove the cycle between local `const` bindings                            |
 | `CL1014` | unsupported compact `IF` condition or output                              | use a documented Network/signal/wildcard form                              |
 | `CL1016` | unknown attachment Network                                                | declare the destination before `+=`                                        |
@@ -32,7 +32,7 @@ The production CLI and browser first emit definite `CL` diagnostics from the con
 | `CL1024` | malformed constant-combinator entry                                       | write `CC(int32 * SIGNAL, ...)`                                            |
 | `CL1025` | duplicate Signal in one `CC`                                              | combine the value before constructing `CC`                                 |
 | `CL1026` | attempted destination-signal rebinding of `CC`                            | let each `CC` entry retain its declared Signal                             |
-| `CL1027` | invalid constant-count `EACH` output                                      | use a signed int32 literal multiplied by `EACH`                            |
+| `CL1027` | invalid constant-count `EACH` output                                      | use a finite safe-integer literal multiplied by `EACH`                     |
 | `CL1028` | invalid explicit `Each(...)` selection                                    | pass exactly one Network                                                   |
 | `CL1029` | `EACH` output used without an Each condition                              | emit a specific Signal for `Any`/`All` conditions                          |
 | `CL1030` | invalid wildcard output mode or destination-signal rebinding              | respect native `Everything`/Each restrictions                              |
@@ -41,7 +41,7 @@ The production CLI and browser first emit definite `CL` diagnostics from the con
 | `CL1033` | unsupported body in the bootstrap direct-plan compiler                    | use the executed compiler path used by the CLI and web app                 |
 | `CL1034` | definite non-producer used on the right side of `Network +=`              | attach `CC`, arithmetic, `IF`, or `when(...).then(...)`                    |
 | `CL1035` | malformed `Network` construction or producer placement                    | use `new Network()` or `.at(x, y, direction?)`                             |
-| `CL1036` | source is outside the Phase 3 single-file module boundary                 | remove imports, exports, dynamic import, or top-level await                |
+| `CL1036` | source is outside the synchronous single-file elaboration boundary        | remove imports, exports, dynamic import, await, or async functions         |
 | `CL1037` | definite malformed consuming Network transfer                             | write `destination.take(source)`                                           |
 | `CL1038` | definite producer attachment through `Readonly<Network>`                  | use an owned Network or a `Ref<Network>` parameter                         |
 | `CL1039` | definite attempt to consume a borrowed Network                            | pass owned destination and source values to `.take(...)`                   |

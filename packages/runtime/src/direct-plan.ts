@@ -339,35 +339,35 @@ function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
                 outputs: (descriptor.outputs ?? [descriptor.output]).map((output) =>
                   output.kind === 'signal'
                     ? {
+                        mode: 'copy',
                         signal: { kind: 'signal', signal: output.signal },
                         ...lowerOutputInputs(output, networks, descriptor.source),
-                        copyCountFromInput: true,
                       }
                     : output.kind === 'each-constant'
                       ? {
+                          mode: 'constant',
                           signal: { kind: 'wildcard', value: 'each' },
-                          copyCountFromInput: false,
-                          constant: output.value,
+                          value: output.value,
                         }
                       : output.kind === 'signal-constant'
                         ? {
+                            mode: 'constant',
                             signal: { kind: 'signal', signal: output.signal },
-                            copyCountFromInput: false,
-                            constant: output.value,
+                            value: output.value,
                           }
                         : output.kind === 'wildcard'
                           ? {
+                              mode: 'copy',
                               signal: {
                                 kind: 'wildcard',
                                 value: output.wildcard,
                               },
                               ...lowerOutputInputs(output, networks, descriptor.source),
-                              copyCountFromInput: true,
                             }
                           : {
+                              mode: 'copy',
                               signal: { kind: 'wildcard', value: 'each' },
                               ...lowerOutputInputs(output, networks, descriptor.source),
-                              copyCountFromInput: true,
                             },
                 ),
               } satisfies RuntimeDeciderConfig,

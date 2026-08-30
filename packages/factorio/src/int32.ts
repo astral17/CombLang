@@ -7,6 +7,11 @@ export function int32(value: number): CircuitValue {
   return value | 0;
 }
 
+/** Canonical boundary from an executed JavaScript configuration value to a circuit int32. */
+export function circuitConstant(value: number): CircuitValue {
+  return int32(value);
+}
+
 export function addInt32(left: CircuitValue, right: CircuitValue): CircuitValue {
   return (left + right) | 0;
 }

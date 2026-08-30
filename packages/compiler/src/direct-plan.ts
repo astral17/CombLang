@@ -1,6 +1,6 @@
 import ts from 'typescript';
 
-import { Signal, signalTypes, type SignalId } from '@comblang/factorio';
+import { circuitConstant, Signal, signalTypes, type SignalId } from '@comblang/factorio';
 import { spanForNode, type ParsedSourceFile } from '@comblang/language';
 import type { Diagnostic, SourceSpan } from '@comblang/shared';
 
@@ -180,8 +180,13 @@ interface LoweringContext {
   readonly instancePath: readonly string[];
 }
 
-const INT32_MIN = -2_147_483_648;
-const INT32_MAX = 2_147_483_647;
+function concreteCircuitConstant(value: number): number | undefined {
+  try {
+    return circuitConstant(value);
+  } catch {
+    return undefined;
+  }
+}
 
 function arithmeticOperation(kind: ts.SyntaxKind): ArithmeticOperation | undefined {
   switch (kind) {
@@ -716,12 +721,8 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
           : undefined;
         const count = leftCount ?? rightCount;
         const outputSignal = leftSignal ?? rightSignal;
-        if (
-          count === undefined ||
-          outputSignal === undefined ||
-          count < INT32_MIN ||
-          count > INT32_MAX
-        ) {
+        const normalizedCount = count === undefined ? undefined : concreteCircuitConstant(count);
+        if (normalizedCount === undefined || outputSignal === undefined) {
           diagnostics.push({
             code: 'CL1024',
             severity: 'error',
@@ -730,7 +731,7 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
           });
           return undefined;
         }
-        constantOutputs.push({ signal: outputSignal, value: count });
+        constantOutputs.push({ signal: outputSignal, value: normalizedCount });
       }
       if (constantOutputs.length === 0) {
         diagnostics.push({
@@ -905,11 +906,12 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
                 }
               : undefined;
         if (normalizedWildcard?.comparison !== undefined) {
-          if (normalizedWildcard.constant < INT32_MIN || normalizedWildcard.constant > INT32_MAX) {
+          const normalizedConstant = concreteCircuitConstant(normalizedWildcard.constant);
+          if (normalizedConstant === undefined) {
             diagnostics.push({
               code: 'CL1008',
               severity: 'error',
-              message: `Circuit constant ${normalizedWildcard.constant} is outside the signed int32 range; use an explicit wrapping operation when that syntax is available.`,
+              message: `Circuit constant ${normalizedWildcard.constant} must be a finite safe integer before int32 normalization.`,
               span: spanForNode(file, leftWildcard === undefined ? node.left : node.right),
             });
             return undefined;
@@ -923,7 +925,7 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
             comparator: negated
               ? invertComparator(normalizedWildcard.comparison)
               : normalizedWildcard.comparison,
-            constant: normalizedWildcard.constant,
+            constant: normalizedConstant,
           };
         }
         const left = lowerExpression(node.left, template, argumentNetworks, context);
@@ -959,11 +961,12 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
                 }
               : undefined;
         if (normalized === undefined) return undefined;
-        if (normalized.constant < INT32_MIN || normalized.constant > INT32_MAX) {
+        const normalizedConstant = concreteCircuitConstant(normalized.constant);
+        if (normalizedConstant === undefined) {
           diagnostics.push({
             code: 'CL1008',
             severity: 'error',
-            message: `Circuit constant ${normalized.constant} is outside the signed int32 range; use an explicit wrapping operation when that syntax is available.`,
+            message: `Circuit constant ${normalized.constant} must be a finite safe integer before int32 normalization.`,
             span: spanForNode(file, normalized.constantExpression),
           });
           return undefined;
@@ -979,14 +982,14 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
               network: normalized.operand.network,
               signal: normalized.operand.signal,
               comparator: normalizedComparator,
-              constant: normalized.constant,
+              constant: normalizedConstant,
             }
           : {
               kind: 'compare-each',
               refKind: 'single',
               network: normalized.operand.network,
               comparator: normalizedComparator,
-              constant: normalized.constant,
+              constant: normalizedConstant,
             };
       };
       const condition = lowerCondition(conditionExpression);
@@ -1006,16 +1009,15 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
         ts.isBinaryExpression(unwrappedOutput) &&
         ((ts.isIdentifier(unwrappedOutput.left) && unwrappedOutput.left.text === 'EACH') ||
           (ts.isIdentifier(unwrappedOutput.right) && unwrappedOutput.right.text === 'EACH'));
-      if (
-        mentionsEach &&
-        (constantEachCandidate === undefined ||
-          constantEachCandidate < INT32_MIN ||
-          constantEachCandidate > INT32_MAX)
-      ) {
+      const normalizedEachConstant =
+        constantEachCandidate === undefined
+          ? undefined
+          : concreteCircuitConstant(constantEachCandidate);
+      if (mentionsEach && normalizedEachConstant === undefined) {
         diagnostics.push({
           code: 'CL1027',
           severity: 'error',
-          message: 'A constant EACH output must be a signed int32 literal multiplied by EACH.',
+          message: 'A constant EACH output must be a finite safe integer multiplied by EACH.',
           span: spanForNode(file, outputExpression),
         });
         return undefined;
@@ -1125,7 +1127,7 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
       }
       let deciderOutput: DirectPlanDecider['output'];
       if (constantEachCandidate !== undefined) {
-        deciderOutput = { kind: 'each-constant', value: constantEachCandidate };
+        deciderOutput = { kind: 'each-constant', value: normalizedEachConstant! };
       } else if (wildcardOutput !== undefined) {
         deciderOutput = { kind: 'wildcard', refKind: 'single', ...wildcardOutput };
       } else if (copyOutput?.kind === 'signal') {
@@ -1205,18 +1207,6 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
       }
       return { kind: 'constant', value };
     }
-    const constant =
-      left.kind === 'constant' ? left.value : right.kind === 'constant' ? right.value : undefined;
-    if (constant !== undefined && (constant < INT32_MIN || constant > INT32_MAX)) {
-      diagnostics.push({
-        code: 'CL1008',
-        severity: 'error',
-        message: `Circuit constant ${constant} is outside the signed int32 range; use an explicit wrapping operation when that syntax is available.`,
-        span: spanForNode(file, expression),
-      });
-      return undefined;
-    }
-
     let attachments = destination;
     if (attachments === undefined) {
       temporaryNetworkOrdinal += 1;
@@ -1237,7 +1227,7 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
     }
     const operand = (value: LoweredExpression): PlanArithmeticOperand =>
       value.kind === 'constant'
-        ? value
+        ? { kind: 'constant', value: circuitConstant(value.value) }
         : value.kind === 'signal'
           ? { kind: 'signal', refKind: 'single', network: value.network, signal: value.signal }
           : { kind: 'each', refKind: 'single', network: value.network };

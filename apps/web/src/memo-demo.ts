@@ -46,9 +46,9 @@ export function runMemoCellDemo(): MemoCellDemo {
     },
     outputs: [
       {
+        mode: 'copy',
         signal: { kind: 'wildcard', value: 'each' },
         input: { refKind: 'single', network: mem },
-        copyCountFromInput: true,
       },
     ],
   });

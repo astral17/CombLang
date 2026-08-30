@@ -13,14 +13,21 @@ import { printErasedTypeScript } from './typescript-erase.js';
 
 export interface ElaborationJavaScript {
   readonly format: 'comblang-elaboration-js';
-  readonly version: 1;
+  readonly version: 2;
   readonly fileId: ParsedSourceFile['id'];
+  readonly runtimeParameter: string;
+  readonly containsUnsupportedAsync: boolean;
   readonly code: string;
 }
 
-const dslCall = (factory: ts.NodeFactory, name: string, args: readonly ts.Expression[]) =>
+const runtimeCall = (
+  factory: ts.NodeFactory,
+  runtimeParameter: string,
+  name: string,
+  args: readonly ts.Expression[],
+) =>
   factory.createCallExpression(
-    factory.createPropertyAccessExpression(factory.createIdentifier('__dsl'), name),
+    factory.createPropertyAccessExpression(factory.createIdentifier(runtimeParameter), name),
     undefined,
     args,
   );
@@ -54,6 +61,28 @@ function producerArrayElementTypeName(
  * left to the JS engine; only DSL-sensitive nodes are replaced with allowlisted calls.
  */
 export function transformElaborationModule(file: ParsedSourceFile): ElaborationJavaScript {
+  const sourceIdentifiers = new Set<string>();
+  let containsUnsupportedAsync = false;
+  const collectIdentifiers = (node: ts.Node): void => {
+    if (ts.isIdentifier(node)) sourceIdentifiers.add(node.text);
+    if (
+      ts.isAwaitExpression(node) ||
+      (ts.isForOfStatement(node) && node.awaitModifier !== undefined) ||
+      (ts.canHaveModifiers(node) &&
+        ts.getModifiers(node)?.some(({ kind }) => kind === ts.SyntaxKind.AsyncKeyword) === true)
+    ) {
+      containsUnsupportedAsync = true;
+    }
+    node.forEachChild(collectIdentifiers);
+  };
+  collectIdentifiers(file.ast);
+  let runtimeParameter = '__dsl';
+  for (let ordinal = 1; sourceIdentifiers.has(runtimeParameter); ordinal += 1) {
+    runtimeParameter = `__dsl_${ordinal}`;
+  }
+  const dslCall = (factory: ts.NodeFactory, name: string, args: readonly ts.Expression[]) =>
+    runtimeCall(factory, runtimeParameter, name, args);
+
   const signalNames = new Set<string>();
   const networkNames = new Set<string>();
 
@@ -385,16 +414,33 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
       return ts.isDeleteExpression(parent);
     };
     const visit: ts.Visitor = (node) => {
-      // Optional chains are ordinary JavaScript. Returning the original subtree preserves both
-      // nullish short-circuiting and the chain flags expected by TypeScript's syntax eraser.
-      if (
-        (ts.isElementAccessExpression(node) && node.questionDotToken !== undefined) ||
-        (ts.isCallExpression(node) &&
-          (node.questionDotToken !== undefined ||
-            (ts.isPropertyAccessExpression(node.expression) &&
-              node.expression.questionDotToken !== undefined)))
-      ) {
-        return node;
+      // The optional operation itself remains native JavaScript, while descendants still need
+      // DSL transformation. Chain-specific updaters preserve TypeScript's internal chain flags
+      // and keep transformed keys and arguments behind the native nullish short-circuit.
+      if (ts.isCallChain(node)) {
+        return factory.updateCallChain(
+          node,
+          ts.visitNode(node.expression, visit) as ts.Expression,
+          node.questionDotToken,
+          node.typeArguments,
+          node.arguments.map((argument) => ts.visitNode(argument, visit) as ts.Expression),
+        );
+      }
+      if (ts.isElementAccessChain(node)) {
+        return factory.updateElementAccessChain(
+          node,
+          ts.visitNode(node.expression, visit) as ts.Expression,
+          node.questionDotToken,
+          ts.visitNode(node.argumentExpression, visit) as ts.Expression,
+        );
+      }
+      if (ts.isPropertyAccessChain(node)) {
+        return factory.updatePropertyAccessChain(
+          node,
+          ts.visitNode(node.expression, visit) as ts.Expression,
+          node.questionDotToken,
+          node.name,
+        );
       }
       if (ts.isEnumDeclaration(node)) {
         let nextNumericValue = 0;
@@ -446,21 +492,9 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
       }
 
       if (ts.isExpressionStatement(node)) {
-        if (
-          ts.isBinaryExpression(node.expression) &&
-          node.expression.operatorToken.kind === ts.SyntaxKind.EqualsToken
-        ) {
-          return factory.updateExpressionStatement(
-            node,
-            ts.visitNode(node.expression, visit) as ts.Expression,
-          );
-        }
         return factory.updateExpressionStatement(
           node,
-          dslCall(factory, 'discard', [
-            ts.visitNode(node.expression, visit) as ts.Expression,
-            spanLiteral(factory, node.expression),
-          ]),
+          ts.visitNode(node.expression, visit) as ts.Expression,
         );
       }
 
@@ -1053,8 +1087,10 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
   transformed.dispose();
   return {
     format: 'comblang-elaboration-js',
-    version: 1,
+    version: 2,
     fileId: file.id,
+    runtimeParameter,
+    containsUnsupportedAsync,
     code: javaScript,
   };
 }

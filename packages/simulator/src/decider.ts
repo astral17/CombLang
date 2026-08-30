@@ -44,12 +44,18 @@ export type DeciderOutputSignal =
   | { readonly kind: 'signal'; readonly signal: SignalId }
   | { readonly kind: 'wildcard'; readonly value: Quantifier };
 
-export interface DeciderOutput {
-  readonly signal: DeciderOutputSignal;
-  readonly copyCountFromInput?: boolean;
-  readonly constant?: CircuitValue;
-  readonly networks?: CircuitNetworkSelection;
-}
+export type DeciderOutput =
+  | {
+      readonly mode: 'copy';
+      readonly signal: DeciderOutputSignal;
+      readonly networks?: CircuitNetworkSelection;
+    }
+  | {
+      readonly mode: 'constant';
+      readonly signal: DeciderOutputSignal;
+      readonly value: CircuitValue;
+      readonly networks?: CircuitNetworkSelection;
+    };
 
 export interface DeciderCombinatorConfig {
   readonly condition: DeciderCondition;
@@ -144,7 +150,7 @@ function evaluateCondition(
 }
 
 function outputValue(output: DeciderOutput, inputValue: CircuitValue): CircuitValue {
-  return output.copyCountFromInput === false ? int32(output.constant ?? 1) : inputValue;
+  return output.mode === 'constant' ? int32(output.value) : inputValue;
 }
 
 function emitOutputs(

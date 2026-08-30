@@ -384,6 +384,7 @@ async function allowed() { await Promise.resolve(); }`,
       'CL1036',
       'CL1036',
       'CL1036',
+      'CL1036',
     ]);
     expect(diagnostics.map(({ message }) => message)).toEqual([
       expect.stringContaining('one self-contained source file'),
@@ -391,18 +392,29 @@ async function allowed() { await Promise.resolve(); }`,
       expect.stringContaining('Dynamic import'),
       expect.stringContaining('Dynamic import'),
       expect.stringContaining('Top-level await'),
+      expect.stringContaining('Async functions'),
     ]);
   });
 
-  test('allows await inside an ordinary async function', () => {
+  test('rejects every asynchronous function spelling explicitly', () => {
     const parsed = parseFile({
       path: 'async-function.ts',
       text: `async function load() {
   await Promise.resolve(1);
-}`,
+}
+const expression = async function() {};
+const arrow = async () => 1;
+const object = { async method() {} };`,
     });
 
-    expect(validateDslSemantics(parsed)).toEqual([]);
+    const diagnostics = validateDslSemantics(parsed);
+    expect(diagnostics.map(({ code }) => code)).toEqual(['CL1036', 'CL1036', 'CL1036', 'CL1036']);
+    expect(diagnostics.map(({ span }) => span && parsed.text.slice(span.start, span.end))).toEqual([
+      'async',
+      'async',
+      'async',
+      'async',
+    ]);
   });
 
   test('keeps Network facts inside lexical block and loop scopes', () => {

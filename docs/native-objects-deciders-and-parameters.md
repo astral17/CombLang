@@ -87,6 +87,8 @@ ConfigNumber = int32 | BlueprintNumberParameter | BlueprintNumericExpr
 ConfigRecipe = RecipeId | BlueprintRecipeParameter
 ```
 
+The concrete side of this boundary is already explicit in NCIR as `ConcreteConfigSignal`, `ConcreteConfigNumber`, and `ConcreteConfigCondition`. Decider outputs are likewise split into `mode: "copy"` and `mode: "constant"` rows. Phase 8 extends the configuration layer above these concrete categories; it does not make the simulator bus symbolic.
+
 The exact types may live in a parameterized configuration layer before FCIR. NCIR simulation continues to use concrete `SignalId -> int32` buses. Tests instantiate parameters from supplied values or defaults before normal elaboration and simulation; a missing required value is a test/configuration error.
 
 ## Dependencies and formulas

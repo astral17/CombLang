@@ -104,8 +104,8 @@ function outputEntry(output: LogicalDeciderOutput): Record<string, unknown> {
       output.signal.kind === 'signal'
         ? signalJson(output.signal.signal)
         : wildcardSignal(output.signal.value),
-    copy_count_from_input: output.copyCountFromInput ?? true,
-    ...(output.constant === undefined ? {} : { constant: output.constant }),
+    copy_count_from_input: output.mode === 'copy',
+    ...(output.mode === 'constant' ? { constant: output.value } : {}),
   };
 }
 

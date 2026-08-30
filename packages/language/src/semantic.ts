@@ -522,6 +522,16 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
   };
 
   const visit = (node: ts.Node): void => {
+    const asyncModifier = ts.canHaveModifiers(node)
+      ? ts.getModifiers(node)?.find(({ kind }) => kind === ts.SyntaxKind.AsyncKeyword)
+      : undefined;
+    if (asyncModifier !== undefined) {
+      report(
+        'CL1036',
+        'Async functions, arrows, and methods are not supported by synchronous compile-time elaboration.',
+        asyncModifier,
+      );
+    }
     if (ts.isFunctionDeclaration(node)) {
       const scope = new Set<string>();
       const arrayScope = new Set<string>();

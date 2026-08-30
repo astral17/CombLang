@@ -5,7 +5,7 @@ import type {
   PlanDeciderCondition,
   PlanNetworkRef,
 } from '@comblang/compiler';
-import type { SignalId } from '@comblang/factorio';
+import { circuitConstant, type SignalId } from '@comblang/factorio';
 import type { SourceSpan } from '@comblang/shared';
 
 import type {
@@ -208,21 +208,21 @@ function dispatchComparison<Source>(
             ...context.planNetworkRef(selected),
             signal: selected.selection,
             comparator: normalized,
-            constant: selectedConstant,
+            constant: circuitConstant(selectedConstant),
           }
         : selected.selection === 'each'
           ? {
               kind: 'compare-each',
               ...context.planNetworkRef(selected),
               comparator: normalized,
-              constant: selectedConstant,
+              constant: circuitConstant(selectedConstant),
             }
           : {
               kind: 'compare-wildcard',
               ...context.planNetworkRef(selected),
               wildcard: selected.selection,
               comparator: normalized,
-              constant: selectedConstant,
+              constant: circuitConstant(selectedConstant),
             },
     });
   }
@@ -244,7 +244,7 @@ function dispatchComparison<Source>(
       kind: 'compare-each',
       ...context.planNetworkRef(network),
       comparator: normalized,
-      constant,
+      constant: circuitConstant(constant),
     },
   });
 }
@@ -272,7 +272,11 @@ function dispatchBinary<Source>(
     if (operator !== '*' || signal === undefined || signalCount === undefined) {
       throw new Error('A typed Signal value must use numericCount * Signal.');
     }
-    return context.brand({ kind: 'signal-value', signal, value: signalCount });
+    return context.brand({
+      kind: 'signal-value',
+      signal,
+      value: circuitConstant(signalCount),
+    });
   }
   const wildcard = context.isWildcardToken(left)
     ? left
@@ -288,7 +292,7 @@ function dispatchBinary<Source>(
     return context.brand({
       kind: 'wildcard-count',
       wildcard: wildcard.value,
-      value: wildcardCount,
+      value: circuitConstant(wildcardCount),
     });
   }
   const operation = arithmeticOperations[operator];

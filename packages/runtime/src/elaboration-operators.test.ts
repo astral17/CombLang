@@ -167,4 +167,21 @@ describe('elaboration operator policy', () => {
     );
     expect(fixture.calls()).toBe(3);
   });
+
+  test('canonicalizes concrete circuit constants at DSL dispatch boundaries', () => {
+    const fixture = dispatchFixture();
+
+    expect(
+      operators.dispatchBinary('*', 4_294_967_295, fixture.signal, 0, fixture.context),
+    ).toMatchObject({ kind: 'signal-value', value: -1 });
+    expect(
+      operators.dispatchComparison('>', fixture.network, 2_147_483_648, 0, fixture.context),
+    ).toMatchObject({ condition: { constant: -2_147_483_648 } });
+
+    for (const value of [1.5, Number.NaN, Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() =>
+        operators.dispatchBinary('*', value, fixture.signal, 0, fixture.context),
+      ).toThrow(/safe integers/);
+    }
+  });
 });

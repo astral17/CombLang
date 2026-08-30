@@ -19,7 +19,7 @@ const eachPositive: DeciderCondition = {
 describe('decider combinator semantics', () => {
   it('treats Everything as vacuously true and Anything as false on an empty bus', () => {
     const constantOutput = [
-      { signal: { kind: 'signal' as const, signal: out }, copyCountFromInput: false },
+      { mode: 'constant' as const, signal: { kind: 'signal' as const, signal: out }, value: 1 },
     ];
     expect(
       evaluateDecider(
@@ -64,12 +64,8 @@ describe('decider combinator semantics', () => {
           comparator: '>=',
           right: { kind: 'signal', signal: a },
         },
-        outputs: [
-          { signal: { kind: 'signal', signal: out }, copyCountFromInput: false, constant: 1 },
-        ],
-        elseOutputs: [
-          { signal: { kind: 'signal', signal: out }, copyCountFromInput: false, constant: -1 },
-        ],
+        outputs: [{ mode: 'constant', signal: { kind: 'signal', signal: out }, value: 1 }],
+        elseOutputs: [{ mode: 'constant', signal: { kind: 'signal', signal: out }, value: -1 }],
       },
       singleWireInput(input),
     );
@@ -80,10 +76,8 @@ describe('decider combinator semantics', () => {
     const result = evaluateDecider(
       {
         condition: eachPositive,
-        outputs: [{ signal: { kind: 'wildcard', value: 'each' } }],
-        elseOutputs: [
-          { signal: { kind: 'signal', signal: out }, copyCountFromInput: false, constant: 2 },
-        ],
+        outputs: [{ mode: 'copy', signal: { kind: 'wildcard', value: 'each' } }],
+        elseOutputs: [{ mode: 'constant', signal: { kind: 'signal', signal: out }, value: 2 }],
       },
       singleWireInput(
         new SparseBus([
@@ -102,7 +96,7 @@ describe('decider combinator semantics', () => {
     const result = evaluateDecider(
       {
         condition: eachPositive,
-        outputs: [{ signal: { kind: 'signal', signal: out } }],
+        outputs: [{ mode: 'copy', signal: { kind: 'signal', signal: out } }],
       },
       singleWireInput(
         new SparseBus([
@@ -119,7 +113,7 @@ describe('decider combinator semantics', () => {
     const result = evaluateDecider(
       {
         condition: eachPositive,
-        outputs: [{ signal: { kind: 'wildcard', value: 'anything' } }],
+        outputs: [{ mode: 'copy', signal: { kind: 'wildcard', value: 'anything' } }],
         compareSignals: (left, right) =>
           left.name === 'signal-C' ? -1 : right.name === 'signal-C' ? 1 : 0,
       },
@@ -148,6 +142,7 @@ describe('decider combinator semantics', () => {
         },
         outputs: [
           {
+            mode: 'copy',
             signal: { kind: 'signal', signal: b },
             networks: { red: false, green: true },
           },
@@ -191,6 +186,7 @@ describe('decider combinator semantics', () => {
         },
         outputs: [
           {
+            mode: 'copy',
             signal: { kind: 'wildcard', value: 'each' },
             networks: { red: false, green: true },
           },

@@ -156,12 +156,18 @@ export type RuntimeDeciderCondition =
   | { readonly kind: 'and'; readonly conditions: readonly RuntimeDeciderCondition[] }
   | { readonly kind: 'or'; readonly conditions: readonly RuntimeDeciderCondition[] };
 
-export interface RuntimeDeciderOutput {
-  readonly signal: LogicalDeciderOutputSignal;
-  readonly input?: RuntimeNetworkRef;
-  readonly copyCountFromInput?: boolean;
-  readonly constant?: number;
-}
+export type RuntimeDeciderOutput =
+  | {
+      readonly mode: 'copy';
+      readonly signal: LogicalDeciderOutputSignal;
+      readonly input?: RuntimeNetworkRef;
+    }
+  | {
+      readonly mode: 'constant';
+      readonly signal: LogicalDeciderOutputSignal;
+      readonly value: number;
+      readonly input?: RuntimeNetworkRef;
+    };
 
 export interface RuntimeDeciderConfig {
   readonly condition: RuntimeDeciderCondition;
@@ -537,15 +543,19 @@ export class DslRuntime {
     });
   }
 
-  #lowerOutput(output: RuntimeDeciderOutput) {
-    return Object.freeze({
-      signal: output.signal,
-      ...(output.input === undefined ? {} : { input: this.#lowerNetworkRef(output.input) }),
-      ...(output.copyCountFromInput === undefined
-        ? {}
-        : { copyCountFromInput: output.copyCountFromInput }),
-      ...(output.constant === undefined ? {} : { constant: output.constant }),
-    });
+  #lowerOutput(output: RuntimeDeciderOutput): DeciderProducerConfig['outputs'][number] {
+    return output.mode === 'constant'
+      ? Object.freeze({
+          mode: 'constant' as const,
+          signal: output.signal,
+          value: output.value,
+          ...(output.input === undefined ? {} : { input: this.#lowerNetworkRef(output.input) }),
+        })
+      : Object.freeze({
+          mode: 'copy' as const,
+          signal: output.signal,
+          ...(output.input === undefined ? {} : { input: this.#lowerNetworkRef(output.input) }),
+        });
   }
 
   #producerInputs(producer: CircuitProducerNode): NetworkId[] {
@@ -735,14 +745,19 @@ export class DslRuntime {
                 comparator: value.comparator,
                 right: scalar(value.right),
               };
-        const output = (value: DeciderProducerConfig['outputs'][number]): DeciderOutput => ({
-          signal: value.signal,
-          ...(value.input === undefined ? {} : { networks: selection(value.input) }),
-          ...(value.copyCountFromInput === undefined
-            ? {}
-            : { copyCountFromInput: value.copyCountFromInput }),
-          ...(value.constant === undefined ? {} : { constant: value.constant }),
-        });
+        const output = (value: DeciderProducerConfig['outputs'][number]): DeciderOutput =>
+          value.mode === 'constant'
+            ? {
+                mode: 'constant',
+                signal: value.signal,
+                value: value.value,
+                ...(value.input === undefined ? {} : { networks: selection(value.input) }),
+              }
+            : {
+                mode: 'copy',
+                signal: value.signal,
+                ...(value.input === undefined ? {} : { networks: selection(value.input) }),
+              };
         const combinator: DeciderCombinatorConfig = {
           condition: condition(producer.config.condition),
           outputs: producer.config.outputs.map(output),
