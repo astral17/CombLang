@@ -344,6 +344,8 @@ Each function declaration call receives an independent provenance scope, so gene
 
 The semantic pass reports only violations it can prove without executing the program. The transformed elaboration runtime is authoritative for dynamic operator and method dispatch: the same instrumented syntax may perform ordinary JavaScript work or construct a circuit descriptor depending on the values reached in that execution. The exact supported metaprogramming surface and optional-chain boundary are listed in [Compile-time JavaScript](compile-time-javascript.md).
 
+Free DSL identifiers are reserved in v1 and cannot be shadowed by user bindings. This includes constructors/functions and every documented wildcard alias. `CL1045` points at the conflicting declaration. Object property and method names are unaffected: `object.to(...)` or `object.as(...)` still dispatches from the executed receiver.
+
 Ordinary functions, `if` branches, arrays, objects, and all JavaScript loop families execute during elaboration. For example, a regular `for` loop can generate compact `IF` attachments:
 
 ```ts

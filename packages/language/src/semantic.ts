@@ -3,9 +3,15 @@ import ts from 'typescript';
 import type { Diagnostic, SourceSpan } from '@comblang/shared';
 
 import { spanForNode, type ParsedSourceFile } from './parser.js';
+import { reservedDslValueNames } from './dsl-names.js';
+import {
+  parseDslTypeAnnotation,
+  networkTypeFromAnnotation,
+  producerHandleTypeFromAnnotation,
+  type NetworkCapability,
+} from './dsl-type-syntax.js';
 
 export type DslValueType = 'network' | 'number' | 'boolean' | 'signal' | 'signal-value' | 'unknown';
-type NetworkCapability = 'owned' | 'readonly' | 'ref' | 'move';
 export type OperatorDomain =
   'circuit-arithmetic' | 'compile-time' | 'typed-constant' | 'unsupported';
 
@@ -18,27 +24,11 @@ export interface SemanticSummary {
   readonly operatorDomain?: OperatorDomain;
 }
 
-function networkCapabilityFromAnnotation(
-  node: ts.TypeNode | undefined,
-): NetworkCapability | undefined {
-  if (node === undefined) return undefined;
-  const text = node.getText().replaceAll(/\s/g, '');
-  if (/^Network(?:<.+>)?$/.test(text)) return 'owned';
-  const wrapper = /^(Readonly|Ref|Move)<Network(?:<.+>)?>$/.exec(text)?.[1];
-  return wrapper === 'Readonly'
-    ? 'readonly'
-    : wrapper === 'Ref'
-      ? 'ref'
-      : wrapper === 'Move'
-        ? 'move'
-        : undefined;
-}
-
 function typeFromAnnotation(node: ts.TypeNode | undefined): DslValueType {
   if (node === undefined) return 'unknown';
   if (node.kind === ts.SyntaxKind.NumberKeyword) return 'number';
   if (node.kind === ts.SyntaxKind.BooleanKeyword) return 'boolean';
-  return networkCapabilityFromAnnotation(node) === undefined ? 'unknown' : 'network';
+  return parseDslTypeAnnotation(node)?.kind === 'network' ? 'network' : 'unknown';
 }
 
 function operatorText(kind: ts.SyntaxKind): string | undefined {
@@ -198,6 +188,47 @@ export function classifyDslSemantics(file: ParsedSourceFile): readonly SemanticS
 /** Reports DSL-invalid forms that are provable without executing compile-time control flow. */
 export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnostic[] {
   const diagnostics: Diagnostic[] = [];
+  const reportReservedBinding = (name: ts.BindingName): void => {
+    if (ts.isIdentifier(name)) {
+      if (reservedDslValueNames.has(name.text)) {
+        diagnostics.push({
+          code: 'CL1045',
+          severity: 'error',
+          message: `${name.text} is a reserved CombLang DSL identifier and cannot be declared or bound by user code.`,
+          span: spanForNode(file, name),
+        });
+      }
+      return;
+    }
+    for (const element of name.elements) {
+      if (!ts.isOmittedExpression(element)) reportReservedBinding(element.name);
+    }
+  };
+  const collectReservedBindings = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) || ts.isParameter(node)) {
+      reportReservedBinding(node.name);
+    } else if (
+      (ts.isFunctionDeclaration(node) ||
+        ts.isFunctionExpression(node) ||
+        ts.isClassDeclaration(node) ||
+        ts.isClassExpression(node) ||
+        ts.isEnumDeclaration(node)) &&
+      node.name !== undefined &&
+      reservedDslValueNames.has(node.name.text)
+    ) {
+      diagnostics.push({
+        code: 'CL1045',
+        severity: 'error',
+        message: `${node.name.text} is a reserved CombLang DSL identifier and cannot be declared or bound by user code.`,
+        span: spanForNode(file, node.name),
+      });
+    }
+    node.forEachChild(collectReservedBindings);
+  };
+  file.ast.forEachChild(collectReservedBindings);
+  // A reserved binding makes textual DSL resolution intentionally unambiguous: compilation stops
+  // at the declarations instead of cascading into misleading diagnostics for their later uses.
+  if (diagnostics.length > 0) return diagnostics;
   const networkScopes: Set<string>[] = [new Set()];
   const networkArrayScopes: Set<string>[] = [new Set()];
   const capabilityScopes: Map<string, NetworkCapability>[] = [new Map()];
@@ -209,53 +240,18 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
   const producerSlotScopes: Map<string, ProducerSlotType | undefined>[] = [new Map()];
   const producerFunctions = new Set<string>();
   const producerParameterTypes = new Map<string, readonly (string | undefined)[]>();
-  const dslBuiltinNames = new Set(['Signal', 'Network', 'CC', 'IF', 'to', 'when', 'pair']);
-  const shadowedDslBuiltins = new Set<string>();
-
-  const collectBindingShadows = (name: ts.BindingName): void => {
-    if (ts.isIdentifier(name)) {
-      if (dslBuiltinNames.has(name.text)) shadowedDslBuiltins.add(name.text);
-      return;
-    }
-    for (const element of name.elements) {
-      if (!ts.isOmittedExpression(element)) collectBindingShadows(element.name);
-    }
-  };
-  const collectShadows = (node: ts.Node): void => {
-    if (ts.isVariableDeclaration(node) || ts.isParameter(node)) collectBindingShadows(node.name);
-    if (
-      (ts.isFunctionDeclaration(node) || ts.isClassDeclaration(node)) &&
-      node.name !== undefined &&
-      dslBuiltinNames.has(node.name.text)
-    ) {
-      shadowedDslBuiltins.add(node.name.text);
-    }
-    node.forEachChild(collectShadows);
-  };
-  file.ast.forEachChild(collectShadows);
-  const isDslBuiltin = (name: string): boolean =>
-    dslBuiltinNames.has(name) && !shadowedDslBuiltins.has(name);
+  const isDslBuiltin = (name: string): boolean => reservedDslValueNames.has(name);
 
   const isNetworkType = (node: ts.TypeNode | undefined): boolean =>
     typeFromAnnotation(node) === 'network';
-  const producerHandleTypeName = (node: ts.TypeNode | undefined): string | undefined => {
-    const text = node?.getText(file.ast).replaceAll(/\s/g, '') ?? '';
-    return ['Producer', 'DeciderCombinator', 'ArithmeticCombinator', 'ConstantCombinator'].includes(
-      text,
-    )
-      ? text
-      : undefined;
-  };
+  const producerHandleTypeName = (node: ts.TypeNode | undefined): string | undefined =>
+    producerHandleTypeFromAnnotation(node, file.ast);
   const isProducerHandleType = (node: ts.TypeNode | undefined): boolean =>
     producerHandleTypeName(node) !== undefined;
   const producerArrayElementTypeName = (node: ts.TypeNode | undefined): string | undefined => {
-    const text = node?.getText(file.ast).replaceAll(/\s/g, '') ?? '';
-    const element = text.endsWith('[]') ? text.slice(0, -2) : /^Array<(.+)>$/.exec(text)?.[1];
-    return element !== undefined &&
-      ['Producer', 'DeciderCombinator', 'ArithmeticCombinator', 'ConstantCombinator'].includes(
-        element,
-      )
-      ? element
+    const syntax = parseDslTypeAnnotation(node, file.ast);
+    return syntax?.kind === 'array' && syntax.element.kind === 'producer'
+      ? syntax.element.producerType
       : undefined;
   };
   const propertyNameText = (node: ts.PropertyName): string | undefined =>
@@ -280,11 +276,8 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     return properties.size === 0 ? undefined : { properties };
   };
   const isNetworkArrayType = (node: ts.TypeNode | undefined): boolean => {
-    const text = node?.getText(file.ast).replaceAll(/\s/g, '') ?? '';
-    return (
-      /^Network(?:<.+>)?\[\]$/.test(text) ||
-      /^(?:Array|ReadonlyArray)<Network(?:<.+>)?>$/.test(text)
-    );
+    const syntax = parseDslTypeAnnotation(node, file.ast);
+    return syntax?.kind === 'array' && syntax.element.kind === 'network';
   };
   for (const statement of file.ast.statements) {
     if (ts.isFunctionDeclaration(statement) && statement.name !== undefined) {
@@ -543,7 +536,8 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
         }
         if (ts.isIdentifier(parameter.name) && isNetworkType(parameter.type)) {
           scope.add(parameter.name.text);
-          const capability = networkCapabilityFromAnnotation(parameter.type) ?? 'owned';
+          const capability =
+            networkTypeFromAnnotation(parameter.type, file.ast)?.capability ?? 'owned';
           capabilityScope.set(parameter.name.text, capability);
           if (capability === 'owned') {
             report(
@@ -636,7 +630,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
           .at(-1)!
           .set(
             node.name.text,
-            networkCapabilityFromAnnotation(node.type) ??
+            networkTypeFromAnnotation(node.type, file.ast)?.capability ??
               (node.initializer === undefined
                 ? undefined
                 : capabilityOfNetworkExpression(node.initializer)) ??

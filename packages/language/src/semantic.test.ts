@@ -303,18 +303,27 @@ for (let i = 0; i < arr.length; i++) output += arr[i] * 2;`,
     expect(validateDslSemantics(heterogeneous)).toEqual([]);
   });
 
-  test('does not validate possibly shadowed DSL builtin names as definite DSL calls', () => {
+  test('rejects bindings that shadow reserved free DSL identifiers', () => {
     const parsed = parseFile({
-      path: 'shadowed-builtins.ts',
+      path: 'reserved-builtins.ts',
       text: `function Signal(value: string) { return value; }
 function CC() { return 1; }
 class Network { constructor(value: number) {} }
 Signal("ordinary");
 CC();
-new Network(1);`,
+new Network(1);
+const { Any } = values;
+function configure(All: number) { return All; }
+const EACH = 5;`,
     });
 
-    expect(validateDslSemantics(parsed)).toEqual([]);
+    const reserved = validateDslSemantics(parsed).filter(({ code }) => code === 'CL1045');
+    expect(reserved).toHaveLength(6);
+    expect(
+      reserved.map(({ span }) =>
+        span === undefined ? undefined : parsed.text.slice(span.start, span.end),
+      ),
+    ).toEqual(['Signal', 'CC', 'Network', 'Any', 'All', 'EACH']);
   });
 
   test('separates invalid Network selections from collection indexing', () => {

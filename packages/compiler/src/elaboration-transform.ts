@@ -1,6 +1,13 @@
 import ts from 'typescript';
 
-import type { ParsedSourceFile } from '@comblang/language';
+import {
+  networkTypeFromAnnotation,
+  parseDslTypeAnnotation,
+  parseDslTypeText,
+  producerHandleTypeFromAnnotation,
+  wildcardDslNames,
+  type ParsedSourceFile,
+} from '@comblang/language';
 
 import { printErasedTypeScript } from './typescript-erase.js';
 
@@ -18,19 +25,6 @@ const dslCall = (factory: ts.NodeFactory, name: string, args: readonly ts.Expres
     args,
   );
 
-const wildcardNames: Readonly<Record<string, 'each' | 'anything' | 'everything'>> = {
-  Each: 'each',
-  EACH: 'each',
-  Anything: 'anything',
-  Any: 'anything',
-  ANYTHING: 'anything',
-  ANY: 'anything',
-  Everything: 'everything',
-  All: 'everything',
-  EVERYTHING: 'everything',
-  ALL: 'everything',
-};
-
 function spanLiteral(factory: ts.NodeFactory, node: ts.Node): ts.ObjectLiteralExpression {
   return factory.createObjectLiteralExpression([
     factory.createPropertyAssignment('start', factory.createNumericLiteral(node.getStart())),
@@ -38,33 +32,21 @@ function spanLiteral(factory: ts.NodeFactory, node: ts.Node): ts.ObjectLiteralEx
   ]);
 }
 
-function isProducerHandleType(file: ParsedSourceFile, type: ts.TypeNode | undefined): boolean {
-  const text = type?.getText(file.ast).replaceAll(/\s/g, '') ?? '';
-  return ['Producer', 'DeciderCombinator', 'ArithmeticCombinator', 'ConstantCombinator'].includes(
-    text,
-  );
-}
-
 function producerHandleTypeName(
   file: ParsedSourceFile,
   type: ts.TypeNode | undefined,
 ): string | undefined {
-  const text = type?.getText(file.ast).replaceAll(/\s/g, '') ?? '';
-  return isProducerHandleType(file, type) ? text : undefined;
+  return producerHandleTypeFromAnnotation(type, file.ast);
 }
 
 function producerArrayElementTypeName(
   file: ParsedSourceFile,
   type: ts.TypeNode | undefined,
 ): string | undefined {
-  const text = type?.getText(file.ast).replaceAll(/\s/g, '') ?? '';
-  const element = text.endsWith('[]') ? text.slice(0, -2) : /^Array<(.+)>$/.exec(text)?.[1];
-  return element === undefined ||
-    !['Producer', 'DeciderCombinator', 'ArithmeticCombinator', 'ConstantCombinator'].includes(
-      element,
-    )
-    ? undefined
-    : element;
+  const syntax = parseDslTypeAnnotation(type, file.ast);
+  return syntax?.kind === 'array' && syntax.element.kind === 'producer'
+    ? syntax.element.producerType
+    : undefined;
 }
 
 /**
@@ -94,13 +76,15 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
       ) {
         networkNames.add(node.name.text);
       }
-      if (node.type?.getText(file.ast).replaceAll(/\s/g, '').startsWith('Network') === true) {
+      if (parseDslTypeAnnotation(node.type, file.ast)?.kind === 'network') {
         networkNames.add(node.name.text);
       }
     }
     if (ts.isParameter(node) && ts.isIdentifier(node.name)) {
-      const type = node.type?.getText(file.ast).replaceAll(/\s/g, '') ?? '';
-      if (type.includes('Network')) networkNames.add(node.name.text);
+      const type = parseDslTypeAnnotation(node.type, file.ast);
+      if (type?.kind === 'network' || (type?.kind === 'array' && type.element.kind === 'network')) {
+        networkNames.add(node.name.text);
+      }
     }
     node.forEachChild(collect);
   };
@@ -249,32 +233,27 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
           readonly color?: 'red' | 'green';
         }
       | undefined => {
-      const text = type?.getText(file.ast).replaceAll(/\s/g, '') ?? '';
-      const match = /^(Readonly|Ref|Move)<Network(?:<(.+)>)?>$/.exec(text);
-      if (match === null) return undefined;
-      const color = match[2] === 'R' ? 'red' : match[2] === 'G' ? 'green' : undefined;
+      const syntax = networkTypeFromAnnotation(type, file.ast);
+      if (syntax === undefined || syntax.capability === 'owned') return undefined;
       return {
-        capability: match[1] === 'Readonly' ? 'readonly' : match[1] === 'Ref' ? 'ref' : 'move',
-        ...(color === undefined ? {} : { color }),
+        capability: syntax.capability,
+        ...(syntax.color === undefined ? {} : { color: syntax.color }),
       };
     };
     const networkCall = (node: ts.NewExpression, name?: string): ts.Expression => {
-      const color = node.typeArguments?.[0]?.getText(file.ast);
+      const type = parseDslTypeText(
+        `Network${node.typeArguments?.[0] === undefined ? '' : `<${node.typeArguments[0].getText(file.ast)}>`}`,
+      );
+      const color = type?.kind === 'network' ? type.color : undefined;
       return dslCall(factory, 'network', [
         name === undefined ? factory.createVoidZero() : factory.createStringLiteral(name),
-        color === 'R' || color === 'G'
-          ? factory.createStringLiteral(color === 'R' ? 'red' : 'green')
-          : factory.createVoidZero(),
+        color === undefined ? factory.createVoidZero() : factory.createStringLiteral(color),
         spanLiteral(factory, node),
       ]);
     };
     const colorForType = (node: ts.TypeNode | undefined): ts.Expression => {
-      const type = node?.getText(file.ast).replaceAll(/\s/g, '') ?? '';
-      return type === 'Network<R>'
-        ? factory.createStringLiteral('red')
-        : type === 'Network<G>'
-          ? factory.createStringLiteral('green')
-          : factory.createVoidZero();
+      const color = networkTypeFromAnnotation(node, file.ast)?.color;
+      return color === undefined ? factory.createVoidZero() : factory.createStringLiteral(color);
     };
     const enclosingFunctionDeclaration = (node: ts.Node): ts.FunctionDeclaration | undefined => {
       for (let parent = node.parent; parent !== undefined; parent = parent.parent) {
@@ -645,9 +624,12 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
         );
       }
 
-      if (ts.isIdentifier(node) && wildcardNames[node.text] !== undefined) {
+      if (
+        ts.isIdentifier(node) &&
+        wildcardDslNames[node.text as keyof typeof wildcardDslNames] !== undefined
+      ) {
         return dslCall(factory, 'wildcardToken', [
-          factory.createStringLiteral(wildcardNames[node.text]!),
+          factory.createStringLiteral(wildcardDslNames[node.text as keyof typeof wildcardDslNames]),
         ]);
       }
       if (
@@ -733,7 +715,7 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
         node.questionDotToken === undefined &&
         ts.isIdentifier(node.expression)
       ) {
-        const wildcard = wildcardNames[node.expression.text];
+        const wildcard = wildcardDslNames[node.expression.text as keyof typeof wildcardDslNames];
         if (wildcard !== undefined && node.arguments.length === 1) {
           return dslCall(factory, 'wildcard', [
             factory.createStringLiteral(wildcard),

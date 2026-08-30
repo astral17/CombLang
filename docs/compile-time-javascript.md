@@ -14,6 +14,8 @@ CombLang executes a synchronous TypeScript-shaped JavaScript subset during elabo
 
 Optional element and property-call chains remain native JavaScript and preserve nullish short-circuiting. They are not DSL invocation syntax: use a direct DSL selection or method call when the receiver is a Network or Producer.
 
+The v1 language reserves all free DSL identifiers. User variables, parameters, destructuring bindings, functions, classes, and enums cannot be named `Signal`, `Network`, `CC`, `IF`, `to`, `when`, `pair`, `Each`/`EACH`, `Anything`/`Any`/`ANYTHING`/`ANY`, or `Everything`/`All`/`EVERYTHING`/`ALL`; such a binding reports `CL1045`. Property names and methods are not free identifiers, so ordinary `object.to(...)`, `object.as(...)`, `object.at(...)`, and `object.take(...)` remain valid. A future lexical symbol-resolution phase may relax this policy.
+
 ## Accepted with limited DSL integration
 
 - callbacks such as `.map(...)` execute normally, but their iterations do not currently add a distinct provenance frame; use an explicit loop when per-iteration diagnostic identity matters;

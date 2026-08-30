@@ -3,6 +3,24 @@ import { describe, expect, test } from 'vitest';
 import { compileSource } from './compile-source.js';
 
 describe('browser source compilation', () => {
+  test('rejects reserved DSL bindings without executing the transformed program', () => {
+    const declaration = 'const ANY = 5;';
+    const text = `${declaration}\nthrow new Error("must not execute");`;
+    const result = compileSource({
+      path: 'main.factorio.ts',
+      text,
+    });
+    const diagnostic = result.compilerDiagnostics.find(({ code }) => code === 'CL1045');
+
+    expect(result.plan).toBeUndefined();
+    expect(diagnostic).toMatchObject({ severity: 'error', span: expect.any(Object) });
+    expect(
+      diagnostic?.span === undefined
+        ? undefined
+        : text.slice(diagnostic.span.start, diagnostic.span.end),
+    ).toBe('ANY');
+  });
+
   test('keeps capability, pair, and transfer descriptors in the browser result plan', () => {
     const text = `function Inspect(input: Readonly<Network>, output: Ref<Network>): void {
   output += input + 1;

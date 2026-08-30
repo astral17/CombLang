@@ -10,13 +10,16 @@ describe('semantic, transform, and runtime language contract', () => {
     const parsed = parseFile({
       path: 'ordinary-contract.ts',
       text: `const value = {
+  kind: "producer",
+  producer: { kind: "arithmetic" },
   as(input: number) { return input + 1; },
   to(input: number) { return input * 2; },
   at(x: number, y: number) { return x + y; },
   take(input: number) { return input - 1; },
 };
+const networkConfig = { kind: "network", name: "ordinary-config" };
 const values = [value.as(1), value.to(2), value.at(3, 4), value.take(5)];
-if (values[0] !== 2 || values[1] !== 4 || values[2] !== 7 || values[3] !== 4) {
+if (values[0] !== 2 || values[1] !== 4 || values[2] !== 7 || values[3] !== 4 || networkConfig.name !== "ordinary-config") {
   throw new Error("ordinary contract changed");
 }`,
     });

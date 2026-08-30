@@ -24,6 +24,19 @@ afterEach(async () => {
 });
 
 describe('factorio-dsl check', () => {
+  test('rejects a reserved DSL binding before executed elaboration', async () => {
+    const path = await sourceFile(`const CC = () => 123;
+CC();`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path])).toBe(1);
+    const result = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: 'CL1045', severity: 'error', span: expect.any(Object) }),
+    ]);
+    expect(result.producerCount).toBe(0);
+  });
+
   test('runs executed circuit validation and reports producer totals as JSON', async () => {
     const path = await sourceFile(`const CHEST = Signal("chest");
 const input = CC(5 * CHEST);`);

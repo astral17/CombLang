@@ -50,6 +50,7 @@ The production CLI and browser first emit definite `CL` diagnostics from the con
 | `CL1042` | definite misuse of immutable `pair(a, b)` input view                      | use pair only for reads; use `to`/`.to` for output fan-out                 |
 | `CL1043` | `.as(...)` crosses a function's `Network` return boundary                 | bind the producer output Signal inside the function                        |
 | `CL1044` | combinator-handle declaration, assignment, argument, or return mismatches | use a compatible unmaterialized producer of the annotated physical kind    |
+| `CL1045` | user binding shadows a reserved free DSL identifier                       | rename the variable, parameter, function, class, or enum                   |
 | `CL2001` | producer has no user destination                                          | attach it, or keep the warning if intentional                              |
 | `EX1001` | transformed elaboration program threw                                     | inspect the execution message and supported executed subset                |
 | `EX1002` | compile-time execution exceeded the worker time budget                    | fix an infinite/expensive loop or reduce generated work                    |

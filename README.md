@@ -46,10 +46,11 @@ The current repository implements the Phase 3 source compiler and the first exec
   - [x] Use canonical quality-aware Signal equality and cover output-binding conflicts end to end.
   - [x] Preserve ordinary `.as`/`.to` dispatch, JavaScript optional-chain semantics, and add a semantic-transform-runtime contract suite.
   - [x] Isolate the private TypeScript syntax-erasure API, pin its compiler version, and cover the boundary plus production builds.
-  - [ ] Settle and enforce the free DSL identifier policy consistently across semantic preflight and transform.
-  - [ ] Brand runtime values and make all guards/session checks nominal rather than structural.
+  - [x] Reserve free DSL identifiers for v1 and enforce one shared name table consistently across semantic preflight and transform.
+  - [x] Brand runtime values in a session-local registry so guards are nominal and ordinary configuration objects cannot forge DSL handles.
   - [ ] Replace the compatibility `network + networks?` representation with a discriminated single/pair selection reference.
-  - [ ] Share DSL type-annotation parsing, then extract runtime values/ownership and operator dispatch from the elaboration coordinator.
+  - [x] Share one DSL type-annotation parser across semantic preflight and transform for Network capabilities/colors, Producer handles, and arrays.
+  - [ ] Extract runtime values/ownership and operator dispatch from the elaboration coordinator.
   - [ ] Decide default Producer versus future Entity-handle materialization using representative benchmark programs.
 - [ ] Phase 5 — testbench: drive/expect/tick, mocks and models, Unknown values, waveforms, and debug hierarchy.
 - [ ] Phase 6 — typed Factorio objects: shared circuit inputs, native single-comparison `enable`, Roboport, Lamp, Constant, logistics entities, belts, displays, and train stops.

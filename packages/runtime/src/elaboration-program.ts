@@ -169,6 +169,17 @@ type DslValue =
   | SignalId
   | number;
 
+type RuntimeObjectKind =
+  | NetworkValue['kind']
+  | PairValue['kind']
+  | SelectedValue['kind']
+  | DestinationValue['kind']
+  | SignalValue['kind']
+  | WildcardTokenValue['kind']
+  | WildcardCountValue['kind']
+  | ConditionValue['kind']
+  | ProducerValue['kind'];
+
 const comparatorMap: Readonly<Record<string, PlanComparator>> = {
   '>': '>',
   '<': '<',
@@ -223,6 +234,8 @@ class ElaborationRecorder {
   readonly #diagnostics: Diagnostic[] = [];
   readonly #producerAttachments = new WeakMap<object, SourceSpan>();
   readonly #knownProducers = new Map<object, ProducerValue>();
+  /** Nominal, session-local identity for runtime-only values; ordinary objects cannot forge it. */
+  readonly #runtimeValues = new WeakMap<object, RuntimeObjectKind>();
   #unusedProducersFinalized = false;
   #anonymousOrdinal = 0;
   readonly #networkNameCounts = new Map<string, number>();
@@ -302,10 +315,11 @@ class ElaborationRecorder {
       const [type, name, quality] = values as [SignalId['type'], string, string?];
       return Signal(type, name, quality);
     },
-    wildcardToken: (value: WildcardName): WildcardTokenValue => ({
-      kind: 'wildcard-token',
-      value,
-    }),
+    wildcardToken: (value: WildcardName): WildcardTokenValue =>
+      this.#runtimeValue({
+        kind: 'wildcard-token',
+        value,
+      }),
     wildcard: (
       value: WildcardName,
       network: NetworkValue | PairValue,
@@ -326,7 +340,7 @@ class ElaborationRecorder {
       if (!outputs.every((value): value is SignalValue => this.#isSignalValue(value))) {
         throw new Error('CC entries must be numeric Signal values.');
       }
-      return {
+      return this.#runtimeValue({
         kind: 'producer',
         identity: {},
         producer: {
@@ -335,7 +349,7 @@ class ElaborationRecorder {
           source: this.#span(rawSpan),
           instancePath: this.#path(),
         },
-      };
+      });
     },
     network: (
       name: string | undefined,
@@ -372,11 +386,11 @@ class ElaborationRecorder {
           [{ message: 'The repeated Network is declared here.', span: values[0]!.declaration }],
         );
       }
-      const pair: PairValue = {
+      const pair: PairValue = this.#runtimeValue({
         kind: 'pair',
         networks: values as [NetworkValue, NetworkValue],
         source: this.#span(rawSpan),
-      };
+      });
       this.#networkPairs.push({
         networks: [values[0]!.name, values[1]!.name],
         provenance: pair.source,
@@ -440,7 +454,7 @@ class ElaborationRecorder {
         provenance: borrow.source,
         instancePath: this.#path(),
       });
-      return {
+      return this.#runtimeValue({
         kind: 'network',
         name: value.name,
         declaration: value.declaration,
@@ -448,7 +462,7 @@ class ElaborationRecorder {
         capability,
         generation: value.generation,
         borrow,
-      };
+      });
     },
     moveParameter: (
       value: unknown,
@@ -494,14 +508,14 @@ class ElaborationRecorder {
         provenance: this.#span(rawSpan),
         instancePath: this.#path(),
       });
-      return {
+      return this.#runtimeValue({
         kind: 'network',
         name: value.name,
         declaration: value.declaration,
         ownership,
         capability: 'move',
         generation: ownership.generation,
-      };
+      });
     },
     producerHandle: (value: unknown, expectedType: unknown, rawSpan: RawSpan): ProducerValue => {
       return this.#producerHandle(value, expectedType, rawSpan);
@@ -685,7 +699,7 @@ class ElaborationRecorder {
         if (!isSignal(left.selection) || !isSignal(right.selection)) {
           throw new Error('Signal-to-signal comparison requires concrete Signal selections.');
         }
-        return {
+        return this.#runtimeValue({
           kind: 'condition',
           condition: {
             kind: 'compare-signals',
@@ -693,7 +707,7 @@ class ElaborationRecorder {
             comparator,
             right: { ...this.#planNetworkRef(right), signal: right.selection },
           },
-        };
+        });
       }
       const selected = this.#isSelected(left) ? left : this.#isSelected(right) ? right : undefined;
       const selectedConstant =
@@ -702,7 +716,7 @@ class ElaborationRecorder {
         const normalized = this.#isSelected(left)
           ? comparator
           : this.#reverseComparator(comparator);
-        return {
+        return this.#runtimeValue({
           kind: 'condition',
           condition: isSignal(selected.selection)
             ? {
@@ -726,7 +740,7 @@ class ElaborationRecorder {
                   comparator: normalized,
                   constant: selectedConstant,
                 },
-        };
+        });
       }
       const network =
         this.#isNetwork(left) || this.#isPair(left)
@@ -743,7 +757,7 @@ class ElaborationRecorder {
         this.#isNetwork(left) || this.#isPair(left)
           ? comparator
           : this.#reverseComparator(comparator);
-      return {
+      return this.#runtimeValue({
         kind: 'condition',
         condition: {
           kind: 'compare-each',
@@ -751,7 +765,7 @@ class ElaborationRecorder {
           comparator: normalized,
           constant,
         },
-      };
+      });
     },
     decider: (...args: unknown[]): ProducerValue => {
       this.#recordDslCall();
@@ -764,7 +778,7 @@ class ElaborationRecorder {
         throw new Error('IF/when requires at least one output specification.');
       }
       const outputs = outputValues.map((output) => this.#deciderOutput(output, rawSpan));
-      return {
+      return this.#runtimeValue({
         kind: 'producer',
         identity: {},
         producer: {
@@ -775,7 +789,7 @@ class ElaborationRecorder {
           source: this.#span(rawSpan),
           instancePath: this.#path(),
         },
-      };
+      });
     },
     logical: (
       operator: 'and' | 'or',
@@ -792,15 +806,18 @@ class ElaborationRecorder {
       if (!this.#isCondition(right)) {
         throw new Error('Cannot mix compile-time booleans with circuit Conditions.');
       }
-      return {
+      return this.#runtimeValue({
         kind: 'condition',
         condition: { kind: operator, conditions: [left.condition, right.condition] },
-      };
+      });
     },
     not: (value: ConditionValue | boolean, _rawSpan: RawSpan): ConditionValue | boolean => {
       if (typeof value === 'boolean') return !value;
       this.#recordDslCall();
-      return { kind: 'condition', condition: this.#invertCondition(value.condition) };
+      return this.#runtimeValue({
+        kind: 'condition',
+        condition: this.#invertCondition(value.condition),
+      });
     },
     destinations: (...args: unknown[]): DestinationValue => {
       this.#recordDslCall();
@@ -818,10 +835,10 @@ class ElaborationRecorder {
         throw new Error('to(...) destinations must be Networks.');
       }
       for (const network of values) this.#assertWritableNetwork(network, rawSpan, 'destination');
-      return {
+      return this.#runtimeValue({
         kind: 'destinations',
         networks: values,
-      };
+      });
     },
     select: (
       value: NetworkValue | PairValue | DestinationValue,
@@ -915,11 +932,11 @@ class ElaborationRecorder {
         y,
         ...(direction === undefined ? {} : { direction }),
       };
-      return {
+      return this.#runtimeValue({
         kind: 'producer',
         identity: producer.identity,
         producer: { ...producer.producer, placement },
-      };
+      });
     },
     attachTo: (...args: unknown[]): unknown => {
       const rawSpan = args.at(-1);
@@ -986,7 +1003,7 @@ class ElaborationRecorder {
         if (operator !== '*' || signal === undefined || signalCount === undefined) {
           throw new Error('A typed Signal value must use numericCount * Signal.');
         }
-        return { kind: 'signal-value', signal, value: signalCount };
+        return this.#runtimeValue({ kind: 'signal-value', signal, value: signalCount });
       }
       const wildcard = this.#isWildcardToken(left)
         ? left
@@ -999,12 +1016,16 @@ class ElaborationRecorder {
         if (operator !== '*' || wildcardCount === undefined) {
           throw new Error('A wildcard constant output must use numericCount * WILDCARD.');
         }
-        return { kind: 'wildcard-count', wildcard: wildcard.value, value: wildcardCount };
+        return this.#runtimeValue({
+          kind: 'wildcard-count',
+          wildcard: wildcard.value,
+          value: wildcardCount,
+        });
       }
       const operation = arithmeticMap[operator];
       if (operation === undefined) throw new Error(`Unsupported arithmetic operator: ${operator}.`);
       const concreteOutput = this.#firstConcreteSignal(left as DslValue, right as DslValue);
-      return {
+      return this.#runtimeValue({
         kind: 'producer',
         identity: {},
         producer: {
@@ -1019,7 +1040,7 @@ class ElaborationRecorder {
           source: this.#span(rawSpan),
           instancePath: this.#path(),
         },
-      };
+      });
     },
     addAssign: (
       left: unknown,
@@ -1173,7 +1194,7 @@ class ElaborationRecorder {
       source: declaration,
       instancePath: this.#path(),
     });
-    return {
+    return this.#runtimeValue({
       kind: 'network',
       name: instanceName,
       declaration,
@@ -1187,7 +1208,7 @@ class ElaborationRecorder {
       },
       capability: 'owned',
       generation: 0,
-    };
+    });
   }
 
   #bindingNetwork(descriptor: BindingDescriptor, rawSpan: RawSpan): NetworkValue {
@@ -1275,9 +1296,7 @@ class ElaborationRecorder {
   }
 
   #isNetwork(value: unknown): value is NetworkValue {
-    return (
-      typeof value === 'object' && value !== null && (value as NetworkValue).kind === 'network'
-    );
+    return this.#hasRuntimeKind(value, 'network');
   }
 
   #assertReadableNetwork(network: NetworkValue, rawSpan: RawSpan, role = 'Network'): void {
@@ -1407,7 +1426,7 @@ class ElaborationRecorder {
   #returnOwnedValue(value: unknown, rawSpan: RawSpan, seen: Map<object, unknown>): unknown {
     if (this.#isProducer(value)) {
       return value.functionReturn === undefined
-        ? { ...value, functionReturn: this.#span(rawSpan) }
+        ? this.#runtimeValue({ ...value, functionReturn: this.#span(rawSpan) })
         : value;
     }
     if (this.#isPair(value) || this.#isPairSelection(value)) {
@@ -1503,14 +1522,14 @@ class ElaborationRecorder {
       source: this.#span(rawSpan),
       generation: value.ownership.generation,
     };
-    return {
+    return this.#runtimeValue({
       kind: 'network',
       name: value.name,
       declaration: value.declaration,
       ownership: value.ownership,
       capability: 'owned',
       generation: value.ownership.generation,
-    };
+    });
   }
 
   #path(): readonly string[] {
@@ -1536,19 +1555,15 @@ class ElaborationRecorder {
   }
 
   #isSignalValue(value: unknown): value is SignalValue {
-    return (
-      typeof value === 'object' && value !== null && (value as SignalValue).kind === 'signal-value'
-    );
+    return this.#hasRuntimeKind(value, 'signal-value');
   }
 
   #isSelected(value: unknown): value is SelectedValue {
-    return (
-      typeof value === 'object' && value !== null && (value as SelectedValue).kind === 'selected'
-    );
+    return this.#hasRuntimeKind(value, 'selected');
   }
 
   #isPair(value: unknown): value is PairValue {
-    return typeof value === 'object' && value !== null && (value as PairValue).kind === 'pair';
+    return this.#hasRuntimeKind(value, 'pair');
   }
 
   #isPairSelection(value: unknown): value is PairSelectedValue {
@@ -1556,27 +1571,15 @@ class ElaborationRecorder {
   }
 
   #isWildcardToken(value: unknown): value is WildcardTokenValue {
-    return (
-      typeof value === 'object' &&
-      value !== null &&
-      (value as WildcardTokenValue).kind === 'wildcard-token'
-    );
+    return this.#hasRuntimeKind(value, 'wildcard-token');
   }
 
   #isWildcardCount(value: unknown): value is WildcardCountValue {
-    return (
-      typeof value === 'object' &&
-      value !== null &&
-      (value as WildcardCountValue).kind === 'wildcard-count'
-    );
+    return this.#hasRuntimeKind(value, 'wildcard-count');
   }
 
   #isDestination(value: unknown): value is DestinationValue {
-    return (
-      typeof value === 'object' &&
-      value !== null &&
-      (value as DestinationValue).kind === 'destinations'
-    );
+    return this.#hasRuntimeKind(value, 'destinations');
   }
 
   #select(value: unknown, signal: unknown, rawSpan: RawSpan): SelectedValue | DestinationValue {
@@ -1598,7 +1601,7 @@ class ElaborationRecorder {
       if (value.signal !== undefined && !sameSignal(value.signal, selection)) {
         throw new Error('A to(...) destination already has a conflicting output Signal.');
       }
-      return { ...value, signal: selection };
+      return this.#runtimeValue({ ...value, signal: selection });
     }
     if (!this.#isNetwork(value) && !this.#isPair(value)) {
       throw new Error('Signal selection requires a Network or pair(a, b).');
@@ -1612,13 +1615,13 @@ class ElaborationRecorder {
     selection: SignalId | WildcardName,
   ): SelectedValue {
     return this.#isPair(value)
-      ? {
+      ? this.#runtimeValue({
           kind: 'selected',
           network: value.networks[0],
           networks: value.networks,
           selection,
-        }
-      : { kind: 'selected', network: value, selection };
+        })
+      : this.#runtimeValue({ kind: 'selected', network: value, selection });
   }
 
   #planNetworkRef(value: NetworkValue | PairValue | SelectedValue): {
@@ -1671,15 +1674,20 @@ class ElaborationRecorder {
   }
 
   #isProducer(value: unknown): value is ProducerValue {
-    return (
-      typeof value === 'object' && value !== null && (value as ProducerValue).kind === 'producer'
-    );
+    return this.#hasRuntimeKind(value, 'producer');
   }
 
   #isCondition(value: unknown): value is ConditionValue {
-    return (
-      typeof value === 'object' && value !== null && (value as ConditionValue).kind === 'condition'
-    );
+    return this.#hasRuntimeKind(value, 'condition');
+  }
+
+  #runtimeValue<T extends object & { readonly kind: RuntimeObjectKind }>(value: T): T {
+    this.#runtimeValues.set(value, value.kind);
+    return value;
+  }
+
+  #hasRuntimeKind(value: unknown, kind: RuntimeObjectKind): boolean {
+    return typeof value === 'object' && value !== null && this.#runtimeValues.get(value) === kind;
   }
 
   #deciderOutput(
@@ -1740,11 +1748,11 @@ class ElaborationRecorder {
         rawSpan,
       );
     } else if (value.producer.kind === 'arithmetic') {
-      bound = {
+      bound = this.#runtimeValue({
         kind: 'producer',
         identity: value.identity,
         producer: { ...value.producer, output: { kind: 'signal', signal } },
-      };
+      });
     } else {
       if ((value.producer.outputs?.length ?? 1) !== 1) {
         this.#outputBindingFailure(
@@ -1764,7 +1772,7 @@ class ElaborationRecorder {
         }
         bound = value;
       } else if (output.kind === 'each') {
-        bound = {
+        bound = this.#runtimeValue({
           kind: 'producer',
           identity: value.identity,
           producer: {
@@ -1776,16 +1784,16 @@ class ElaborationRecorder {
               signal,
             },
           },
-        };
+        });
       } else if (output.kind === 'each-constant') {
-        bound = {
+        bound = this.#runtimeValue({
           kind: 'producer',
           identity: value.identity,
           producer: {
             ...value.producer,
             output: { kind: 'signal-constant', signal, value: output.value },
           },
-        };
+        });
       } else {
         this.#outputBindingFailure(
           'Wildcard decider output cannot be rebound to a concrete Signal.',
@@ -1795,11 +1803,11 @@ class ElaborationRecorder {
       }
     }
     return explicit || value.boundOutputSignal !== undefined
-      ? {
+      ? this.#runtimeValue({
           ...bound,
           boundOutputSignal: signal,
           boundOutputSource: value.boundOutputSource ?? this.#span(rawSpan),
-        }
+        })
       : bound;
   }
 
