@@ -51,7 +51,8 @@ The current repository implements the Phase 3 source compiler and the first exec
   - [x] Replace the compatibility `network + networks?` representation with a discriminated single/pair selection reference.
   - [x] Share one DSL type-annotation parser across semantic preflight and transform for Network capabilities/colors, Producer handles, and arrays.
   - [x] Extract runtime value shapes and their nominal session registry from the elaboration coordinator.
-  - [ ] Extract ownership transitions and operator dispatch from the elaboration coordinator behind explicit policy interfaces.
+  - [x] Extract ownership validation and state transitions behind an explicit, independently tested policy interface.
+  - [x] Extract operator normalization, condition inversion, nominal JavaScript-versus-DSL dispatch, producer construction, and exact native fallback evaluation behind a tested policy interface.
   - [ ] Decide default Producer versus future Entity-handle materialization using representative benchmark programs.
 - [ ] Phase 5 — testbench: drive/expect/tick, mocks and models, Unknown values, waveforms, and debug hierarchy.
 - [ ] Phase 6 — typed Factorio objects: shared circuit inputs, native single-comparison `enable`, Roboport, Lamp, Constant, logistics entities, belts, displays, and train stops.

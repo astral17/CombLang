@@ -3,22 +3,19 @@ import type {
   DirectElaborationPlan,
   DirectPlanProducer,
   ElaborationJavaScript,
-  ArithmeticOperation,
   PlanEntityPlacement,
   PlanArithmeticOperand,
-  PlanComparator,
   PlanDeciderCondition,
 } from '@comblang/compiler';
 import type { Diagnostic, SourceFileId, SourceSpan } from '@comblang/shared';
 
+import { ElaborationExecutionError, ElaborationOperationLimitError } from './elaboration-errors.js';
 import {
   RuntimeValueRegistry,
   type ConditionValue,
   type DestinationValue,
   type DslValue,
   type FunctionOwnershipFrame,
-  type NetworkBorrow,
-  type NetworkMove,
   type NetworkOwnershipState,
   type NetworkValue,
   type PairSelectedValue,
@@ -32,6 +29,11 @@ import {
   type WildcardName,
   type WildcardTokenValue,
 } from './elaboration-values.js';
+import {
+  elaborationOperatorPolicy as operators,
+  type ElaborationOperatorDispatchContext,
+} from './elaboration-operators.js';
+import { elaborationOwnershipPolicy as ownership } from './elaboration-ownership.js';
 
 interface RawSpan {
   readonly start: number;
@@ -51,52 +53,7 @@ export interface ElaborationExecutionOptions {
   readonly operationBudget?: number;
 }
 
-export class ElaborationOperationLimitError extends Error {
-  constructor(limit: number) {
-    super(
-      `Compile-time generator exceeded the safety limit of ${limit} circuit-recording DSL calls.`,
-    );
-    this.name = 'ElaborationOperationLimitError';
-  }
-}
-
-export class ElaborationExecutionError extends Error {
-  constructor(
-    message: string,
-    readonly span: SourceSpan,
-    readonly code = 'EX1001',
-    readonly related: Diagnostic['related'] = undefined,
-    options?: ErrorOptions,
-  ) {
-    super(message, options);
-    this.name = 'ElaborationExecutionError';
-  }
-}
-
-const comparatorMap: Readonly<Record<string, PlanComparator>> = {
-  '>': '>',
-  '<': '<',
-  '>=': '>=',
-  '<=': '<=',
-  '==': '=',
-  '===': '=',
-  '!=': '!=',
-  '!==': '!=',
-};
-
-const arithmeticMap: Readonly<Record<string, ArithmeticOperation>> = {
-  '+': 'add',
-  '-': 'subtract',
-  '*': 'multiply',
-  '/': 'divide',
-  '%': 'modulo',
-  '**': 'power',
-  '<<': 'left-shift',
-  '>>': 'right-shift',
-  '&': 'bit-and',
-  '|': 'bit-or',
-  '^': 'bit-xor',
-};
+export { ElaborationExecutionError, ElaborationOperationLimitError };
 
 function isSignal(value: unknown): value is SignalId {
   return (
@@ -136,6 +93,20 @@ class ElaborationRecorder {
   readonly #ownershipFrames: (FunctionOwnershipFrame | undefined)[] = [];
   readonly #dslCallBudget: number;
   #dslCalls = 0;
+  readonly #operatorContext: ElaborationOperatorDispatchContext<RawSpan> = {
+    isCircuitDslValue: (value): value is DslValue => this.#isCircuitDslValue(value),
+    isSignal,
+    isSelected: (value): value is SelectedValue => this.#isSelected(value),
+    isNetwork: (value): value is NetworkValue => this.#isNetwork(value),
+    isPair: (value): value is PairValue => this.#isPair(value),
+    isWildcardToken: (value): value is WildcardTokenValue => this.#isWildcardToken(value),
+    recordDslCall: () => this.#recordDslCall(),
+    assertReadable: (value, source) => this.#assertReadableValue(value, source),
+    planNetworkRef: (value) => this.#planNetworkRef(value),
+    arithmeticOperand: (value, source) => this.#arithmeticOperand(value, source),
+    producerMetadata: (source) => ({ source: this.#span(source), instancePath: this.#path() }),
+    brand: <T extends RuntimeObjectValue>(value: T): T => this.#runtimeValue(value),
+  };
 
   constructor(fileId: SourceFileId, dslCallBudget: number) {
     this.#fileId = fileId;
@@ -168,27 +139,7 @@ class ElaborationRecorder {
         throw new Error('Executed provenance stack underflow.');
       }
       if (frame !== undefined) {
-        for (const borrow of frame.borrows.toReversed()) {
-          borrow.active = false;
-          if (isRawSpan(rawSpan)) borrow.releasedAt = this.#span(rawSpan);
-          const ownership = borrow.ownership;
-          if (borrow.capability === 'readonly') ownership.readonlyBorrows.delete(borrow);
-          else if (ownership.mutableBorrow === borrow) delete ownership.mutableBorrow;
-        }
-        for (const move of frame.moves.toReversed()) {
-          if (
-            !move.returned &&
-            move.ownership.consumedAt === undefined &&
-            move.ownership.owner === frame.owner
-          ) {
-            move.ownership.generation += 1;
-            move.ownership.owner = 'lost';
-            move.ownership.lastMove = {
-              source: isRawSpan(rawSpan) ? this.#span(rawSpan) : frame.source,
-              generation: move.ownership.generation,
-            };
-          }
-        }
+        ownership.releaseFrame(frame, isRawSpan(rawSpan) ? this.#span(rawSpan) : undefined);
       }
     },
     signal: (...args: unknown[]) => {
@@ -308,36 +259,15 @@ class ElaborationRecorder {
         );
       }
       this.#recordDslCall();
-      this.#assertReadableNetwork(value, rawSpan);
+      const source = this.#span(rawSpan);
+      ownership.assertReadable(value, source);
       if (fixedColor !== undefined)
         this.#requireNetworkColor(value, capability, fixedColor, rawSpan);
       const frame = this.#currentFunctionFrame();
       if (frame === undefined) {
         throw new Error('Network parameter borrow was created outside a function frame.');
       }
-      const ownership = value.ownership;
-      const conflicting =
-        capability === 'readonly'
-          ? ownership.mutableBorrow
-          : (ownership.mutableBorrow ?? ownership.readonlyBorrows.values().next().value);
-      if (conflicting !== undefined) {
-        throw new ElaborationExecutionError(
-          `Cannot create ${capability === 'readonly' ? 'Readonly<Network>' : 'Ref<Network>'} parameter ${parameter} while Network ${value.name} is already borrowed.`,
-          this.#span(rawSpan),
-          'RT2016',
-          [{ message: 'Conflicting borrow created here.', span: conflicting.source }],
-        );
-      }
-      const borrow: NetworkBorrow = {
-        capability,
-        parameter,
-        source: this.#span(rawSpan),
-        ownership,
-        active: true,
-      };
-      if (capability === 'readonly') ownership.readonlyBorrows.add(borrow);
-      else ownership.mutableBorrow = borrow;
-      frame.borrows.push(borrow);
+      const borrow = ownership.borrow(value, capability, parameter, source, frame);
       this.#capabilityUses.push({
         network: value.name,
         capability,
@@ -350,7 +280,7 @@ class ElaborationRecorder {
         kind: 'network',
         name: value.name,
         declaration: value.declaration,
-        ownership,
+        ownership: value.ownership,
         capability,
         generation: value.generation,
         borrow,
@@ -378,35 +308,29 @@ class ElaborationRecorder {
         );
       }
       this.#recordDslCall();
-      this.#assertConsumableNetwork(value, rawSpan, 'source');
+      const source = this.#span(rawSpan);
+      ownership.assertConsumable(value, source, 'source');
       const frame = this.#currentFunctionFrame();
       if (frame === undefined) {
         throw new Error('Network ownership transfer was created outside a function frame.');
       }
       if (fixedColor !== undefined) this.#requireNetworkColor(value, 'move', fixedColor, rawSpan);
-      const ownership = value.ownership;
-      ownership.generation += 1;
-      ownership.owner = frame.owner;
-      ownership.lastMove = {
-        source: this.#span(rawSpan),
-        generation: ownership.generation,
-      };
-      frame.moves.push({ ownership, source: this.#span(rawSpan), returned: false });
+      ownership.moveToFrame(value, source, frame);
       this.#capabilityUses.push({
         network: value.name,
         capability: 'move',
         parameter,
         ...(fixedColor === undefined ? {} : { fixedColor }),
-        provenance: this.#span(rawSpan),
+        provenance: source,
         instancePath: this.#path(),
       });
       return this.#runtimeValue({
         kind: 'network',
         name: value.name,
         declaration: value.declaration,
-        ownership,
+        ownership: value.ownership,
         capability: 'move',
-        generation: ownership.generation,
+        generation: value.ownership.generation,
       });
     },
     producerHandle: (value: unknown, expectedType: unknown, rawSpan: RawSpan): ProducerValue => {
@@ -469,7 +393,7 @@ class ElaborationRecorder {
         provenance,
         instancePath: this.#path(),
       });
-      source.ownership.consumedAt = provenance;
+      ownership.consume(source, provenance);
       return destination;
     },
     materialize: (
@@ -579,85 +503,7 @@ class ElaborationRecorder {
       this.#discardProducer(value, this.#span(rawSpan));
     },
     compare: (operator: string, left: unknown, right: unknown, rawSpan: RawSpan): unknown => {
-      const comparator = comparatorMap[operator];
-      if (comparator === undefined) throw new Error(`Unsupported comparator: ${operator}.`);
-      if (!this.#isCircuitDslValue(left) && !this.#isCircuitDslValue(right)) {
-        return this.#compareJavaScript(operator, left, right);
-      }
-      this.#recordDslCall();
-      this.#assertReadableValue(left, rawSpan);
-      this.#assertReadableValue(right, rawSpan);
-      if (this.#isSelected(left) && this.#isSelected(right)) {
-        if (!isSignal(left.selection) || !isSignal(right.selection)) {
-          throw new Error('Signal-to-signal comparison requires concrete Signal selections.');
-        }
-        return this.#runtimeValue({
-          kind: 'condition',
-          condition: {
-            kind: 'compare-signals',
-            left: { ...this.#planNetworkRef(left), signal: left.selection },
-            comparator,
-            right: { ...this.#planNetworkRef(right), signal: right.selection },
-          },
-        });
-      }
-      const selected = this.#isSelected(left) ? left : this.#isSelected(right) ? right : undefined;
-      const selectedConstant =
-        typeof left === 'number' ? left : typeof right === 'number' ? right : undefined;
-      if (selected !== undefined && selectedConstant !== undefined) {
-        const normalized = this.#isSelected(left)
-          ? comparator
-          : this.#reverseComparator(comparator);
-        return this.#runtimeValue({
-          kind: 'condition',
-          condition: isSignal(selected.selection)
-            ? {
-                kind: 'compare-signal',
-                ...this.#planNetworkRef(selected),
-                signal: selected.selection,
-                comparator: normalized,
-                constant: selectedConstant,
-              }
-            : selected.selection === 'each'
-              ? {
-                  kind: 'compare-each',
-                  ...this.#planNetworkRef(selected),
-                  comparator: normalized,
-                  constant: selectedConstant,
-                }
-              : {
-                  kind: 'compare-wildcard',
-                  ...this.#planNetworkRef(selected),
-                  wildcard: selected.selection,
-                  comparator: normalized,
-                  constant: selectedConstant,
-                },
-        });
-      }
-      const network =
-        this.#isNetwork(left) || this.#isPair(left)
-          ? left
-          : this.#isNetwork(right) || this.#isPair(right)
-            ? right
-            : undefined;
-      const constant =
-        typeof left === 'number' ? left : typeof right === 'number' ? right : undefined;
-      if (network === undefined || constant === undefined) {
-        throw new Error('The executable comparison slice requires Network/pair(a, b) vs number.');
-      }
-      const normalized =
-        this.#isNetwork(left) || this.#isPair(left)
-          ? comparator
-          : this.#reverseComparator(comparator);
-      return this.#runtimeValue({
-        kind: 'condition',
-        condition: {
-          kind: 'compare-each',
-          ...this.#planNetworkRef(network),
-          comparator: normalized,
-          constant,
-        },
-      });
+      return operators.dispatchComparison(operator, left, right, rawSpan, this.#operatorContext);
     },
     decider: (...args: unknown[]): ProducerValue => {
       this.#recordDslCall();
@@ -708,7 +554,7 @@ class ElaborationRecorder {
       this.#recordDslCall();
       return this.#runtimeValue({
         kind: 'condition',
-        condition: this.#invertCondition(value.condition),
+        condition: operators.invertCondition(value.condition),
       });
     },
     destinations: (...args: unknown[]): DestinationValue => {
@@ -879,60 +725,7 @@ class ElaborationRecorder {
       return this.#attachMany(destinations, producer, rawSpan, outputSignal);
     },
     binary: (operator: string, left: unknown, right: unknown, rawSpan: RawSpan): unknown => {
-      if (!this.#isCircuitDslValue(left) && !this.#isCircuitDslValue(right)) {
-        return this.#binaryJavaScript(operator, left, right);
-      }
-      this.#recordDslCall();
-      this.#assertReadableValue(left, rawSpan);
-      this.#assertReadableValue(right, rawSpan);
-      const signal = isSignal(left) ? left : isSignal(right) ? right : undefined;
-      const signalCount =
-        typeof left === 'number' ? left : typeof right === 'number' ? right : undefined;
-      if (
-        signal !== undefined ||
-        (signalCount !== undefined && (isSignal(left) || isSignal(right)))
-      ) {
-        if (operator !== '*' || signal === undefined || signalCount === undefined) {
-          throw new Error('A typed Signal value must use numericCount * Signal.');
-        }
-        return this.#runtimeValue({ kind: 'signal-value', signal, value: signalCount });
-      }
-      const wildcard = this.#isWildcardToken(left)
-        ? left
-        : this.#isWildcardToken(right)
-          ? right
-          : undefined;
-      const wildcardCount =
-        typeof left === 'number' ? left : typeof right === 'number' ? right : undefined;
-      if (wildcard !== undefined) {
-        if (operator !== '*' || wildcardCount === undefined) {
-          throw new Error('A wildcard constant output must use numericCount * WILDCARD.');
-        }
-        return this.#runtimeValue({
-          kind: 'wildcard-count',
-          wildcard: wildcard.value,
-          value: wildcardCount,
-        });
-      }
-      const operation = arithmeticMap[operator];
-      if (operation === undefined) throw new Error(`Unsupported arithmetic operator: ${operator}.`);
-      const concreteOutput = this.#firstConcreteSignal(left as DslValue, right as DslValue);
-      return this.#runtimeValue({
-        kind: 'producer',
-        identity: {},
-        producer: {
-          kind: 'arithmetic',
-          left: this.#arithmeticOperand(left as DslValue, rawSpan),
-          operation,
-          right: this.#arithmeticOperand(right as DslValue, rawSpan),
-          output:
-            concreteOutput === undefined
-              ? { kind: 'each' }
-              : { kind: 'signal', signal: concreteOutput },
-          source: this.#span(rawSpan),
-          instancePath: this.#path(),
-        },
-      });
+      return operators.dispatchBinary(operator, left, right, rawSpan, this.#operatorContext);
     },
     addAssign: (
       left: unknown,
@@ -1192,54 +985,7 @@ class ElaborationRecorder {
   }
 
   #assertReadableNetwork(network: NetworkValue, rawSpan: RawSpan, role = 'Network'): void {
-    const consumedAt = network.ownership.consumedAt;
-    if (consumedAt !== undefined) {
-      throw new ElaborationExecutionError(
-        `Cannot use moved ${role} ${network.name}.`,
-        this.#span(rawSpan),
-        'RT2012',
-        [
-          { message: 'Network was consumed here.', span: consumedAt },
-          { message: 'Network was declared here.', span: network.declaration },
-        ],
-      );
-    }
-    if (network.generation !== network.ownership.generation) {
-      const move = network.ownership.lastMove;
-      throw new ElaborationExecutionError(
-        network.ownership.owner === 'lost'
-          ? `Cannot use Network ${network.name}; its moved ownership was not returned.`
-          : `Cannot use moved ${role} ${network.name}.`,
-        this.#span(rawSpan),
-        network.ownership.owner === 'lost' ? 'RT2019' : 'RT2012',
-        [
-          ...(move === undefined ? [] : [{ message: 'Ownership moved here.', span: move.source }]),
-          { message: 'Network declared here.', span: network.declaration },
-        ],
-      );
-    }
-    if (network.borrow !== undefined && !network.borrow.active) {
-      throw new ElaborationExecutionError(
-        `Cannot use expired ${network.capability === 'readonly' ? 'Readonly<Network>' : 'Ref<Network>'} parameter ${network.borrow.parameter}.`,
-        this.#span(rawSpan),
-        'RT2017',
-        [
-          { message: 'Borrow created here.', span: network.borrow.source },
-          ...(network.borrow.releasedAt === undefined
-            ? []
-            : [{ message: 'Borrow ended here.', span: network.borrow.releasedAt }]),
-        ],
-      );
-    }
-    const mutableBorrow = network.ownership.mutableBorrow;
-    if (mutableBorrow !== undefined && network.borrow !== mutableBorrow) {
-      throw new ElaborationExecutionError(
-        `Cannot read Network ${network.name} while it is mutably borrowed.`,
-        this.#span(rawSpan),
-        'RT2016',
-        [{ message: 'Mutable borrow created here.', span: mutableBorrow.source }],
-      );
-    }
+    ownership.assertReadable(network, this.#span(rawSpan), role);
   }
 
   #requireNetworkColor(
@@ -1248,18 +994,7 @@ class ElaborationRecorder {
     color: 'red' | 'green',
     rawSpan: RawSpan,
   ): void {
-    const existing = network.ownership.colorRequirement;
-    if (existing?.color === color) return;
-    if (existing !== undefined) {
-      throw new ElaborationExecutionError(
-        `${capability === 'ref' ? 'Ref' : capability === 'move' ? 'Move' : 'Readonly'}<Network<${color === 'red' ? 'R' : 'G'}>> conflicts with the existing ${existing.color} requirement for Network ${network.name}.`,
-        this.#span(rawSpan),
-        'RT2018',
-        [{ message: 'Existing color requirement originates here.', span: existing.source }],
-      );
-    }
-    const requirement = { color, source: this.#span(rawSpan) } as const;
-    network.ownership.colorRequirement = requirement;
+    if (!ownership.requireColor(network, capability, color, this.#span(rawSpan))) return;
     const index = this.#networks.findLastIndex(({ name }) => name === network.name);
     const declaration = this.#networks[index];
     if (declaration === undefined) {
@@ -1269,50 +1004,11 @@ class ElaborationRecorder {
   }
 
   #assertWritableNetwork(network: NetworkValue, rawSpan: RawSpan, role = 'Network'): void {
-    this.#assertReadableNetwork(network, rawSpan, role);
-    if (network.capability === 'readonly') {
-      throw new ElaborationExecutionError(
-        `Cannot attach a producer through Readonly<Network> parameter ${network.borrow?.parameter ?? network.name}.`,
-        this.#span(rawSpan),
-        'RT2015',
-        network.borrow === undefined
-          ? undefined
-          : [{ message: 'Readonly borrow created here.', span: network.borrow.source }],
-      );
-    }
-    const readonlyBorrow = network.ownership.readonlyBorrows.values().next().value;
-    if (readonlyBorrow !== undefined) {
-      throw new ElaborationExecutionError(
-        `Cannot write Network ${network.name} while it is read-only borrowed.`,
-        this.#span(rawSpan),
-        'RT2016',
-        [{ message: 'Readonly borrow created here.', span: readonlyBorrow.source }],
-      );
-    }
+    ownership.assertWritable(network, this.#span(rawSpan), role);
   }
 
   #assertConsumableNetwork(network: NetworkValue, rawSpan: RawSpan, role: string): void {
-    this.#assertReadableNetwork(network, rawSpan, role);
-    if (network.capability !== 'owned' && network.capability !== 'move') {
-      throw new ElaborationExecutionError(
-        `Cannot consume ${network.capability === 'readonly' ? 'Readonly<Network>' : 'Ref<Network>'} ${role} ${network.name}.`,
-        this.#span(rawSpan),
-        'RT2015',
-        network.borrow === undefined
-          ? undefined
-          : [{ message: 'Borrow created here.', span: network.borrow.source }],
-      );
-    }
-    const activeBorrow =
-      network.ownership.mutableBorrow ?? network.ownership.readonlyBorrows.values().next().value;
-    if (activeBorrow !== undefined) {
-      throw new ElaborationExecutionError(
-        `Cannot consume Network ${network.name} while it is borrowed.`,
-        this.#span(rawSpan),
-        'RT2016',
-        [{ message: 'Borrow created here.', span: activeBorrow.source }],
-      );
-    }
+    ownership.assertConsumable(network, this.#span(rawSpan), role);
   }
 
   #returnOwnedValue(value: unknown, rawSpan: RawSpan, seen: Map<object, unknown>): unknown {
@@ -1385,19 +1081,8 @@ class ElaborationRecorder {
 
   #returnOwnedNetwork(value: NetworkValue, rawSpan: RawSpan): NetworkValue {
     this.#recordDslCall();
-    this.#assertReadableNetwork(value, rawSpan);
-    if (value.capability === 'readonly' || value.capability === 'ref') {
-      throw new ElaborationExecutionError(
-        `A ${value.capability === 'readonly' ? 'Readonly<Network>' : 'Ref<Network>'} borrow cannot escape its function.`,
-        this.#span(rawSpan),
-        'RT2017',
-        value.borrow === undefined
-          ? undefined
-          : [{ message: 'Borrow created here.', span: value.borrow.source }],
-      );
-    }
     const frame = this.#currentFunctionFrame();
-    if (frame === undefined || value.ownership.owner !== frame.owner) {
+    if (frame === undefined) {
       throw new ElaborationExecutionError(
         `Function cannot return Network ${value.name} because it does not own that value; accept it as Move<Network> first.`,
         this.#span(rawSpan),
@@ -1405,15 +1090,8 @@ class ElaborationRecorder {
         [{ message: 'Network declared here.', span: value.declaration }],
       );
     }
-    const move = frame.moves.findLast(({ ownership }) => ownership === value.ownership);
-    if (move !== undefined) move.returned = true;
     const caller = this.#parentFunctionFrame();
-    value.ownership.generation += 1;
-    value.ownership.owner = caller?.owner ?? 'top-level';
-    value.ownership.lastMove = {
-      source: this.#span(rawSpan),
-      generation: value.ownership.generation,
-    };
+    ownership.returnToCaller(value, this.#span(rawSpan), frame, caller);
     return this.#runtimeValue({
       kind: 'network',
       name: value.name,
@@ -1737,13 +1415,6 @@ class ElaborationRecorder {
     throw new ElaborationExecutionError(message, primary, 'RT2023', related);
   }
 
-  #firstConcreteSignal(...values: readonly DslValue[]): SignalId | undefined {
-    for (const value of values) {
-      if (this.#isSelected(value) && isSignal(value.selection)) return value.selection;
-    }
-    return undefined;
-  }
-
   #isCircuitDslValue(value: unknown): value is DslValue {
     return (
       isSignal(value) ||
@@ -1786,75 +1457,6 @@ class ElaborationRecorder {
     if (this.#isDestination(value)) {
       for (const network of value.networks) this.#assertWritableNetwork(network, rawSpan);
     }
-  }
-
-  #binaryJavaScript(operator: string, left: unknown, right: unknown): unknown {
-    switch (operator) {
-      case '+':
-        return (left as number) + (right as number);
-      case '-':
-        return (left as number) - (right as number);
-      case '*':
-        return (left as number) * (right as number);
-      case '/':
-        return (left as number) / (right as number);
-      case '%':
-        return (left as number) % (right as number);
-      case '**':
-        return (left as number) ** (right as number);
-      case '<<':
-        return (left as number) << (right as number);
-      case '>>':
-        return (left as number) >> (right as number);
-      case '&':
-        return (left as number) & (right as number);
-      case '|':
-        return (left as number) | (right as number);
-      case '^':
-        return (left as number) ^ (right as number);
-      default:
-        throw new Error(`Unsupported compile-time operator: ${operator}.`);
-    }
-  }
-
-  #compareJavaScript(operator: string, left: unknown, right: unknown): boolean {
-    switch (operator) {
-      case '>':
-        return (left as number) > (right as number);
-      case '<':
-        return (left as number) < (right as number);
-      case '>=':
-        return (left as number) >= (right as number);
-      case '<=':
-        return (left as number) <= (right as number);
-      case '==':
-        return left == right;
-      case '===':
-        return left === right;
-      case '!=':
-        return left != right;
-      case '!==':
-        return left !== right;
-      default:
-        throw new Error(`Unsupported compile-time comparator: ${operator}.`);
-    }
-  }
-
-  #reverseComparator(value: PlanComparator): PlanComparator {
-    return ({ '>': '<', '<': '>', '>=': '<=', '<=': '>=', '=': '=', '!=': '!=' } as const)[value];
-  }
-
-  #invertCondition(condition: PlanDeciderCondition): PlanDeciderCondition {
-    if (condition.kind === 'and' || condition.kind === 'or') {
-      return {
-        kind: condition.kind === 'and' ? 'or' : 'and',
-        conditions: condition.conditions.map((child) => this.#invertCondition(child)),
-      };
-    }
-    const comparator = (
-      { '>': '<=', '<': '>=', '>=': '<', '<=': '>', '=': '!=', '!=': '=' } as const
-    )[condition.comparator];
-    return { ...condition, comparator };
   }
 
   #recordDslCall(): void {
