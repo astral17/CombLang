@@ -2,6 +2,8 @@
 
 This document records accepted post-Phase-3 design constraints for Phases 6–8. It does not describe syntax implemented by the current compiler. Candidate spellings remain provisional until backed by executable tests and captured Factorio 2.1 blueprint fixtures.
 
+Phase 4.5 fixed the declaration rule before these objects are implemented: a typed-object constructor returns a separately branded Entity handle and inferred declarations preserve that identity. It must not pass through combinator Producer auto-materialization. A `Network` context may project exactly one schema-declared default circuit view without creating hardware; otherwise source selects an explicit port. See [Producer and Entity materialization policy](producer-materialization-policy.md) for the six benchmark programs and rationale.
+
 ## Three semantic times
 
 CombLang must keep three domains separate:

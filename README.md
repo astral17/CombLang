@@ -42,7 +42,7 @@ The current repository implements the Phase 3 source compiler and the first exec
   - [x] Freeze Producer identity and its public `Producer`/specific-combinator type surface; validate declarations, calls, returns, destructuring, and typed slot assignments while fluent wrappers and containers retain one physical identity.
   - [x] Keep topology `+=` valid through both `const` and `let` bindings: JavaScript binding mutability is separate from Network topology capability.
   - [ ] Add focused semantic/runtime tests, end-to-end compiler cases, diagnostics documentation, and executable language examples for every ownership transition and `pair` form.
-- [ ] Phase 4.5 — semantic/runtime hardening before typed objects
+- [x] Phase 4.5 — semantic/runtime hardening before typed objects
   - [x] Use canonical quality-aware Signal equality and cover output-binding conflicts end to end.
   - [x] Preserve ordinary `.as`/`.to` dispatch, JavaScript optional-chain semantics, and add a semantic-transform-runtime contract suite.
   - [x] Isolate the private TypeScript syntax-erasure API, pin its compiler version, and cover the boundary plus production builds.
@@ -53,7 +53,7 @@ The current repository implements the Phase 3 source compiler and the first exec
   - [x] Extract runtime value shapes and their nominal session registry from the elaboration coordinator.
   - [x] Extract ownership validation and state transitions behind an explicit, independently tested policy interface.
   - [x] Extract operator normalization, condition inversion, nominal JavaScript-versus-DSL dispatch, producer construction, and exact native fallback evaluation behind a tested policy interface.
-  - [ ] Decide default Producer versus future Entity-handle materialization using representative benchmark programs.
+  - [x] Decide default Producer versus future Entity-handle materialization using Scale, Distance, MemoCell, RGB indicator, RequesterChest, and Assembler benchmarks.
 - [ ] Phase 5 — testbench: drive/expect/tick, mocks and models, Unknown values, waveforms, and debug hierarchy.
 - [ ] Phase 6 — typed Factorio objects: shared circuit inputs, native single-comparison `enable`, Roboport, Lamp, Constant, logistics entities, belts, displays, and train stops.
 - [ ] Phase 7 — exact constructors and native-config stress: Arithmetic, full Decider normal/else output lists, duplicate outputs, `Everything`, Selector, raw entities, LUTs, and large generated configurations.
@@ -70,6 +70,7 @@ Later phases still cover the remaining ownership and multi-network semantics, te
 - [Current language reference](docs/language-reference.md) — the exact implemented syntax, diagnostics, and known gaps.
 - [Phase 4 ownership design](docs/ownership-and-multi-network.md) — planned affine ownership, borrows, consuming transfer, read-only `pair`, and implementation checkpoints.
 - [Native objects, Deciders, and parameters](docs/native-objects-deciders-and-parameters.md) — planned Phase 6–8 semantic domains and conformance requirements.
+- [Producer and Entity materialization policy](docs/producer-materialization-policy.md) — the Phase 4.5 benchmark decision for inferred Networks, explicit combinator handles, and future typed-object identity.
 - [Diagnostics](docs/diagnostics.md) — compiler/runtime code families and the most common actionable errors.
 - [Blueprint JSON preview](docs/blueprint-json.md) — generated structure, wiring model, and current limitations.
 - [Architecture notes](docs/architecture.md) — package boundaries, lowering decisions, runtime invariants, and implementation status.
