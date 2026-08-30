@@ -3,6 +3,28 @@ import { describe, expect, test } from 'vitest';
 import { compileSource } from './compile-source.js';
 
 describe('browser source compilation', () => {
+  test('keeps capability, pair, and transfer descriptors in the browser result plan', () => {
+    const text = `function Inspect(input: Readonly<Network>, output: Ref<Network>): void {
+  output += input + 1;
+}
+const input = new Network();
+const output = new Network();
+Inspect(input, output);
+const both = pair(input, output);
+const merged = new Network();
+merged.take(output);`;
+    const result = compileSource({ path: 'main.factorio.ts', text });
+
+    expect(result.plan?.capabilityUses).toMatchObject([
+      { network: 'input', capability: 'readonly', parameter: 'input' },
+      { network: 'output', capability: 'ref', parameter: 'output' },
+    ]);
+    expect(result.plan?.networkPairs).toMatchObject([{ networks: ['input', 'output'] }]);
+    expect(result.plan?.networkTransfers).toMatchObject([
+      { destination: 'merged', source: 'output' },
+    ]);
+  });
+
   test('attaches a duplicate to(...) destination diagnostic to its source statement', () => {
     const statement = 'to(a, a) += input + 0;';
     const text = `const input = new Network();
@@ -147,5 +169,24 @@ ${expression};`;
       related: expect.any(Array),
     });
     expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(expression);
+  });
+
+  test('reports stale ownership through an alias of a replaced container slot', () => {
+    const staleUse = 'alias + 1';
+    const text = `function Pass(input: Move<Network>): Network { return input; }
+const values: Network[] = [new Network()];
+const alias = values[0];
+values[0] = Pass(values[0]);
+const output: Network = ${staleUse};`;
+    const result = compileSource({ path: 'main.factorio.ts', text });
+    const diagnostic = result.compilerDiagnostics.find(({ code }) => code === 'RT2012');
+
+    expect(result.plan).toBeUndefined();
+    expect(diagnostic).toMatchObject({
+      severity: 'error',
+      span: expect.any(Object),
+      related: expect.any(Array),
+    });
+    expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(staleUse);
   });
 });

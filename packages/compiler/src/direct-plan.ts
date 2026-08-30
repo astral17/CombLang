@@ -85,6 +85,16 @@ export interface DirectPlanNetworkPair {
   readonly instancePath: readonly string[];
 }
 
+/** An executed function-boundary capability use. This is audit metadata, not hardware. */
+export interface DirectPlanCapabilityUse {
+  readonly network: string;
+  readonly capability: 'readonly' | 'ref' | 'move';
+  readonly parameter: string;
+  readonly fixedColor?: CircuitColor;
+  readonly provenance: SourceSpan;
+  readonly instancePath: readonly string[];
+}
+
 export interface DirectPlanArithmetic {
   readonly kind: 'arithmetic';
   readonly left: PlanArithmeticOperand;
@@ -134,6 +144,7 @@ export interface DirectElaborationPlan {
   readonly networks: readonly DirectPlanNetwork[];
   readonly networkTransfers?: readonly DirectPlanNetworkTransfer[];
   readonly networkPairs?: readonly DirectPlanNetworkPair[];
+  readonly capabilityUses?: readonly DirectPlanCapabilityUse[];
   readonly producers: readonly DirectPlanProducer[];
   readonly diagnostics?: readonly Diagnostic[];
 }

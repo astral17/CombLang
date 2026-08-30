@@ -4,6 +4,20 @@ import { describe, expect, test, vi } from 'vitest';
 import { transformElaborationModule } from './elaboration-transform.js';
 
 describe('executable elaboration transform', () => {
+  test('leaves optional element and property-call chains native', () => {
+    const source = parseFile({
+      path: 'optional.ts',
+      text: `const element = maybe?.[key()];
+const call = maybe?.to(value);`,
+    });
+    const code = transformElaborationModule(source).code;
+
+    expect(code).toContain('maybe?.[key()]');
+    expect(code).toContain('maybe?.to(value)');
+    expect(code).not.toContain('__dsl.element');
+    expect(code).not.toContain('__dsl.attachTo');
+  });
+
   test('leaves a compile-time for loop to the JS engine while rewriting DSL operations', () => {
     const source = parseFile({
       path: 'loop.factorio.ts',

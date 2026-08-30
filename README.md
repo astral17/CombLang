@@ -18,6 +18,7 @@ The current repository implements the Phase 3 source compiler and the first exec
 - explicit zero-tick `destination.take(source)` Network union with runtime move tracking and EG/NCIR identity collapse.
 - executable `Readonly<Network>` and `Ref<Network>` function borrows with alias-safe runtime enforcement, expiry checks, and color-qualified requirements.
 - explicit `Move<Network>` function transfer with caller-alias invalidation, owned returns, and recursive array/plain-object return handling.
+- ordinary variable, destructuring, array, and object aliases that share one Network ownership token, with `slot = Transform(slot)` replacement after a `Move<Network>` return.
 - immutable `pair(a, b)` both-colors input views with summed signal reads, opposite-color constraints, simulation, and blueprint wiring.
 
 ## Roadmap
@@ -29,18 +30,27 @@ The current repository implements the Phase 3 source compiler and the first exec
 - [ ] Phase 4 — ownership and multi-network syntax
   - [x] Freeze and implement function-scoped `Readonly<Network>` and `Ref<Network>` capabilities, including color-qualified forms and runtime borrow views.
   - [x] Reject ambiguous bare-`Network` parameters and implement explicit `Move<Network>` call/return transfer, including color-qualified and array/plain-object returns.
-  - [ ] Track ownership, borrows, aliases, and moved state through lexical scopes, function calls, returns, destructuring, arrays, objects, and executed control flow.
+  - [x] Track ownership, borrows, aliases, and moved state through lexical scopes, function calls, returns, destructuring, arrays, objects, closures, and executed control flow.
   - [x] Enforce the function-borrow operation matrix: read-only borrows may be read, mutable borrows may receive producer attachments, neither may be consumed, and escaped views expire.
-  - [ ] Complete the owned/moved operation matrix across calls, returns, local aliases, and container ownership slots.
-  - [ ] Add source-aware diagnostics for illegal copies, writes through `Readonly`, invalid borrow escapes, double moves, and use after move, with runtime checks for cases the semantic pass cannot prove.
-  - [x] Freeze and implement explicit zero-tick consuming network transfer as `a.take(b)`; `a += b` and implicit Network copying remain invalid.
+  - [x] Complete the owned/moved operation matrix across calls, returns, local aliases, and container ownership slots; ordinary assignment replaces a slot with the fresh owner returned from a consuming call.
+  - [x] Add source-aware diagnostics for invalid alias reuse, writes through `Readonly`, borrow escapes, double moves, dropped ownership, and use after move, with runtime checks for cases the semantic pass cannot prove.
+  - [x] Freeze and implement explicit zero-tick consuming network transfer as `a.take(b)`; `a += b` and independent ownership cloning remain invalid, while ordinary aliases share one ownership token.
   - [x] Implement `pair(a, b)` as an immutable two-network input view, including `pair(a, b)[SIGNAL]`, wildcard selections, summed red/green reads, and opposite-color constraints.
   - [x] Reject `pair(...)` as an attachment destination or ownership carrier; keep producer output fan-out expressed through `.to(...)`, `to(...) +=`, or contextual destructuring.
   - [x] Unify single- and multi-destination attachment validation, output-signal binding, connector cardinality, color constraints, and source provenance across all supported producer forms.
-  - [ ] Carry capability and multi-network descriptors through the transformed runtime, serialized direct-plan boundary, EG/NCIR lowering, CLI, and browser result model.
+  - [x] Carry capability and multi-network descriptors through the transformed runtime, serialized direct-plan boundary, EG/NCIR lowering, CLI, and browser result model.
   - [x] Freeze Producer identity and its public `Producer`/specific-combinator type surface; validate declarations, calls, returns, destructuring, and typed slot assignments while fluent wrappers and containers retain one physical identity.
-  - [ ] Decide whether topology `+=` requires a `let` binding; the current `const`/`let` behavior remains unchanged until stress tests justify a restriction.
+  - [x] Keep topology `+=` valid through both `const` and `let` bindings: JavaScript binding mutability is separate from Network topology capability.
   - [ ] Add focused semantic/runtime tests, end-to-end compiler cases, diagnostics documentation, and executable language examples for every ownership transition and `pair` form.
+- [ ] Phase 4.5 — semantic/runtime hardening before typed objects
+  - [x] Use canonical quality-aware Signal equality and cover output-binding conflicts end to end.
+  - [x] Preserve ordinary `.as`/`.to` dispatch, JavaScript optional-chain semantics, and add a semantic-transform-runtime contract suite.
+  - [x] Isolate the private TypeScript syntax-erasure API, pin its compiler version, and cover the boundary plus production builds.
+  - [ ] Settle and enforce the free DSL identifier policy consistently across semantic preflight and transform.
+  - [ ] Brand runtime values and make all guards/session checks nominal rather than structural.
+  - [ ] Replace the compatibility `network + networks?` representation with a discriminated single/pair selection reference.
+  - [ ] Share DSL type-annotation parsing, then extract runtime values/ownership and operator dispatch from the elaboration coordinator.
+  - [ ] Decide default Producer versus future Entity-handle materialization using representative benchmark programs.
 - [ ] Phase 5 — testbench: drive/expect/tick, mocks and models, Unknown values, waveforms, and debug hierarchy.
 - [ ] Phase 6 — typed Factorio objects: shared circuit inputs, native single-comparison `enable`, Roboport, Lamp, Constant, logistics entities, belts, displays, and train stops.
 - [ ] Phase 7 — exact constructors and native-config stress: Arithmetic, full Decider normal/else output lists, duplicate outputs, `Everything`, Selector, raw entities, LUTs, and large generated configurations.
@@ -60,6 +70,8 @@ Later phases still cover the remaining ownership and multi-network semantics, te
 - [Diagnostics](docs/diagnostics.md) — compiler/runtime code families and the most common actionable errors.
 - [Blueprint JSON preview](docs/blueprint-json.md) — generated structure, wiring model, and current limitations.
 - [Architecture notes](docs/architecture.md) — package boundaries, lowering decisions, runtime invariants, and implementation status.
+- [Compile-time JavaScript](docs/compile-time-javascript.md) — supported metaprogramming subset and explicit compatibility limits.
+- [Security model](docs/security-model.md) — current trusted-source assumption and Worker/CLI isolation limits.
 
 Signal identity is structural. `Signal("chest")` is the same default-item shorthand as `network["chest"]` and produces the internal identity `{ type: "item", name: "chest" }`; blueprint JSON omits that default `item` type. Explicit namespaces use `Signal("virtual", "signal-A")`, while `Signal("virtual", "signal-A", "normal")` also carries quality. The lowercase `signal(...)` helper remains a compatibility alias for internal/runtime code. Broader import-time omission/defaulting rules still require Phase 8 Factorio conformance fixtures.
 

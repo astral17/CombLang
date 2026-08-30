@@ -26,7 +26,7 @@ The production CLI and browser first emit definite `CL` diagnostics from the con
 | `CL1010` | circular local binding                                                    | remove the cycle between local `const` bindings                            |
 | `CL1014` | unsupported compact `IF` condition or output                              | use a documented Network/signal/wildcard form                              |
 | `CL1016` | unknown attachment Network                                                | declare the destination before `+=`                                        |
-| `CL1017` | forbidden implicit Network merge or alias                                 | use a producer or explicit `destination.take(source)` transfer             |
+| `CL1017` | bootstrap path inferred an implicit Network merge/owned copy              | use an alias, a producer, or explicit `destination.take(source)` transfer  |
 | `CL1019` | invalid Signal declaration or Network signal selection                    | use `Signal(name)` or `Signal(type, name, quality?)`                       |
 | `CL1021` | invalid producer destination set                                          | attach to one or two distinct declared Networks                            |
 | `CL1024` | malformed constant-combinator entry                                       | write `CC(int32 * SIGNAL, ...)`                                            |

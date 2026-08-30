@@ -1,12 +1,30 @@
 import { compileDirectPlan } from '@comblang/compiler/direct-plan';
+import { transformElaborationModule } from '@comblang/compiler/elaboration-transform';
 import { signal, SparseBus } from '@comblang/factorio';
 import { parseFile } from '@comblang/language';
 import { describe, expect, test } from 'vitest';
 
 import { elaborateDirectPlan, tryElaborateDirectPlan } from './direct-plan.js';
 import { RuntimeDiagnosticError } from './elaboration.js';
+import { executeElaborationProgram } from './elaboration-program.js';
 
 describe('direct plan execution', () => {
+  test('retains capability audit metadata after direct-plan lowering', () => {
+    const parsed = parseFile({
+      path: 'capability-audit.factorio.ts',
+      text: `function Scale(input: Readonly<Network<R>>): Network { return input + 1; }
+const input = new Network<R>();
+const output: Network = Scale(input);`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const executed = elaborateDirectPlan(plan);
+
+    expect(executed.capabilityUses).toMatchObject([
+      { network: 'input', capability: 'readonly', parameter: 'input', fixedColor: 'red' },
+    ]);
+    expect(executed.capabilityUses).toEqual(plan.capabilityUses);
+  });
+
   test('compiles and retains a value through a source-level MemoCell', () => {
     const parsed = parseFile({
       path: 'memo-cell.factorio.ts',

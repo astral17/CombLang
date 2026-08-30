@@ -36,6 +36,20 @@ const input = CC(5 * CHEST);`);
     });
   });
 
+  test('reports executed capability descriptors as JSON audit data', async () => {
+    const path = await sourceFile(`function Scale(input: Readonly<Network<R>>): Network {
+  return input + 1;
+}
+const input = new Network<R>();
+const output: Network = Scale(input);`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path])).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0])).capabilityUses).toMatchObject([
+      { network: 'input', capability: 'readonly', parameter: 'input', fixedColor: 'red' },
+    ]);
+  });
+
   test('reports semantic errors in branches that execution would skip', async () => {
     const path = await sourceFile(`const output = new Network();
 if (false) {
@@ -264,5 +278,22 @@ const output = new Network();
     expect(JSON.parse(String(log.mock.calls[0]?.[0])).diagnostics).toEqual([
       expect.objectContaining({ code: 'RT2023', severity: 'error', related: expect.any(Array) }),
     ]);
+  });
+
+  test('accepts ordinary assignment as moved container-slot replacement', async () => {
+    const path = await sourceFile(`function Advance(input: Move<Network>): Network {
+  input += input + 1;
+  return input;
+}
+const stages: Network[] = [new Network()];
+stages[0] = Advance(stages[0]);
+const output: Network = stages[0] + 1;`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path])).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      diagnostics: [],
+      producerCount: 2,
+    });
   });
 });

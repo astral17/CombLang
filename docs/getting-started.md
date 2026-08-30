@@ -1,8 +1,8 @@
 # Getting started
 
-CombLang currently implements the Phase 3 source compiler and the first Phase 4 ownership slice of a TypeScript-shaped structural HDL for Factorio 2.1 circuit networks. The browser workbench can parse, lower, color, simulate, and generate an early uncompressed blueprint JSON preview for the supported source subset locally. Exchange-string encoding and the verified Phase 8 blueprint codec are not implemented yet.
+CombLang currently implements the Phase 3 source compiler and most of the Phase 4 ownership/multi-network runtime of a TypeScript-shaped structural HDL for Factorio 2.1 circuit networks. The browser workbench can parse, lower, color, simulate, and generate an early uncompressed blueprint JSON preview for the supported source subset locally. Exchange-string encoding and the verified Phase 8 blueprint codec are not implemented yet.
 
-The executable examples include [`examples/scale/main.factorio.ts`](../examples/scale/main.factorio.ts) for ordinary composition, [`examples/take/main.factorio.ts`](../examples/take/main.factorio.ts) for zero-tick network union, [`examples/borrow/main.factorio.ts`](../examples/borrow/main.factorio.ts) for non-owning function capabilities, [`examples/move/main.factorio.ts`](../examples/move/main.factorio.ts) for explicit ownership transfer across a call, and [`examples/pair/main.factorio.ts`](../examples/pair/main.factorio.ts) for reading both circuit-wire colors through one immutable input view.
+The executable examples include [`examples/scale/main.factorio.ts`](../examples/scale/main.factorio.ts) for ordinary composition, [`examples/take/main.factorio.ts`](../examples/take/main.factorio.ts) for zero-tick network union, [`examples/borrow/main.factorio.ts`](../examples/borrow/main.factorio.ts) for non-owning function capabilities, [`examples/move/main.factorio.ts`](../examples/move/main.factorio.ts) for explicit ownership transfer across a call, [`examples/move-slots/main.factorio.ts`](../examples/move-slots/main.factorio.ts) for replacing moved variable/array/object owners, and [`examples/pair/main.factorio.ts`](../examples/pair/main.factorio.ts) for reading both circuit-wire colors through one immutable input view.
 
 ## Requirements
 
@@ -71,6 +71,6 @@ const constants: Network = CC(50 * IRON, 5 * A, -2 * B);
 npm run cli -- check fixtures/language/scale.ts
 ```
 
-The CLI `check` command validates TypeScript syntax, runs the non-executing DSL semantic pass, executes compile-time elaboration, and validates the resulting circuit topology and color constraints. Use `--json` for structured diagnostics and the generated producer count. The browser workbench adds the live simulation proof and blueprint preview; it is not required for compiler/runtime validation.
+The CLI `check` command validates TypeScript syntax, runs the non-executing DSL semantic pass, executes compile-time elaboration, and validates the resulting circuit topology and color constraints. Use `--json` for structured diagnostics, the generated producer count, and `capabilityUses`: the executed `Readonly`/`Ref`/`Move` function-boundary audit descriptors with their Network, parameter, optional color requirement, source span, and dynamic instance path. The browser result exposes the same descriptors on `result.plan.capabilityUses`; it also retains `networkPairs` and `networkTransfers`. The browser workbench adds the live simulation proof and blueprint preview, but is not required for compiler/runtime validation.
 
 Continue with the [current language reference](language-reference.md) for the exact supported subset.

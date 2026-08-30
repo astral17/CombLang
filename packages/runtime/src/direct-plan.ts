@@ -1,5 +1,6 @@
 import type {
   DirectElaborationPlan,
+  DirectPlanCapabilityUse,
   PlanArithmeticOperand,
   PlanDeciderCondition,
   PlanNetworkRef,
@@ -18,6 +19,7 @@ import {
 
 export interface ExecutedDirectPlan {
   readonly circuit: ElaboratedCircuit;
+  readonly capabilityUses: readonly DirectPlanCapabilityUse[];
   network(name: string): NetworkHandle;
 }
 
@@ -198,6 +200,23 @@ function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
       `Duplicate Network in direct plan: ${duplicate.name}.`,
       duplicate.source,
     );
+  }
+
+  const capabilityUses = Object.freeze([...(plan.capabilityUses ?? [])]);
+  for (const use of capabilityUses) {
+    if (
+      !declarations.has(use.network) ||
+      !['readonly', 'ref', 'move'].includes(use.capability) ||
+      typeof use.parameter !== 'string' ||
+      use.parameter.length === 0 ||
+      (use.fixedColor !== undefined && use.fixedColor !== 'red' && use.fixedColor !== 'green')
+    ) {
+      throw runtimeFailure(
+        'RT1001',
+        'Invalid capability descriptor in direct plan.',
+        use.provenance,
+      );
+    }
   }
 
   const parent = new Map(plan.networks.map(({ name }) => [name, name]));
@@ -389,6 +408,7 @@ function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
   const circuit = runtime.elaborate();
   return Object.freeze({
     circuit,
+    capabilityUses,
     network(name: string) {
       const movedAt = consumed.get(name);
       if (movedAt !== undefined) {

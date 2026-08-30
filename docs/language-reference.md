@@ -1,6 +1,6 @@
 # Current language reference
 
-This document describes the syntax implemented in the current Phase 3 compiler slice. It is intentionally narrower than the target language in the architecture analysis.
+This document describes the syntax implemented by the completed Phase 3 compiler and the current Phase 4 ownership/multi-network runtime. It is intentionally narrower than the eventual language.
 
 Phase 3 elaborates one self-contained source file synchronously. Static or dynamic imports, exports, `import.meta`, and top-level `await` report `CL1036` before execution. An `async` function declaration is syntactically accepted, but the current elaborator does not await Promises and therefore does not support asynchronous circuit generation. Multi-file linking belongs to a later compiler phase. This boundary is separate from the fully hardened sandbox deferred to Phase 11.
 
@@ -227,7 +227,7 @@ const output: Network = destination * 2;
 
 The direct plan retains the ordered transfer and its source/instance provenance. Before EG construction, lowering maps all earlier producer references to the surviving runtime handle; EG and NCIR therefore contain one physical Network for the union. Contradictory fixed colors such as `Network<R>` taking `Network<G>` report `RT2014`. Taking itself reports `RT2013`. An ordinary non-Network object may still define its own JavaScript `.take(...)` method.
 
-This first transfer slice freezes the consuming-transfer spelling and runtime moved state. Function capabilities and both-colors input views are described below. General local ownership-copy rules and explicit moves into and out of container slots remain planned Phase 4 work.
+Ordinary JavaScript aliases of a Network share its runtime ownership token; they are not independent ownership copies. Consuming through any alias invalidates every view of the old generation. A returned fresh owner replaces a mutable binding or container slot through ordinary assignment, such as `current = Advance(current)`, `stages[i] = Advance(stages[i])`, or `state.current = Advance(state.current)`. JavaScript evaluates the consuming call before storing its result. No additional `move(...)` or slot-specific syntax is required.
 
 ## Both-colors input views
 
@@ -301,6 +301,8 @@ function Connect(output: Ref<Network<G>>, input: Readonly<Network<R>>): void {
 
 The annotations create runtime views over the actual Network identity; they do not copy topology. Aliases and containers therefore cannot bypass the operation matrix. Multiple `Readonly` views may overlap, while a `Ref` is exclusive and currently cannot overlap either another `Ref` or a `Readonly` view. Both views expire on function return. Returning a borrowed parameter directly reports `CL1040`; a borrow hidden in an executed array/object return reports `RT2017`. `<R>`/`<G>` inside a capability is a real color requirement and a conflict reports `RT2018`.
 
+Every successfully executed capability boundary is serialized in the direct plan as a `capabilityUses` audit descriptor. It records the concrete Network, capability, parameter, optional fixed-color requirement, source span, and dynamic instance path. Direct-plan validation preserves this metadata beside the lowered EG/NCIR circuit; it is visible in CLI JSON and the browser result model but deliberately creates no Factorio entity or wire by itself. Physical effects remain represented by the Network color requirements, `networkTransfers`, `networkPairs`, and producer inputs/attachments.
+
 `Move<Network>` is the explicit consuming parameter mode:
 
 ```ts
@@ -317,7 +319,7 @@ Entering `Advance` transfers ownership and immediately invalidates every caller-
 
 Ownership is affine rather than mandatory-use: a function may consume or drop a `Move` parameter without returning it. The old caller views do not become valid again; trying to use dropped ownership reports `RT2019`. A function also cannot return a caller-owned Network that it never accepted through `Move`; that would be an implicit steal and reports `RT2019`. A bare `Network` parameter is deliberately invalid (`CL1041`) because it would not state whether the call borrows or consumes the value. Use `Readonly<Network>`, `Ref<Network>`, or `Move<Network>` explicitly.
 
-Complete local alias-copy rules and explicit move/replace operations for container slots remain Phase 4 work. Passing `array[i]` to `Move` is already checked dynamically and invalidates that old slot, but there is not yet dedicated syntax that replaces the slot with a returned owner in one operation.
+Variables, destructuring bindings, arrays, objects, and closures may hold aliases of one Network. They share the same ownership state and generation. Passing `array[i]` or `record.current` to `Move<Network>` invalidates the old slot value and every other old alias; assign the returned owner back with `array[i] = Transform(array[i])` or `record.current = Transform(record.current)`. A closure that retains a `Readonly`/`Ref` view past the call boundary receives `RT2017` when it later tries to use that expired borrow.
 
 A structural function may instead declare local Networks, attach producers to them, and return one of those Networks. Each call receives independent local Networks:
 
@@ -339,6 +341,8 @@ Returning a producer lets the caller materialize or attach it contextually. Retu
 Each function declaration call receives an independent provenance scope, so generated Networks, producers, and attachments retain the dynamic function path. Async syntax may be parsed inside a function, but Promise-based circuit elaboration is not supported by the current synchronous executor. Imports and multi-module elaboration are not implemented yet.
 
 ## Executed compile-time control flow
+
+The semantic pass reports only violations it can prove without executing the program. The transformed elaboration runtime is authoritative for dynamic operator and method dispatch: the same instrumented syntax may perform ordinary JavaScript work or construct a circuit descriptor depending on the values reached in that execution. The exact supported metaprogramming surface and optional-chain boundary are listed in [Compile-time JavaScript](compile-time-javascript.md).
 
 Ordinary functions, `if` branches, arrays, objects, and all JavaScript loop families execute during elaboration. For example, a regular `for` loop can generate compact `IF` attachments:
 
@@ -388,10 +392,9 @@ See the [diagnostics catalog](diagnostics.md) for common codes and corrective ac
 ## Not implemented yet
 
 - blueprint import/export and FCIR
-- ownership types and operations such as `Ref`, `Move`, a possible consuming `take`, and read-only `pair`
 - exact `Arithmetic`, `Decider`, `Selector`, and entity constructors
 - multi-file module linking and asynchronous top-level elaboration
 - testbench syntax, mocks, expectations, and waveform assertions
 - general language service and schematic editor
 
-The planned ownership and `pair` semantics are tracked separately in the [Phase 4 design](ownership-and-multi-network.md); candidate syntax there is not part of this current reference until implemented and tested.
+Implemented ownership and `pair` semantics, acceptance criteria, and the few remaining Phase 4 decisions are tracked in the [Phase 4 design](ownership-and-multi-network.md). Candidate syntax in that design is not part of this current reference until implemented and tested.

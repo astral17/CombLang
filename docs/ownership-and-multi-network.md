@@ -1,8 +1,8 @@
 # Phase 4: ownership and multi-network design
 
-This document defines the intended semantic boundary for Phase 4. `destination.take(source)`, function-scoped `Readonly`/`Ref` borrows, explicit `Move<Network>` call/return transfer, and immutable `pair(a, b)` input views are frozen and implemented. Other syntax below remains design material unless the [current language reference](language-reference.md) says otherwise.
+This document defines the intended semantic boundary for Phase 4. `destination.take(source)`, function-scoped `Readonly`/`Ref` borrows, explicit `Move<Network>` call/return transfer and slot replacement, ordinary shared-identity aliases, and immutable `pair(a, b)` input views are frozen and implemented. Other syntax below remains design material unless the [current language reference](language-reference.md) says otherwise.
 
-Phase 4 makes physical circuit topology explicit in the type and runtime models. A `Network` is an affine handle to one logical wire network: it may be read many times, but ownership cannot be silently copied or consumed twice. The phase also adds an immutable view over the two wire colors without turning that view into another writable network.
+Phase 4 makes physical circuit topology explicit in the type and runtime models. A `Network` is an affine handle to one logical wire network: it may be read many times and referenced by ordinary JavaScript aliases, but those aliases share one ownership token rather than cloning ownership. Consuming that token invalidates every stale view. The phase also adds an immutable view over the two wire colors without turning that view into another writable network.
 
 ## Goals
 
@@ -16,7 +16,7 @@ Phase 4 makes physical circuit topology explicit in the type and runtime models.
 
 Phase 4 does not add multi-file modules, a hardened security sandbox, Factorio object constructors, physical wire routing, or the final blueprint codec.
 
-The current compiler permits producer attachment through both `const` and `let` Network bindings. Requiring `let` for topology accumulators is a design candidate, not a Phase 4 assumption; it must first be tested against functions, aliases, containers, and generated code.
+The compiler permits producer attachment through both `const` and `let` Network bindings. This is now intentional: `const` prevents JavaScript rebinding, while topology writability comes from the Network capability. Use `let` only when the binding itself must be replaced, for example after a consuming function returns a fresh ownership generation.
 
 ## Capability model
 
@@ -39,7 +39,7 @@ Move<Network>;
 
 `const` only prevents rebinding a JavaScript variable. It does not turn an owned Network into `Readonly<Network>` and does not prevent a producer from being physically attached to that Network.
 
-Function parameters annotated as `Readonly<Network>` or `Ref<Network>` receive runtime borrow views. `Move<Network>` consumes the caller's ownership generation and may return a fresh owned view, directly or inside an array/plain object. Direct, provably invalid operations are also rejected by the conservative semantic pass. Local owned-copy inference, explicit container-slot replacement, and the complete closure/control-flow ownership model remain unfinished.
+Function parameters annotated as `Readonly<Network>` or `Ref<Network>` receive runtime borrow views. `Move<Network>` consumes the caller's ownership generation and may return a fresh owned view, directly or inside an array/plain object. Direct, provably invalid operations are also rejected by the conservative semantic pass. Runtime generations authoritatively cover local aliases, destructuring, arrays, objects, closures, and executed control flow.
 
 ## Function boundaries
 
@@ -70,12 +70,15 @@ Borrowed values must not outlive their owner. The checker should reject a defini
 
 ## Copying, containers, and destructuring
 
-An owned Network cannot be copied by assignment:
+Ordinary assignment does not copy Network ownership. It creates another JavaScript reference to the same logical Network and ownership generation:
 
 ```ts
 let a = new Network();
-let b = a; // planned error: ownership would be duplicated
+let alias = a;
+const values = [a];
 ```
+
+`a`, `alias`, and `values[0]` may all be read or used as topology destinations while that generation is current. Moving or consuming the Network through any one of them invalidates every stale alias. A genuinely independent Network requires `new Network()` or contextual materialization from another producer.
 
 Arrays and objects remain supported. They may own Networks, and reading `arr[i]` or `record.output` may borrow the contained handle for circuit expressions and producer attachment. Phase 4 must preserve that identity through dynamic indexing:
 
@@ -88,7 +91,19 @@ for (let i = 0; i < stages.length; i++) {
 }
 ```
 
-Passing a dynamically read slot to a `Move` parameter already invalidates that old slot at runtime, and owned Networks returned in arrays/plain objects receive fresh views. The explicit syntax for atomically taking or replacing an already-owned container slot is not frozen. Whatever spelling is chosen must invalidate exactly the consumed slot or binding at runtime. Static analysis may reject only a definite duplicate, double move, or use-after-move.
+Passing a dynamically read slot to a `Move` parameter invalidates its old generation at runtime, and owned Networks returned in arrays/plain objects receive fresh views. The replacement spelling is ordinary TypeScript assignment:
+
+```ts
+let current = new Network();
+const stages: Network[] = [new Network()];
+const state = { current: new Network() };
+
+current = Advance(current);
+stages[i] = Advance(stages[i]);
+state.current = Advance(state.current);
+```
+
+JavaScript evaluates the right side before storing the returned fresh owner in the target. Any alias captured before the call remains stale and reports `RT2012`; if the callee drops ownership instead of returning it, later stale use reports `RT2019`. A computed target follows ordinary JavaScript evaluation rules, so save a side-effectful index in a local variable when it must be evaluated once.
 
 Producer destructuring is not a Network copy. Forms such as `let [a, b] = input + 0` attach one physical producer output to two fresh logical destination Networks. Those Networks receive independent ownership and the existing opposite-color output constraint.
 
@@ -106,12 +121,13 @@ destination.take(source);
 
 After the call, `destination` owns the unified Network and `source` is moved. The transformed runtime tracks the actual handle through aliases and containers, the direct plan records an ordered transfer, and EG/NCIR lowering collapses both identities without adding hardware or a tick. The method name itself communicates consumption; the older `destination.merge(move(source))` draft is intentionally not the documented target.
 
-These forms are invalid:
+This form is invalid:
 
 ```ts
 destination += source; // Network is not a Producer
-let alias = source; // no implicit owned copy
 ```
+
+`let alias = source` is valid, but it aliases the same ownership token rather than copying it. After `destination.take(source)`, both `source` and `alias` are stale.
 
 Required errors include use after move, double move, consuming a `Readonly` or `Ref` value, and a transfer whose fixed color requirements become contradictory. Dynamic errors must point to the consuming call and include the declaration or earlier move as related provenance.
 
@@ -172,7 +188,7 @@ Runtime enforcement must use the same diagnostic result path as other elaboratio
 5. Implement consuming zero-tick transfer through EG and NCIR color constraints.
 6. Implement `pair` selections and both-colors connector lowering.
 7. Consolidate all attachment forms on one destination/cardinality/output-signal validation path.
-8. Expose identical results through `factorio-dsl check` and the browser workbench.
+8. Expose identical results through `factorio-dsl check` and the browser workbench. Implemented: CLI JSON and the browser plan retain executed `capabilityUses`, `networkTransfers`, and `networkPairs`; the validated direct-plan execution result retains capability audit metadata beside EG/NCIR.
 9. Document stable diagnostics and move accepted syntax into the current language reference.
 
 Phase 4 is complete when each capability transition and `pair` form has semantic, transformed-runtime, EG/NCIR, CLI, and end-to-end tests; uncertain static cases are proven by runtime tests; and no candidate syntax is described as implemented before those tests pass.
@@ -180,7 +196,5 @@ Phase 4 is complete when each capability transition and `pair` form has semantic
 ## Open decisions
 
 - whether producer handles need capabilities beyond the implemented `Producer`, `DeciderCombinator`, `ArithmeticCombinator`, and `ConstantCombinator` annotations;
-- whether attachment through `+=` is restricted to `let` Network bindings;
-- explicit syntax for moving values into and out of array/object slots;
 - whether `pair` is restricted to exactly two Networks permanently or later generalized under another name;
-- exact diagnostic codes and borrow-lifetime rules for closures and asynchronous functions.
+- ownership rules for asynchronous functions once asynchronous elaboration exists.

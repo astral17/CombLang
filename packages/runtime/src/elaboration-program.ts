@@ -1,4 +1,4 @@
-import { Signal, type SignalId } from '@comblang/factorio';
+import { sameSignal, Signal, type SignalId } from '@comblang/factorio';
 import type {
   DirectElaborationPlan,
   DirectPlanProducer,
@@ -218,6 +218,7 @@ class ElaborationRecorder {
   readonly #networks: DirectElaborationPlan['networks'][number][] = [];
   readonly #networkTransfers: NonNullable<DirectElaborationPlan['networkTransfers']>[number][] = [];
   readonly #networkPairs: NonNullable<DirectElaborationPlan['networkPairs']>[number][] = [];
+  readonly #capabilityUses: NonNullable<DirectElaborationPlan['capabilityUses']>[number][] = [];
   readonly #producers: DirectPlanProducer[] = [];
   readonly #diagnostics: Diagnostic[] = [];
   readonly #producerAttachments = new WeakMap<object, SourceSpan>();
@@ -431,6 +432,14 @@ class ElaborationRecorder {
       if (capability === 'readonly') ownership.readonlyBorrows.add(borrow);
       else ownership.mutableBorrow = borrow;
       frame.borrows.push(borrow);
+      this.#capabilityUses.push({
+        network: value.name,
+        capability,
+        parameter,
+        ...(fixedColor === undefined ? {} : { fixedColor }),
+        provenance: borrow.source,
+        instancePath: this.#path(),
+      });
       return {
         kind: 'network',
         name: value.name,
@@ -477,6 +486,14 @@ class ElaborationRecorder {
         generation: ownership.generation,
       };
       frame.moves.push({ ownership, source: this.#span(rawSpan), returned: false });
+      this.#capabilityUses.push({
+        network: value.name,
+        capability: 'move',
+        parameter,
+        ...(fixedColor === undefined ? {} : { fixedColor }),
+        provenance: this.#span(rawSpan),
+        instancePath: this.#path(),
+      });
       return {
         kind: 'network',
         name: value.name,
@@ -824,16 +841,20 @@ class ElaborationRecorder {
       }
       return (value as Record<PropertyKey, unknown>)[key as PropertyKey];
     },
-    bindOutput: (producer: unknown, signal: SignalId, rawSpan: RawSpan): ProducerValue => {
+    bindOutput: (producer: unknown, signal: SignalId, rawSpan: RawSpan): unknown => {
+      if (!isRawSpan(rawSpan)) throw new Error('.as(...) is missing provenance.');
+      if (!this.#isProducer(producer)) {
+        if (
+          (typeof producer !== 'object' && typeof producer !== 'function') ||
+          producer === null ||
+          typeof (producer as { as?: unknown }).as !== 'function'
+        ) {
+          throw new Error('.as(...) requires a combinator producer or an ordinary .as method.');
+        }
+        return (producer as { as: (value: unknown) => unknown }).as(signal);
+      }
       this.#recordDslCall();
       if (!isSignal(signal)) throw new Error('.as(...) requires a Signal.');
-      if (!this.#isProducer(producer)) {
-        throw new ElaborationExecutionError(
-          '.as(SIGNAL) requires a direct arithmetic or decider producer, not a materialized Network.',
-          this.#span(rawSpan),
-          'RT2021',
-        );
-      }
       if (producer.functionReturn !== undefined) {
         throw new ElaborationExecutionError(
           '.as(SIGNAL) cannot cross a function Network return boundary; bind the producer output inside that function.',
@@ -900,16 +921,24 @@ class ElaborationRecorder {
         producer: { ...producer.producer, placement },
       };
     },
-    attachTo: (...args: unknown[]): ProducerValue => {
-      this.#recordDslCall();
+    attachTo: (...args: unknown[]): unknown => {
       const rawSpan = args.at(-1);
       const producer = args[0];
       const values = args.slice(1, -1);
+      if (!isRawSpan(rawSpan)) throw new Error('.to(...) is missing provenance.');
+      if (!this.#isProducer(producer)) {
+        if (
+          (typeof producer !== 'object' && typeof producer !== 'function') ||
+          producer === null ||
+          typeof (producer as { to?: unknown }).to !== 'function'
+        ) {
+          throw new Error('.to(...) requires a combinator producer or an ordinary .to method.');
+        }
+        return (producer as { to: (...items: unknown[]) => unknown }).to(...values);
+      }
+      this.#recordDslCall();
       let outputSignal = isSignal(values.at(-1)) ? (values.pop() as SignalId) : undefined;
       let destinations: readonly NetworkValue[];
-      if (!isRawSpan(rawSpan) || !this.#isProducer(producer)) {
-        throw new Error('.to(...) requires a producer and provenance.');
-      }
       if (values.length === 1 && this.#isSelected(values[0])) {
         const selected = values[0];
         if (this.#isPairSelection(selected)) {
@@ -1065,6 +1094,7 @@ class ElaborationRecorder {
       networks: Object.freeze([...this.#networks]),
       networkTransfers: Object.freeze([...this.#networkTransfers]),
       networkPairs: Object.freeze([...this.#networkPairs]),
+      capabilityUses: Object.freeze([...this.#capabilityUses]),
       producers: Object.freeze([...this.#producers]),
       diagnostics: Object.freeze([...this.#diagnostics]),
     };
@@ -1565,7 +1595,7 @@ class ElaborationRecorder {
       if (!isSignal(selection)) {
         throw new Error('to(...)[SIGNAL] requires one concrete output Signal.');
       }
-      if (value.signal !== undefined && !this.#sameSignal(value.signal, selection)) {
+      if (value.signal !== undefined && !sameSignal(value.signal, selection)) {
         throw new Error('A to(...) destination already has a conflicting output Signal.');
       }
       return { ...value, signal: selection };
@@ -1695,10 +1725,7 @@ class ElaborationRecorder {
     explicit = false,
   ): ProducerValue {
     if (signal === undefined) return value;
-    if (
-      value.boundOutputSignal !== undefined &&
-      !this.#sameSignal(value.boundOutputSignal, signal)
-    ) {
+    if (value.boundOutputSignal !== undefined && !sameSignal(value.boundOutputSignal, signal)) {
       this.#outputBindingFailure(
         'Explicit producer output Signal conflicts with its destination binding.',
         value,
@@ -1728,7 +1755,7 @@ class ElaborationRecorder {
       }
       const output = value.producer.output;
       if (output.kind === 'signal') {
-        if (!this.#sameSignal(output.signal, signal)) {
+        if (!sameSignal(output.signal, signal)) {
           this.#outputBindingFailure(
             'Decider output Signal conflicts with its destination binding.',
             value,
@@ -1810,10 +1837,6 @@ class ElaborationRecorder {
       if (this.#isSelected(value) && isSignal(value.selection)) return value.selection;
     }
     return undefined;
-  }
-
-  #sameSignal(left: SignalId, right: SignalId): boolean {
-    return left.type === right.type && left.name === right.name;
   }
 
   #isCircuitDslValue(value: unknown): value is DslValue {

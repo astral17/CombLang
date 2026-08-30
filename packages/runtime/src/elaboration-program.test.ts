@@ -20,6 +20,35 @@ for (let i = 0; i < 10; i++) {
 }`;
 
 describe('executed elaboration program', () => {
+  test('serializes executed capability uses with pair and transfer descriptors', () => {
+    const parsed = parseFile({
+      path: 'capability-boundary.factorio.ts',
+      text: `function Inspect(input: Readonly<Network<R>>, output: Ref<Network<G>>): void {
+  output += input + 1;
+}
+function Pass(input: Move<Network>): Network { return input; }
+let red = new Network<R>();
+const green = new Network<G>();
+Inspect(red, green);
+red = Pass(red);
+const inputs = pair(red, green);`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.capabilityUses).toMatchObject([
+      { network: 'red', capability: 'readonly', parameter: 'input', fixedColor: 'red' },
+      { network: 'green', capability: 'ref', parameter: 'output', fixedColor: 'green' },
+      { network: 'red', capability: 'move', parameter: 'input' },
+    ]);
+    expect(
+      plan.capabilityUses?.every(
+        ({ provenance, instancePath }) =>
+          provenance.fileId === parsed.id && instancePath.length > 0,
+      ),
+    ).toBe(true);
+    expect(plan.networkPairs).toMatchObject([{ networks: ['red', 'green'] }]);
+  });
+
   test('limits recorded DSL work rather than empty JavaScript iterations', () => {
     const parsed = parseFile({
       path: 'budget.factorio.ts',
@@ -130,6 +159,47 @@ const input = CC((count + loose + strict) * A);`,
     ]);
   });
 
+  test('preserves ordinary JavaScript .as and .to methods through runtime dispatch', () => {
+    const parsed = parseFile({
+      path: 'ordinary-fluent-methods.ts',
+      text: `const formatter = { as(value: string) { return value + "!"; } };
+const target = { to(value: number) { return value + 1; } };
+const formatted = formatter.as("ok");
+const incremented = target.to(4);
+if (formatted !== "ok!" || incremented !== 5) {
+  throw new Error("ordinary fluent dispatch failed");
+}`,
+    });
+
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    expect(executeElaborationProgram(transformElaborationModule(parsed)).producers).toEqual([]);
+  });
+
+  test('treats Signal quality as part of an output binding constraint', () => {
+    const conflict = '(input[normal] + 1).as(normal).to(output, legendary)';
+    const parsed = parseFile({
+      path: 'quality-output-conflict.factorio.ts',
+      text: `const normal = Signal("item", "iron-plate", "normal");
+const legendary = Signal("item", "iron-plate", "legendary");
+const input = new Network();
+const output = new Network();
+${conflict};`,
+    });
+
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected different Signal qualities to conflict.');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'RT2023', span: expect.any(Object) });
+      expect(
+        parsed.text.slice(
+          (error as ElaborationExecutionError).span.start,
+          (error as ElaborationExecutionError).span.end,
+        ),
+      ).toBe(conflict);
+    }
+  });
+
   test('preserves JavaScript logical short-circuiting without weakening circuit conditions', () => {
     const parsed = parseFile({
       path: 'logical-short-circuit.factorio.ts',
@@ -154,6 +224,24 @@ const output = IF(source > 0 && source < 10, source);`,
         conditions: [{ comparator: '>' }, { comparator: '<' }],
       },
     });
+  });
+
+  test('preserves ordinary optional element and method-call short-circuiting', () => {
+    const parsed = parseFile({
+      path: 'ordinary-optional-access.ts',
+      text: `let keyCalls = 0;
+function key(): string { keyCalls++; return "value"; }
+const missing: { value: number } | undefined = undefined;
+const skippedElement = missing?.[key()];
+const skippedCall = missing?.toString();
+const present = { value: 7 };
+const read = present?.[key()];
+if (skippedElement !== undefined || skippedCall !== undefined || keyCalls !== 1 || read !== 7) {
+  throw new Error("optional access semantics changed");
+}`,
+    });
+
+    expect(executeElaborationProgram(transformElaborationModule(parsed)).producers).toEqual([]);
   });
 
   test('carries explicit .at placement into blueprint JSON', () => {
@@ -1294,6 +1382,20 @@ const output: Network = inputs + 0;`,
     expect(() => executeElaborationProgram(transformElaborationModule(stale))).toThrowError(
       expect.objectContaining({ code: 'RT2012' }),
     );
+
+    const collapsed = parseFile({
+      path: 'pair-collapsed-by-take.factorio.ts',
+      text: `const first = new Network();
+const second = new Network();
+const inputs = pair(first, second);
+first.take(second);`,
+    });
+    const collapsedResult = tryElaborateDirectPlan(
+      executeElaborationProgram(transformElaborationModule(collapsed)),
+    );
+    expect(collapsedResult.diagnostics).toEqual([
+      expect.objectContaining({ code: 'RT2020', severity: 'error', span: expect.any(Object) }),
+    ]);
   });
 
   test('materializes loop-local Networks and feeds them into arithmetic producers', () => {
@@ -1780,6 +1882,93 @@ const output: Network = values[0] + 1;`,
     expect(() => executeElaborationProgram(transformElaborationModule(container))).toThrowError(
       expect.objectContaining({ code: 'RT2012' }),
     );
+  });
+
+  test('replaces moved ownership in direct, array, object, and destructured slots', () => {
+    const parsed = parseFile({
+      path: 'replace-moved-slots.factorio.ts',
+      text: `function Advance(input: Move<Network>): Network {
+  input += input + 1;
+  return input;
+}
+let direct = new Network();
+const stages: Network[] = [new Network(), new Network()];
+const state = { current: new Network() };
+let [destructured] = [new Network()];
+direct = Advance(direct);
+for (let i = 0; i < stages.length; i++) {
+  stages[i] = Advance(stages[i]);
+}
+state.current = Advance(state.current);
+destructured = Advance(destructured);
+const output: Network = direct + stages[0] + stages[1] + state.current + destructured;`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.diagnostics).toEqual([]);
+    expect(plan.producers).toHaveLength(9);
+    expect(plan.producers.slice(0, 5).every(({ destinations }) => destinations.length === 1)).toBe(
+      true,
+    );
+    expect(plan.producers.at(-1)?.destinations).toMatchObject([{ network: 'output' }]);
+  });
+
+  test('keeps aliases usable until a move and invalidates stale slot aliases after replacement', () => {
+    const valid = parseFile({
+      path: 'local-network-alias.factorio.ts',
+      text: `const input = new Network();
+const alias = input;
+const slots = [alias];
+slots[0] += input + 1;`,
+    });
+    expect(executeElaborationProgram(transformElaborationModule(valid)).producers).toMatchObject([
+      { kind: 'arithmetic', destinations: [{ network: 'input' }] },
+    ]);
+
+    const staleUse = 'alias + 1';
+    const stale = parseFile({
+      path: 'stale-replaced-slot-alias.factorio.ts',
+      text: `function Advance(input: Move<Network>): Network { return input; }
+const stages: Network[] = [new Network()];
+const alias = stages[0];
+stages[0] = Advance(stages[0]);
+const valid: Network = stages[0] + 1;
+const invalid: Network = ${staleUse};`,
+    });
+    try {
+      executeElaborationProgram(transformElaborationModule(stale));
+      expect.fail('Expected the pre-move alias to retain its stale ownership generation.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ElaborationExecutionError);
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2012');
+      expect(stale.text.slice(failure.span.start, failure.span.end)).toBe(staleUse);
+      expect(failure.related).toHaveLength(2);
+    }
+  });
+
+  test('rejects a closure that uses an expired Network borrow', () => {
+    const use = 'input + 1';
+    const parsed = parseFile({
+      path: 'borrowed-network-closure.factorio.ts',
+      text: `function Capture(input: Readonly<Network>) {
+  return () => ${use};
+}
+const input = new Network();
+const delayed = Capture(input);
+const output: Network = delayed();`,
+    });
+
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected the closure to retain an expired borrow view.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ElaborationExecutionError);
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2017');
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(use);
+      expect(failure.related).toHaveLength(2);
+    }
   });
 
   test('lets Move parameters participate in take and rejects dropped ownership reuse', () => {

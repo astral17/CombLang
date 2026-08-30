@@ -6,6 +6,7 @@ import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
 import { transformElaborationModule } from '@comblang/compiler';
+import type { DirectPlanCapabilityUse } from '@comblang/compiler/direct-plan';
 import { parseProject, validateDslSemantics } from '@comblang/language';
 import {
   ElaborationExecutionError,
@@ -66,6 +67,7 @@ async function check(fileNames: readonly string[], json: boolean): Promise<numbe
 
   const diagnostics: Diagnostic[] = [...project.diagnostics];
   let producerCount = 0;
+  const capabilityUses: DirectPlanCapabilityUse[] = [];
   for (const file of project.files.values()) {
     if (file.diagnostics.some(({ severity }) => severity === 'error')) continue;
     const semanticDiagnostics = validateDslSemantics(file);
@@ -75,6 +77,7 @@ async function check(fileNames: readonly string[], json: boolean): Promise<numbe
       const plan = executeElaborationProgram(transformElaborationModule(file));
       diagnostics.push(...(plan.diagnostics ?? []));
       producerCount += plan.producers.length;
+      capabilityUses.push(...(plan.capabilityUses ?? []));
       diagnostics.push(...tryElaborateDirectPlan(plan).diagnostics);
     } catch (error) {
       diagnostics.push({
@@ -95,7 +98,7 @@ async function check(fileNames: readonly string[], json: boolean): Promise<numbe
   }
 
   if (json) {
-    console.log(JSON.stringify({ diagnostics, producerCount }, null, 2));
+    console.log(JSON.stringify({ diagnostics, producerCount, capabilityUses }, null, 2));
   } else if (diagnostics.length === 0) {
     console.log(
       `Checked ${project.files.size} file(s): circuit semantics are valid (${producerCount} producer(s)).`,

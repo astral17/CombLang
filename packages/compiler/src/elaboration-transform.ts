@@ -2,6 +2,8 @@ import ts from 'typescript';
 
 import type { ParsedSourceFile } from '@comblang/language';
 
+import { printErasedTypeScript } from './typescript-erase.js';
+
 export interface ElaborationJavaScript {
   readonly format: 'comblang-elaboration-js';
   readonly version: 1;
@@ -399,6 +401,17 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
       return ts.isDeleteExpression(parent);
     };
     const visit: ts.Visitor = (node) => {
+      // Optional chains are ordinary JavaScript. Returning the original subtree preserves both
+      // nullish short-circuiting and the chain flags expected by TypeScript's syntax eraser.
+      if (
+        (ts.isElementAccessExpression(node) && node.questionDotToken !== undefined) ||
+        (ts.isCallExpression(node) &&
+          (node.questionDotToken !== undefined ||
+            (ts.isPropertyAccessExpression(node.expression) &&
+              node.expression.questionDotToken !== undefined)))
+      ) {
+        return node;
+      }
       if (ts.isEnumDeclaration(node)) {
         let nextNumericValue = 0;
         const properties = node.members.map((member) => {
@@ -715,7 +728,11 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
         return networkCall(node);
       }
 
-      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+      if (
+        ts.isCallExpression(node) &&
+        node.questionDotToken === undefined &&
+        ts.isIdentifier(node.expression)
+      ) {
         const wildcard = wildcardNames[node.expression.text];
         if (wildcard !== undefined && node.arguments.length === 1) {
           return dslCall(factory, 'wildcard', [
@@ -739,7 +756,12 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
         }
       }
 
-      if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      if (
+        ts.isCallExpression(node) &&
+        node.questionDotToken === undefined &&
+        ts.isPropertyAccessExpression(node.expression) &&
+        node.expression.questionDotToken === undefined
+      ) {
         const method = node.expression.name.text;
         const receiver = node.expression.expression;
         if (
@@ -786,7 +808,11 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
         }
       }
 
-      if (ts.isElementAccessExpression(node) && !isWriteTarget(node)) {
+      if (
+        ts.isElementAccessExpression(node) &&
+        node.questionDotToken === undefined &&
+        !isWriteTarget(node)
+      ) {
         return dslCall(factory, 'element', [
           ts.visitNode(node.expression, visit) as ts.Expression,
           ts.visitNode(node.argumentExpression, visit) as ts.Expression,
@@ -1016,20 +1042,7 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
     module: ts.ModuleKind.None,
   };
   const transformed = ts.transform(file.ast, [transformer], compilerOptions);
-  // `transpileModule` constructs a short-lived compiler program. Besides doing work we do not
-  // need, that path is not stable after TypeScript itself is bundled into a production Worker.
-  // The compiler's syntax-only TypeScript transform is the same erasure stage used by emit and
-  // keeps runtime elaboration deterministic in both Node and the browser.
-  const syntaxTransforms = ts as typeof ts & {
-    transformTypeScript: ts.TransformerFactory<ts.SourceFile>;
-  };
-  const erased = ts.transform(
-    transformed.transformed[0]!,
-    [syntaxTransforms.transformTypeScript],
-    compilerOptions,
-  );
-  const javaScript = ts.createPrinter().printFile(erased.transformed[0]!);
-  erased.dispose();
+  const javaScript = printErasedTypeScript(transformed.transformed[0]!, compilerOptions);
   transformed.dispose();
   return {
     format: 'comblang-elaboration-js',
