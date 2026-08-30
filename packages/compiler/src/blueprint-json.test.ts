@@ -13,7 +13,7 @@ describe('Factorio blueprint JSON generator', () => {
     const A = signal('virtual', 'signal-A');
     const ir: NativeCircuitIr = {
       format: 'comblang-ncir',
-      version: 1,
+      version: 2,
       networks: [
         {
           id: network(1),
@@ -41,7 +41,7 @@ describe('Factorio blueprint JSON generator', () => {
           kind: 'arithmetic',
           placement: { x: 12.5, y: -4, direction: 8 },
           config: {
-            left: { kind: 'signal', signal: A, network: network(1) },
+            left: { kind: 'signal', signal: A, refKind: 'single', network: network(1) },
             operation: 'multiply',
             right: { kind: 'constant', value: 2 },
             output: { kind: 'signal', signal: A },
@@ -86,7 +86,7 @@ describe('Factorio blueprint JSON generator', () => {
     const IRON = signal('item', 'iron-plate');
     const ir: NativeCircuitIr = {
       format: 'comblang-ncir',
-      version: 1,
+      version: 2,
       networks: [
         {
           id: network(1),

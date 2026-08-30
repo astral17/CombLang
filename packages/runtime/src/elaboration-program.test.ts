@@ -1284,8 +1284,11 @@ const copied: Network = IF(Anything(pair(red, green)) > 0, Everything(pair(red, 
     expect(plan.networkPairs).toHaveLength(3);
     expect(plan.producers[2]).toMatchObject({
       kind: 'arithmetic',
-      left: { kind: 'signal', network: 'red', networks: ['red', 'green'] },
+      left: { kind: 'signal', refKind: 'pair', networks: ['red', 'green'] },
     });
+    expect(
+      plan.producers[2]?.kind === 'arithmetic' ? plan.producers[2].left : undefined,
+    ).not.toHaveProperty('network');
     expect(plan.producers[3]).toMatchObject({
       kind: 'decider',
       condition: {
@@ -1633,7 +1636,11 @@ const output: Network = destination * 2;`,
     expect(sourceProducer.destinations).toContain(destination.id);
     expect(outputProducer.kind).toBe('arithmetic');
     if (outputProducer.kind === 'arithmetic') {
-      expect(outputProducer.config.left).toEqual({ kind: 'each', network: destination.id });
+      expect(outputProducer.config.left).toEqual({
+        kind: 'each',
+        refKind: 'single',
+        network: destination.id,
+      });
     }
   });
 

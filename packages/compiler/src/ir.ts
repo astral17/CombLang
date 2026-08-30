@@ -22,11 +22,9 @@ export interface CircuitNetworkNode {
   readonly provenance: Provenance;
 }
 
-export interface LogicalNetworkRef {
-  readonly network: NetworkId;
-  /** Both input wires for a pair; `network` is the primary compatibility view. */
-  readonly networks?: readonly [NetworkId, NetworkId];
-}
+export type LogicalNetworkRef =
+  | { readonly refKind: 'single'; readonly network: NetworkId }
+  | { readonly refKind: 'pair'; readonly networks: readonly [NetworkId, NetworkId] };
 
 export type LogicalArithmeticOperand =
   | { readonly kind: 'constant'; readonly value: number }
@@ -90,8 +88,7 @@ export type LogicalDeciderOutputSignal =
 
 export interface LogicalDeciderOutput {
   readonly signal: LogicalDeciderOutputSignal;
-  readonly input?: NetworkId;
-  readonly inputs?: readonly [NetworkId, NetworkId];
+  readonly input?: LogicalNetworkRef;
   readonly copyCountFromInput?: boolean;
   readonly constant?: number;
 }
@@ -136,7 +133,7 @@ export interface CircuitAttachment {
 
 export interface ElaborationGraph {
   readonly format: 'comblang-eg';
-  readonly version: 1;
+  readonly version: 2;
   readonly networks: readonly CircuitNetworkNode[];
   readonly producers: readonly CircuitProducerNode[];
   readonly attachments: readonly CircuitAttachment[];
@@ -148,7 +145,7 @@ export interface ResolvedCircuitNetworkNode extends CircuitNetworkNode {
 
 export interface NativeCircuitIr {
   readonly format: 'comblang-ncir';
-  readonly version: 1;
+  readonly version: 2;
   readonly networks: readonly ResolvedCircuitNetworkNode[];
   readonly producers: readonly CircuitProducerNode[];
 }

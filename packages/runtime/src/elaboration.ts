@@ -9,6 +9,7 @@ import type {
   LogicalConditionLeft,
   LogicalDeciderCondition,
   LogicalDeciderOutputSignal,
+  LogicalNetworkRef,
   LogicalScalarOperand,
   NativeCircuitIr,
   Provenance,
@@ -113,10 +114,9 @@ export interface NetworkHandle {
   readonly id: NetworkId;
 }
 
-export interface RuntimeNetworkRef {
-  readonly network: NetworkHandle;
-  readonly networks?: readonly [NetworkHandle, NetworkHandle];
-}
+export type RuntimeNetworkRef =
+  | { readonly refKind: 'single'; readonly network: NetworkHandle }
+  | { readonly refKind: 'pair'; readonly networks: readonly [NetworkHandle, NetworkHandle] };
 
 export interface ProducerHandle {
   readonly kind: 'producer';
@@ -158,8 +158,7 @@ export type RuntimeDeciderCondition =
 
 export interface RuntimeDeciderOutput {
   readonly signal: LogicalDeciderOutputSignal;
-  readonly input?: NetworkHandle;
-  readonly inputs?: readonly [NetworkHandle, NetworkHandle];
+  readonly input?: RuntimeNetworkRef;
   readonly copyCountFromInput?: boolean;
   readonly constant?: number;
 }
@@ -428,7 +427,7 @@ export class DslRuntime {
     const networks = [...this.#networks.values()];
     const graph: ElaborationGraph = Object.freeze({
       format: 'comblang-eg',
-      version: 1,
+      version: 2,
       networks: Object.freeze(networks),
       producers: Object.freeze(producers),
       attachments: Object.freeze(
@@ -441,7 +440,7 @@ export class DslRuntime {
     });
     const ir: NativeCircuitIr = Object.freeze({
       format: 'comblang-ncir',
-      version: 1,
+      version: 2,
       networks: Object.freeze(
         networks.map((network) => Object.freeze({ ...network, color: colors.get(network.id)! })),
       ),
@@ -474,19 +473,21 @@ export class DslRuntime {
     return handle.id;
   }
 
+  #lowerNetworkRef(reference: RuntimeNetworkRef) {
+    return reference.refKind === 'single'
+      ? ({ refKind: 'single' as const, network: this.#networkId(reference.network) } as const)
+      : ({
+          refKind: 'pair' as const,
+          networks: reference.networks.map((network) => this.#networkId(network)) as [
+            NetworkId,
+            NetworkId,
+          ],
+        } as const);
+  }
+
   #lowerArithmeticOperand(operand: RuntimeArithmeticOperand) {
     if (operand.kind === 'constant') return operand;
-    const reference = {
-      network: this.#networkId(operand.network),
-      ...(operand.networks === undefined
-        ? {}
-        : {
-            networks: operand.networks.map((network) => this.#networkId(network)) as [
-              NetworkId,
-              NetworkId,
-            ],
-          }),
-    };
+    const reference = this.#lowerNetworkRef(operand);
     return operand.kind === 'signal'
       ? Object.freeze({ kind: 'signal' as const, signal: operand.signal, ...reference })
       : Object.freeze({ kind: 'each' as const, ...reference });
@@ -497,15 +498,7 @@ export class DslRuntime {
     return Object.freeze({
       kind: 'signal' as const,
       signal: operand.signal,
-      network: this.#networkId(operand.network),
-      ...(operand.networks === undefined
-        ? {}
-        : {
-            networks: operand.networks.map((network) => this.#networkId(network)) as [
-              NetworkId,
-              NetworkId,
-            ],
-          }),
+      ...this.#lowerNetworkRef(operand),
     });
   }
 
@@ -529,28 +522,12 @@ export class DslRuntime {
         ? Object.freeze({
             kind: 'signal' as const,
             signal: condition.left.signal,
-            network: this.#networkId(condition.left.network),
-            ...(condition.left.networks === undefined
-              ? {}
-              : {
-                  networks: condition.left.networks.map((network) => this.#networkId(network)) as [
-                    NetworkId,
-                    NetworkId,
-                  ],
-                }),
+            ...this.#lowerNetworkRef(condition.left),
           })
         : Object.freeze({
             kind: 'wildcard' as const,
             value: condition.left.value,
-            network: this.#networkId(condition.left.network),
-            ...(condition.left.networks === undefined
-              ? {}
-              : {
-                  networks: condition.left.networks.map((network) => this.#networkId(network)) as [
-                    NetworkId,
-                    NetworkId,
-                  ],
-                }),
+            ...this.#lowerNetworkRef(condition.left),
           });
     return Object.freeze({
       kind: 'compare',
@@ -563,15 +540,7 @@ export class DslRuntime {
   #lowerOutput(output: RuntimeDeciderOutput) {
     return Object.freeze({
       signal: output.signal,
-      ...(output.input === undefined ? {} : { input: this.#networkId(output.input) }),
-      ...(output.inputs === undefined
-        ? {}
-        : {
-            inputs: output.inputs.map((network) => this.#networkId(network)) as [
-              NetworkId,
-              NetworkId,
-            ],
-          }),
+      ...(output.input === undefined ? {} : { input: this.#lowerNetworkRef(output.input) }),
       ...(output.copyCountFromInput === undefined
         ? {}
         : { copyCountFromInput: output.copyCountFromInput }),
@@ -584,11 +553,9 @@ export class DslRuntime {
     const add = (network: NetworkId | undefined) => {
       if (network !== undefined) result.push(network);
     };
-    const addRef = (value: {
-      readonly network: NetworkId;
-      readonly networks?: readonly NetworkId[];
-    }) => {
-      for (const network of value.networks ?? [value.network]) add(network);
+    const addRef = (value: LogicalNetworkRef) => {
+      for (const network of value.refKind === 'single' ? [value.network] : value.networks)
+        add(network);
     };
     if (producer.kind === 'arithmetic') {
       if (producer.config.left.kind !== 'constant') addRef(producer.config.left);
@@ -604,12 +571,10 @@ export class DslRuntime {
       };
       walk(producer.config.condition);
       producer.config.outputs.forEach((output) => {
-        for (const network of output.inputs ?? (output.input === undefined ? [] : [output.input]))
-          add(network);
+        if (output.input !== undefined) addRef(output.input);
       });
       producer.config.elseOutputs?.forEach((output) => {
-        for (const network of output.inputs ?? (output.input === undefined ? [] : [output.input]))
-          add(network);
+        if (output.input !== undefined) addRef(output.input);
       });
     }
     return unique(result);
@@ -711,12 +676,10 @@ export class DslRuntime {
     initial: readonly SimulationInitialValue[],
   ): SimulationKernel {
     const colors = new Map(ir.networks.map((network) => [network.id, network.color]));
-    const selection = (value: {
-      readonly network: NetworkId;
-      readonly networks?: readonly NetworkId[];
-    }) => {
+    const selection = (value: LogicalNetworkRef) => {
       const result = { red: false, green: false };
-      for (const network of value.networks ?? [value.network]) result[colors.get(network)!] = true;
+      for (const network of value.refKind === 'single' ? [value.network] : value.networks)
+        result[colors.get(network)!] = true;
       return result;
     };
     const inputNetworks = (producer: CircuitProducerNode) => {
@@ -774,14 +737,7 @@ export class DslRuntime {
               };
         const output = (value: DeciderProducerConfig['outputs'][number]): DeciderOutput => ({
           signal: value.signal,
-          ...(value.input === undefined
-            ? {}
-            : {
-                networks: selection({
-                  network: value.input,
-                  ...(value.inputs === undefined ? {} : { networks: value.inputs }),
-                }),
-              }),
+          ...(value.input === undefined ? {} : { networks: selection(value.input) }),
           ...(value.copyCountFromInput === undefined
             ? {}
             : { copyCountFromInput: value.copyCountFromInput }),

@@ -7,6 +7,7 @@ import type {
   CircuitProducerNode,
   LogicalDeciderCondition,
   LogicalDeciderOutput,
+  LogicalNetworkRef,
   LogicalScalarOperand,
   NativeCircuitIr,
   Quantifier,
@@ -181,11 +182,9 @@ function producerInputs(producer: CircuitProducerNode): NetworkId[] {
   const add = (network: NetworkId | undefined) => {
     if (network !== undefined && !inputs.includes(network)) inputs.push(network);
   };
-  const addRef = (value: {
-    readonly network: NetworkId;
-    readonly networks?: readonly NetworkId[];
-  }) => {
-    for (const network of value.networks ?? [value.network]) add(network);
+  const addRef = (value: LogicalNetworkRef) => {
+    const networks = value.refKind === 'single' ? [value.network] : value.networks;
+    for (const network of networks) add(network);
   };
   if (producer.kind === 'arithmetic') {
     if (producer.config.left.kind !== 'constant') addRef(producer.config.left);
@@ -201,12 +200,10 @@ function producerInputs(producer: CircuitProducerNode): NetworkId[] {
     };
     walk(producer.config.condition);
     producer.config.outputs.forEach((output) => {
-      for (const network of output.inputs ?? (output.input === undefined ? [] : [output.input]))
-        add(network);
+      if (output.input !== undefined) addRef(output.input);
     });
     producer.config.elseOutputs?.forEach((output) => {
-      for (const network of output.inputs ?? (output.input === undefined ? [] : [output.input]))
-        add(network);
+      if (output.input !== undefined) addRef(output.input);
     });
   }
   return inputs;

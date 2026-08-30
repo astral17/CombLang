@@ -1,4 +1,4 @@
-import { compileDirectPlan } from '@comblang/compiler/direct-plan';
+import { compileDirectPlan, type DirectElaborationPlan } from '@comblang/compiler/direct-plan';
 import { transformElaborationModule } from '@comblang/compiler/elaboration-transform';
 import { signal, SparseBus } from '@comblang/factorio';
 import { parseFile } from '@comblang/language';
@@ -9,6 +9,17 @@ import { RuntimeDiagnosticError } from './elaboration.js';
 import { executeElaborationProgram } from './elaboration-program.js';
 
 describe('direct plan execution', () => {
+  test('rejects the pre-discriminant direct-plan schema', () => {
+    const parsed = parseFile({ path: 'schema.factorio.ts', text: 'const input = new Network();' });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const legacy = { ...plan, version: 1 } as unknown as DirectElaborationPlan;
+
+    expect(() => elaborateDirectPlan(legacy)).toThrowError(RuntimeDiagnosticError);
+    expect(tryElaborateDirectPlan(legacy).diagnostics).toMatchObject([
+      { code: 'RT1001', severity: 'error' },
+    ]);
+  });
+
   test('retains capability audit metadata after direct-plan lowering', () => {
     const parsed = parseFile({
       path: 'capability-audit.factorio.ts',

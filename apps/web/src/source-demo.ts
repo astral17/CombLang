@@ -1,4 +1,8 @@
-import type { DirectElaborationPlan, PlanDeciderCondition } from '@comblang/compiler/direct-plan';
+import type {
+  DirectElaborationPlan,
+  PlanDeciderCondition,
+  PlanNetworkRef,
+} from '@comblang/compiler/direct-plan';
 import { signal, SparseBus } from '@comblang/factorio';
 import { elaborateDirectPlan } from '@comblang/runtime';
 
@@ -18,15 +22,19 @@ export interface SourcePlanDemo {
   }[];
 }
 
+function networkRefNames(reference: PlanNetworkRef): readonly string[] {
+  return reference.refKind === 'single' ? [reference.network] : reference.networks;
+}
+
 function firstConditionNetwork(condition: PlanDeciderCondition): string | undefined {
   if (
     condition.kind === 'compare-each' ||
     condition.kind === 'compare-signal' ||
     condition.kind === 'compare-wildcard'
   ) {
-    return condition.network;
+    return networkRefNames(condition)[0];
   }
-  if (condition.kind === 'compare-signals') return condition.left.network;
+  if (condition.kind === 'compare-signals') return networkRefNames(condition.left)[0];
   for (const child of condition.conditions) {
     const network = firstConditionNetwork(child);
     if (network !== undefined) return network;
@@ -40,13 +48,10 @@ function conditionNetworks(condition: PlanDeciderCondition): readonly string[] {
     condition.kind === 'compare-signal' ||
     condition.kind === 'compare-wildcard'
   ) {
-    return condition.networks ?? [condition.network];
+    return networkRefNames(condition);
   }
   if (condition.kind === 'compare-signals') {
-    return [
-      ...(condition.left.networks ?? [condition.left.network]),
-      ...(condition.right.networks ?? [condition.right.network]),
-    ];
+    return [...networkRefNames(condition.left), ...networkRefNames(condition.right)];
   }
   return condition.conditions.flatMap(conditionNetworks);
 }
@@ -61,14 +66,14 @@ function producerInputNetworks(
       ...conditionNetworks(producer.condition),
       ...outputs.flatMap((output) =>
         output.kind === 'each' || output.kind === 'signal' || output.kind === 'wildcard'
-          ? (output.networks ?? [output.network])
+          ? networkRefNames(output)
           : [],
       ),
     ];
   }
   return [producer.left, producer.right]
     .filter((operand) => operand.kind === 'each' || operand.kind === 'signal')
-    .flatMap((operand) => operand.networks ?? [operand.network]);
+    .flatMap(networkRefNames);
 }
 
 function criticalPathStages(plan: DirectElaborationPlan): number {
@@ -102,20 +107,18 @@ export function runSourcePlanDemo(plan: DirectElaborationPlan, inputValue = 7): 
       waveform: [],
     };
   }
-  const inputOperand =
+  const inputNetworkName =
     firstProducer.kind === 'decider'
-      ? { network: firstConditionNetwork(firstProducer.condition) }
+      ? firstConditionNetwork(firstProducer.condition)
       : firstProducer.kind === 'arithmetic'
         ? firstProducer.left.kind === 'each' || firstProducer.left.kind === 'signal'
-          ? firstProducer.left
+          ? networkRefNames(firstProducer.left)[0]
           : firstProducer.right.kind === 'each' || firstProducer.right.kind === 'signal'
-            ? firstProducer.right
+            ? networkRefNames(firstProducer.right)[0]
             : undefined
         : undefined;
-  const inputNetworkName = inputOperand?.network;
   const outputName = lastProducer.destinations[0]?.network;
   if (
-    (inputOperand === undefined && firstProducer.kind !== 'constant') ||
     (inputNetworkName === undefined && firstProducer.kind !== 'constant') ||
     outputName === undefined
   ) {

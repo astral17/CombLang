@@ -21,7 +21,7 @@ function buildMemoCell(runtime: DslRuntime, input: NetworkHandle) {
   const mem = runtime.network({ name: 'mem' });
 
   const delay = runtime.arithmetic({
-    left: { kind: 'each', network: input },
+    left: { kind: 'each', refKind: 'single', network: input },
     operation: 'add',
     right: { kind: 'constant', value: 0 },
     output: { kind: 'each' },
@@ -34,13 +34,13 @@ function buildMemoCell(runtime: DslRuntime, input: NetworkHandle) {
       conditions: [
         {
           kind: 'compare',
-          left: { kind: 'wildcard', value: 'each', network: input },
+          left: { kind: 'wildcard', value: 'each', refKind: 'single', network: input },
           comparator: '=',
           right: { kind: 'constant', value: 0 },
         },
         {
           kind: 'compare',
-          left: { kind: 'wildcard', value: 'each', network: mem },
+          left: { kind: 'wildcard', value: 'each', refKind: 'single', network: mem },
           comparator: '!=',
           right: { kind: 'constant', value: 0 },
         },
@@ -49,7 +49,7 @@ function buildMemoCell(runtime: DslRuntime, input: NetworkHandle) {
     outputs: [
       {
         signal: { kind: 'wildcard', value: 'each' },
-        input: mem,
+        input: { refKind: 'single', network: mem },
         copyCountFromInput: true,
       },
     ],
@@ -88,7 +88,7 @@ describe('direct elaboration runtime', () => {
     const secondSource = sourceSpan(file, 30, 40);
     const second = runtime.network({ color: 'red', source: secondSource });
     const producer = runtime.arithmetic({
-      left: { kind: 'each', network: input },
+      left: { kind: 'each', refKind: 'single', network: input },
       operation: 'add',
       right: { kind: 'constant', value: 0 },
       output: { kind: 'each' },
@@ -111,7 +111,7 @@ describe('direct elaboration runtime', () => {
 
     const error = captureRuntimeDiagnostic(() =>
       second.arithmetic({
-        left: { kind: 'each', network: foreign },
+        left: { kind: 'each', refKind: 'single', network: foreign },
         operation: 'add',
         right: { kind: 'constant', value: 0 },
         output: { kind: 'each' },
@@ -131,7 +131,7 @@ describe('direct elaboration runtime', () => {
     const producerSource = sourceSpan(sourceFileId('unattached.factorio.ts'), 10, 20);
     const producer = runtime.arithmetic(
       {
-        left: { kind: 'each', network: input },
+        left: { kind: 'each', refKind: 'single', network: input },
         operation: 'add',
         right: { kind: 'constant', value: 0 },
         output: { kind: 'each' },
@@ -163,7 +163,7 @@ describe('direct elaboration runtime', () => {
     const attachmentSource = sourceSpan(file, 30, 40);
     const producer = runtime.arithmetic(
       {
-        left: { kind: 'each', network: input },
+        left: { kind: 'each', refKind: 'single', network: input },
         operation: 'multiply',
         right: { kind: 'constant', value: 2 },
         output: { kind: 'each' },
@@ -208,7 +208,7 @@ describe('direct elaboration runtime', () => {
     const output = runtime.network({ name: 'output', instancePath });
     const producer = runtime.arithmetic(
       {
-        left: { kind: 'each', network: input },
+        left: { kind: 'each', refKind: 'single', network: input },
         operation: 'multiply',
         right: { kind: 'constant', value: 2 },
         output: { kind: 'each' },

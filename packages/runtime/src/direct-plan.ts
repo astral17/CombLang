@@ -15,6 +15,7 @@ import {
   type RuntimeArithmeticOperand,
   type RuntimeConstantConfig,
   type RuntimeDeciderConfig,
+  type RuntimeNetworkRef,
 } from './elaboration.js';
 
 export interface ExecutedDirectPlan {
@@ -72,53 +73,37 @@ function lowerNetworkRef(
   value: PlanNetworkRef,
   networks: ReadonlyMap<string, NetworkHandle>,
   source: SourceSpan,
-): {
-  readonly network: NetworkHandle;
-  readonly networks?: readonly [NetworkHandle, NetworkHandle];
-} {
-  if (
-    value.networks !== undefined &&
-    (value.networks.length !== 2 ||
-      value.networks[0] !== value.network ||
-      value.networks[0] === value.networks[1])
-  ) {
+): RuntimeNetworkRef {
+  if (value.refKind === 'single') {
+    return { refKind: 'single', network: requiredNetwork(value.network, networks, source) };
+  }
+  if (value.networks.length !== 2 || value.networks[0] === value.networks[1]) {
     throw runtimeFailure(
       'RT2020',
-      'A pair input descriptor requires two distinct Networks and its primary Network first.',
+      'A pair input descriptor requires two distinct Networks.',
       source,
     );
   }
-  const network = requiredNetwork(value.network, networks, source);
-  const pair =
-    value.networks === undefined
-      ? undefined
-      : (value.networks.map((name) => requiredNetwork(name, networks, source)) as [
-          NetworkHandle,
-          NetworkHandle,
-        ]);
-  if (pair !== undefined && pair[0] === pair[1]) {
+  const pair = value.networks.map((name) => requiredNetwork(name, networks, source)) as [
+    NetworkHandle,
+    NetworkHandle,
+  ];
+  if (pair[0] === pair[1]) {
     throw runtimeFailure(
       'RT2020',
       'A pair input descriptor resolves to one logical Network after transfer.',
       source,
     );
   }
-  return {
-    network,
-    ...(pair === undefined ? {} : { networks: pair }),
-  };
+  return { refKind: 'pair', networks: pair };
 }
 
 function lowerOutputInputs(
   value: PlanNetworkRef,
   networks: ReadonlyMap<string, NetworkHandle>,
   source: SourceSpan,
-): { readonly input: NetworkHandle; readonly inputs?: readonly [NetworkHandle, NetworkHandle] } {
-  const reference = lowerNetworkRef(value, networks, source);
-  return {
-    input: reference.network,
-    ...(reference.networks === undefined ? {} : { inputs: reference.networks }),
-  };
+): { readonly input: RuntimeNetworkRef } {
+  return { input: lowerNetworkRef(value, networks, source) };
 }
 
 function lowerCondition(
@@ -185,7 +170,7 @@ function lowerCondition(
 
 /** Executes compiler-owned descriptors only; it never evaluates source text. */
 function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
-  if (plan.format !== 'comblang-direct-plan' || plan.version !== 1) {
+  if (plan.format !== 'comblang-direct-plan' || plan.version !== 2) {
     throw runtimeFailure('RT1001', 'Unsupported direct elaboration plan format.');
   }
   const runtime = new DslRuntime();

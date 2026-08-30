@@ -6,13 +6,12 @@ import type { Diagnostic, SourceSpan } from '@comblang/shared';
 
 import type { ArithmeticOperation, CircuitColor, LogicalArithmeticOutput } from './ir.js';
 
-export interface PlanNetworkRef {
-  readonly network: string;
-  /** Both physical input wires for a `pair`; `network` remains the primary compatibility view. */
-  readonly networks?: readonly [string, string];
-}
+export type PlanNetworkRef =
+  | { readonly refKind: 'single'; readonly network: string }
+  | { readonly refKind: 'pair'; readonly networks: readonly [string, string] };
 
-export interface PlanAttachment extends PlanNetworkRef {
+export interface PlanAttachment {
+  readonly network: string;
   readonly source: SourceSpan;
   readonly instancePath: readonly string[];
 }
@@ -140,7 +139,7 @@ export type DirectPlanProducer = DirectPlanArithmetic | DirectPlanDecider | Dire
 
 export interface DirectElaborationPlan {
   readonly format: 'comblang-direct-plan';
-  readonly version: 1;
+  readonly version: 2;
   readonly networks: readonly DirectPlanNetwork[];
   readonly networkTransfers?: readonly DirectPlanNetworkTransfer[];
   readonly networkPairs?: readonly DirectPlanNetworkPair[];
@@ -918,6 +917,7 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
           conditionCount += 1;
           return {
             kind: 'compare-wildcard',
+            refKind: 'single',
             network: normalizedWildcard.selection.network,
             wildcard: normalizedWildcard.selection.wildcard,
             comparator: negated
@@ -933,9 +933,9 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
           left.kind === 'signal' && right.kind === 'signal'
             ? {
                 kind: 'compare-signals' as const,
-                left: { network: left.network, signal: left.signal },
+                left: { refKind: 'single' as const, network: left.network, signal: left.signal },
                 comparator: negated ? invertComparator(comparison) : comparison,
-                right: { network: right.network, signal: right.signal },
+                right: { refKind: 'single' as const, network: right.network, signal: right.signal },
               }
             : undefined;
         if (signalComparison !== undefined) {
@@ -975,6 +975,7 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
         return normalized.operand.kind === 'signal'
           ? {
               kind: 'compare-signal',
+              refKind: 'single',
               network: normalized.operand.network,
               signal: normalized.operand.signal,
               comparator: normalizedComparator,
@@ -982,6 +983,7 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
             }
           : {
               kind: 'compare-each',
+              refKind: 'single',
               network: normalized.operand.network,
               comparator: normalizedComparator,
               constant: normalized.constant,
@@ -1125,21 +1127,23 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
       if (constantEachCandidate !== undefined) {
         deciderOutput = { kind: 'each-constant', value: constantEachCandidate };
       } else if (wildcardOutput !== undefined) {
-        deciderOutput = { kind: 'wildcard', ...wildcardOutput };
+        deciderOutput = { kind: 'wildcard', refKind: 'single', ...wildcardOutput };
       } else if (copyOutput?.kind === 'signal') {
         deciderOutput = {
           kind: 'signal',
+          refKind: 'single',
           network: copyOutput.network,
           signal: requestedOutputSignal ?? copyOutput.signal,
         };
       } else if (requestedOutputSignal !== undefined) {
         deciderOutput = {
           kind: 'signal',
+          refKind: 'single',
           network: copyOutput!.network,
           signal: requestedOutputSignal,
         };
       } else {
-        deciderOutput = { kind: 'each', network: copyOutput!.network };
+        deciderOutput = { kind: 'each', refKind: 'single', network: copyOutput!.network };
       }
       producers.push({
         kind: 'decider',
@@ -1235,8 +1239,8 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
       value.kind === 'constant'
         ? value
         : value.kind === 'signal'
-          ? { kind: 'signal', network: value.network, signal: value.signal }
-          : { kind: 'each', network: value.network };
+          ? { kind: 'signal', refKind: 'single', network: value.network, signal: value.signal }
+          : { kind: 'each', refKind: 'single', network: value.network };
     const inferredOutputSignal =
       requestedOutputSignal ??
       (left.kind === 'signal' ? left.signal : right.kind === 'signal' ? right.signal : undefined);
@@ -1825,7 +1829,7 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
   return {
     plan: {
       format: 'comblang-direct-plan',
-      version: 1,
+      version: 2,
       networks,
       producers,
     },

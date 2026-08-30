@@ -19,7 +19,7 @@ export function runMemoCellDemo(): MemoCellDemo {
   const mem = runtime.network({ name: 'mem' });
 
   const delay = runtime.arithmetic({
-    left: { kind: 'each', network: input },
+    left: { kind: 'each', refKind: 'single', network: input },
     operation: 'add',
     right: { kind: 'constant', value: 0 },
     output: { kind: 'each' },
@@ -32,13 +32,13 @@ export function runMemoCellDemo(): MemoCellDemo {
       conditions: [
         {
           kind: 'compare',
-          left: { kind: 'wildcard', value: 'each', network: input },
+          left: { kind: 'wildcard', value: 'each', refKind: 'single', network: input },
           comparator: '=',
           right: { kind: 'constant', value: 0 },
         },
         {
           kind: 'compare',
-          left: { kind: 'wildcard', value: 'each', network: mem },
+          left: { kind: 'wildcard', value: 'each', refKind: 'single', network: mem },
           comparator: '!=',
           right: { kind: 'constant', value: 0 },
         },
@@ -47,7 +47,7 @@ export function runMemoCellDemo(): MemoCellDemo {
     outputs: [
       {
         signal: { kind: 'wildcard', value: 'each' },
-        input: mem,
+        input: { refKind: 'single', network: mem },
         copyCountFromInput: true,
       },
     ],

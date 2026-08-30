@@ -11,9 +11,38 @@ import type {
 } from '@comblang/compiler';
 import type { Diagnostic, SourceFileId, SourceSpan } from '@comblang/shared';
 
+import {
+  RuntimeValueRegistry,
+  type ConditionValue,
+  type DestinationValue,
+  type DslValue,
+  type FunctionOwnershipFrame,
+  type NetworkBorrow,
+  type NetworkMove,
+  type NetworkOwnershipState,
+  type NetworkValue,
+  type PairSelectedValue,
+  type PairValue,
+  type ProducerValue,
+  type RuntimeObjectKind,
+  type RuntimeObjectValue,
+  type SelectedValue,
+  type SignalValue,
+  type WildcardCountValue,
+  type WildcardName,
+  type WildcardTokenValue,
+} from './elaboration-values.js';
+
 interface RawSpan {
   readonly start: number;
   readonly end: number;
+}
+
+interface BindingDescriptor {
+  readonly name: string;
+  readonly color?: 'red' | 'green';
+  readonly property?: string;
+  readonly producerType?: string;
 }
 
 export interface ElaborationExecutionOptions {
@@ -43,142 +72,6 @@ export class ElaborationExecutionError extends Error {
     this.name = 'ElaborationExecutionError';
   }
 }
-
-type RuntimeNetworkCapability = 'owned' | 'readonly' | 'ref' | 'move';
-
-interface NetworkBorrow {
-  readonly capability: 'readonly' | 'ref';
-  readonly parameter: string;
-  readonly source: SourceSpan;
-  readonly ownership: NetworkOwnershipState;
-  active: boolean;
-  releasedAt?: SourceSpan;
-}
-
-interface NetworkMove {
-  readonly ownership: NetworkOwnershipState;
-  readonly source: SourceSpan;
-  returned: boolean;
-}
-
-interface FunctionOwnershipFrame {
-  readonly owner: symbol;
-  readonly source: SourceSpan;
-  readonly borrows: NetworkBorrow[];
-  readonly moves: NetworkMove[];
-}
-
-interface NetworkOwnershipState {
-  consumedAt?: SourceSpan;
-  lastMove?: { readonly source: SourceSpan; readonly generation: number };
-  generation: number;
-  owner: symbol | 'top-level' | 'lost';
-  colorRequirement?: { readonly color: 'red' | 'green'; readonly source: SourceSpan };
-  readonlyBorrows: Set<NetworkBorrow>;
-  mutableBorrow?: NetworkBorrow;
-}
-
-interface NetworkValue {
-  readonly kind: 'network';
-  readonly name: string;
-  readonly declaration: SourceSpan;
-  readonly ownership: NetworkOwnershipState;
-  readonly capability: RuntimeNetworkCapability;
-  readonly generation: number;
-  readonly borrow?: NetworkBorrow;
-}
-
-interface SignalValue {
-  readonly kind: 'signal-value';
-  readonly signal: SignalId;
-  readonly value: number;
-}
-
-interface SelectedValue {
-  readonly kind: 'selected';
-  readonly network: NetworkValue;
-  readonly networks?: readonly [NetworkValue, NetworkValue];
-  readonly selection: SignalId | WildcardName;
-}
-
-interface PairSelectedValue extends SelectedValue {
-  readonly networks: readonly [NetworkValue, NetworkValue];
-}
-
-interface PairValue {
-  readonly kind: 'pair';
-  readonly networks: readonly [NetworkValue, NetworkValue];
-  readonly source: SourceSpan;
-}
-
-type WildcardName = 'each' | 'anything' | 'everything';
-
-interface WildcardTokenValue {
-  readonly kind: 'wildcard-token';
-  readonly value: WildcardName;
-}
-
-interface WildcardCountValue {
-  readonly kind: 'wildcard-count';
-  readonly wildcard: WildcardName;
-  readonly value: number;
-}
-
-interface DestinationValue {
-  readonly kind: 'destinations';
-  readonly networks: readonly NetworkValue[];
-  readonly signal?: SignalId;
-}
-
-interface ConditionValue {
-  readonly kind: 'condition';
-  readonly condition: PlanDeciderCondition;
-}
-
-interface BindingDescriptor {
-  readonly name: string;
-  readonly color?: 'red' | 'green';
-  readonly property?: string;
-  readonly producerType?: string;
-}
-
-type WithoutDestinations<T> = T extends unknown ? Omit<T, 'destinations'> : never;
-
-interface ProducerValue {
-  readonly kind: 'producer';
-  /** Shared identity of one physical entity across fluent wrapper values. */
-  readonly identity: object;
-  readonly producer: WithoutDestinations<DirectPlanProducer>;
-  /** Explicit `.as(...)` constraint; inferred arithmetic outputs remain overridable. */
-  readonly boundOutputSignal?: SignalId;
-  readonly boundOutputSource?: SourceSpan;
-  /** A declared function returned this internal producer through its public Network boundary. */
-  readonly functionReturn?: SourceSpan;
-}
-
-type DslValue =
-  | NetworkValue
-  | PairValue
-  | SelectedValue
-  | DestinationValue
-  | SignalValue
-  | WildcardTokenValue
-  | WildcardCountValue
-  | ConditionValue
-  | ProducerValue
-  | SignalId
-  | number;
-
-type RuntimeObjectKind =
-  | NetworkValue['kind']
-  | PairValue['kind']
-  | SelectedValue['kind']
-  | DestinationValue['kind']
-  | SignalValue['kind']
-  | WildcardTokenValue['kind']
-  | WildcardCountValue['kind']
-  | ConditionValue['kind']
-  | ProducerValue['kind'];
 
 const comparatorMap: Readonly<Record<string, PlanComparator>> = {
   '>': '>',
@@ -234,8 +127,7 @@ class ElaborationRecorder {
   readonly #diagnostics: Diagnostic[] = [];
   readonly #producerAttachments = new WeakMap<object, SourceSpan>();
   readonly #knownProducers = new Map<object, ProducerValue>();
-  /** Nominal, session-local identity for runtime-only values; ordinary objects cannot forge it. */
-  readonly #runtimeValues = new WeakMap<object, RuntimeObjectKind>();
+  readonly #runtimeValues = new RuntimeValueRegistry();
   #unusedProducersFinalized = false;
   #anonymousOrdinal = 0;
   readonly #networkNameCounts = new Map<string, number>();
@@ -1111,7 +1003,7 @@ class ElaborationRecorder {
     this.#finalizeUnusedProducers();
     return {
       format: 'comblang-direct-plan',
-      version: 1,
+      version: 2,
       networks: Object.freeze([...this.#networks]),
       networkTransfers: Object.freeze([...this.#networkTransfers]),
       networkPairs: Object.freeze([...this.#networkPairs]),
@@ -1624,23 +1516,28 @@ class ElaborationRecorder {
       : this.#runtimeValue({ kind: 'selected', network: value, selection });
   }
 
-  #planNetworkRef(value: NetworkValue | PairValue | SelectedValue): {
-    readonly network: string;
-    readonly networks?: readonly [string, string];
-  } {
+  #planNetworkRef(value: NetworkValue | PairValue | SelectedValue):
+    | {
+        readonly refKind: 'single';
+        readonly network: string;
+      }
+    | {
+        readonly refKind: 'pair';
+        readonly networks: readonly [string, string];
+      } {
     if (this.#isPair(value)) {
       return {
-        network: value.networks[0].name,
+        refKind: 'pair',
         networks: [value.networks[0].name, value.networks[1].name],
       };
     }
-    if (this.#isNetwork(value)) return { network: value.name };
-    return {
-      network: value.network.name,
-      ...(value.networks === undefined
-        ? {}
-        : { networks: [value.networks[0].name, value.networks[1].name] }),
-    };
+    if (this.#isNetwork(value)) return { refKind: 'single', network: value.name };
+    return value.networks === undefined
+      ? { refKind: 'single', network: value.network.name }
+      : {
+          refKind: 'pair',
+          networks: [value.networks[0].name, value.networks[1].name],
+        };
   }
 
   #readableNetworks(value: PairValue | SelectedValue): readonly NetworkValue[] {
@@ -1651,7 +1548,7 @@ class ElaborationRecorder {
     if (typeof value === 'number') return { kind: 'constant', value };
     if (this.#isNetwork(value)) {
       this.#assertReadableNetwork(value, rawSpan);
-      return { kind: 'each', network: value.name };
+      return { kind: 'each', refKind: 'single', network: value.name };
     }
     if (this.#isPair(value)) {
       this.#assertReadableValue(value, rawSpan);
@@ -1668,7 +1565,7 @@ class ElaborationRecorder {
     if (this.#isProducer(value)) {
       const temporary = this.#network(`$tmp:${++this.#anonymousOrdinal}`, rawSpan);
       this.#attach(temporary, value, rawSpan);
-      return { kind: 'each', network: temporary.name };
+      return { kind: 'each', refKind: 'single', network: temporary.name };
     }
     throw new Error('Circuit arithmetic currently requires a Network or numeric operand.');
   }
@@ -1681,13 +1578,12 @@ class ElaborationRecorder {
     return this.#hasRuntimeKind(value, 'condition');
   }
 
-  #runtimeValue<T extends object & { readonly kind: RuntimeObjectKind }>(value: T): T {
-    this.#runtimeValues.set(value, value.kind);
-    return value;
+  #runtimeValue<T extends RuntimeObjectValue>(value: T): T {
+    return this.#runtimeValues.brand(value);
   }
 
   #hasRuntimeKind(value: unknown, kind: RuntimeObjectKind): boolean {
-    return typeof value === 'object' && value !== null && this.#runtimeValues.get(value) === kind;
+    return this.#runtimeValues.hasKind(value, kind);
   }
 
   #deciderOutput(
@@ -1721,7 +1617,7 @@ class ElaborationRecorder {
     }
     if (this.#isNetwork(output)) {
       this.#assertReadableNetwork(output, rawSpan);
-      return { kind: 'each', network: output.name };
+      return { kind: 'each', refKind: 'single', network: output.name };
     }
     throw new Error('Unsupported decider output specification.');
   }
@@ -1779,8 +1675,9 @@ class ElaborationRecorder {
             ...value.producer,
             output: {
               kind: 'signal',
-              network: output.network,
-              ...(output.networks === undefined ? {} : { networks: output.networks }),
+              ...(output.refKind === 'single'
+                ? { refKind: 'single' as const, network: output.network }
+                : { refKind: 'pair' as const, networks: output.networks }),
               signal,
             },
           },

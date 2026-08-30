@@ -48,9 +48,10 @@ The current repository implements the Phase 3 source compiler and the first exec
   - [x] Isolate the private TypeScript syntax-erasure API, pin its compiler version, and cover the boundary plus production builds.
   - [x] Reserve free DSL identifiers for v1 and enforce one shared name table consistently across semantic preflight and transform.
   - [x] Brand runtime values in a session-local registry so guards are nominal and ordinary configuration objects cannot forge DSL handles.
-  - [ ] Replace the compatibility `network + networks?` representation with a discriminated single/pair selection reference.
+  - [x] Replace the compatibility `network + networks?` representation with a discriminated single/pair selection reference.
   - [x] Share one DSL type-annotation parser across semantic preflight and transform for Network capabilities/colors, Producer handles, and arrays.
-  - [ ] Extract runtime values/ownership and operator dispatch from the elaboration coordinator.
+  - [x] Extract runtime value shapes and their nominal session registry from the elaboration coordinator.
+  - [ ] Extract ownership transitions and operator dispatch from the elaboration coordinator behind explicit policy interfaces.
   - [ ] Decide default Producer versus future Entity-handle materialization using representative benchmark programs.
 - [ ] Phase 5 — testbench: drive/expect/tick, mocks and models, Unknown values, waveforms, and debug hierarchy.
 - [ ] Phase 6 — typed Factorio objects: shared circuit inputs, native single-comparison `enable`, Roboport, Lamp, Constant, logistics entities, belts, displays, and train stops.
