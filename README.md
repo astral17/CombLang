@@ -31,8 +31,8 @@ The current repository implements the Phase 3 source compiler, the complete Phas
 - [ ] Phase 5 — deterministic testbench, external-world adapters, Unknown propagation, traces, and debug hierarchy
   - [x] Define a browser/Node-neutral `TestSession` over an already elaborated circuit; test operations must never mutate EG/NCIR topology or re-execute source elaboration.
   - [ ] Freeze the synchronous test clock: every participant reads snapshot `T`, all combinators and reactive models evaluate independently, and their writes commit together to `T+1` regardless of traversal order.
-  - [ ] Introduce the MVP whole-bus lattice `Known(SparseBus) | Unknown(origins)` and preserve ordered, deduplicated dependency origins through network aggregation and downstream combinators.
-  - [ ] Keep ordinary production simulation on the concrete fast path while allowing a test session to opt into Known/Unknown propagation without widening `SparseBus` itself.
+  - [x] Introduce the MVP whole-bus lattice `Known(SparseBus) | Unknown(origins)` and preserve ordered, deduplicated dependency origins through network aggregation and downstream combinators.
+  - [x] Keep ordinary production simulation on the concrete fast path while allowing a test session to opt into Known/Unknown propagation without widening `SparseBus` itself.
   - [x] Implement persistent `drive(network, values)`, replacement, `clear(network)`, and one-boundary `pulse(network, values)` external broadcasters with canonical Signal identity and int32 conversion.
   - [ ] Define whether testbench drives bypass source-level Network capabilities: the test environment acts as an external circuit participant, while stale/moved handles and session-crossing handles remain invalid.
   - [ ] Implement signal and whole-bus assertions: exact value/bus, partial containment, empty/support checks, known/unknown checks, and failures that report tick, target, expected/actual values, and Unknown dependency chains.

@@ -18,16 +18,22 @@ import type {
 import { SparseBus, type SignalId } from '@comblang/factorio';
 import {
   ArithmeticCombinatorDevice,
+  ArithmeticValueCombinatorDevice,
   ConstantCombinatorDevice,
+  ConstantValueCombinatorDevice,
   DeciderCombinatorDevice,
+  DeciderValueCombinatorDevice,
   SimulationKernel,
   TestSession,
+  ValueSimulationKernel,
   type ArithmeticCombinatorConfig,
   type ArithmeticOperand,
   type DeciderCombinatorConfig,
   type DeciderCondition,
   type DeciderOutput,
   type ScalarOperand,
+  type SynchronousDevice,
+  type ValueSynchronousDevice,
 } from '@comblang/simulator';
 import {
   StableIdAllocator,
@@ -460,7 +466,7 @@ export class DslRuntime {
       createSimulation: (initial: readonly SimulationInitialValue[] = []) =>
         this.#createSimulation(ir, initial),
       createTestSession: () =>
-        new TestSession<NetworkHandle>(this.#createSimulation(ir, []), {
+        new TestSession<NetworkHandle>(this.#createValueSimulation(ir), {
           resolveNetwork: (network) => this.#networkId(network),
         }),
     });
@@ -691,6 +697,23 @@ export class DslRuntime {
     ir: NativeCircuitIr,
     initial: readonly SimulationInitialValue[],
   ): SimulationKernel {
+    const kernel = new SimulationKernel();
+    for (const device of this.#simulationDevices(ir).concrete) kernel.addDevice(device);
+    for (const value of initial)
+      kernel.setInitialNetwork(this.#networkId(value.network), value.values);
+    return kernel;
+  }
+
+  #createValueSimulation(ir: NativeCircuitIr): ValueSimulationKernel {
+    const kernel = new ValueSimulationKernel();
+    for (const device of this.#simulationDevices(ir).value) kernel.addDevice(device);
+    return kernel;
+  }
+
+  #simulationDevices(ir: NativeCircuitIr): {
+    readonly concrete: readonly SynchronousDevice[];
+    readonly value: readonly ValueSynchronousDevice[];
+  } {
     const colors = new Map(ir.networks.map((network) => [network.id, network.color]));
     const selection = (value: LogicalNetworkRef) => {
       const result = { red: false, green: false };
@@ -703,7 +726,8 @@ export class DslRuntime {
       for (const network of this.#producerInputs(producer)) result[colors.get(network)!] = network;
       return result;
     };
-    const kernel = new SimulationKernel();
+    const concrete: SynchronousDevice[] = [];
+    const value: ValueSynchronousDevice[] = [];
     for (const producer of ir.producers) {
       if (producer.kind === 'arithmetic') {
         const operand = (value: typeof producer.config.left): ArithmeticOperand =>
@@ -714,24 +738,24 @@ export class DslRuntime {
           right: operand(producer.config.right),
           output: producer.config.output,
         };
-        kernel.addDevice(
-          new ArithmeticCombinatorDevice({
-            id: producer.id as unknown as DeviceId,
-            inputNetworks: inputNetworks(producer),
-            outputNetworks: producer.destinations,
-            combinator,
-          }),
-        );
+        const config = {
+          id: producer.id as unknown as DeviceId,
+          inputNetworks: inputNetworks(producer),
+          outputNetworks: producer.destinations,
+          combinator,
+        };
+        concrete.push(new ArithmeticCombinatorDevice(config));
+        value.push(new ArithmeticValueCombinatorDevice(config));
       } else if (producer.kind === 'constant') {
-        kernel.addDevice(
-          new ConstantCombinatorDevice({
-            id: producer.id as unknown as DeviceId,
-            outputNetworks: producer.destinations,
-            values: new SparseBus(
-              producer.config.outputs.map((output) => [output.signal, output.value] as const),
-            ),
-          }),
-        );
+        const config = {
+          id: producer.id as unknown as DeviceId,
+          outputNetworks: producer.destinations,
+          values: new SparseBus(
+            producer.config.outputs.map((output) => [output.signal, output.value] as const),
+          ),
+        };
+        concrete.push(new ConstantCombinatorDevice(config));
+        value.push(new ConstantValueCombinatorDevice(config));
       } else {
         const scalar = (value: LogicalScalarOperand): ScalarOperand =>
           value.kind === 'constant' ? value : { ...value, networks: selection(value) };
@@ -771,18 +795,16 @@ export class DslRuntime {
             ? {}
             : { elseOutputs: producer.config.elseOutputs.map(output) }),
         };
-        kernel.addDevice(
-          new DeciderCombinatorDevice({
-            id: producer.id as unknown as DeviceId,
-            inputNetworks: inputNetworks(producer),
-            outputNetworks: producer.destinations,
-            combinator,
-          }),
-        );
+        const config = {
+          id: producer.id as unknown as DeviceId,
+          inputNetworks: inputNetworks(producer),
+          outputNetworks: producer.destinations,
+          combinator,
+        };
+        concrete.push(new DeciderCombinatorDevice(config));
+        value.push(new DeciderValueCombinatorDevice(config));
       }
     }
-    for (const value of initial)
-      kernel.setInitialNetwork(this.#networkId(value.network), value.values);
-    return kernel;
+    return { concrete, value };
   }
 }

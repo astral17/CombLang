@@ -51,5 +51,18 @@ snapshots are equal. It throws when the bound is exhausted, including for an
 oscillating circuit. Settling deliberately observes the whole circuit for now;
 selected observation sets will be introduced with traces.
 
-Assertions, Unknown propagation, traces, and debug hierarchy are later Phase 5
+Assertions, object adapters, traces, and debug hierarchy are later Phase 5
 slices.
+
+## Known and Unknown values
+
+Test sessions use a separate opt-in whole-bus value kernel. Its values are
+either `Known(SparseBus)` or `Unknown(origins)`. An Unknown broadcaster makes
+the aggregated Network unknown, and arithmetic and decider combinators extend
+the retained dependency path when they read it. Origins are deduplicated and
+canonically ordered, so device traversal order cannot change diagnostics.
+
+The ordinary production `SimulationKernel` remains on its existing concrete
+`SparseBus` path. `readValue(network)` exposes the lattice value. The convenient
+`read(network)` returns the known bus, but throws with the current tick and
+origin descriptions instead of silently treating Unknown as an empty bus.

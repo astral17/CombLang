@@ -1,7 +1,12 @@
 import { SparseBus, type SignalId } from '@comblang/factorio';
 import type { DeviceId, NetworkId } from '@comblang/shared';
 
-import { SimulationKernel, type SimulationSnapshot, type SynchronousDevice } from './kernel.js';
+import { knownBus, type BusValue } from './bus-value.js';
+import {
+  ValueSimulationKernel,
+  type ValueSimulationSnapshot,
+  type ValueSynchronousDevice,
+} from './value-kernel.js';
 
 export type TestBusInput = SparseBus | Iterable<readonly [signal: SignalId, value: number]>;
 
@@ -17,11 +22,12 @@ function copyBus(values: TestBusInput): SparseBus {
   return values instanceof SparseBus ? values.clone() : new SparseBus(values);
 }
 
-function snapshotKey(snapshot: SimulationSnapshot): string {
+function snapshotKey(snapshot: ValueSimulationSnapshot): string {
   return JSON.stringify(
-    [...snapshot.networkIds]
-      .sort()
-      .map((networkId) => [networkId, snapshot.read(networkId).toJSON()]),
+    [...snapshot.networkIds].sort().map((networkId) => {
+      const value = snapshot.read(networkId);
+      return [networkId, value.kind === 'known' ? value.bus.toJSON() : value];
+    }),
   );
 }
 
@@ -39,28 +45,34 @@ function positiveCount(value: number, label: string): number {
  * topology after construction and never re-run source elaboration.
  */
 export class TestSession<Target = NetworkId> {
-  readonly #kernel: SimulationKernel;
+  readonly #kernel: ValueSimulationKernel;
   readonly #resolveNetwork: (target: Target) => NetworkId;
   readonly #drives = new Map<NetworkId, SparseBus>();
   readonly #pulses = new Map<NetworkId, SparseBus>();
   readonly #scheduled = new Map<number, (() => void)[]>();
 
-  constructor(kernel: SimulationKernel, options?: TestSessionOptions<Target>) {
+  constructor(kernel: ValueSimulationKernel, options?: TestSessionOptions<Target>) {
     this.#kernel = kernel;
     this.#resolveNetwork =
       options?.resolveNetwork ?? ((target: Target) => target as unknown as NetworkId);
 
-    const externalSource: SynchronousDevice = {
+    const externalSource: ValueSynchronousDevice = {
       id: 'testbench:external-source' as DeviceId,
       evaluate: () => [
-        ...[...this.#drives].map(([networkId, values]) => ({ networkId, values })),
-        ...[...this.#pulses].map(([networkId, values]) => ({ networkId, values })),
+        ...[...this.#drives].map(([networkId, values]) => ({
+          networkId,
+          value: knownBus(values),
+        })),
+        ...[...this.#pulses].map(([networkId, values]) => ({
+          networkId,
+          value: knownBus(values),
+        })),
       ],
     };
     this.#kernel.addDevice(externalSource);
   }
 
-  get snapshot(): SimulationSnapshot {
+  get snapshot(): ValueSimulationSnapshot {
     return this.#kernel.snapshot;
   }
 
@@ -69,6 +81,18 @@ export class TestSession<Target = NetworkId> {
   }
 
   read(target: Target): SparseBus {
+    const value = this.readValue(target);
+    if (value.kind === 'unknown') {
+      throw new Error(
+        `Network is Unknown at tick ${this.currentTick}: ${value.origins
+          .map((origin) => origin.description)
+          .join(', ')}.`,
+      );
+    }
+    return value.bus;
+  }
+
+  readValue(target: Target): BusValue {
     return this.#kernel.snapshot.read(this.#networkId(target));
   }
 
@@ -102,7 +126,7 @@ export class TestSession<Target = NetworkId> {
     return this;
   }
 
-  tick(count = 1): SimulationSnapshot {
+  tick(count = 1): ValueSimulationSnapshot {
     positiveCount(count, 'tick count');
 
     let snapshot = this.#kernel.snapshot;
@@ -117,11 +141,11 @@ export class TestSession<Target = NetworkId> {
     return snapshot;
   }
 
-  run(count: number): SimulationSnapshot {
+  run(count: number): ValueSimulationSnapshot {
     return this.tick(count);
   }
 
-  settle({ maxTicks }: SettleOptions): SimulationSnapshot {
+  settle({ maxTicks }: SettleOptions): ValueSimulationSnapshot {
     positiveCount(maxTicks, 'settle maxTicks');
     let previousKey = snapshotKey(this.#kernel.snapshot);
     for (let elapsed = 0; elapsed < maxTicks; elapsed += 1) {
