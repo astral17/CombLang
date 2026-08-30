@@ -502,6 +502,21 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       isProducerExpression(node)
     );
   };
+  const isDefinitelyNotOutputSignal = (node: ts.Expression): boolean => {
+    if (ts.isParenthesizedExpression(node)) return isDefinitelyNotOutputSignal(node.expression);
+    return (
+      ts.isNumericLiteral(node) ||
+      ts.isStringLiteral(node) ||
+      node.kind === ts.SyntaxKind.TrueKeyword ||
+      node.kind === ts.SyntaxKind.FalseKeyword ||
+      node.kind === ts.SyntaxKind.NullKeyword ||
+      ts.isArrayLiteralExpression(node) ||
+      ts.isObjectLiteralExpression(node) ||
+      isNetworkExpression(node) ||
+      isProducerExpression(node) ||
+      isPairViewExpression(node)
+    );
+  };
   const report = (code: string, message: string, node: ts.Node): void => {
     diagnostics.push({ code, severity: 'error', message, span: spanForNode(file, node) });
   };
@@ -934,6 +949,17 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
             'CL1021',
             '.to(...) requires one or two Network destinations and an optional output Signal.',
             node,
+          );
+        }
+        if (
+          method === 'to' &&
+          node.arguments.length === 3 &&
+          isDefinitelyNotOutputSignal(node.arguments[2]!)
+        ) {
+          report(
+            'CL1021',
+            'The third .to(...) argument must be an output Signal, not another destination or ordinary value.',
+            node.arguments[2]!,
           );
         }
       }

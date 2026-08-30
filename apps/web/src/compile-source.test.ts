@@ -129,4 +129,23 @@ slots[0] = ${assigned};`;
     expect(diagnostic).toMatchObject({ severity: 'error', span: expect.any(Object) });
     expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(assigned);
   });
+
+  test('reports a structured output Signal conflict from the common attachment path', () => {
+    const expression = 'to(output)[B] += (input + 0).as(A)';
+    const text = `const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const input = new Network();
+const output = new Network();
+${expression};`;
+    const result = compileSource({ path: 'main.factorio.ts', text });
+    const diagnostic = result.compilerDiagnostics.find(({ code }) => code === 'RT2023');
+
+    expect(result.plan).toBeUndefined();
+    expect(diagnostic).toMatchObject({
+      severity: 'error',
+      span: expect.any(Object),
+      related: expect.any(Array),
+    });
+    expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(expression);
+  });
 });

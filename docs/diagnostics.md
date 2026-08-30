@@ -87,5 +87,6 @@ The production CLI and browser first emit definite `CL` diagnostics from the con
 | `RT2020` | pair input is repeated, malformed, or used as ownership/output    |
 | `RT2021` | `.as(...)` target crossed a function or materialization boundary  |
 | `RT2022` | an executed Producer boundary received a wrong value or kind      |
+| `RT2023` | destination Signal conflicts with the physical producer output    |
 
 `tryElaborateDirectPlan()` returns these runtime diagnostics without throwing. `elaborateDirectPlan()` throws `RuntimeDiagnosticError` carrying the same structured value.

@@ -36,7 +36,7 @@ The current repository implements the Phase 3 source compiler and the first exec
   - [x] Freeze and implement explicit zero-tick consuming network transfer as `a.take(b)`; `a += b` and implicit Network copying remain invalid.
   - [x] Implement `pair(a, b)` as an immutable two-network input view, including `pair(a, b)[SIGNAL]`, wildcard selections, summed red/green reads, and opposite-color constraints.
   - [x] Reject `pair(...)` as an attachment destination or ownership carrier; keep producer output fan-out expressed through `.to(...)`, `to(...) +=`, or contextual destructuring.
-  - [ ] Unify single- and multi-destination attachment validation, output-signal binding, connector cardinality, color constraints, and source provenance across all supported producer forms.
+  - [x] Unify single- and multi-destination attachment validation, output-signal binding, connector cardinality, color constraints, and source provenance across all supported producer forms.
   - [ ] Carry capability and multi-network descriptors through the transformed runtime, serialized direct-plan boundary, EG/NCIR lowering, CLI, and browser result model.
   - [x] Freeze Producer identity and its public `Producer`/specific-combinator type surface; validate declarations, calls, returns, destructuring, and typed slot assignments while fluent wrappers and containers retain one physical identity.
   - [ ] Decide whether topology `+=` requires a `let` binding; the current `const`/`let` behavior remains unchanged until stress tests justify a restriction.

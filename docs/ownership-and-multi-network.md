@@ -147,6 +147,8 @@ destination.take(pair(a, b)); // CL1042
 
 `pair(a, b)[SIGNAL]` is a read selection. Forms such as `.to(pair(a, b))` or `to(pair(a, b)[SIGNAL]) += producer` mix input and output concepts and are rejected. Dynamically aliased misuse receives `RT2020`. The serialized plan and NCIR retain both input Networks, the simulator sums both buses, and blueprint generation wires both resolved colors.
 
+Every implemented output spelling now converges before plan serialization: contextual Network materialization and tuple/object fan-out, `Network +=`, free `to(...)[SIGNAL] +=`, and fluent `.to(..., SIGNAL)` share producer identity, one/two-destination cardinality, duplicate checks, writability checks, output binding, attachment provenance, and the downstream opposite-color constraint. Dynamic destination cardinality failures use `RT2003` through `RT2005`; incompatible executed output binding uses `RT2023` with related `.as(...)`/producer provenance.
+
 ## Static and runtime enforcement
 
 The non-executing semantic pass remains conservative. It should diagnose only facts established for every possible execution, for example a direct write through a known `Readonly<Network>` parameter or an unconditional use after a known move.

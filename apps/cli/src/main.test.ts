@@ -251,4 +251,18 @@ second += slots[0];`);
       producerCount: 2,
     });
   });
+
+  test('reports a structured output Signal conflict from fluent attachment', async () => {
+    const path = await sourceFile(`const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const input = new Network();
+const output = new Network();
+(input + 0).as(A).to(output, B);`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path])).toBe(1);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0])).diagnostics).toEqual([
+      expect.objectContaining({ code: 'RT2023', severity: 'error', related: expect.any(Array) }),
+    ]);
+  });
 });

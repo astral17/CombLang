@@ -151,6 +151,7 @@ interface ProducerValue {
   readonly producer: WithoutDestinations<DirectPlanProducer>;
   /** Explicit `.as(...)` constraint; inferred arithmetic outputs remain overridable. */
   readonly boundOutputSignal?: SignalId;
+  readonly boundOutputSource?: SourceSpan;
   /** A declared function returned this internal producer through its public Network boundary. */
   readonly functionReturn?: SourceSpan;
 }
@@ -846,7 +847,7 @@ class ElaborationRecorder {
           ],
         );
       }
-      return this.#bindOutputSignal(producer, signal, true);
+      return this.#bindOutputSignal(producer, signal, rawSpan, true);
     },
     place: (...args: unknown[]): unknown => {
       const rawSpan = args.at(-1);
@@ -937,9 +938,7 @@ class ElaborationRecorder {
           '.to(...) permits Network[SIGNAL] only for one destination; use .to(first, second, SIGNAL) for fan-out.',
         );
       }
-      const boundProducer = this.#bindOutputSignal(producer, outputSignal);
-      this.#attachMany(destinations, boundProducer, rawSpan);
-      return boundProducer;
+      return this.#attachMany(destinations, producer, rawSpan, outputSignal);
     },
     binary: (operator: string, left: unknown, right: unknown, rawSpan: RawSpan): unknown => {
       if (!this.#isCircuitDslValue(left) && !this.#isCircuitDslValue(right)) {
@@ -1043,19 +1042,17 @@ class ElaborationRecorder {
           : [destination];
       this.#attachMany(
         destinations,
-        this.#bindOutputSignal(
-          producer,
-          this.#isDestination(destination)
-            ? destination.signal
-            : this.#isSelected(destination)
-              ? isSignal(destination.selection)
-                ? destination.selection
-                : (() => {
-                    throw new Error('A destination can bind only a concrete Signal.');
-                  })()
-              : undefined,
-        ),
+        producer,
         rawSpan,
+        this.#isDestination(destination)
+          ? destination.signal
+          : this.#isSelected(destination)
+            ? isSignal(destination.selection)
+              ? destination.selection
+              : (() => {
+                  throw new Error('A destination can bind only a concrete Signal.');
+                })()
+            : undefined,
       );
     },
   });
@@ -1179,12 +1176,47 @@ class ElaborationRecorder {
     this.#attachMany([network], value, rawSpan);
   }
 
-  #attachMany(networks: readonly NetworkValue[], value: ProducerValue, rawSpan: RawSpan): void {
-    if (!networks.every((network) => this.#isNetwork(network)) || value.kind !== 'producer') {
+  #attachMany(
+    networks: readonly NetworkValue[],
+    value: ProducerValue,
+    rawSpan: RawSpan,
+    outputSignal?: SignalId,
+  ): ProducerValue {
+    if (!networks.every((network) => this.#isNetwork(network)) || !this.#isProducer(value)) {
       throw new Error('Attachment requires a Network and producer.');
     }
-    if (networks.length === 0 || networks.length > 2) {
-      throw new Error('A producer destructuring/attachment requires one or two Network outputs.');
+    const source = this.#span(rawSpan);
+    if (networks.length === 0) {
+      throw new ElaborationExecutionError(
+        'A producer attachment requires at least one Network destination.',
+        source,
+        'RT2003',
+      );
+    }
+    const uniqueNames = new Set(networks.map(({ name }) => name));
+    if (uniqueNames.size !== networks.length) {
+      throw new ElaborationExecutionError(
+        'A producer attachment repeats the same Network destination.',
+        source,
+        'RT2004',
+        [...new Map(networks.map((network) => [network.name, network])).values()].map(
+          (network) => ({
+            message: 'Destination Network was declared here.',
+            span: network.declaration,
+          }),
+        ),
+      );
+    }
+    if (networks.length > 2) {
+      throw new ElaborationExecutionError(
+        'One Factorio output connector can attach to at most two logical Networks.',
+        source,
+        'RT2005',
+        networks.map((network) => ({
+          message: `Destination Network ${network.name} was declared here.`,
+          span: network.declaration,
+        })),
+      );
     }
     const previousAttachment = this.#producerAttachments.get(value.identity);
     if (previousAttachment !== undefined) {
@@ -1199,15 +1231,17 @@ class ElaborationRecorder {
       );
     }
     for (const network of networks) this.#assertWritableNetwork(network, rawSpan, 'destination');
+    const boundValue = this.#bindOutputSignal(value, outputSignal, rawSpan);
     this.#producers.push({
-      ...value.producer,
+      ...boundValue.producer,
       destinations: networks.map((network) => ({
         network: network.name,
-        source: this.#span(rawSpan),
+        source,
         instancePath: this.#path(),
       })),
     } as unknown as DirectPlanProducer);
-    this.#producerAttachments.set(value.identity, this.#span(rawSpan));
+    this.#producerAttachments.set(value.identity, source);
+    return boundValue;
   }
 
   #isNetwork(value: unknown): value is NetworkValue {
@@ -1657,6 +1691,7 @@ class ElaborationRecorder {
   #bindOutputSignal(
     value: ProducerValue,
     signal: SignalId | undefined,
+    rawSpan: RawSpan,
     explicit = false,
   ): ProducerValue {
     if (signal === undefined) return value;
@@ -1664,55 +1699,110 @@ class ElaborationRecorder {
       value.boundOutputSignal !== undefined &&
       !this.#sameSignal(value.boundOutputSignal, signal)
     ) {
-      throw new Error('Arithmetic output Signal conflicts with its destination binding.');
+      this.#outputBindingFailure(
+        'Explicit producer output Signal conflicts with its destination binding.',
+        value,
+        rawSpan,
+      );
     }
+    let bound: ProducerValue;
     if (value.producer.kind === 'constant') {
-      throw new Error('A constant combinator output cannot be rebound to another Signal.');
-    }
-    if (value.producer.kind === 'arithmetic') {
-      return {
+      this.#outputBindingFailure(
+        'A constant combinator output cannot be rebound to another Signal.',
+        value,
+        rawSpan,
+      );
+    } else if (value.producer.kind === 'arithmetic') {
+      bound = {
         kind: 'producer',
         identity: value.identity,
         producer: { ...value.producer, output: { kind: 'signal', signal } },
-        ...(explicit || value.boundOutputSignal !== undefined ? { boundOutputSignal: signal } : {}),
       };
-    }
-    if ((value.producer.outputs?.length ?? 1) !== 1) {
-      throw new Error('A multi-output decider cannot be rebound to one destination Signal.');
-    }
-    const output = value.producer.output;
-    if (output.kind === 'signal') {
-      if (output.signal.type !== signal.type || output.signal.name !== signal.name) {
-        throw new Error('Decider output Signal conflicts with its destination binding.');
+    } else {
+      if ((value.producer.outputs?.length ?? 1) !== 1) {
+        this.#outputBindingFailure(
+          'A multi-output decider cannot be rebound to one destination Signal.',
+          value,
+          rawSpan,
+        );
       }
-      return value;
-    }
-    if (output.kind === 'each') {
-      return {
-        kind: 'producer',
-        identity: value.identity,
-        producer: {
-          ...value.producer,
-          output: {
-            kind: 'signal',
-            network: output.network,
-            ...(output.networks === undefined ? {} : { networks: output.networks }),
-            signal,
+      const output = value.producer.output;
+      if (output.kind === 'signal') {
+        if (!this.#sameSignal(output.signal, signal)) {
+          this.#outputBindingFailure(
+            'Decider output Signal conflicts with its destination binding.',
+            value,
+            rawSpan,
+          );
+        }
+        bound = value;
+      } else if (output.kind === 'each') {
+        bound = {
+          kind: 'producer',
+          identity: value.identity,
+          producer: {
+            ...value.producer,
+            output: {
+              kind: 'signal',
+              network: output.network,
+              ...(output.networks === undefined ? {} : { networks: output.networks }),
+              signal,
+            },
           },
-        },
-      };
+        };
+      } else if (output.kind === 'each-constant') {
+        bound = {
+          kind: 'producer',
+          identity: value.identity,
+          producer: {
+            ...value.producer,
+            output: { kind: 'signal-constant', signal, value: output.value },
+          },
+        };
+      } else {
+        this.#outputBindingFailure(
+          'Wildcard decider output cannot be rebound to a concrete Signal.',
+          value,
+          rawSpan,
+        );
+      }
     }
-    if (output.kind === 'each-constant') {
-      return {
-        kind: 'producer',
-        identity: value.identity,
-        producer: {
-          ...value.producer,
-          output: { kind: 'signal-constant', signal, value: output.value },
-        },
-      };
-    }
-    throw new Error('Wildcard decider output cannot be rebound to a concrete Signal.');
+    return explicit || value.boundOutputSignal !== undefined
+      ? {
+          ...bound,
+          boundOutputSignal: signal,
+          boundOutputSource: value.boundOutputSource ?? this.#span(rawSpan),
+        }
+      : bound;
+  }
+
+  #outputBindingFailure(message: string, value: ProducerValue, rawSpan: RawSpan): never {
+    const primary = this.#span(rawSpan);
+    const related = [
+      ...(value.boundOutputSource === undefined
+        ? []
+        : [
+            {
+              message: 'Producer output was explicitly bound here.',
+              span: value.boundOutputSource,
+            },
+          ]),
+      { message: 'Physical producer was created here.', span: value.producer.source },
+    ].filter(
+      (entry, index, entries) =>
+        entries.findIndex(
+          (candidate) =>
+            candidate.span.fileId === entry.span.fileId &&
+            candidate.span.start === entry.span.start &&
+            candidate.span.end === entry.span.end,
+        ) === index &&
+        !(
+          entry.span.fileId === primary.fileId &&
+          entry.span.start === primary.start &&
+          entry.span.end === primary.end
+        ),
+    );
+    throw new ElaborationExecutionError(message, primary, 'RT2023', related);
   }
 
   #firstConcreteSignal(...values: readonly DslValue[]): SignalId | undefined {

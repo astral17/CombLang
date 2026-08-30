@@ -209,6 +209,8 @@ to(first, second)[RESULT] += left[A] + right[B];
 
 A free destination set binds its output Signal as `to(first, second)[SIGNAL]`. The fluent producer form instead uses `.to(first, second, SIGNAL)`, because an element selection after `.to(...)` would occur after that method has already attached the producer. `.to(first[SIGNAL], second[SIGNAL])` remains invalid. The output binding adds no combinator. Two destinations share one physical output connector and therefore receive opposite wire colors. The right side of `Network += value` must be a combinator producer. Constants and `Network += Network` are deliberately rejected rather than invoking JavaScript object coercion.
 
+All attachment spellings use one executed validation path. An attachment requires one or two distinct writable Networks: dynamically computed empty, duplicate, and over-capacity destination lists report `RT2003`, `RT2004`, and `RT2005` at the attachment expression. Output Signal binding is also shared by `network[SIGNAL] += producer`, `to(...)[SIGNAL] += producer`, and `producer.to(..., SIGNAL)`. A destination may override an arithmetic output inferred from an input selection, but it cannot contradict an explicit `.as(...)`, rename constant-combinator filters, collapse a multi-output decider, or replace an incompatible explicit decider output. Those executed conflicts report `RT2023` and retain the explicit binding and producer-creation spans where available. The third fluent `.to(...)` argument is only an output `Signal`; a statically definite Network or ordinary value there is `CL1021`.
+
 ## Explicit Network transfer
 
 `destination.take(source)` physically unifies two logical Networks without adding a combinator or a tick:

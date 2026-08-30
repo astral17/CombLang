@@ -92,7 +92,7 @@ Direct-plan attachments are source-aware records rather than bare Network names.
 
 Direct-plan validation has both result-oriented and strict entry points. `tryElaborateDirectPlan` returns stable `RT1xxx` diagnostics and retains the most relevant plan span; `elaborateDirectPlan` throws `RuntimeDiagnosticError` carrying that same diagnostic. Unexpected lower-level failures are contained as `RT1099` rather than leaking an unstructured value through the result API.
 
-The direct runtime uses `RT2xxx` diagnostics for handle ownership, attachment cardinality, missing outputs, invalid condition groups, connector capacity, and color conflicts. Producer or attachment provenance supplies the primary span where available. A color conflict also retains related Network declarations when the failing constraint identifies more than one source-bearing Network.
+The direct runtime uses `RT2xxx` diagnostics for handle ownership, attachment cardinality, output-signal binding, missing outputs, invalid condition groups, connector capacity, and color conflicts. All executed attachment spellings converge before direct-plan serialization, so duplicate/capacity/output-binding failures have the same code and source provenance. Producer or attachment provenance supplies the primary span where available. A color conflict also retains related Network declarations when the failing constraint identifies more than one source-bearing Network.
 
 The checked-in API baseline is Factorio Runtime API 2.1.16 / API version 6. Generated schemas and conformance fixtures must record that version and remain checked into this repository, so builds never depend on sibling directories.
 

@@ -227,6 +227,21 @@ to(first, second, A) += input + 0;`,
     );
   });
 
+  test('rejects a definitely non-Signal third fluent .to(...) argument', () => {
+    const third = 'second';
+    const parsed = parseFile({
+      path: 'fluent-to-third-destination.ts',
+      text: `const input = new Network();
+const first = new Network();
+const second = new Network();
+(input + 0).to(first, second, ${third});`,
+    });
+    const diagnostic = validateDslSemantics(parsed).find(({ code }) => code === 'CL1021');
+
+    expect(diagnostic).toMatchObject({ severity: 'error', span: expect.any(Object) });
+    expect(parsed.text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(third);
+  });
+
   test('checks definite DSL call arity without executing the branch', () => {
     const parsed = parseFile({
       path: 'invalid-builtins.ts',

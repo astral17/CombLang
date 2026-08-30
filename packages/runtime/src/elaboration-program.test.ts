@@ -752,15 +752,155 @@ const output = new Network();
 ${conflictingCall};`,
     });
     expect(() => executeElaborationProgram(transformElaborationModule(conflicting))).toThrowError(
-      'Arithmetic output Signal conflicts with its destination binding.',
+      'Explicit producer output Signal conflicts with its destination binding.',
     );
     try {
       executeElaborationProgram(transformElaborationModule(conflicting));
       expect.fail('Expected an explicit output conflict.');
     } catch (error) {
       expect(error).toBeInstanceOf(ElaborationExecutionError);
-      const span = (error as ElaborationExecutionError).span;
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2023');
+      expect(failure.related).toHaveLength(2);
+      const span = failure.span;
       expect(conflicting.text.slice(span.start, span.end)).toBe(conflictingCall);
+    }
+  });
+
+  test('uses one attachment path for +=, free to, fluent to, and contextual fan-out', () => {
+    const parsed = parseFile({
+      path: 'attachment-matrix.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const direct = new Network();
+direct += input + 0;
+const freeFirst = new Network();
+const freeSecond = new Network();
+to(freeFirst, freeSecond)[A] += input + 1;
+const fluentFirst = new Network();
+const fluentSecond = new Network();
+(input + 2).to(fluentFirst, fluentSecond, A);
+let [left, right] = input + 3;`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const execution = elaborateDirectPlan(plan);
+
+    expect(plan.producers).toMatchObject([
+      { kind: 'arithmetic', destinations: [{ network: 'direct' }] },
+      {
+        kind: 'arithmetic',
+        output: { kind: 'signal', signal: { type: 'virtual', name: 'signal-A' } },
+        destinations: [{ network: 'freeFirst' }, { network: 'freeSecond' }],
+      },
+      {
+        kind: 'arithmetic',
+        output: { kind: 'signal', signal: { type: 'virtual', name: 'signal-A' } },
+        destinations: [{ network: 'fluentFirst' }, { network: 'fluentSecond' }],
+      },
+      { kind: 'arithmetic', destinations: [{ network: 'left' }, { network: 'right' }] },
+    ]);
+    const colors = new Map(execution.circuit.ir.networks.map(({ name, color }) => [name, color]));
+    for (const [first, second] of [
+      ['freeFirst', 'freeSecond'],
+      ['fluentFirst', 'fluentSecond'],
+      ['left', 'right'],
+    ] as const) {
+      expect(colors.get(first)).not.toBe(colors.get(second));
+    }
+  });
+
+  test('reports common destination cardinality diagnostics before direct-plan lowering', () => {
+    const cases = [
+      {
+        code: 'RT2003',
+        expression: '(input + 0).to(...targets)',
+        targets: 'const targets = [];',
+      },
+      {
+        code: 'RT2004',
+        expression: '(input + 0).to(output, alias)',
+        targets: 'const targets = [];\nconst alias = output;',
+      },
+      {
+        code: 'RT2005',
+        expression: '(input + 0).to(...targets)',
+        targets: 'const targets = [output, new Network(), new Network()];',
+      },
+    ] as const;
+
+    for (const expected of cases) {
+      const parsed = parseFile({
+        path: `${expected.code}.factorio.ts`,
+        text: `const input = new Network();
+const output = new Network();
+${expected.targets}
+${expected.expression};`,
+      });
+      try {
+        executeElaborationProgram(transformElaborationModule(parsed));
+        expect.fail(`Expected ${expected.code}.`);
+      } catch (error) {
+        expect(error).toBeInstanceOf(ElaborationExecutionError);
+        const failure = error as ElaborationExecutionError;
+        expect(failure.code).toBe(expected.code);
+        expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(expected.expression);
+        if (expected.code !== 'RT2003') expect(failure.related?.length).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  test('uses RT2023 for output binding conflicts across every attachment spelling', () => {
+    const cases = [
+      'output[B] += (input + 0).as(A)',
+      'to(output)[B] += (input + 0).as(A)',
+      '(input + 0).as(A).to(output, B)',
+    ] as const;
+
+    for (const expression of cases) {
+      const parsed = parseFile({
+        path: 'output-binding-conflict.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const input = new Network();
+const output = new Network();
+${expression};`,
+      });
+      try {
+        executeElaborationProgram(transformElaborationModule(parsed));
+        expect.fail('Expected an output binding conflict.');
+      } catch (error) {
+        expect(error).toBeInstanceOf(ElaborationExecutionError);
+        const failure = error as ElaborationExecutionError;
+        expect(failure.code).toBe('RT2023');
+        expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(expression);
+        expect(failure.related).toHaveLength(2);
+      }
+    }
+  });
+
+  test('rejects constant and multi-output decider rebinding with RT2023', () => {
+    const expressions = [
+      'to(output)[A] += CC(1 * A)',
+      'when(input > 0).then(input, input).to(output, A)',
+    ] as const;
+
+    for (const expression of expressions) {
+      const parsed = parseFile({
+        path: 'unsupported-output-rebinding.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output = new Network();
+${expression};`,
+      });
+      try {
+        executeElaborationProgram(transformElaborationModule(parsed));
+        expect.fail('Expected output rebinding to fail.');
+      } catch (error) {
+        expect(error).toBeInstanceOf(ElaborationExecutionError);
+        const failure = error as ElaborationExecutionError;
+        expect(failure.code).toBe('RT2023');
+        expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(expression);
+      }
     }
   });
 
