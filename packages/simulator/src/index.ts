@@ -5,4 +5,6 @@ export * from './combinator-device.js';
 export * from './decider.js';
 export * from './kernel.js';
 export * from './test-session.js';
+export * from './test-expectation.js';
+export * from './trace.js';
 export * from './value-kernel.js';

@@ -7,6 +7,12 @@ import {
   type ValueSimulationSnapshot,
   type ValueSynchronousDevice,
 } from './value-kernel.js';
+import {
+  NetworkExpectation,
+  SignalExpectation,
+  type TestSignalTarget,
+} from './test-expectation.js';
+import { networkTraceTarget, signalTraceTarget, TraceStore } from './trace.js';
 
 export type TestBusInput = SparseBus | Iterable<readonly [signal: SignalId, value: number]>;
 
@@ -45,6 +51,7 @@ function positiveCount(value: number, label: string): number {
  * topology after construction and never re-run source elaboration.
  */
 export class TestSession<Target = NetworkId> {
+  readonly traces = new TraceStore();
   readonly #kernel: ValueSimulationKernel;
   readonly #resolveNetwork: (target: Target) => NetworkId;
   readonly #drives = new Map<NetworkId, SparseBus>();
@@ -96,6 +103,37 @@ export class TestSession<Target = NetworkId> {
     return this.#kernel.snapshot.read(this.#networkId(target));
   }
 
+  signal(target: Target, signal: SignalId): TestSignalTarget<Target> {
+    return Object.freeze({ kind: 'test-signal', network: target, signal });
+  }
+
+  expect(target: Target): NetworkExpectation;
+  expect(target: TestSignalTarget<Target>): SignalExpectation;
+  expect(target: Target | TestSignalTarget<Target>): NetworkExpectation | SignalExpectation {
+    if (this.#isSignalTarget(target)) {
+      return this.expectSignal(target.network, target.signal);
+    }
+    return new NetworkExpectation(this.#assertionContext(), this.#networkId(target));
+  }
+
+  expectSignal(target: Target, signal: SignalId): SignalExpectation {
+    return new SignalExpectation(this.#assertionContext(), this.#networkId(target), signal);
+  }
+
+  trace(...targets: readonly (Target | TestSignalTarget<Target>)[]): this {
+    for (const target of targets) {
+      if (this.#isSignalTarget(target)) {
+        this.traces.register(
+          signalTraceTarget(this.#networkId(target.network), target.signal),
+          this.#kernel.snapshot,
+        );
+      } else {
+        this.traces.register(networkTraceTarget(this.#networkId(target)), this.#kernel.snapshot);
+      }
+    }
+    return this;
+  }
+
   drive(target: Target, values: TestBusInput): this {
     this.#drives.set(this.#networkId(target), copyBus(values));
     return this;
@@ -137,6 +175,7 @@ export class TestSession<Target = NetworkId> {
       for (const callback of callbacks) callback();
       snapshot = this.#kernel.step();
       this.#pulses.clear();
+      this.traces.record(snapshot);
     }
     return snapshot;
   }
@@ -159,5 +198,23 @@ export class TestSession<Target = NetworkId> {
 
   #networkId(target: Target): NetworkId {
     return this.#resolveNetwork(target);
+  }
+
+  #isSignalTarget(value: Target | TestSignalTarget<Target>): value is TestSignalTarget<Target> {
+    return (
+      typeof value === 'object' && value !== null && 'kind' in value && value.kind === 'test-signal'
+    );
+  }
+
+  #assertionContext() {
+    const session = this;
+    return {
+      get currentTick() {
+        return session.currentTick;
+      },
+      readValue(networkId: NetworkId) {
+        return session.#kernel.snapshot.read(networkId);
+      },
+    };
   }
 }

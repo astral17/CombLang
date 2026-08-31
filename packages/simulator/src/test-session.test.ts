@@ -5,10 +5,12 @@ import { describe, expect, it } from 'vitest';
 import { TestSession } from './test-session.js';
 import { ValueSimulationKernel } from './value-kernel.js';
 import { unknownBus } from './bus-value.js';
+import { TestAssertionError } from './test-expectation.js';
 
 const input = 'network:input' as NetworkId;
 const output = 'network:output' as NetworkId;
 const signalA = signal('virtual', 'signal-A');
+const signalB = signal('virtual', 'signal-B');
 
 describe('TestSession external drives', () => {
   it('replaces persistent drives, aggregates them with devices, and clears them', () => {
@@ -86,6 +88,75 @@ describe('TestSession external drives', () => {
     });
     expect(() => session.read(input)).toThrow(
       'Network is Unknown at tick 0: unmodeled object output.',
+    );
+  });
+
+  it('asserts signal values, exact buses, containment, support, and emptiness', () => {
+    const session = new TestSession(new ValueSimulationKernel());
+    session.drive(input, [
+      [signalA, 5],
+      [signalB, -2],
+    ]);
+    session.tick();
+
+    session.expectSignal(input, signalA).toBe(5);
+    session.expect(session.signal(input, signalB)).toBe(-2);
+    session.expect(input).toEqual([
+      [signalA, 5],
+      [signalB, -2],
+    ]);
+    session.expect(input).toContain([[signalA, 5]]);
+    session.expect(input).toHaveSignal(signalB);
+    session.expect(input).toHaveSignal(signalA, 5);
+    session.expect(input).toHaveSupport(signalB, signalA);
+    session.expect(input).toBeKnown();
+    session.expect(output).toBeEmpty();
+    session.expectSignal(output, signalA).toBe(0);
+    expect(() => session.expect(output).toHaveSignal(signalA, 0)).toThrow(
+      'zero is absent from a SparseBus',
+    );
+  });
+
+  it('reports tick, target, expected value, and actual value on assertion failure', () => {
+    const session = new TestSession(new ValueSimulationKernel());
+    session.drive(input, [[signalA, 5]]).tick(2);
+
+    let failure: unknown;
+    try {
+      session.expectSignal(input, signalA).toBe(6);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toBeInstanceOf(TestAssertionError);
+    expect(failure).toMatchObject({
+      details: {
+        tick: 2,
+        target: `Signal virtual\u0000signal-A\u0000 on Network ${input}`,
+        matcher: 'toBe()',
+        expected: '6',
+        actual: '5',
+      },
+    });
+  });
+
+  it('includes deterministic Unknown dependency chains in assertion failures', () => {
+    const kernel = new ValueSimulationKernel();
+    kernel.setInitialNetwork(
+      input,
+      unknownBus([
+        {
+          id: 'object:1',
+          description: 'unmodeled chest output',
+          path: ['device:reader' as DeviceId],
+        },
+      ]),
+    );
+    const session = new TestSession(kernel);
+
+    session.expect(input).toBeUnknown();
+    session.expectSignal(input, signalA).toBeUnknown();
+    expect(() => session.expectSignal(input, signalA).toBe(1)).toThrow(
+      /Unknown origins:\n  - unmodeled chest output \[object:1\] via device:reader/,
     );
   });
 

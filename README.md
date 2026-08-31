@@ -35,7 +35,7 @@ The current repository implements the Phase 3 source compiler, the complete Phas
   - [x] Keep ordinary production simulation on the concrete fast path while allowing a test session to opt into Known/Unknown propagation without widening `SparseBus` itself.
   - [x] Implement persistent `drive(network, values)`, replacement, `clear(network)`, and one-boundary `pulse(network, values)` external broadcasters with canonical Signal identity and int32 conversion.
   - [ ] Define whether testbench drives bypass source-level Network capabilities: the test environment acts as an external circuit participant, while stale/moved handles and session-crossing handles remain invalid.
-  - [ ] Implement signal and whole-bus assertions: exact value/bus, partial containment, empty/support checks, known/unknown checks, and failures that report tick, target, expected/actual values, and Unknown dependency chains.
+  - [x] Implement signal and whole-bus assertions: exact value/bus, partial containment, empty/support checks, known/unknown checks, and failures that report tick, target, expected/actual values, and Unknown dependency chains.
   - [x] Implement `tick()`, `tick(count)`, scheduled `at(tick, callback)`, bounded `run(count)`, and `settle({ maxTicks })`; settling uses observed whole-circuit state equality and fails clearly for oscillation/non-convergence.
   - [ ] Build a shared `DebugIndex` from lexical bindings, source spans, function-call instance paths, loop provenance, Networks, and physical Producers without exposing function locals to ordinary production code.
   - [ ] Implement `instantiate(fn, ...args)` so `dut.value` has topology identical to an ordinary call while `dut.$` retains only a test/debug scope root.
@@ -46,6 +46,8 @@ The current repository implements the Phase 3 source compiler, the complete Phas
   - [ ] Implement reactive `model(entity, { initialState, step })`; the runner invokes `step({ input, state, tick })` exactly once per tick and commits returned output/state only at the next boundary.
   - [ ] Resolve unmodeled object output in the order explicit mock/model → per-instance default → class default → global policy, with strict `Unknown` as the default and explicit `zero`/custom policies.
   - [ ] Implement trace registration for selected signals, whole Networks, object inputs, and object outputs; store tick-zero plus sparse/delta changes and expose deterministic JSON/timeline queries without coupling storage to a chart renderer.
+    - [x] Whole-Network and selected-signal targets, tick-zero capture, Known/Unknown transitions, sparse signal deltas, removals, timeline filtering, and deterministic `comblang-trace` JSON.
+    - [ ] Object input/output targets after the generic circuit-adapter protocol exists.
   - [ ] Surface test results, assertion diagnostics, debug queries, and waveform data consistently through runtime APIs, CLI JSON, and the browser result model; keep visual waveform rendering a consumer of the shared trace model.
   - [ ] Add focused kernel/lattice/mock/model/query tests plus end-to-end feedback, pulse, settle, Unknown-chain, hierarchy, structural, CLI, and browser cases; use a MemoCell testbench and a test-only object adapter as Phase 5 acceptance programs.
   - [ ] Document the executable testbench language/API and its separation from compile-time assertions, Factorio conformance fixtures, and future Phase 6 typed-object state adapters.
