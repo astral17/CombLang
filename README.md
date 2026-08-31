@@ -31,7 +31,8 @@ The current repository implements the Phase 3 source compiler, the complete Phas
 - [ ] Phase 5 — deterministic testbench, external-world adapters, Unknown propagation, traces, and debug hierarchy
   - [x] Define a browser/Node-neutral `TestSession` over an already elaborated circuit; test operations must never mutate EG/NCIR topology or re-execute source elaboration.
   - [ ] Freeze the synchronous test clock: every participant reads snapshot `T`, all combinators and reactive models evaluate independently, and their writes commit together to `T+1` regardless of traversal order.
-  - [x] Introduce the MVP whole-bus lattice `Known(SparseBus) | Unknown(origins)` and preserve ordered, deduplicated dependency origins through network aggregation and downstream combinators.
+    - [x] Prevent scheduled callbacks from advancing time reentrantly or scheduling work into the boundary already being evaluated; callbacks may still schedule later boundaries.
+  - [x] Introduce the MVP whole-bus lattice `Known(SparseBus) | Unknown(origins)` with epistemic semantics, deterministic origin canonicalization, three-valued AND/OR short-circuiting, and inactive-branch elimination for non-`Each` Deciders.
   - [x] Keep ordinary production simulation on the concrete fast path while allowing a test session to opt into Known/Unknown propagation without widening `SparseBus` itself.
   - [x] Implement persistent `drive(network, values)`, replacement, `clear(network)`, and one-boundary `pulse(network, values)` external broadcasters with canonical Signal identity and int32 conversion.
   - [ ] Define whether testbench drives bypass source-level Network capabilities: the test environment acts as an external circuit participant, while stale/moved handles and session-crossing handles remain invalid.
@@ -54,6 +55,11 @@ The current repository implements the Phase 3 source compiler, the complete Phas
     - [ ] Shared trace-document ingestion, CLI test JSON, and debug-query presentation after the remaining Phase 5 APIs exist.
   - [ ] Add focused kernel/lattice/mock/model/query tests plus end-to-end feedback, pulse, settle, Unknown-chain, hierarchy, structural, CLI, and browser cases; use a MemoCell testbench and a test-only object adapter as Phase 5 acceptance programs.
   - [ ] Document the executable testbench language/API and its separation from compile-time assertions, Factorio conformance fixtures, and future Phase 6 typed-object state adapters.
+- [ ] Phase 5.5 — external prototype environment foundation
+  - [ ] Add a versioned normalized Prototype DB, structural validator, immutable `PrototypeProvider`, deterministic environment identity, and synthetic fixtures in a dedicated package.
+  - [ ] Inject the provider explicitly into compiler consumers; keep prototype facts out of the simulator and avoid a global mutable registry.
+  - [ ] Load validated databases from CLI project options and browser-local files/cache, with an explicit built-in vanilla/Space Age first-run profile and no silent fallback for pinned projects.
+  - [ ] Build a Factorio-side exporter over the resolved runtime `prototypes` API, active mods, and startup settings; verify base, Space Age, and modded-override fixtures.
 - [ ] Phase 6 — typed Factorio objects: shared circuit inputs, native single-comparison `enable`, Roboport, Lamp, Constant, logistics entities, belts, displays, and train stops.
 - [ ] Phase 7 — exact constructors and native-config stress: Arithmetic, full Decider normal/else output lists, duplicate outputs, `Everything`, Selector, raw entities, LUTs, and large generated configurations.
 - [ ] Phase 8 — parameter-ready configuration IR, placement-time `BlueprintFormula`, dependent blueprint parameters, FCIR, and the Factorio 2.1 codec with fixture-backed semantic round trips.
@@ -69,6 +75,7 @@ Later phases cover testbenches, typed Factorio objects, exact constructors, the 
 - [Current language reference](docs/language-reference.md) — the exact implemented syntax, diagnostics, and known gaps.
 - [Phase 4 ownership design](docs/ownership-and-multi-network.md) — completed affine ownership, borrows, consuming transfer, read-only `pair`, and its acceptance matrix.
 - [Native objects, Deciders, and parameters](docs/native-objects-deciders-and-parameters.md) — planned Phase 6–8 semantic domains and conformance requirements.
+- [Prototype environment](docs/prototype-environment.md) — the Phase 5.5 normalized modded-data provider, Factorio exporter, loading, and environment-identity boundary.
 - [Producer and Entity materialization policy](docs/producer-materialization-policy.md) — the Phase 4.5 benchmark decision for inferred Networks, explicit combinator handles, and future typed-object identity.
 - [Diagnostics](docs/diagnostics.md) — compiler/runtime code families and the most common actionable errors.
 - [Blueprint JSON preview](docs/blueprint-json.md) — generated structure, wiring model, and current limitations.

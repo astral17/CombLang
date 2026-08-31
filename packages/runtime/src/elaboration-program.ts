@@ -90,6 +90,7 @@ class ElaborationRecorder {
   readonly #runtimeValues = new RuntimeValueRegistry();
   readonly #ownership = createElaborationOwnershipPolicy((network) => this.#networkState(network));
   #unusedProducersFinalized = false;
+  #sealed = false;
   #anonymousOrdinal = 0;
   readonly #networkNameCounts = new Map<string, number>();
   readonly #anonymousLoopCounts = new Map<string, number>();
@@ -810,6 +811,7 @@ class ElaborationRecorder {
 
   plan(): DirectElaborationPlan {
     this.#finalizeUnusedProducers();
+    this.#sealed = true;
     return {
       format: 'comblang-direct-plan',
       version: 2,
@@ -827,6 +829,19 @@ class ElaborationRecorder {
       name,
       (...args: unknown[]) => {
         try {
+          if (this.#sealed) {
+            const rawSpan = args.at(-1);
+            if (isRawSpan(rawSpan)) {
+              throw new ElaborationExecutionError(
+                'The elaboration runtime is sealed; delayed asynchronous DSL calls cannot mutate a completed plan.',
+                this.#span(rawSpan),
+                'RT2025',
+              );
+            }
+            throw new Error(
+              'The elaboration runtime is sealed; delayed asynchronous DSL calls cannot mutate a completed plan.',
+            );
+          }
           const result = (operation as (...values: unknown[]) => unknown)(...args);
           if (this.#isProducer(result)) this.#knownProducers.set(result.identity, result);
           return result;

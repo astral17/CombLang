@@ -172,6 +172,39 @@ describe('TestSession external drives', () => {
     expect(() => session.at(2, () => undefined)).toThrow('later than current tick 2');
   });
 
+  it('rejects reentrant time advancement from a scheduled callback', () => {
+    for (const advance of [
+      (session: TestSession) => session.tick(),
+      (session: TestSession) => session.run(1),
+      (session: TestSession) => session.settle({ maxTicks: 1 }),
+    ]) {
+      const session = new TestSession(new ValueSimulationKernel());
+      session.at(1, () => advance(session));
+
+      expect(() => session.tick()).toThrow(
+        'TestSession time cannot be advanced from inside an active boundary.',
+      );
+      expect(session.currentTick).toBe(0);
+    }
+  });
+
+  it('only allows callbacks to schedule work after the active boundary', () => {
+    const session = new TestSession(new ValueSimulationKernel());
+    let laterCallbackRan = false;
+    session.at(1, () => {
+      expect(() => session.at(1, () => undefined)).toThrow(
+        'scheduled tick 1 must be later than active boundary 1.',
+      );
+      session.at(2, () => {
+        laterCallbackRan = true;
+      });
+    });
+
+    session.tick(2);
+    expect(laterCallbackRan).toBe(true);
+    expect(session.currentTick).toBe(2);
+  });
+
   it('settles on observed whole-circuit state and reports non-convergence', () => {
     const stable = new TestSession(new ValueSimulationKernel());
     expect(stable.settle({ maxTicks: 2 }).tick).toBe(1);

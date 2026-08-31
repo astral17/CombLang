@@ -90,5 +90,6 @@ The production CLI and browser first emit definite `CL` diagnostics from the con
 | `RT2022` | an executed Producer boundary received a wrong value or kind      |
 | `RT2023` | destination Signal conflicts with the physical producer output    |
 | `RT2024` | circuit Condition was used as a JavaScript control-flow test      |
+| `RT2025` | a delayed asynchronous DSL call reached a sealed elaboration plan |
 
 `tryElaborateDirectPlan()` returns these runtime diagnostics without throwing. `elaborateDirectPlan()` throws `RuntimeDiagnosticError` carrying the same structured value.

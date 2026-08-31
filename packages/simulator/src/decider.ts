@@ -87,9 +87,9 @@ function scalarValue(operand: ScalarOperand, input: CircuitInput): CircuitValue 
     : selectCircuitInput(input, operand.networks).get(operand.signal);
 }
 
-function hasEach(condition: DeciderCondition): boolean {
+export function deciderConditionUsesEach(condition: DeciderCondition): boolean {
   if (condition.kind === 'and' || condition.kind === 'or') {
-    return condition.conditions.some(hasEach);
+    return condition.conditions.some(deciderConditionUsesEach);
   }
   return condition.left.kind === 'wildcard' && condition.left.value === 'each';
 }
@@ -109,7 +109,7 @@ function quantifierCandidates(
     });
 }
 
-function evaluateCondition(
+export function evaluateDeciderCondition(
   condition: DeciderCondition,
   input: CircuitInput,
   eachSignal?: SignalId,
@@ -119,8 +119,8 @@ function evaluateCondition(
       throw new Error(`A decider ${condition.kind.toUpperCase()} group cannot be empty.`);
     }
     return condition.kind === 'and'
-      ? condition.conditions.every((child) => evaluateCondition(child, input, eachSignal))
-      : condition.conditions.some((child) => evaluateCondition(child, input, eachSignal));
+      ? condition.conditions.every((child) => evaluateDeciderCondition(child, input, eachSignal))
+      : condition.conditions.some((child) => evaluateDeciderCondition(child, input, eachSignal));
   }
 
   const right = scalarValue(condition.right, input);
@@ -229,8 +229,8 @@ export function evaluateDecider(config: DeciderCombinatorConfig, input: CircuitI
   const result = new SparseBus();
   const compareSignals = config.compareSignals ?? compareSignalIds;
 
-  if (!hasEach(config.condition)) {
-    const outputs = evaluateCondition(config.condition, input)
+  if (!deciderConditionUsesEach(config.condition)) {
+    const outputs = evaluateDeciderCondition(config.condition, input)
       ? config.outputs
       : (config.elseOutputs ?? []);
     emitOutputs(result, outputs, input, undefined, compareSignals);
@@ -242,7 +242,9 @@ export function evaluateDecider(config: DeciderCombinatorConfig, input: CircuitI
   const passed: SignalId[] = [];
   const failed: SignalId[] = [];
   for (const candidate of candidateMap.values()) {
-    (evaluateCondition(config.condition, input, candidate) ? passed : failed).push(candidate);
+    (evaluateDeciderCondition(config.condition, input, candidate) ? passed : failed).push(
+      candidate,
+    );
   }
   emitOutputs(result, config.outputs, input, passed, compareSignals);
   emitOutputs(result, config.elseOutputs ?? [], input, failed, compareSignals);

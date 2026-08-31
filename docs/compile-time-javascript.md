@@ -25,6 +25,13 @@ The v1 language reserves all free DSL identifiers. User variables, parameters, d
 - callbacks such as `.map(...)` execute normally, but their iterations do not currently add a distinct provenance frame; use an explicit loop when per-iteration diagnostic identity matters;
 - ambient time and randomness are currently allowed, so builds need not be reproducible.
 
+Ambient Promise and microtask APIs are not yet removed by the deferred hardened
+sandbox. The elaboration recorder is nevertheless sealed as soon as synchronous
+module execution completes. A delayed callback that attempts `input + 1`,
+`CC(...)`, `new Network()`, or another DSL operation therefore reports `RT2025`
+and cannot mutate the completed plan. Asynchronous ordinary-JavaScript side
+effects are outside the supported compilation model and must not be relied on.
+
 ## Unsupported
 
 - static or dynamic imports, exports, `import.meta`, and top-level `await`;

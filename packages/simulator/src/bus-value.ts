@@ -26,6 +26,12 @@ function comparePaths(left: readonly DeviceId[], right: readonly DeviceId[]): nu
   return pathKey(left).localeCompare(pathKey(right));
 }
 
+function compareOrigins(left: UnknownOrigin, right: UnknownOrigin): number {
+  const pathOrder = comparePaths(left.path, right.path);
+  if (pathOrder !== 0) return pathOrder;
+  return left.description < right.description ? -1 : left.description > right.description ? 1 : 0;
+}
+
 function canonicalOrigins(origins: Iterable<UnknownOrigin>): readonly UnknownOrigin[] {
   const byId = new Map<string, UnknownOrigin>();
   for (const origin of origins) {
@@ -35,7 +41,7 @@ function canonicalOrigins(origins: Iterable<UnknownOrigin>): readonly UnknownOri
       path: Object.freeze([...origin.path]),
     });
     const previous = byId.get(origin.id);
-    if (previous === undefined || comparePaths(candidate.path, previous.path) < 0) {
+    if (previous === undefined || compareOrigins(candidate, previous) < 0) {
       byId.set(origin.id, candidate);
     }
   }

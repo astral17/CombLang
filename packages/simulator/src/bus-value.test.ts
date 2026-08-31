@@ -34,6 +34,20 @@ describe('whole-bus value lattice', () => {
     });
   });
 
+  it('canonicalizes conflicting metadata independently of traversal order', () => {
+    const left = unknownBus([
+      { id: 'same', description: 'Zulu' },
+      { id: 'same', description: 'Alpha' },
+    ]);
+    const right = unknownBus([
+      { id: 'same', description: 'Alpha' },
+      { id: 'same', description: 'Zulu' },
+    ]);
+
+    expect(left).toEqual(right);
+    expect(left).toMatchObject({ origins: [{ description: 'Alpha' }] });
+  });
+
   it('records a deterministic downstream dependency path', () => {
     const value = throughDevice(
       throughDevice(

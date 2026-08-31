@@ -57,6 +57,8 @@ export class TestSession<Target = NetworkId> {
   readonly #drives = new Map<NetworkId, SparseBus>();
   readonly #pulses = new Map<NetworkId, SparseBus>();
   readonly #scheduled = new Map<number, (() => void)[]>();
+  #advancing = false;
+  #activeBoundary: number | undefined;
 
   constructor(kernel: ValueSimulationKernel, options?: TestSessionOptions<Target>) {
     this.#kernel = kernel;
@@ -153,9 +155,12 @@ export class TestSession<Target = NetworkId> {
 
   at(tick: number, callback: () => void): this {
     positiveCount(tick, 'scheduled tick');
-    if (tick <= this.currentTick) {
+    const earliestBoundary = this.#activeBoundary ?? this.currentTick;
+    if (tick <= earliestBoundary) {
       throw new RangeError(
-        `scheduled tick ${tick} must be later than current tick ${this.currentTick}.`,
+        this.#activeBoundary === undefined
+          ? `scheduled tick ${tick} must be later than current tick ${this.currentTick}.`
+          : `scheduled tick ${tick} must be later than active boundary ${this.#activeBoundary}.`,
       );
     }
     const callbacks = this.#scheduled.get(tick) ?? [];
@@ -166,18 +171,11 @@ export class TestSession<Target = NetworkId> {
 
   tick(count = 1): ValueSimulationSnapshot {
     positiveCount(count, 'tick count');
-
-    let snapshot = this.#kernel.snapshot;
-    for (let index = 0; index < count; index += 1) {
-      const nextTick = snapshot.tick + 1;
-      const callbacks = this.#scheduled.get(nextTick) ?? [];
-      this.#scheduled.delete(nextTick);
-      for (const callback of callbacks) callback();
-      snapshot = this.#kernel.step();
-      this.#pulses.clear();
-      this.traces.record(snapshot);
-    }
-    return snapshot;
+    return this.#advance(() => {
+      let snapshot = this.#kernel.snapshot;
+      for (let index = 0; index < count; index += 1) snapshot = this.#advanceOne();
+      return snapshot;
+    });
   }
 
   run(count: number): ValueSimulationSnapshot {
@@ -186,14 +184,42 @@ export class TestSession<Target = NetworkId> {
 
   settle({ maxTicks }: SettleOptions): ValueSimulationSnapshot {
     positiveCount(maxTicks, 'settle maxTicks');
-    let previousKey = snapshotKey(this.#kernel.snapshot);
-    for (let elapsed = 0; elapsed < maxTicks; elapsed += 1) {
-      const snapshot = this.tick();
-      const currentKey = snapshotKey(snapshot);
-      if (currentKey === previousKey) return snapshot;
-      previousKey = currentKey;
+    return this.#advance(() => {
+      let previousKey = snapshotKey(this.#kernel.snapshot);
+      for (let elapsed = 0; elapsed < maxTicks; elapsed += 1) {
+        const snapshot = this.#advanceOne();
+        const currentKey = snapshotKey(snapshot);
+        if (currentKey === previousKey) return snapshot;
+        previousKey = currentKey;
+      }
+      throw new Error(`Circuit did not settle within ${maxTicks} ticks.`);
+    });
+  }
+
+  #advance<T>(operation: () => T): T {
+    if (this.#advancing) {
+      throw new Error('TestSession time cannot be advanced from inside an active boundary.');
     }
-    throw new Error(`Circuit did not settle within ${maxTicks} ticks.`);
+    this.#advancing = true;
+    try {
+      return operation();
+    } finally {
+      this.#activeBoundary = undefined;
+      this.#advancing = false;
+    }
+  }
+
+  #advanceOne(): ValueSimulationSnapshot {
+    const nextTick = this.currentTick + 1;
+    this.#activeBoundary = nextTick;
+    const callbacks = this.#scheduled.get(nextTick) ?? [];
+    this.#scheduled.delete(nextTick);
+    for (const callback of callbacks) callback();
+    const snapshot = this.#kernel.step();
+    this.#pulses.clear();
+    this.traces.record(snapshot);
+    this.#activeBoundary = undefined;
+    return snapshot;
   }
 
   #networkId(target: Target): NetworkId {

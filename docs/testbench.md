@@ -46,20 +46,38 @@ test.at(5, () => test.drive(input, [[SIGNAL_A, 20]]));
 test.run(10);
 ```
 
+A scheduled callback may change drives, pulses, mocks, and later scheduling, but
+it cannot call `tick`, `run`, or `settle` recursively. One runner boundary call
+therefore commits exactly one transition. While boundary 5 is being evaluated,
+`at(5, ...)` is rejected as already active and `at(6, ...)` remains valid.
+
 `settle({ maxTicks })` advances until two consecutive complete simulation
 snapshots are equal. It throws when the bound is exhausted, including for an
 oscillating circuit. Settling deliberately observes the whole circuit for now;
-selected observation sets will be introduced with traces.
+selected observation sets will be introduced with traces. Future scheduled
+external events do not keep it running: `settle()` finds a fixed point under
+the inputs active now and may return before an event scheduled for a later tick.
 
 Object adapters, traces, and debug hierarchy are later Phase 5 slices.
 
 ## Known and Unknown values
 
 Test sessions use a separate opt-in whole-bus value kernel. Its values are
-either `Known(SparseBus)` or `Unknown(origins)`. An Unknown broadcaster makes
-the aggregated Network unknown, and arithmetic and decider combinators extend
-the retained dependency path when they read it. Origins are deduplicated and
-canonically ordered, so device traversal order cannot change diagnostics.
+either `Known(SparseBus)` or `Unknown(origins)`. Unknown is epistemic: it means
+that the available model cannot determine the exact bus, rather than merely
+marking every value that has a possible dependency. An Unknown broadcaster
+makes an aggregated Network unknown, and arithmetic and decider combinators
+extend the retained dependency path when they actually read it. Origins are
+deduplicated and canonically ordered, including conflicting descriptions for
+the same stable origin ID, so device traversal order cannot change diagnostics.
+
+For Deciders without `Each`, condition evaluation uses three values. A known
+false child makes `false && Unknown` false, and a known true child makes
+`true || Unknown` true. Once the condition is known, only the selected output
+branch contributes dependencies, so an Unknown value used solely by the
+inactive branch does not contaminate a known result. `Each` may choose a branch
+per signal and remains conservatively whole-bus Unknown until the value kernel
+supports partial known/unknown buses.
 
 The ordinary production `SimulationKernel` remains on its existing concrete
 `SparseBus` path. `readValue(network)` exposes the lattice value. The convenient

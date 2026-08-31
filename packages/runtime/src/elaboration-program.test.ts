@@ -20,6 +20,27 @@ for (let i = 0; i < 10; i++) {
 }`;
 
 describe('executed elaboration program', () => {
+  test('seals the runtime against delayed Promise mutations', async () => {
+    const globalKey = '__comblangLateDslMutationTest';
+    const parsed = parseFile({
+      path: 'late-promise.factorio.ts',
+      text: `const input = new Network();
+globalThis.${globalKey} = Promise.resolve().then(() => input + 1);`,
+    });
+
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const lateMutation = (globalThis as unknown as Record<string, unknown>)[globalKey];
+    try {
+      await expect(lateMutation).rejects.toMatchObject({
+        code: 'RT2025',
+        span: expect.any(Object),
+      });
+      expect(plan.producers).toEqual([]);
+    } finally {
+      delete (globalThis as unknown as Record<string, unknown>)[globalKey];
+    }
+  });
+
   test('validates the versioned hygienic runtime bridge metadata', () => {
     const program = transformElaborationModule(
       parseFile({ path: 'runtime-envelope.factorio.ts', text: 'const input = new Network();' }),

@@ -3,7 +3,13 @@ import type { DeviceId, NetworkId } from '@comblang/shared';
 
 import { evaluateArithmetic, type ArithmeticCombinatorConfig } from './arithmetic.js';
 import type { CircuitInput } from './circuit-input.js';
-import { evaluateDecider, type DeciderCombinatorConfig } from './decider.js';
+import {
+  deciderConditionUsesEach,
+  evaluateDecider,
+  evaluateDeciderCondition,
+  type DeciderCombinatorConfig,
+  type DeciderCondition,
+} from './decider.js';
 import type { NetworkOutput, SimulationReader, SynchronousDevice } from './kernel.js';
 import { aggregateBusValues, knownBus, throughDevice, type BusValue } from './bus-value.js';
 import type {
@@ -120,6 +126,44 @@ function outputSelections(
     .map((output) => output.networks);
 }
 
+type ValueConditionResult =
+  | { readonly kind: 'known'; readonly value: boolean }
+  | Extract<BusValue, { readonly kind: 'unknown' }>;
+
+function evaluateValueCondition(
+  condition: DeciderCondition,
+  input: ValueCircuitInput,
+): ValueConditionResult {
+  if (condition.kind === 'and' || condition.kind === 'or') {
+    if (condition.conditions.length === 0) {
+      throw new Error(`A decider ${condition.kind.toUpperCase()} group cannot be empty.`);
+    }
+    const unknown: BusValue[] = [];
+    for (const child of condition.conditions) {
+      const result = evaluateValueCondition(child, input);
+      if (result.kind === 'known') {
+        if (condition.kind === 'and' && !result.value) return { kind: 'known', value: false };
+        if (condition.kind === 'or' && result.value) return { kind: 'known', value: true };
+      } else {
+        unknown.push(result);
+      }
+    }
+    if (unknown.length > 0) {
+      const result = aggregateBusValues(unknown);
+      if (result.kind === 'unknown') return result;
+      throw new Error('Unknown condition dependencies unexpectedly became Known.');
+    }
+    return { kind: 'known', value: condition.kind === 'and' };
+  }
+
+  const dependency = aggregateBusValues(selectedValues(input, conditionSelections(condition)));
+  if (dependency.kind === 'unknown') return dependency;
+  return {
+    kind: 'known',
+    value: evaluateDeciderCondition(condition, concreteInput(input)),
+  };
+}
+
 export class ArithmeticCombinatorDevice implements SynchronousDevice {
   readonly id: DeviceId;
   readonly #config: ArithmeticDeviceConfig;
@@ -206,6 +250,26 @@ export class DeciderValueCombinatorDevice implements ValueSynchronousDevice {
 
   evaluate(snapshot: ValueSimulationReader): readonly ValueNetworkOutput[] {
     const input = readValueInputs(snapshot, this.#config.inputNetworks);
+    if (!deciderConditionUsesEach(this.#config.combinator.condition)) {
+      const condition = evaluateValueCondition(this.#config.combinator.condition, input);
+      if (condition.kind === 'unknown') {
+        return valueBroadcast(throughDevice(condition, this.id), this.#config.outputNetworks);
+      }
+      const activeOutputs = condition.value
+        ? this.#config.combinator.outputs
+        : (this.#config.combinator.elseOutputs ?? []);
+      const outputDependency = aggregateBusValues(
+        selectedValues(input, outputSelections(activeOutputs)),
+      );
+      const output =
+        outputDependency.kind === 'unknown'
+          ? throughDevice(outputDependency, this.id)
+          : knownBus(evaluateDecider(this.#config.combinator, concreteInput(input)));
+      return valueBroadcast(output, this.#config.outputNetworks);
+    }
+
+    // Each can select a different branch per signal. Until the value kernel
+    // models partial buses, retain the conservative whole-bus dependency rule.
     const selections = [
       ...conditionSelections(this.#config.combinator.condition),
       ...outputSelections(this.#config.combinator.outputs),
