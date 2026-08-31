@@ -17,6 +17,8 @@ describe('static deployment configuration', () => {
   it('keeps the compiler workbench focused on emitted JavaScript', () => {
     const page = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
     expect(page).toContain('Generated JavaScript');
+    expect(page).toContain('id="simulation-reset"');
+    expect(page).toContain('id="state-signal-quality"');
     expect(page).not.toContain('Parse + semantic result');
     expect(page).not.toContain('class="hero"');
     expect(page).not.toContain('Project milestones');

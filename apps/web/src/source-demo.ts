@@ -37,16 +37,17 @@ export interface SourcePlanDemo {
   readonly timeline: readonly CircuitTimelineSample[];
 }
 
-function captureTimeline(
+export function captureTimeline(
   snapshot: SimulationSnapshot,
   networks: readonly {
     readonly id: NetworkId;
     readonly name?: string;
     readonly color: 'red' | 'green';
   }[],
+  tick = snapshot.tick,
 ): CircuitTimelineSample {
   return {
-    tick: snapshot.tick,
+    tick,
     networks: networks
       .filter((network) => !network.name?.startsWith('$unused:'))
       .map((network) => ({
@@ -59,6 +60,132 @@ function captureTimeline(
           .map(([signal, value]) => ({ signal, value })),
       })),
   };
+}
+
+type DirectExecution = ReturnType<typeof elaborateDirectPlan>;
+type ConcreteSimulation = ReturnType<DirectExecution['circuit']['createSimulation']>;
+
+/** Mutable browser-only controller over immutable captured circuit snapshots. */
+export class SourceSimulationController {
+  readonly #plan: DirectElaborationPlan;
+  #execution!: DirectExecution;
+  #simulation!: ConcreteSimulation;
+  #tickOffset = 0;
+  #timeline: CircuitTimelineSample[] = [];
+
+  constructor(plan: DirectElaborationPlan) {
+    this.#plan = plan;
+    this.reset();
+  }
+
+  get timeline(): readonly CircuitTimelineSample[] {
+    return this.#timeline;
+  }
+
+  get currentTick(): number {
+    return this.#timeline.at(-1)?.tick ?? 0;
+  }
+
+  reset(): void {
+    this.#execution = elaborateDirectPlan(this.#plan);
+    this.#simulation = this.#execution.circuit.createSimulation();
+    this.#tickOffset = 0;
+    this.#timeline = [
+      captureTimeline(this.#simulation.snapshot, this.#execution.circuit.ir.networks, 0),
+    ];
+  }
+
+  stepFrom(tick: number, count = 1): void {
+    if (!Number.isSafeInteger(count) || count < 1) {
+      throw new RangeError('Simulation step count must be a positive safe integer.');
+    }
+    if (tick !== this.currentTick) this.#rebase(tick);
+    for (let index = 0; index < count; index += 1) {
+      const snapshot = this.#simulation.step();
+      this.#timeline.push(
+        captureTimeline(
+          snapshot,
+          this.#execution.circuit.ir.networks,
+          this.#tickOffset + snapshot.tick,
+        ),
+      );
+    }
+  }
+
+  setSignalAt(tick: number, networkId: NetworkId, signalId: SignalId, value: number): void {
+    this.#rebase(
+      tick,
+      (buses, networkName) => {
+        const bus = buses.get(networkName) ?? new SparseBus();
+        bus.set(signalId, value);
+        buses.set(networkName, bus);
+      },
+      networkId,
+    );
+  }
+
+  clearNetworkAt(tick: number, networkId: NetworkId): void {
+    this.#rebase(tick, (buses, networkName) => buses.set(networkName, new SparseBus()), networkId);
+  }
+
+  signalValueAt(tick: number, networkName: string, signalId: SignalId): number {
+    const sample = this.#sample(tick);
+    const network = sample.networks.find(({ name }) => name === networkName);
+    return (
+      network?.signals.find(({ signal }) => {
+        return (
+          signal.type === signalId.type &&
+          signal.name === signalId.name &&
+          signal.quality === signalId.quality
+        );
+      })?.value ?? 0
+    );
+  }
+
+  #sample(tick: number): CircuitTimelineSample {
+    const sample = this.#timeline.find((candidate) => candidate.tick === tick);
+    if (sample === undefined) throw new RangeError(`Tick ${tick} is not present in the timeline.`);
+    return sample;
+  }
+
+  #rebase(
+    tick: number,
+    edit?: (buses: Map<string, SparseBus>, networkName: string) => void,
+    editedNetworkId?: NetworkId,
+  ): void {
+    const sample = this.#sample(tick);
+    const buses = new Map(
+      sample.networks.map(
+        (network) =>
+          [
+            network.name,
+            new SparseBus(network.signals.map(({ signal, value }) => [signal, value] as const)),
+          ] as const,
+      ),
+    );
+    if (edit !== undefined) {
+      const network = sample.networks.find(({ id }) => id === editedNetworkId);
+      if (network === undefined)
+        throw new RangeError(`Unknown timeline Network: ${editedNetworkId}`);
+      edit(buses, network.name);
+    }
+
+    this.#execution = elaborateDirectPlan(this.#plan);
+    const initial = this.#execution.circuit.ir.networks.flatMap((network) => {
+      if (network.name === undefined || network.name.startsWith('$unused:')) return [];
+      const values = buses.get(network.name);
+      return values === undefined
+        ? []
+        : [{ network: this.#execution.network(network.name), values }];
+    });
+    this.#simulation = this.#execution.circuit.createSimulation(initial);
+    this.#tickOffset = tick;
+    const retained = this.#timeline.filter((candidate) => candidate.tick < tick);
+    this.#timeline = [
+      ...retained,
+      captureTimeline(this.#simulation.snapshot, this.#execution.circuit.ir.networks, tick),
+    ];
+  }
 }
 
 function networkRefNames(reference: PlanNetworkRef): readonly string[] {
@@ -128,7 +255,11 @@ function criticalPathStages(plan: DirectElaborationPlan): number {
   return finalDepth;
 }
 
-export function runSourcePlanDemo(plan: DirectElaborationPlan, inputValue = 7): SourcePlanDemo {
+export function runSourcePlanDemo(
+  plan: DirectElaborationPlan,
+  inputValue = 7,
+  tickCount?: number,
+): SourcePlanDemo {
   const firstProducer = plan.producers[0];
   const lastProducer = plan.producers.at(-1);
   if (firstProducer === undefined || lastProducer === undefined) {
@@ -182,8 +313,9 @@ export function runSourcePlanDemo(plan: DirectElaborationPlan, inputValue = 7): 
   ];
   const timeline = [captureTimeline(simulation.snapshot, executed.circuit.ir.networks)];
   const stages = criticalPathStages(plan);
+  const ticks = tickCount ?? stages;
   let snapshot = simulation.snapshot;
-  for (let tick = 1; tick <= stages; tick += 1) {
+  for (let tick = 1; tick <= ticks; tick += 1) {
     snapshot = simulation.step();
     waveform.push({
       tick: snapshot.tick,

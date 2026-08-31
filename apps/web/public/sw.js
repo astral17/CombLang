@@ -1,4 +1,4 @@
-const CACHE_NAME = 'comblang-shell-v5';
+const CACHE_NAME = 'comblang-shell-v6';
 const APP_SHELL_URL = new URL('./', self.registration.scope).href;
 
 async function fetchAndCache(cache, url) {

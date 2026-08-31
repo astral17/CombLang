@@ -52,6 +52,7 @@ The current repository implements the Phase 3 source compiler, the complete Phas
   - [ ] Surface test results, assertion diagnostics, debug queries, and waveform data consistently through runtime APIs, CLI JSON, and the browser result model; keep visual waveform rendering a consumer of the shared trace model.
     - [x] Browser-local editable test file, isolated worker execution, pass/fail list with assertion/runtime source locations, independent draft persistence, and responsive test editor/results panes.
     - [x] Browser circuit timeline with a compact `ticks × Networks` overview and selectable `ticks × signals` detail table.
+    - [x] Interactive all-zero `T0`, reset/play/pause/step/run controls, configurable history window, historical tick selection/branching, and quality-aware snapshot editing with double-click shortcuts.
     - [ ] Shared trace-document ingestion, CLI test JSON, and debug-query presentation after the remaining Phase 5 APIs exist.
   - [ ] Add focused kernel/lattice/mock/model/query tests plus end-to-end feedback, pulse, settle, Unknown-chain, hierarchy, structural, CLI, and browser cases; use a MemoCell testbench and a test-only object adapter as Phase 5 acceptance programs.
   - [ ] Document the executable testbench language/API and its separation from compile-time assertions, Factorio conformance fixtures, and future Phase 6 typed-object state adapters.

@@ -188,3 +188,17 @@ The old single-signal bar waveform has been replaced by two table views:
 Both tables scroll horizontally on narrow screens. Their model remains separate
 from DOM rendering so it can later consume the shared `comblang-trace` document
 and evolve toward richer waveform views.
+
+The live circuit view starts paused with one explicit all-zero `T0`; absent
+signals are displayed and read as zero. `Play`/`Pause`, `Step`, `Run N`, and
+`Reset` control an interactive browser simulation. Complete history is retained
+for the compiled source, while the table shows a configurable window of 32
+ticks by default. A tick can be selected from a row or by number.
+
+The selected snapshot can be edited by Network and structural Signal identity,
+including optional quality. Setting zero removes that sparse entry, while
+clearing a Network removes every entry. Editing or stepping from an older tick
+truncates its former future and creates a new deterministic branch. Double-click
+loads a concrete signal cell into the editor; double-clicking an empty or
+multi-signal overview cell selects its tick and Network so a previously absent
+signal can be entered in the retained form.

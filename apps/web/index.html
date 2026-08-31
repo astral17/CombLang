@@ -50,6 +50,66 @@
               </select>
             </label>
           </div>
+          <div class="simulation-toolbar" aria-label="Simulation controls">
+            <output id="simulation-status">T0 · paused</output>
+            <div class="simulation-buttons">
+              <button id="simulation-reset" type="button">Reset</button>
+              <button id="simulation-play" type="button">Play</button>
+              <button id="simulation-step" type="button">Step</button>
+              <label>
+                <span>Tick</span>
+                <input id="simulation-tick" type="number" min="0" value="0" />
+              </label>
+              <button id="simulation-select-tick" type="button">Go</button>
+              <label>
+                <span>Steps</span>
+                <input id="simulation-step-count" type="number" min="1" max="10000" value="10" />
+              </label>
+              <button id="simulation-run" type="button">Run N</button>
+              <label>
+                <span>Show</span>
+                <input id="timeline-window" type="number" min="1" max="512" value="32" />
+              </label>
+            </div>
+          </div>
+          <form id="state-editor" class="state-editor">
+            <strong>Edit selected tick</strong>
+            <label>
+              <span>Network</span>
+              <select id="state-network" aria-label="Network to edit"></select>
+            </label>
+            <label>
+              <span>Type</span>
+              <select id="state-signal-type" aria-label="Signal type">
+                <option value="virtual">virtual</option>
+                <option value="item">item</option>
+                <option value="fluid">fluid</option>
+                <option value="entity">entity</option>
+                <option value="recipe">recipe</option>
+                <option value="space-location">space-location</option>
+                <option value="asteroid-chunk">asteroid-chunk</option>
+                <option value="quality">quality</option>
+              </select>
+            </label>
+            <label>
+              <span>Signal</span>
+              <input id="state-signal-name" value="signal-A" autocomplete="off" />
+            </label>
+            <label>
+              <span>Quality (optional)</span>
+              <input id="state-signal-quality" placeholder="normal" autocomplete="off" />
+            </label>
+            <label>
+              <span>Value</span>
+              <input id="state-signal-value" type="number" step="1" value="1" />
+            </label>
+            <div class="state-actions">
+              <button type="submit">Set</button>
+              <button id="state-remove-signal" type="button">Set zero</button>
+              <button id="state-clear-network" type="button">Clear Network</button>
+            </div>
+            <output id="state-status"></output>
+          </form>
           <div id="instance-paths" class="instance-paths" aria-label="Lowered call paths"></div>
           <div id="waveform" class="waveform" aria-label="Current circuit timeline"></div>
           <div

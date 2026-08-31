@@ -1,11 +1,17 @@
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan';
+import { signal, type SignalId, type SignalType } from '@comblang/factorio';
 import { offsetToPosition, sourceFileId, sourceSpan, type Diagnostic } from '@comblang/shared';
 
 import { blueprintJsonForPlan } from './blueprint-demo.js';
 import { createSourceEditor, type SourceEditorKind } from './code-editor.js';
 import { registerOfflineSupport, warmOfflineCache } from './offline.js';
 import { loadSourceDraft, saveSourceDraft, type SourceDraftStorage } from './source-draft.js';
-import { runSourcePlanDemo, type SourcePlanDemo } from './source-demo.js';
+import {
+  runSourcePlanDemo,
+  SourceSimulationController,
+  type CircuitTimelineSample,
+  type SourcePlanDemo,
+} from './source-demo.js';
 import { loadTestDraft, saveTestDraft } from './test-draft.js';
 import type { TestWorkerRequest, TestWorkerResponse } from './test-worker-protocol.js';
 import { buildDetailTimeline, buildOverviewTimeline, signalLabel } from './timeline-view.js';
@@ -87,6 +93,24 @@ const proofFolds = requiredElement<HTMLElement>('#proof-folds');
 const waveform = requiredElement<HTMLElement>('#waveform');
 const waveformNetwork = requiredElement<HTMLSelectElement>('#waveform-network');
 const waveformViewLabel = requiredElement<HTMLElement>('#waveform-view-label');
+const simulationStatus = requiredElement<HTMLOutputElement>('#simulation-status');
+const simulationReset = requiredElement<HTMLButtonElement>('#simulation-reset');
+const simulationPlay = requiredElement<HTMLButtonElement>('#simulation-play');
+const simulationStep = requiredElement<HTMLButtonElement>('#simulation-step');
+const simulationTick = requiredElement<HTMLInputElement>('#simulation-tick');
+const simulationSelectTick = requiredElement<HTMLButtonElement>('#simulation-select-tick');
+const simulationStepCount = requiredElement<HTMLInputElement>('#simulation-step-count');
+const simulationRun = requiredElement<HTMLButtonElement>('#simulation-run');
+const timelineWindow = requiredElement<HTMLInputElement>('#timeline-window');
+const stateEditor = requiredElement<HTMLFormElement>('#state-editor');
+const stateNetwork = requiredElement<HTMLSelectElement>('#state-network');
+const stateSignalType = requiredElement<HTMLSelectElement>('#state-signal-type');
+const stateSignalName = requiredElement<HTMLInputElement>('#state-signal-name');
+const stateSignalQuality = requiredElement<HTMLInputElement>('#state-signal-quality');
+const stateSignalValue = requiredElement<HTMLInputElement>('#state-signal-value');
+const stateRemoveSignal = requiredElement<HTMLButtonElement>('#state-remove-signal');
+const stateClearNetwork = requiredElement<HTMLButtonElement>('#state-clear-network');
+const stateStatus = requiredElement<HTMLOutputElement>('#state-status');
 const instancePaths = requiredElement<HTMLElement>('#instance-paths');
 const networkColors = requiredElement<HTMLElement>('#network-colors');
 const blueprintStatus = requiredElement<HTMLOutputElement>('#blueprint-status');
@@ -108,6 +132,9 @@ let copyResetTimer: ReturnType<typeof setTimeout> | undefined;
 let currentBlueprintJson: string | undefined;
 let currentPlan: DirectElaborationPlan | undefined;
 let currentDemo: SourcePlanDemo | undefined;
+let sourceSimulation: SourceSimulationController | undefined;
+let selectedSimulationTick = 0;
+let simulationTimer: ReturnType<typeof setInterval> | undefined;
 let testWorker: Worker | undefined;
 let testWorkerTimeout: ReturnType<typeof setTimeout> | undefined;
 let testRenderTimer: ReturnType<typeof setTimeout> | undefined;
@@ -221,6 +248,168 @@ function timelineTable(headers: readonly (string | HTMLElement)[]): HTMLTableEle
   return table;
 }
 
+function pauseSimulation(): void {
+  if (simulationTimer !== undefined) clearInterval(simulationTimer);
+  simulationTimer = undefined;
+  simulationPlay.textContent = 'Play';
+}
+
+function setSimulationEnabled(enabled: boolean): void {
+  for (const control of [
+    simulationReset,
+    simulationPlay,
+    simulationStep,
+    simulationTick,
+    simulationSelectTick,
+    simulationStepCount,
+    simulationRun,
+    timelineWindow,
+    stateNetwork,
+    stateSignalType,
+    stateSignalName,
+    stateSignalQuality,
+    stateSignalValue,
+    stateRemoveSignal,
+    stateClearNetwork,
+    ...stateEditor.querySelectorAll<HTMLButtonElement>('button'),
+  ]) {
+    control.disabled = !enabled;
+  }
+}
+
+function boundedInputValue(input: HTMLInputElement, fallback: number, maximum: number): number {
+  const value = Number(input.value);
+  return Number.isSafeInteger(value) && value >= 1 && value <= maximum ? value : fallback;
+}
+
+function visibleTimeline(): readonly CircuitTimelineSample[] {
+  const timeline = sourceSimulation?.timeline ?? currentDemo?.timeline ?? [];
+  const windowSize = boundedInputValue(timelineWindow, 32, 512);
+  if (timeline.length <= windowSize) return timeline;
+  const selectedIndex = Math.max(
+    0,
+    timeline.findIndex(({ tick }) => tick === selectedSimulationTick),
+  );
+  const start = Math.min(
+    Math.max(0, selectedIndex - Math.floor((windowSize - 1) / 2)),
+    timeline.length - windowSize,
+  );
+  return timeline.slice(start, start + windowSize);
+}
+
+function syncSimulationDemo(): void {
+  if (currentDemo === undefined || sourceSimulation === undefined) return;
+  currentDemo = { ...currentDemo, timeline: sourceSimulation.timeline };
+}
+
+function refreshSimulationSummary(): void {
+  const controller = sourceSimulation;
+  if (controller === undefined || currentDemo === undefined) {
+    simulationStatus.textContent = 'No simulation';
+    setSimulationEnabled(false);
+    return;
+  }
+  setSimulationEnabled(true);
+  const latest = controller.currentTick;
+  simulationTick.max = String(latest);
+  simulationTick.value = String(selectedSimulationTick);
+  simulationStatus.textContent = `T${selectedSimulationTick} selected · latest T${latest} · ${simulationTimer === undefined ? 'paused' : 'playing'}`;
+  const output =
+    currentDemo.outputNetwork === undefined
+      ? undefined
+      : controller.signalValueAt(
+          selectedSimulationTick,
+          currentDemo.outputNetwork,
+          signal('virtual', 'signal-A'),
+        );
+  proofTitle.textContent =
+    output === undefined
+      ? `T${selectedSimulationTick} selected`
+      : `T${selectedSimulationTick} · output signal-A = ${output}`;
+  proofDescription.textContent =
+    selectedSimulationTick === 0
+      ? 'Simulation starts paused at T0 with every Network empty; every absent signal reads as zero. Edit this snapshot or advance time.'
+      : 'Select any captured row to inspect it. Editing or stepping from an older tick creates a new branch and discards its computed future.';
+}
+
+function renderSimulation(): void {
+  syncSimulationDemo();
+  refreshSimulationSummary();
+  renderTimeline();
+}
+
+function selectSimulationTick(tick: number): void {
+  if (!sourceSimulation?.timeline.some((sample) => sample.tick === tick)) return;
+  pauseSimulation();
+  selectedSimulationTick = tick;
+  stateStatus.textContent = '';
+  renderSimulation();
+}
+
+function advanceSimulation(count: number): void {
+  const controller = sourceSimulation;
+  if (controller === undefined) return;
+  controller.stepFrom(selectedSimulationTick, count);
+  selectedSimulationTick = controller.currentTick;
+  stateStatus.textContent = '';
+  renderSimulation();
+}
+
+function selectedStateSignal(): SignalId {
+  const name = stateSignalName.value.trim();
+  const quality = stateSignalQuality.value.trim();
+  if (name.length === 0) throw new TypeError('Signal name cannot be empty.');
+  return signal(
+    stateSignalType.value as SignalType,
+    name,
+    quality.length === 0 ? undefined : quality,
+  );
+}
+
+function editSelectedSignal(value: number): void {
+  const controller = sourceSimulation;
+  if (controller === undefined) return;
+  if (!Number.isSafeInteger(value)) throw new RangeError('Signal value must be a safe integer.');
+  controller.setSignalAt(
+    selectedSimulationTick,
+    stateNetwork.value as CircuitTimelineSample['networks'][number]['id'],
+    selectedStateSignal(),
+    value,
+  );
+  pauseSimulation();
+  stateStatus.textContent =
+    value === 0
+      ? `Signal removed at T${selectedSimulationTick}.`
+      : `Snapshot T${selectedSimulationTick} updated.`;
+  renderSimulation();
+}
+
+function reportStateEdit(error: unknown): void {
+  stateStatus.textContent = error instanceof Error ? error.message : String(error);
+}
+
+function openStateEditor(
+  tick: number,
+  networkId: string,
+  entry?: { readonly signal: SignalId; readonly value: number },
+): void {
+  selectSimulationTick(tick);
+  stateNetwork.value = networkId;
+  if (entry === undefined) {
+    stateStatus.textContent = `Editing Network at T${tick}; enter a Signal that is currently absent.`;
+    stateSignalName.focus();
+    stateSignalName.select();
+    return;
+  }
+  stateSignalType.value = entry.signal.type;
+  stateSignalName.value = entry.signal.name;
+  stateSignalQuality.value = entry.signal.quality ?? '';
+  stateSignalValue.value = String(entry.value);
+  stateStatus.textContent = `Loaded ${signalLabel(entry.signal)} from T${tick}.`;
+  stateSignalValue.focus();
+  stateSignalValue.select();
+}
+
 function renderTimeline(): void {
   const demo = currentDemo;
   if (demo === undefined || demo.timeline.length === 0) {
@@ -231,10 +420,11 @@ function renderTimeline(): void {
     return;
   }
 
+  const timeline = visibleTimeline();
   const selected = waveformNetwork.value;
   if (selected === '') {
     waveformViewLabel.textContent = 'Networks overview';
-    const model = buildOverviewTimeline(demo.timeline);
+    const model = buildOverviewTimeline(timeline);
     const headers: (string | HTMLElement)[] = ['Tick'];
     for (const network of model.networks) {
       const button = document.createElement('button');
@@ -253,15 +443,27 @@ function renderTimeline(): void {
     const body = table.tBodies[0]!;
     for (const row of model.rows) {
       const element = document.createElement('tr');
+      element.dataset.selected = String(row.tick === selectedSimulationTick);
+      element.title = `Select T${row.tick}`;
+      element.addEventListener('click', () => selectSimulationTick(row.tick));
       const tick = document.createElement('th');
       tick.scope = 'row';
       tick.textContent = `T${row.tick}`;
       element.append(tick);
-      for (const cell of row.cells) {
+      row.cells.forEach((cell, networkIndex) => {
         const value = document.createElement('td');
+        const network = model.networks[networkIndex]!;
+        const sourceEntry = timeline
+          .find(({ tick }) => tick === row.tick)
+          ?.networks.find(({ id }) => id === network.id)?.signals[0];
+        value.title = 'Double-click to edit this Network snapshot';
+        value.addEventListener('dblclick', (event) => {
+          event.stopPropagation();
+          openStateEditor(row.tick, network.id, cell.lines.length === 1 ? sourceEntry : undefined);
+        });
         if (cell.lines.length === 0) {
           value.className = 'timeline-empty';
-          value.textContent = '—';
+          value.textContent = '0';
         } else {
           for (const line of cell.lines) {
             const item = document.createElement('span');
@@ -275,14 +477,14 @@ function renderTimeline(): void {
           }
         }
         element.append(value);
-      }
+      });
       body.append(element);
     }
     waveform.replaceChildren(table);
     return;
   }
 
-  const detail = buildDetailTimeline(demo.timeline, selected);
+  const detail = buildDetailTimeline(timeline, selected);
   if (detail === undefined) {
     waveformNetwork.value = '';
     renderTimeline();
@@ -294,16 +496,25 @@ function renderTimeline(): void {
   const body = table.tBodies[0]!;
   for (const row of detail.rows) {
     const element = document.createElement('tr');
+    element.dataset.selected = String(row.tick === selectedSimulationTick);
+    element.title = `Select T${row.tick}`;
+    element.addEventListener('click', () => selectSimulationTick(row.tick));
     const tick = document.createElement('th');
     tick.scope = 'row';
     tick.textContent = `T${row.tick}`;
     element.append(tick);
-    for (const value of row.values) {
+    row.values.forEach((value, signalIndex) => {
       const cell = document.createElement('td');
       cell.textContent = String(value);
       if (value === 0) cell.className = 'timeline-zero';
+      const signalId = detail.signals[signalIndex]!;
+      cell.title = `Double-click to edit ${signalLabel(signalId)}`;
+      cell.addEventListener('dblclick', (event) => {
+        event.stopPropagation();
+        openStateEditor(row.tick, detail.network.id, { signal: signalId, value });
+      });
       element.append(cell);
-    }
+    });
     body.append(element);
   }
   if (detail.signals.length === 0) {
@@ -311,7 +522,7 @@ function renderTimeline(): void {
     const empty = document.createElement('td');
     empty.colSpan = 2;
     empty.className = 'timeline-empty';
-    empty.textContent = 'This Network is empty for every captured tick.';
+    empty.textContent = 'No non-zero signals in this window; every signal reads as 0.';
     row.append(empty);
     body.replaceChildren(row);
   }
@@ -320,6 +531,7 @@ function renderTimeline(): void {
 
 function updateTimelineTargets(demo: SourcePlanDemo): void {
   const previous = waveformNetwork.value;
+  const previousStateNetwork = stateNetwork.value;
   const networks = demo.timeline[0]?.networks ?? [];
   waveformNetwork.replaceChildren(
     Object.assign(document.createElement('option'), { value: '', textContent: 'All Networks' }),
@@ -331,12 +543,95 @@ function updateTimelineTargets(demo: SourcePlanDemo): void {
     ),
   );
   waveformNetwork.value = networks.some(({ id }) => id === previous) ? previous : '';
+  stateNetwork.replaceChildren(
+    ...networks.map((network) =>
+      Object.assign(document.createElement('option'), {
+        value: network.id,
+        textContent: displayNetworkName(network.name),
+      }),
+    ),
+  );
+  const stateDefault = networks.find(({ name }) => name === demo.inputNetwork) ?? networks[0];
+  stateNetwork.value = networks.some(({ id }) => id === previousStateNetwork)
+    ? previousStateNetwork
+    : (stateDefault?.id ?? '');
   renderTimeline();
 }
 
 waveformNetwork.addEventListener('change', renderTimeline);
+timelineWindow.addEventListener('input', renderTimeline);
+simulationReset.addEventListener('click', () => {
+  pauseSimulation();
+  sourceSimulation?.reset();
+  selectedSimulationTick = 0;
+  stateStatus.textContent = 'Reset to all-zero T0.';
+  renderSimulation();
+});
+simulationPlay.addEventListener('click', () => {
+  if (simulationTimer !== undefined) {
+    pauseSimulation();
+    refreshSimulationSummary();
+    return;
+  }
+  if (sourceSimulation === undefined) return;
+  simulationPlay.textContent = 'Pause';
+  simulationTimer = setInterval(() => advanceSimulation(1), 350);
+  refreshSimulationSummary();
+});
+simulationStep.addEventListener('click', () => {
+  pauseSimulation();
+  advanceSimulation(1);
+});
+simulationSelectTick.addEventListener('click', () => {
+  const tick = Number(simulationTick.value);
+  if (
+    !Number.isSafeInteger(tick) ||
+    tick < 0 ||
+    !sourceSimulation?.timeline.some((sample) => sample.tick === tick)
+  ) {
+    stateStatus.textContent = `Tick must be an integer from 0 to ${sourceSimulation?.currentTick ?? 0}.`;
+    return;
+  }
+  selectSimulationTick(tick);
+});
+simulationRun.addEventListener('click', () => {
+  pauseSimulation();
+  advanceSimulation(boundedInputValue(simulationStepCount, 10, 10_000));
+});
+stateEditor.addEventListener('submit', (event) => {
+  event.preventDefault();
+  try {
+    editSelectedSignal(Number(stateSignalValue.value));
+  } catch (error) {
+    reportStateEdit(error);
+  }
+});
+stateRemoveSignal.addEventListener('click', () => {
+  try {
+    editSelectedSignal(0);
+  } catch (error) {
+    reportStateEdit(error);
+  }
+});
+stateClearNetwork.addEventListener('click', () => {
+  try {
+    const controller = sourceSimulation;
+    if (controller === undefined) return;
+    pauseSimulation();
+    controller.clearNetworkAt(
+      selectedSimulationTick,
+      stateNetwork.value as CircuitTimelineSample['networks'][number]['id'],
+    );
+    stateStatus.textContent = `Network cleared at T${selectedSimulationTick}.`;
+    renderSimulation();
+  } catch (error) {
+    reportStateEdit(error);
+  }
+});
 
 function renderProofPending(): void {
+  pauseSimulation();
+  setSimulationEnabled(false);
   currentPlan = undefined;
   testRevision += 1;
   terminateTestWorker();
@@ -350,8 +645,14 @@ function renderProofPending(): void {
 }
 
 function renderProofError(message: string): void {
+  pauseSimulation();
   currentPlan = undefined;
   currentDemo = undefined;
+  sourceSimulation = undefined;
+  selectedSimulationTick = 0;
+  setSimulationEnabled(false);
+  simulationStatus.textContent = 'No simulation';
+  stateStatus.textContent = '';
   proof.dataset.state = 'invalid';
   proof.setAttribute('aria-busy', 'false');
   proofTitle.textContent = 'Current source is not simulatable yet';
@@ -383,26 +684,15 @@ function renderSourceProof(
   plan: NonNullable<CompilerWorkerResponse['result']['plan']>,
   foldedOperations: number,
 ): void {
-  const demo = runSourcePlanDemo(plan);
+  pauseSimulation();
+  const controller = new SourceSimulationController(plan);
+  sourceSimulation = controller;
+  selectedSimulationTick = 0;
+  const demo = { ...runSourcePlanDemo(plan, 0, 0), timeline: controller.timeline };
   currentDemo = demo;
   proof.dataset.state = 'valid';
   proof.setAttribute('aria-busy', 'false');
-  if (demo.outputValue === undefined) {
-    proofTitle.textContent = `${demo.colors.length} Networks colored`;
-    proofDescription.textContent =
-      'No producers constrain these Networks yet; unconstrained components receive the deterministic red default.';
-  } else {
-    proofTitle.replaceChildren(
-      document.createTextNode('Current source produced '),
-      Object.assign(document.createElement('code'), {
-        textContent: `signal-A = ${demo.outputValue}`,
-      }),
-    );
-    proofDescription.textContent =
-      demo.inputNetwork === undefined
-        ? `${demo.outputNetwork} is driven by a source device after ${demo.stages} synchronous circuit ${demo.stages === 1 ? 'tick' : 'ticks'}.`
-        : `${demo.inputNetwork} receives signal-A = ${demo.inputValue} at T0; ${demo.outputNetwork} is read after ${demo.stages} synchronous circuit ${demo.stages === 1 ? 'tick' : 'ticks'}.`;
-  }
+  stateStatus.textContent = '';
   proofCombinators.textContent = String(demo.combinators);
   proofAttachments.textContent = String(demo.attachments);
   proofStages.textContent = String(demo.stages);
@@ -428,6 +718,7 @@ function renderSourceProof(
     }),
   );
   updateTimelineTargets(demo);
+  refreshSimulationSummary();
   networkColors.replaceChildren(
     ...demo.colors.map((network) => {
       const item = document.createElement('span');

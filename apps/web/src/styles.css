@@ -139,7 +139,7 @@ code {
   border-radius: 10px;
   background: #0e1410;
   min-height: 356px;
-  max-height: 440px;
+  max-height: 620px;
   overflow: auto;
 }
 .waveform-head {
@@ -180,7 +180,107 @@ code {
     Consolas,
     monospace;
 }
+.simulation-toolbar {
+  display: grid;
+  gap: 9px;
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid #29382f;
+  border-radius: 7px;
+  background: #121a15;
+}
+.simulation-toolbar output {
+  color: #a9cdb6;
+  font:
+    650 0.68rem ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+}
+.simulation-buttons,
+.state-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  align-items: end;
+}
+.simulation-buttons label,
+.state-editor label {
+  display: grid;
+  gap: 3px;
+  color: #718077;
+  font-size: 0.58rem;
+}
+.simulation-buttons button,
+.state-actions button,
+.state-editor input,
+.state-editor select {
+  min-height: 30px;
+  border: 1px solid #35463c;
+  border-radius: 5px;
+  color: #c9d5ce;
+  background: #172019;
+  font:
+    0.64rem ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+}
+.simulation-buttons button,
+.state-actions button {
+  padding: 0 10px;
+  cursor: pointer;
+}
+.simulation-buttons button:disabled,
+.state-actions button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+.simulation-buttons input {
+  width: 66px;
+  min-height: 30px;
+  box-sizing: border-box;
+  border: 1px solid #35463c;
+  border-radius: 5px;
+  padding: 0 5px;
+  color: #c9d5ce;
+  background: #172019;
+  font: inherit;
+}
+.state-editor {
+  display: grid;
+  grid-template-columns: minmax(110px, 1.2fr) repeat(4, minmax(74px, 1fr));
+  gap: 8px;
+  align-items: end;
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid #29382f;
+  border-radius: 7px;
+  background: #121a15;
+}
+.state-editor > strong,
+.state-editor > .state-actions,
+.state-editor > output {
+  grid-column: 1 / -1;
+}
+.state-editor > strong {
+  color: #aab8af;
+  font-size: 0.66rem;
+}
+.state-editor input,
+.state-editor select {
+  min-width: 0;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0 7px;
+}
+.state-editor output {
+  min-height: 1em;
+  color: #d09a73;
+  font-size: 0.61rem;
+}
 .waveform {
+  max-height: 300px;
   overflow: auto;
   border: 1px solid #26342c;
   border-radius: 7px;
@@ -209,6 +309,13 @@ code {
 }
 .timeline-table tr:last-child > * {
   border-bottom: 0;
+}
+.timeline-table tbody tr {
+  cursor: pointer;
+}
+.timeline-table tbody tr[data-selected='true'] > * {
+  box-shadow: inset 0 0 0 1px #5b856c;
+  background: #19241d;
 }
 .timeline-table tr > *:last-child {
   border-right: 0;
@@ -838,6 +945,12 @@ output[data-state='warning'] {
   .waveform-head select {
     width: 100%;
     max-width: none;
+  }
+  .simulation-buttons > button {
+    flex: 1 1 auto;
+  }
+  .state-editor {
+    grid-template-columns: 1fr 1fr;
   }
   .test-panel-header {
     align-items: flex-start;

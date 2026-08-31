@@ -55,4 +55,29 @@ describe('timeline table models', () => {
       { tick: 1, values: [0, 0, 9, 0] },
     ]);
   });
+
+  it('keeps quality in a signal column label', () => {
+    const qualityTimeline: CircuitTimelineSample[] = [
+      {
+        tick: 0,
+        networks: [
+          {
+            id: 'network:1' as NetworkId,
+            name: 'input',
+            color: 'red',
+            signals: [
+              {
+                signal: { type: 'item', name: 'iron-plate', quality: 'legendary' },
+                value: 1,
+              },
+            ],
+          },
+        ],
+      },
+    ];
+
+    expect(buildOverviewTimeline(qualityTimeline).rows[0]?.cells[0]?.lines).toEqual([
+      'item/iron-plate@legendary: 1',
+    ]);
+  });
 });

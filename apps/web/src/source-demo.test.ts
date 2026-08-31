@@ -4,7 +4,9 @@ import { parseFile } from '@comblang/language';
 import { executeElaborationProgram } from '@comblang/runtime';
 import { describe, expect, test } from 'vitest';
 
-import { runSourcePlanDemo } from './source-demo.js';
+import { signal } from '@comblang/factorio';
+
+import { runSourcePlanDemo, SourceSimulationController } from './source-demo.js';
 
 function compileScale(multiplier: number) {
   const parsed = parseFile({
@@ -21,6 +23,41 @@ const output: Network = Scale(input);`,
 }
 
 describe('source-driven homepage proof', () => {
+  test('starts interactive simulation at an all-zero T0 and branches edited history', () => {
+    const plan = compileScale(2);
+    const controller = new SourceSimulationController(plan);
+    const input = controller.timeline[0]!.networks.find(({ name }) => name === 'input')!;
+    const output = controller.timeline[0]!.networks.find(({ name }) => name === 'output')!;
+    const A = signal('virtual', 'signal-A');
+
+    expect(controller.timeline).toHaveLength(1);
+    expect(controller.timeline[0]?.tick).toBe(0);
+    expect(controller.timeline[0]?.networks.every(({ signals }) => signals.length === 0)).toBe(
+      true,
+    );
+
+    controller.setSignalAt(0, input.id, A, 3);
+    expect(controller.signalValueAt(0, 'input', A)).toBe(3);
+    controller.stepFrom(0, 1);
+    expect(controller.signalValueAt(1, 'output', A)).toBe(6);
+
+    controller.setSignalAt(0, input.id, A, 4);
+    expect(controller.timeline.map(({ tick }) => tick)).toEqual([0]);
+    controller.stepFrom(0, 1);
+    expect(controller.signalValueAt(1, 'output', A)).toBe(8);
+
+    controller.clearNetworkAt(1, output.id);
+    expect(controller.signalValueAt(1, 'output', A)).toBe(0);
+    controller.reset();
+    expect(controller.timeline).toHaveLength(1);
+    expect(controller.signalValueAt(0, 'input', A)).toBe(0);
+
+    const legendaryA = signal('virtual', 'signal-A', 'legendary');
+    controller.setSignalAt(0, input.id, legendaryA, 9);
+    expect(controller.signalValueAt(0, 'input', legendaryA)).toBe(9);
+    expect(controller.signalValueAt(0, 'input', A)).toBe(0);
+  });
+
   test('colors declared Networks even when the source has no producers', () => {
     const parsed = parseFile({
       path: 'declarations.factorio.ts',
