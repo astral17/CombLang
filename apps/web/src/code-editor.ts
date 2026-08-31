@@ -129,6 +129,7 @@ export function toEditorDiagnostics(
 export interface SourceEditor {
   readonly kind: SourceEditorKind;
   getValue(): string;
+  insertText(text: string): void;
   setDiagnostics(diagnostics: readonly Diagnostic[]): void;
   destroy(): void;
 }
@@ -148,6 +149,7 @@ export function createSourceEditor(
   initialValue: string,
   onChange: () => void,
   mode: SourceEditorMode = 'auto',
+  ariaLabel = 'CombLang source editor, main.factorio.ts',
 ): SourceEditor {
   const kind = chooseSourceEditorKind(
     mode,
@@ -157,7 +159,7 @@ export function createSourceEditor(
     const textarea = document.createElement('textarea');
     textarea.className = 'native-source-editor';
     textarea.value = initialValue;
-    textarea.setAttribute('aria-label', 'CombLang source editor, main.factorio.ts');
+    textarea.setAttribute('aria-label', ariaLabel);
     textarea.autocapitalize = 'off';
     textarea.autocomplete = 'off';
     textarea.setAttribute('autocorrect', 'off');
@@ -168,6 +170,13 @@ export function createSourceEditor(
     return {
       kind,
       getValue: () => textarea.value,
+      insertText: (text) => {
+        const separator = textarea.value.length === 0 || textarea.value.endsWith('\n') ? '' : '\n';
+        const insertion = `${separator}${text}`;
+        textarea.setRangeText(insertion, textarea.value.length, textarea.value.length, 'end');
+        textarea.focus();
+        onChange();
+      },
       setDiagnostics: (diagnostics) => {
         const errors = diagnostics.filter(({ severity }) => severity === 'error').length;
         textarea.setAttribute('aria-invalid', String(errors > 0));
@@ -199,7 +208,7 @@ export function createSourceEditor(
       javascript({ typescript: true }),
       typescriptLanguage.data.of({ autocomplete: dslCompletionSource }),
       EditorView.contentAttributes.of({
-        'aria-label': 'CombLang source editor, main.factorio.ts',
+        'aria-label': ariaLabel,
         autocapitalize: 'off',
         autocomplete: 'off',
         autocorrect: 'off',
@@ -224,6 +233,18 @@ export function createSourceEditor(
   return {
     kind,
     getValue: () => view.state.doc.toString(),
+    insertText: (text) => {
+      const separator =
+        view.state.doc.length === 0 || view.state.doc.toString().endsWith('\n') ? '' : '\n';
+      const insertion = `${separator}${text}`;
+      const end = view.state.doc.length;
+      view.dispatch({
+        changes: { from: end, insert: insertion },
+        selection: { anchor: end + insertion.length },
+        scrollIntoView: true,
+      });
+      view.focus();
+    },
     setDiagnostics: (diagnostics) => {
       view.dispatch(
         setDiagnostics(view.state, toEditorDiagnostics(view.state.doc.length, diagnostics)),

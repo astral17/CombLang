@@ -38,9 +38,20 @@
           </dl>
         </div>
         <div class="waveform-card">
-          <div class="waveform-head"><strong>Waveform</strong><span>virtual / signal-A</span></div>
+          <div class="waveform-head">
+            <div>
+              <strong>Circuit timeline</strong>
+              <span id="waveform-view-label">Networks overview</span>
+            </div>
+            <label>
+              <span>Detail</span>
+              <select id="waveform-network" aria-label="Select a Network timeline">
+                <option value="">All Networks</option>
+              </select>
+            </label>
+          </div>
           <div id="instance-paths" class="instance-paths" aria-label="Lowered call paths"></div>
-          <div id="waveform" class="waveform" aria-label="Current source waveform"></div>
+          <div id="waveform" class="waveform" aria-label="Current circuit timeline"></div>
           <div
             id="network-colors"
             class="network-colors"
@@ -66,6 +77,38 @@
             <output id="status"></output>
           </div>
           <pre id="result" aria-live="polite"></pre>
+        </div>
+      </section>
+
+      <section class="test-panel" aria-labelledby="test-title">
+        <div class="test-panel-header">
+          <div>
+            <p class="section-kicker">Current source · browser-local tests</p>
+            <h2 id="test-title">Circuit tests</h2>
+          </div>
+          <div class="test-actions">
+            <output id="test-status" data-state="pending">Waiting for compiler…</output>
+            <button id="add-test" type="button">Add test</button>
+          </div>
+        </div>
+        <div class="test-workbench">
+          <div class="pane test-editor-pane">
+            <div class="pane-header">
+              <span>Tests</span>
+              <div class="editor-meta">
+                <small id="test-editor-label">circuit.test.js · CodeMirror 6</small>
+                <button id="test-editor-mode" type="button">Native editor</button>
+              </div>
+            </div>
+            <div id="test-editor" class="source-editor test-editor"></div>
+          </div>
+          <div class="pane test-results-pane">
+            <div class="pane-header">
+              <span>Results</span>
+              <small>fresh circuit per test</small>
+            </div>
+            <div id="test-results" class="test-results" aria-live="polite"></div>
+          </div>
         </div>
       </section>
 

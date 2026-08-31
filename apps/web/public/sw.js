@@ -1,4 +1,4 @@
-const CACHE_NAME = 'comblang-shell-v4';
+const CACHE_NAME = 'comblang-shell-v5';
 const APP_SHELL_URL = new URL('./', self.registration.scope).href;
 
 async function fetchAndCache(cache, url) {
@@ -23,7 +23,9 @@ async function precacheApplication() {
   for (const { url, response } of assetResponses) {
     if (!url.endsWith('.js')) continue;
     const javaScript = await response.text();
-    for (const match of javaScript.matchAll(/["']([^"']*parser\.worker-[\w-]+\.js)["']/g)) {
+    for (const match of javaScript.matchAll(
+      /["']([^"']*(?:parser|test)\.worker-[\w-]+\.js)["']/g,
+    )) {
       const nestedUrl = new URL(match[1], url);
       if (nestedUrl.origin === self.location.origin) nestedAssets.add(nestedUrl.href);
     }

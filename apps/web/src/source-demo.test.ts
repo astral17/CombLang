@@ -61,6 +61,10 @@ const output: Network = Pipeline(input);`,
       outputValue: 75,
     });
     expect(demo.waveform.map((sample) => sample.output)).toEqual([0, 0, 75]);
+    expect(demo.timeline).toHaveLength(3);
+    expect(demo.timeline[2]?.networks.find(({ name }) => name === 'output')?.signals).toEqual([
+      { signal: { type: 'virtual', name: 'signal-A' }, value: 75 },
+    ]);
   });
 
   test('uses a folded integer subexpression without adding a physical stage', () => {

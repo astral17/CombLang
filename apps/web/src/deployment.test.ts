@@ -25,7 +25,7 @@ describe('static deployment configuration', () => {
   it('precaches the production shell and bundled compiler worker', () => {
     const worker = readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8');
     expect(worker).toContain('precacheApplication()');
-    expect(worker).toContain('parser\\.worker-');
+    expect(worker).toContain('(?:parser|test)\\.worker-');
     expect(worker).toContain("request.mode === 'navigate'");
   });
 });

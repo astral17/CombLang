@@ -3,8 +3,22 @@ import type {
   PlanDeciderCondition,
   PlanNetworkRef,
 } from '@comblang/compiler/direct-plan';
-import { signal, SparseBus } from '@comblang/factorio';
+import { signal, SparseBus, type SignalId } from '@comblang/factorio';
 import { elaborateDirectPlan } from '@comblang/runtime';
+import type { NetworkId } from '@comblang/shared';
+import type { SimulationSnapshot } from '@comblang/simulator';
+
+export interface NetworkTimelineSample {
+  readonly id: NetworkId;
+  readonly name: string;
+  readonly color: 'red' | 'green';
+  readonly signals: readonly { readonly signal: SignalId; readonly value: number }[];
+}
+
+export interface CircuitTimelineSample {
+  readonly tick: number;
+  readonly networks: readonly NetworkTimelineSample[];
+}
 
 export interface SourcePlanDemo {
   readonly combinators: number;
@@ -20,6 +34,31 @@ export interface SourcePlanDemo {
     readonly input: number;
     readonly output: number;
   }[];
+  readonly timeline: readonly CircuitTimelineSample[];
+}
+
+function captureTimeline(
+  snapshot: SimulationSnapshot,
+  networks: readonly {
+    readonly id: NetworkId;
+    readonly name?: string;
+    readonly color: 'red' | 'green';
+  }[],
+): CircuitTimelineSample {
+  return {
+    tick: snapshot.tick,
+    networks: networks
+      .filter((network) => !network.name?.startsWith('$unused:'))
+      .map((network) => ({
+        id: network.id,
+        name: network.name ?? network.id,
+        color: network.color,
+        signals: snapshot
+          .read(network.id)
+          .entries()
+          .map(([signal, value]) => ({ signal, value })),
+      })),
+  };
 }
 
 function networkRefNames(reference: PlanNetworkRef): readonly string[] {
@@ -94,6 +133,7 @@ export function runSourcePlanDemo(plan: DirectElaborationPlan, inputValue = 7): 
   const lastProducer = plan.producers.at(-1);
   if (firstProducer === undefined || lastProducer === undefined) {
     const executed = elaborateDirectPlan(plan);
+    const simulation = executed.circuit.createSimulation();
     return {
       combinators: 0,
       attachments: 0,
@@ -105,6 +145,7 @@ export function runSourcePlanDemo(plan: DirectElaborationPlan, inputValue = 7): 
           color: network.color,
         })),
       waveform: [],
+      timeline: [captureTimeline(simulation.snapshot, executed.circuit.ir.networks)],
     };
   }
   const inputNetworkName =
@@ -139,6 +180,7 @@ export function runSourcePlanDemo(plan: DirectElaborationPlan, inputValue = 7): 
       output: simulation.snapshot.read(output.id).get(A),
     },
   ];
+  const timeline = [captureTimeline(simulation.snapshot, executed.circuit.ir.networks)];
   const stages = criticalPathStages(plan);
   let snapshot = simulation.snapshot;
   for (let tick = 1; tick <= stages; tick += 1) {
@@ -148,6 +190,7 @@ export function runSourcePlanDemo(plan: DirectElaborationPlan, inputValue = 7): 
       input: input === undefined ? 0 : snapshot.read(input.id).get(A),
       output: snapshot.read(output.id).get(A),
     });
+    timeline.push(captureTimeline(snapshot, executed.circuit.ir.networks));
   }
 
   return {
@@ -164,5 +207,6 @@ export function runSourcePlanDemo(plan: DirectElaborationPlan, inputValue = 7): 
         color: network.color,
       })),
     waveform,
+    timeline,
   };
 }

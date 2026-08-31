@@ -20,6 +20,7 @@
     "@comblang/factorio": "0.0.0",
     "@comblang/language": "0.0.0",
     "@comblang/runtime": "0.0.0",
+    "@comblang/simulator": "0.0.0",
     "@comblang/shared": "0.0.0",
     "@lezer/highlight": "^1.2.3"
   }

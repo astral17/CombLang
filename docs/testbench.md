@@ -129,3 +129,44 @@ Whole Networks and selected signals are implemented. Object input/output trace
 targets remain pending until the Phase 5 generic object-adapter boundary is
 available. Chart rendering is intentionally outside the trace store; the web
 waveform will consume this shared JSON model later.
+
+## Browser workbench
+
+The current web workbench has a separate `circuit.test.js` editor. Its draft is
+stored independently from `main.factorio.ts`; recompiling the circuit does not
+overwrite test code. `Add test` appends another test block.
+
+Each `test(name, callback)` executes against a fresh elaborated circuit in a
+separate worker. A runaway test is terminated by the UI budget instead of
+blocking the editor. Results show every passing or failing test, and failures
+include the structured assertion message; assertion/runtime stacks are mapped
+back to their source line. A syntax error is visible but may lack a line until
+test parsing shares the compiler worker without duplicating TypeScript in the
+small test worker. The temporary JavaScript API exposes:
+
+```js
+test('example', ({ network, drive, clear, pulse, tick, run, expect, expectSignal }) => {
+  const A = Signal('virtual', 'signal-A');
+  drive(network('input'), [[A, 7]]);
+  tick(2);
+  expectSignal(network('output'), A).toBe(8);
+});
+```
+
+This is an execution surface for the Phase 5 functionality, not the final test
+language syntax. The runner, `TestSession`, assertions, and result model do not
+depend on the callback spelling, so a later test compiler can replace it. The
+worker is an availability boundary, not yet the deferred hardened module
+sandbox.
+
+The old single-signal bar waveform has been replaced by two table views:
+
+- overview rows are ticks and columns are Networks; a cell shows up to three
+  `type/signal: value` entries followed by an overflow count;
+- selecting a Network changes columns to every signal seen on that Network and
+  keeps ticks as rows, making pipelines, disappearing signals, and exact values
+  easy to compare.
+
+Both tables scroll horizontally on narrow screens. Their model remains separate
+from DOM rendering so it can later consume the shared `comblang-trace` document
+and evolve toward richer waveform views.
