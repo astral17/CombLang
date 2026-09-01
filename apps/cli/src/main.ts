@@ -13,6 +13,7 @@ import type {
   DirectPlanNetworkTransfer,
 } from '@comblang/compiler/direct-plan';
 import { parseProject, validateDslSemantics } from '@comblang/language';
+import type { PrototypeProvider } from '@comblang/prototypes';
 import {
   ElaborationExecutionError,
   ElaborationOperationLimitError,
@@ -35,6 +36,10 @@ interface LoadedSource {
   readonly text: string;
 }
 
+export interface CliCompilationEnvironment {
+  readonly prototypes?: PrototypeProvider;
+}
+
 function formatDiagnostic(
   diagnostic: Diagnostic,
   files: ReadonlyMap<string, LoadedSource>,
@@ -52,7 +57,11 @@ function formatDiagnostic(
   return `${source.path}:${position.line + 1}:${position.column + 1} - ${diagnostic.severity} ${diagnostic.code}: ${diagnostic.message}`;
 }
 
-async function check(fileNames: readonly string[], json: boolean): Promise<number> {
+async function check(
+  fileNames: readonly string[],
+  json: boolean,
+  environment: CliCompilationEnvironment,
+): Promise<number> {
   if (fileNames.length === 0) {
     console.error(usage);
     return 2;
@@ -83,7 +92,7 @@ async function check(fileNames: readonly string[], json: boolean): Promise<numbe
     diagnostics.push(...semanticDiagnostics);
     if (semanticDiagnostics.some(({ severity }) => severity === 'error')) continue;
     try {
-      const plan = executeElaborationProgram(transformElaborationModule(file));
+      const plan = executeElaborationProgram(transformElaborationModule(file), environment);
       diagnostics.push(...(plan.diagnostics ?? []));
       producerCount += plan.producers.length;
       capabilityUses.push(...(plan.capabilityUses ?? []));
@@ -135,7 +144,11 @@ function executionFailure(error: unknown): Diagnostic {
   };
 }
 
-async function testCircuit(fileNames: readonly string[], json: boolean): Promise<number> {
+async function testCircuit(
+  fileNames: readonly string[],
+  json: boolean,
+  environment: CliCompilationEnvironment,
+): Promise<number> {
   if (fileNames.length !== 2) {
     console.error(usage);
     return 2;
@@ -158,7 +171,7 @@ async function testCircuit(fileNames: readonly string[], json: boolean): Promise
     diagnostics.push(...semanticDiagnostics);
     if (!semanticDiagnostics.some(({ severity }) => severity === 'error')) {
       try {
-        plan = executeElaborationProgram(transformElaborationModule(file));
+        plan = executeElaborationProgram(transformElaborationModule(file), environment);
         diagnostics.push(...(plan.diagnostics ?? []));
         if (!diagnostics.some(({ severity }) => severity === 'error')) {
           diagnostics.push(...tryElaborateDirectPlan(plan).diagnostics);
@@ -210,7 +223,10 @@ async function testCircuit(fileNames: readonly string[], json: boolean): Promise
   return tests !== undefined && tests.failed > 0 ? 1 : 0;
 }
 
-export async function run(args: readonly string[]): Promise<number> {
+export async function run(
+  args: readonly string[],
+  environment: CliCompilationEnvironment = {},
+): Promise<number> {
   const [command, ...rest] = args;
   if (command === undefined || command === '--help' || command === '-h') {
     console.log(usage);
@@ -224,7 +240,9 @@ export async function run(args: readonly string[]): Promise<number> {
   const json = rest.includes('--json');
   try {
     const files = rest.filter((argument) => argument !== '--json');
-    return command === 'check' ? await check(files, json) : await testCircuit(files, json);
+    return command === 'check'
+      ? await check(files, json, environment)
+      : await testCircuit(files, json, environment);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Unable to ${command} source files: ${message}`);

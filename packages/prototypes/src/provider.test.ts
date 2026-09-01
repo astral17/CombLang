@@ -24,6 +24,8 @@ type MutableDatabase = {
   recipes: Record<string, unknown>[];
   entities: Record<string, unknown>[];
   qualities: Record<string, unknown>[];
+  recipeCategories: Record<string, unknown>[];
+  virtualSignals: Record<string, unknown>[];
   indexes: { recipesByProduct: Record<string, string[]> };
 };
 
@@ -38,7 +40,7 @@ describe('PrototypeDatabase v1', () => {
     raw.environment.mods.reverse();
     raw.items.reverse();
     const loaded = await loadPrototypeDatabase(raw);
-    const { database, provider } = loaded;
+    const { database, prototypes } = loaded;
 
     expect(Object.isFrozen(database)).toBe(true);
     expect(Object.isFrozen(database.items)).toBe(true);
@@ -48,20 +50,38 @@ describe('PrototypeDatabase v1', () => {
       'item:iron-gear-wheel',
       'item:iron-plate',
     ]);
-    expect(provider.identity).toMatch(/^comblang-prototypes-v1-sha256:[0-9a-f]{64}$/);
-    expect(provider.getItem('iron-plate')).toBe(provider.getItem('item:iron-plate'));
-    expect(provider.stackSize('iron-plate')).toBe(100);
-    expect(provider.recipesProducing('item:iron-gear-wheel').map(({ name }) => name)).toEqual([
+    expect(prototypes.identity).toMatch(/^comblang-prototypes-v1-sha256:[0-9a-f]{64}$/);
+    expect(prototypes.item['iron-plate']).toBe(prototypes.getItem('iron-plate'));
+    expect(prototypes.recipe_category.crafting?.key).toBe('recipe-category:crafting');
+    expect(prototypes.virtual_signal['signal-A']?.key).toBe('virtual:signal-A');
+    expect(prototypes.item.missing).toBeUndefined();
+    expect(Object.getPrototypeOf(prototypes.item)).toBeNull();
+    expect(Object.isFrozen(prototypes.item)).toBe(true);
+    expect(prototypes.collections.all['virtual:signal-A']).toBe(
+      prototypes.virtual_signal['signal-A'],
+    );
+    expect(
+      prototypes.collections.entitiesByType['assembling-machine']?.map(({ name }) => name),
+    ).toEqual(['assembling-machine-3', 'chemical-plant']);
+    expect(
+      prototypes.collections.craftingMachinesByCategory.crafting?.map(({ name }) => name),
+    ).toEqual(['assembling-machine-3']);
+    expect(
+      prototypes.collections.recipesByProduct['item:iron-gear-wheel']?.map(({ name }) => name),
+    ).toEqual(['iron-gear-wheel', 'modded-gear-wheel']);
+    expect(prototypes.getItem('iron-plate')).toBe(prototypes.getItem('item:iron-plate'));
+    expect(prototypes.stackSize('iron-plate')).toBe(100);
+    expect(prototypes.recipesProducing('item:iron-gear-wheel').map(({ name }) => name)).toEqual([
       'iron-gear-wheel',
       'modded-gear-wheel',
     ]);
-    expect(provider.canCraft('assembling-machine-3', 'iron-gear-wheel')).toBe(true);
-    expect(provider.canCraft('assembling-machine-3', 'water-cycle')).toBe(false);
-    expect(provider.canCraft('chemical-plant', 'water-cycle')).toBe(true);
-    expect(provider.entityCircuitCapabilities('assembling-machine-3').setRecipe).toBe(true);
+    expect(prototypes.canCraft('assembling-machine-3', 'iron-gear-wheel')).toBe(true);
+    expect(prototypes.canCraft('assembling-machine-3', 'water-cycle')).toBe(false);
+    expect(prototypes.canCraft('chemical-plant', 'water-cycle')).toBe(true);
+    expect(prototypes.entityCircuitCapabilities('assembling-machine-3').setRecipe).toBe(true);
 
     raw.items[0]!.stackSize = 1;
-    expect(provider.stackSize('iron-plate')).toBe(100);
+    expect(prototypes.stackSize('iron-plate')).toBe(100);
   });
 
   test('rejects unsupported schemas, duplicate keys, bad references, and stale indexes', () => {
@@ -84,6 +104,14 @@ describe('PrototypeDatabase v1', () => {
       expect.objectContaining({ code: 'PT1004' }),
     );
 
+    const badCategory = mutableFixture();
+    badCategory.recipeCategories = badCategory.recipeCategories.filter(
+      ({ name }) => name !== 'chemistry',
+    );
+    expect(() => validatePrototypeDatabase(badCategory)).toThrowError(
+      expect.objectContaining({ code: 'PT1004', path: 'recipes.water-cycle.category' }),
+    );
+
     const staleIndex = mutableFixture();
     staleIndex.indexes.recipesByProduct['item:iron-gear-wheel'] = ['recipe:iron-gear-wheel'];
     expect(() => validatePrototypeDatabase(staleIndex)).toThrowError(
@@ -99,7 +127,7 @@ describe('PrototypeDatabase v1', () => {
     effective.ingredients = [{ prototype: 'item:copper-plate', amount: 3 }];
     const loaded = await loadPrototypeDatabase(raw);
 
-    expect(loaded.provider.getRecipe('iron-gear-wheel')?.ingredients).toEqual([
+    expect(loaded.prototypes.getRecipe('iron-gear-wheel')?.ingredients).toEqual([
       { prototype: 'item:copper-plate', amount: 3 },
     ]);
   });
@@ -112,6 +140,8 @@ describe('PrototypeDatabase v1', () => {
     reordered.environment.mods.reverse();
     reordered.items.reverse();
     reordered.recipes.reverse();
+    reordered.recipeCategories.reverse();
+    reordered.virtualSignals.reverse();
     for (const recipes of Object.values(reordered.indexes.recipesByProduct)) recipes.reverse();
 
     const contentChanged = mutableFixture();
@@ -123,7 +153,7 @@ describe('PrototypeDatabase v1', () => {
 
     const [base, same, content, mods, settings] = await Promise.all(
       [original, reordered, contentChanged, modsChanged, settingsChanged].map(
-        async (value) => (await loadPrototypeDatabase(value)).provider.identity,
+        async (value) => (await loadPrototypeDatabase(value)).prototypes.identity,
       ),
     );
     expect(same).toBe(base);
@@ -150,11 +180,13 @@ describe('PrototypeDatabase v1', () => {
   test('distinguishes missing capability data from an unknown prototype', async () => {
     const raw = mutableFixture();
     raw.capabilities.recipes = false;
-    const provider = (await loadPrototypeDatabase(raw)).provider;
+    const provider = (await loadPrototypeDatabase(raw)).prototypes;
 
     expect(() => provider.getRecipe('missing')).toThrow(
       'Prototype database does not provide recipes data.',
     );
+    expect(provider.recipe['iron-gear-wheel']).toBeUndefined();
+    expect(provider.collections.recipesByProduct['item:iron-gear-wheel']).toBeUndefined();
     expect(() => provider.stackSize('missing')).toThrow('Unknown item prototype: missing.');
     expect(() => provider.getItem('missing')).not.toThrow();
     expect(provider.getItem('missing')).toBeUndefined();
@@ -162,7 +194,7 @@ describe('PrototypeDatabase v1', () => {
     const partialItems = mutableFixture();
     partialItems.capabilities.itemStackSizes = false;
     delete (partialItems.items[0] as { stackSize?: number }).stackSize;
-    const partialProvider = (await loadPrototypeDatabase(partialItems)).provider;
+    const partialProvider = (await loadPrototypeDatabase(partialItems)).prototypes;
     expect(() => partialProvider.stackSize('copper-plate')).toThrow(
       'Prototype database does not provide itemStackSizes data.',
     );

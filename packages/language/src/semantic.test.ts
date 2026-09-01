@@ -314,16 +314,17 @@ CC();
 new Network(1);
 const { Any } = values;
 function configure(All: number) { return All; }
-const EACH = 5;`,
+const EACH = 5;
+const prototypes = {};`,
     });
 
     const reserved = validateDslSemantics(parsed).filter(({ code }) => code === 'CL1045');
-    expect(reserved).toHaveLength(6);
+    expect(reserved).toHaveLength(7);
     expect(
       reserved.map(({ span }) =>
         span === undefined ? undefined : parsed.text.slice(span.start, span.end),
       ),
-    ).toEqual(['Signal', 'CC', 'Network', 'Any', 'All', 'EACH']);
+    ).toEqual(['Signal', 'CC', 'Network', 'Any', 'All', 'EACH', 'prototypes']);
   });
 
   test('separates invalid Network selections from collection indexing', () => {

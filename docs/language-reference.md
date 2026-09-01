@@ -17,6 +17,15 @@ const QUALITY_A = Signal('virtual', 'signal-A', 'legendary');
 
 `Signal("chest")` normalizes internally to `{ type: "item", name: "chest" }`. Factorio blueprint JSON omits the default item `type`, so the exported field contains only `name`. The optional third string carries Factorio quality. Literal non-string arguments are rejected by the semantic checker; dynamic arguments are accepted until elaboration and then validated from their executed values.
 
+The reserved read-only `prototypes` value mirrors the supported subset of
+Factorio's `LuaPrototypes` tables when a Prototype DB is explicitly injected
+into the compilation environment. For example,
+`prototypes.item['iron-plate']` and
+`prototypes.virtual_signal['signal-A']` return normalized immutable prototype
+records. `prototypes` cannot be shadowed by a user declaration. A source file
+that reads it without an active Prototype DB receives `EX1004`; current
+standalone CLI/browser profile selection is not implemented yet.
+
 The source value returned by `Signal(...)` is a nominal handle registered to the current elaboration session. A plain JavaScript object with `type` and `name` fields remains an ordinary object and is not accepted as a Signal operand or Network selection. Once a valid handle enters a direct plan, its identity is serialized as the structural `{ type, name, quality? }` Signal ID used by IR, simulation, and blueprint JSON. Name-only `network["chest"]` remains an explicit shorthand and does not require constructing a handle first.
 
 ## Networks and colors

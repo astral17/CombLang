@@ -27,4 +27,5 @@ export const freeDslFunctionNames = Object.freeze([
 export const reservedDslValueNames: ReadonlySet<string> = new Set([
   ...freeDslFunctionNames,
   ...Object.keys(wildcardDslNames),
+  'prototypes',
 ]);

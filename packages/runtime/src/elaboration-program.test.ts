@@ -1,6 +1,7 @@
 import { generateBlueprintJson, transformElaborationModule } from '@comblang/compiler';
 import { signal, SparseBus } from '@comblang/factorio';
 import { parseFile, validateDslSemantics } from '@comblang/language';
+import { loadPrototypeDatabase, syntheticPrototypeDatabase } from '@comblang/prototypes';
 import { describe, expect, test } from 'vitest';
 
 import { elaborateDirectPlan, tryElaborateDirectPlan } from './direct-plan.js';
@@ -20,6 +21,35 @@ for (let i = 0; i < 10; i++) {
 }`;
 
 describe('executed elaboration program', () => {
+  test('exposes an explicitly injected immutable prototype environment to source', async () => {
+    const { prototypes } = await loadPrototypeDatabase(syntheticPrototypeDatabase());
+    const parsed = parseFile({
+      path: 'prototype-environment.factorio.ts',
+      text: `const PLATE = Signal(prototypes.item['iron-plate'].name);
+const source = CC(prototypes.item['iron-plate'].stackSize * PLATE);`,
+    });
+
+    const plan = executeElaborationProgram(transformElaborationModule(parsed), { prototypes });
+
+    expect(plan.producers).toMatchObject([
+      {
+        kind: 'constant',
+        outputs: [{ signal: { type: 'item', name: 'iron-plate' }, value: 100 }],
+      },
+    ]);
+  });
+
+  test('reports source-linked failure when prototypes are used without an environment', () => {
+    const parsed = parseFile({
+      path: 'missing-prototype-environment.factorio.ts',
+      text: `const plate = prototypes.item['iron-plate'];`,
+    });
+
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+      expect.objectContaining({ code: 'EX1004', span: expect.any(Object) }),
+    );
+  });
+
   test('seals the runtime against delayed Promise mutations', async () => {
     const globalKey = '__comblangLateDslMutationTest';
     const parsed = parseFile({

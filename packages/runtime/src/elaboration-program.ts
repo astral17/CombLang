@@ -8,6 +8,7 @@ import type {
   PlanArithmeticOperand,
   PlanDeciderCondition,
 } from '@comblang/compiler';
+import type { PrototypeProvider } from '@comblang/prototypes';
 import type { Diagnostic, SourceFileId, SourceSpan } from '@comblang/shared';
 
 import { ElaborationExecutionError, ElaborationOperationLimitError } from './elaboration-errors.js';
@@ -58,6 +59,8 @@ interface PendingDebugInstance {
 
 export interface ElaborationExecutionOptions {
   readonly dslCallBudget?: number;
+  /** Explicit immutable prototype environment exposed to source as `prototypes`. */
+  readonly prototypes?: PrototypeProvider;
   /** @deprecated Use dslCallBudget. */
   readonly operationBudget?: number;
 }
@@ -110,6 +113,7 @@ class ElaborationRecorder {
   readonly #ownershipFrames: (FunctionOwnershipFrame | undefined)[] = [];
   #pendingDebugInstance: PendingDebugInstance | undefined;
   readonly #dslCallBudget: number;
+  readonly #prototypes: PrototypeProvider | undefined;
   #dslCalls = 0;
   readonly #operatorContext: ElaborationOperatorDispatchContext<RawSpan> = {
     isCircuitDslValue: (value): value is DslValue => this.#isCircuitDslValue(value),
@@ -127,12 +131,27 @@ class ElaborationRecorder {
     brand: <T extends RuntimeObjectValue>(value: T): T => this.#runtimeValue(value),
   };
 
-  constructor(fileId: SourceFileId, dslCallBudget: number) {
+  constructor(
+    fileId: SourceFileId,
+    dslCallBudget: number,
+    prototypes: PrototypeProvider | undefined,
+  ) {
     this.#fileId = fileId;
     this.#dslCallBudget = dslCallBudget;
+    this.#prototypes = prototypes;
   }
 
   readonly api = Object.freeze({
+    prototypeEnvironment: (rawSpan: RawSpan): PrototypeProvider => {
+      if (this.#prototypes === undefined) {
+        throw new ElaborationExecutionError(
+          'This compilation has no prototype environment; provide a Prototype DB before using prototypes.',
+          this.#span(rawSpan),
+          'EX1004',
+        );
+      }
+      return this.#prototypes;
+    },
     enterFunction: (name: string, rawSpan: RawSpan): void => {
       const pending = this.#pendingDebugInstance;
       let segment: string;
@@ -1708,7 +1727,7 @@ export function executeElaborationProgram(
   if (!Number.isSafeInteger(dslCallBudget) || dslCallBudget <= 0) {
     throw new Error('Elaboration DSL call budget must be a positive safe integer.');
   }
-  const recorder = new ElaborationRecorder(program.fileId, dslCallBudget);
+  const recorder = new ElaborationRecorder(program.fileId, dslCallBudget, options.prototypes);
   Function(program.runtimeParameter, `"use strict";\n${program.code}`)(recorder.executionApi());
   return recorder.plan();
 }

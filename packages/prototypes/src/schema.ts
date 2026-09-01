@@ -5,9 +5,16 @@ export type FluidPrototypeKey = `fluid:${string}`;
 export type RecipePrototypeKey = `recipe:${string}`;
 export type EntityPrototypeKey = `entity:${string}`;
 export type QualityPrototypeKey = `quality:${string}`;
+export type RecipeCategoryPrototypeKey = `recipe-category:${string}`;
+export type VirtualSignalPrototypeKey = `virtual:${string}`;
 export type ProductPrototypeKey = ItemPrototypeKey | FluidPrototypeKey;
 export type PrototypeKey =
-  ProductPrototypeKey | RecipePrototypeKey | EntityPrototypeKey | QualityPrototypeKey;
+  | ProductPrototypeKey
+  | RecipePrototypeKey
+  | EntityPrototypeKey
+  | QualityPrototypeKey
+  | RecipeCategoryPrototypeKey
+  | VirtualSignalPrototypeKey;
 
 export interface PrototypeMod {
   readonly name: string;
@@ -31,6 +38,8 @@ export interface PrototypeDatabaseCapabilities {
   readonly entities: boolean;
   readonly entityCircuitCapabilities: boolean;
   readonly qualities: boolean;
+  readonly recipeCategories: boolean;
+  readonly virtualSignals: boolean;
 }
 
 export interface ItemPrototype {
@@ -100,6 +109,16 @@ export interface QualityPrototype {
   readonly level: number;
 }
 
+export interface RecipeCategoryPrototype {
+  readonly key: RecipeCategoryPrototypeKey;
+  readonly name: string;
+}
+
+export interface VirtualSignalPrototype {
+  readonly key: VirtualSignalPrototypeKey;
+  readonly name: string;
+}
+
 export interface PrototypeIndexes {
   readonly recipesByProduct: Readonly<Record<ProductPrototypeKey, readonly RecipePrototypeKey[]>>;
 }
@@ -113,5 +132,7 @@ export interface PrototypeDatabaseV1 {
   readonly recipes: readonly RecipePrototype[];
   readonly entities: readonly EntityPrototype[];
   readonly qualities: readonly QualityPrototype[];
+  readonly recipeCategories: readonly RecipeCategoryPrototype[];
+  readonly virtualSignals: readonly VirtualSignalPrototype[];
   readonly indexes: PrototypeIndexes;
 }

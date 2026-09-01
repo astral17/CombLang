@@ -20,6 +20,8 @@ function identityPayload(database: PrototypeDatabaseV1): unknown {
     recipes: database.recipes,
     entities: database.entities,
     qualities: database.qualities,
+    recipeCategories: database.recipeCategories,
+    virtualSignals: database.virtualSignals,
     indexes: database.indexes,
   };
 }

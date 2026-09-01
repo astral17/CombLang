@@ -7,6 +7,7 @@
   "dependencies": {
     "@comblang/compiler": "0.0.0",
     "@comblang/factorio": "0.0.0",
+    "@comblang/prototypes": "0.0.0",
     "@comblang/simulator": "0.0.0",
     "@comblang/shared": "0.0.0"
   }

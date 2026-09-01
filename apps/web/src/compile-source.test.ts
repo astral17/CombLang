@@ -1,8 +1,27 @@
 import { describe, expect, test } from 'vitest';
+import { loadPrototypeDatabase, syntheticPrototypeDatabase } from '@comblang/prototypes';
 
 import { compileSource } from './compile-source.js';
 
 describe('browser source compilation', () => {
+  test('accepts an explicitly injected prototype environment', async () => {
+    const { prototypes } = await loadPrototypeDatabase(syntheticPrototypeDatabase());
+    const result = compileSource(
+      {
+        path: 'main.factorio.ts',
+        text: `const PLATE = Signal(prototypes.item['iron-plate'].name);
+const source = CC(prototypes.item['iron-plate'].stackSize * PLATE);`,
+      },
+      { prototypes },
+    );
+
+    expect(result.compilerDiagnostics).toEqual([]);
+    expect(result.plan?.producers[0]).toMatchObject({
+      kind: 'constant',
+      outputs: [{ signal: { name: 'iron-plate' }, value: 100 }],
+    });
+  });
+
   test('rejects reserved DSL bindings without executing the transformed program', () => {
     const declaration = 'const ANY = 5;';
     const text = `${declaration}\nthrow new Error("must not execute");`;

@@ -12,9 +12,11 @@ import {
   type PrototypeIndexes,
   type PrototypeKey,
   type QualityPrototype,
+  type RecipeCategoryPrototype,
   type RecipeComponent,
   type RecipePrototype,
   type RecipePrototypeKey,
+  type VirtualSignalPrototype,
 } from './schema.js';
 
 export class PrototypeValidationError extends Error {
@@ -161,6 +163,8 @@ function parseCapabilities(value: unknown): PrototypeDatabaseCapabilities {
       'capabilities.entityCircuitCapabilities',
     ),
     qualities: boolean(input.qualities, 'capabilities.qualities'),
+    recipeCategories: boolean(input.recipeCategories, 'capabilities.recipeCategories'),
+    virtualSignals: boolean(input.virtualSignals, 'capabilities.virtualSignals'),
   });
 }
 
@@ -384,6 +388,27 @@ function parseQualities(value: unknown): readonly QualityPrototype[] {
   );
 }
 
+function parseNamedPrototypes<T extends { readonly key: string; readonly name: string }>(
+  value: unknown,
+  path: string,
+  prefix: string,
+): readonly T[] {
+  const prototypes = array(value, path).map((entry, index): T => {
+    const entryPath = `${path}[${index}]`;
+    const input = object(entry, entryPath);
+    const name = string(input.name, `${entryPath}.name`);
+    return Object.freeze({
+      key: canonicalKey(prefix, name, input.key, `${entryPath}.key`),
+      name,
+    }) as T;
+  });
+  unique(
+    prototypes.map(({ key }) => key),
+    path,
+  );
+  return Object.freeze([...prototypes].sort((left, right) => left.key.localeCompare(right.key)));
+}
+
 export function buildPrototypeIndexes(recipes: readonly RecipePrototype[]): PrototypeIndexes {
   const mutable = new Map<ProductPrototypeKey, Set<RecipePrototypeKey>>();
   for (const recipe of recipes) {
@@ -427,6 +452,16 @@ function validateReferences(database: PrototypeDatabaseV1): void {
     ...database.fluids.map(({ key }) => key),
   ]);
   for (const recipe of database.recipes) {
+    if (
+      database.capabilities.recipeCategories &&
+      !database.recipeCategories.some(({ name }) => name === recipe.category)
+    ) {
+      invalid(
+        'PT1004',
+        `recipes.${recipe.name}.category`,
+        `unknown recipe category ${JSON.stringify(recipe.category)}.`,
+      );
+    }
     for (const [kind, components] of [
       ['ingredients', recipe.ingredients],
       ['products', recipe.products],
@@ -437,6 +472,20 @@ function validateReferences(database: PrototypeDatabaseV1): void {
             'PT1004',
             `recipes.${recipe.name}.${kind}[${index}].prototype`,
             `unknown prototype ${JSON.stringify(component.prototype)}.`,
+          );
+        }
+      }
+    }
+  }
+  if (database.capabilities.recipeCategories) {
+    const categories = new Set(database.recipeCategories.map(({ name }) => name));
+    for (const entity of database.entities) {
+      for (const [index, category] of (entity.crafting?.categories ?? []).entries()) {
+        if (!categories.has(category)) {
+          invalid(
+            'PT1004',
+            `entities.${entity.name}.crafting.categories[${index}]`,
+            `unknown recipe category ${JSON.stringify(category)}.`,
           );
         }
       }
@@ -463,6 +512,16 @@ export function validatePrototypeDatabase(value: unknown): PrototypeDatabaseV1 {
     recipes,
     entities: parseEntities(input.entities),
     qualities: parseQualities(input.qualities),
+    recipeCategories: parseNamedPrototypes<RecipeCategoryPrototype>(
+      input.recipeCategories,
+      'recipeCategories',
+      'recipe-category',
+    ),
+    virtualSignals: parseNamedPrototypes<VirtualSignalPrototype>(
+      input.virtualSignals,
+      'virtualSignals',
+      'virtual',
+    ),
     indexes: parseIndexes(input.indexes, recipes),
   });
   if (

@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import { loadPrototypeDatabase, syntheticPrototypeDatabase } from '@comblang/prototypes';
 
 import { run } from './main.js';
 
@@ -36,6 +37,19 @@ afterEach(async () => {
 });
 
 describe('factorio-dsl check', () => {
+  test('uses an explicitly injected prototype environment', async () => {
+    const path = await sourceFile(`const PLATE = Signal(prototypes.item['iron-plate'].name);
+const source = CC(prototypes.item['iron-plate'].stackSize * PLATE);`);
+    const { prototypes } = await loadPrototypeDatabase(syntheticPrototypeDatabase());
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path], { prototypes })).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      diagnostics: [],
+      producerCount: 1,
+    });
+  });
+
   test('rejects a reserved DSL binding before executed elaboration', async () => {
     const path = await sourceFile(`const CC = () => 123;
 CC();`);

@@ -81,6 +81,7 @@ The production CLI and browser first emit definite `CL` diagnostics from the con
 | `EX1001` | transformed elaboration program threw                                     | inspect the execution message and supported executed subset                |
 | `EX1002` | compile-time execution exceeded the worker time budget                    | fix an infinite/expensive loop or reduce generated work                    |
 | `EX1003` | compile-time generator exceeded its circuit-recording DSL-call limit      | reduce generated circuit work or raise the configured limit                |
+| `EX1004` | source accessed `prototypes` without an injected Prototype DB             | select or load a prototype environment before compiling this source        |
 
 ## Common runtime diagnostics
 

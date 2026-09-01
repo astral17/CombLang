@@ -16,7 +16,7 @@ Phase 5.5 provides `packages/prototypes` with these responsibilities:
 
 - versioned normalized schema and structural validation;
 - environment metadata and a deterministic content identity;
-- immutable indexes and a `PrototypeProvider` query interface;
+- immutable LuaPrototypes-shaped tables, derived indexes, and query helpers;
 - JSON loading for Node and browser consumers;
 - tiny synthetic fixtures and a generated first-run vanilla/Space Age profile.
 
@@ -38,6 +38,7 @@ Schema version 1 includes only facts required by the next acceptance programs:
 - entities: key, type, footprint, crafting categories, and capability-oriented
   circuit flags;
 - qualities: canonical key and stable ordering information;
+- recipe categories and virtual signals: canonical key and name;
 - indexes such as every recipe producing a product.
 
 Every prototype carries a canonical namespaced key such as
@@ -59,7 +60,7 @@ unknown extension fields, copies and freezes accepted data, and rejects:
 
 Validation errors carry stable `PT1000`–`PT1006` codes and a structural path.
 `loadPrototypeDatabase()` and `loadPrototypeDatabaseJson()` return the frozen
-database together with an immutable `PrototypeProvider`.
+database together with an immutable `prototypes` provider.
 
 Recipe products are one-to-many, and ingredients/products may be items or
 fluids. Entity data should expose capabilities needed by CombLang instead of
@@ -68,23 +69,28 @@ separate optional assets, not part of the core identity.
 
 ## Factorio-side export
 
-The bundled local Factorio 2.1.16 runtime API confirms a practical control-stage
-export path. The global read-only `prototypes: LuaPrototypes` object exposes
-dictionaries for items, fluids, recipes, entities, qualities, virtual signals,
-and other resolved prototypes. `script.active_mods` identifies active mod
-versions, while startup settings are available to the mod. `helpers.table_to_json`
-serializes a normalized Lua table and `helpers.write_file` writes it under the
-user-data `script-output` directory.
+The preferred first extraction path is Factorio's own command-line
+`factorio.exe --dump-data`. It loads the selected game/mod/startup-settings data
+stage and writes the resolved raw prototype dump under `script-output`. A
+separate offline CombLang converter can then select and normalize the small v1
+schema instead of requiring an exporter mod or loading raw prototype JSON in
+the compiler.
 
-Therefore the first exporter should be a small Factorio mod that reads the
-resolved runtime prototype views and writes CombLang's normalized schema. It
-must not serialize `data.raw` as the public compiler contract. A larger raw
-archive may be useful for diagnostics, but it is a separate artifact.
+This path still requires conformance verification. In particular, fixtures
+must establish whether the dump contains every capability-oriented circuit and
+crafting fact CombLang needs, and whether modded overrides agree with the
+control-stage read-only `prototypes: LuaPrototypes` views. The bundled local
+Factorio 2.1.16 runtime API confirms that `LuaPrototypes` exposes dictionaries
+for items, fluids, recipes, entities, qualities, virtual signals, and other
+resolved prototypes. If `--dump-data` omits a required derived fact, a small
+Factorio-side Lua probe may supplement it; it should not become the public
+compiler contract or duplicate fields already available in the native dump.
 
 Extraction details still need conformance fixtures against base, Space Age, and
 at least one mod that modifies a vanilla recipe or entity. The architecture does
-not depend on one extraction implementation: a future Factorio API change may
-replace the exporter without changing `PrototypeProvider` consumers.
+not depend on one extraction implementation: a future Factorio dump/API change
+may replace the converter or supplemental probe without changing
+`PrototypeProvider` consumers.
 
 ## Loading and identity
 
@@ -103,19 +109,65 @@ capability coverage, normalized prototypes, and indexes. Informational
 identity boundary, not yet the optional reproducible-build policy from Phase
 11; a future schema version may select a different explicitly tagged algorithm.
 
-The provider exposes synchronous immutable queries after asynchronous loading:
-items, fluids, recipes, entities, qualities, recipes producing a product,
-stack size, entity circuit capabilities, and basic crafting-category/fluid
-compatibility. Missing capability coverage is reported separately from an
-unknown key. No provider singleton exists, and the simulator has no dependency
-on this package.
+After asynchronous loading, the primary synchronous surface deliberately feels
+like Factorio's Lua API. Singular snake_case tables are indexed by prototype
+name:
+
+```ts
+const { prototypes } = await loadPrototypeDatabaseJson(source);
+
+prototypes.item['iron-plate'];
+prototypes.fluid.water;
+prototypes.recipe['iron-gear-wheel'];
+prototypes.recipe_category.crafting;
+prototypes.entity['assembling-machine-3'];
+prototypes.quality.normal;
+prototypes.virtual_signal['signal-A'];
+```
+
+These frozen null-prototype objects model read-only `LuaCustomTable` access;
+an unknown name evaluates to `undefined`. The tables contain names only, while
+canonical-key access and cross-kind lookup live in query helpers and
+`prototypes.collections`:
+
+```ts
+prototypes.getItem('item:iron-plate');
+prototypes.collections.all['entity:chemical-plant'];
+prototypes.collections.recipesByProduct['item:iron-gear-wheel'];
+prototypes.collections.entitiesByType['assembling-machine'];
+prototypes.collections.craftingMachinesByCategory.crafting;
+```
+
+The other helpers answer stack-size, entity circuit-capability, recipe-product,
+and basic crafting-category/fluid-compatibility questions. If a database lacks
+complete coverage for one prototype kind, its direct table is empty and a
+helper requiring that coverage reports the missing capability separately from
+an unknown key. No provider singleton exists, and the simulator has no
+dependency on this package.
+
+Source code receives the same provider through an explicit compilation
+environment and may inspect it using the reserved `prototypes` value. The
+transform routes that identifier through its hygienic runtime bridge, so it is
+not a mutable process global:
+
+```ts
+const PLATE = Signal(prototypes.item['iron-plate'].name);
+const fullStack = CC(prototypes.item['iron-plate'].stackSize * PLATE);
+```
+
+Using `prototypes` without an injected environment reports source-linked
+`EX1004`. The runtime executor, browser-local `compileSource` boundary, and CLI
+`run` boundary accept the provider explicitly. The CLI flag/project profile and
+browser Worker-side database construction belong to the next loading slice;
+providers with methods are never posted across a Worker boundary.
 
 ## Phase boundary
 
 Phase 5 testbench work does not depend on prototype data. The schema, provider,
 identity, validator, JSON boundary, and synthetic fixtures now establish the
-core Phase 5.5 seam. Explicit compiler/CLI/browser injection, persisted profile
-loading, exporter fixtures, and the built-in vanilla/Space Age snapshot remain
-before Phase 6 typed objects introduce entity- and recipe-specific
-configuration. Phase 8 then extends concrete configuration values with
-blueprint parameters without changing the provider boundary.
+core Phase 5.5 seam. The explicit runtime, browser-library, and CLI-library
+injection seam is now established. Persisted profile loading, dump/conformance
+fixtures, and the built-in vanilla/Space Age snapshot remain before Phase 6
+typed objects introduce entity- and recipe-specific configuration. Phase 8 then
+extends concrete configuration values with blueprint parameters without
+changing the provider boundary.

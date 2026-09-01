@@ -32,6 +32,8 @@ const fixture: PrototypeDatabaseV1 = {
     entities: true,
     entityCircuitCapabilities: true,
     qualities: true,
+    recipeCategories: true,
+    virtualSignals: true,
   },
   items: [
     { key: 'item:copper-plate', name: 'copper-plate', stackSize: 100 },
@@ -89,6 +91,14 @@ const fixture: PrototypeDatabaseV1 = {
   qualities: [
     { key: 'quality:normal', name: 'normal', level: 0 },
     { key: 'quality:rare', name: 'rare', level: 2 },
+  ],
+  recipeCategories: [
+    { key: 'recipe-category:chemistry', name: 'chemistry' },
+    { key: 'recipe-category:crafting', name: 'crafting' },
+  ],
+  virtualSignals: [
+    { key: 'virtual:signal-A', name: 'signal-A' },
+    { key: 'virtual:signal-each', name: 'signal-each' },
   ],
   indexes: {
     recipesByProduct: {

@@ -4,6 +4,30 @@ import { describe, expect, test, vi } from 'vitest';
 import { transformElaborationModule } from './elaboration-transform.js';
 
 describe('executable elaboration transform', () => {
+  test('routes the reserved prototypes value through the hygienic runtime bridge', () => {
+    const source = parseFile({
+      path: 'prototype-access.factorio.ts',
+      text: `const plate = prototypes.item['iron-plate'];`,
+    });
+    const code = transformElaborationModule(source).code;
+
+    expect(code).toContain('__dsl.prototypeEnvironment({ start:');
+    expect(code).toContain(".item, 'iron-plate'");
+    expect(code).not.toMatch(/\bprototypes\.item\b/);
+  });
+
+  test('keeps ordinary prototypes property names while transforming value references', () => {
+    const source = parseFile({
+      path: 'prototype-property.factorio.ts',
+      text: `const named = { prototypes: 'metadata' };
+const forwarded = { prototypes };`,
+    });
+    const code = transformElaborationModule(source).code;
+
+    expect(code).toContain("prototypes: 'metadata'");
+    expect(code).toContain('prototypes: __dsl.prototypeEnvironment(');
+  });
+
   test('leaves optional element and property-call chains native', () => {
     const source = parseFile({
       path: 'optional.ts',

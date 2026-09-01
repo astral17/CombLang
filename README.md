@@ -62,10 +62,12 @@ The current repository implements the Phase 3 source compiler, the complete Phas
   - [ ] Add focused kernel/lattice/mock/model/query tests plus end-to-end feedback, pulse, settle, Unknown-chain, hierarchy, structural, CLI, and browser cases; use a MemoCell testbench and a test-only object adapter as Phase 5 acceptance programs.
   - [ ] Document the executable testbench language/API and its separation from compile-time assertions, Factorio conformance fixtures, and future Phase 6 typed-object state adapters.
 - [ ] Phase 5.5 — external prototype environment foundation
-  - [x] Add a versioned normalized Prototype DB, structural/referential/index validator, immutable `PrototypeProvider`, deterministic environment identity, browser/Node JSON boundary, and synthetic base/modded fixtures in a dedicated package.
+  - [x] Add a versioned normalized Prototype DB, structural/referential/index validator, immutable LuaPrototypes-shaped `prototypes.*` tables plus derived collections/query helpers, deterministic environment identity, browser/Node JSON boundary, and synthetic base/modded fixtures in a dedicated package.
   - [ ] Inject the provider explicitly into compiler consumers; keep prototype facts out of the simulator and avoid a global mutable registry.
+    - [x] Reserve source `prototypes`, route it through the hygienic elaboration bridge, and thread an optional provider through runtime, browser compiler, and CLI library entry points with source-linked missing-environment diagnostics.
+    - [ ] Construct/select the provider inside CLI and browser Worker profile loaders; never structured-clone provider methods across the Worker boundary.
   - [ ] Load validated databases from CLI project options and browser-local files/cache, with an explicit built-in vanilla/Space Age first-run profile and no silent fallback for pinned projects.
-  - [ ] Build a Factorio-side exporter over the resolved runtime `prototypes` API, active mods, and startup settings; verify base, Space Age, and modded-override fixtures.
+  - [ ] Build an offline normalizer for native `factorio.exe --dump-data` output, supplementing it with a narrow Lua `prototypes` probe only for missing derived facts; verify base, Space Age, and modded-override fixtures.
 - [ ] Phase 6 — typed Factorio objects: shared circuit inputs, native single-comparison `enable`, Roboport, Lamp, Constant, logistics entities, belts, displays, and train stops.
 - [ ] Phase 7 — exact constructors and native-config stress: Arithmetic, full Decider normal/else output lists, duplicate outputs, `Everything`, Selector, raw entities, LUTs, and large generated configurations.
   - [x] Validate the currently implemented `Each`/`Everything` output compatibility against the final post-execution Decider descriptor, including dynamically generated rows and conditions.

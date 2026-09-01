@@ -262,6 +262,26 @@ export function transformElaborationModule(
 
   const transformer: ts.TransformerFactory<ts.SourceFile> = (context) => {
     const { factory } = context;
+    const isNonReferenceIdentifier = (node: ts.Identifier): boolean => {
+      const parent = node.parent;
+      return (
+        (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
+        (ts.isPropertyAssignment(parent) && parent.name === node) ||
+        (ts.isBindingElement(parent) && (parent.name === node || parent.propertyName === node)) ||
+        ((ts.isVariableDeclaration(parent) || ts.isParameter(parent)) && parent.name === node) ||
+        ((ts.isFunctionDeclaration(parent) ||
+          ts.isFunctionExpression(parent) ||
+          ts.isClassDeclaration(parent) ||
+          ts.isClassExpression(parent) ||
+          ts.isMethodDeclaration(parent) ||
+          ts.isPropertyDeclaration(parent) ||
+          ts.isEnumDeclaration(parent) ||
+          ts.isEnumMember(parent)) &&
+          parent.name === node) ||
+        (ts.isLabeledStatement(parent) && parent.label === node) ||
+        ((ts.isBreakStatement(parent) || ts.isContinueStatement(parent)) && parent.label === node)
+      );
+    };
     const borrowDescriptorForType = (
       type: ts.TypeNode | undefined,
     ):
@@ -721,6 +741,15 @@ export function transformElaborationModule(
         return dslCall(factory, 'wildcardToken', [
           factory.createStringLiteral(wildcardDslNames[node.text as keyof typeof wildcardDslNames]),
         ]);
+      }
+      if (ts.isShorthandPropertyAssignment(node) && node.name.text === 'prototypes') {
+        return factory.createPropertyAssignment(
+          node.name,
+          dslCall(factory, 'prototypeEnvironment', [spanLiteral(factory, node.name)]),
+        );
+      }
+      if (ts.isIdentifier(node) && node.text === 'prototypes' && !isNonReferenceIdentifier(node)) {
+        return dslCall(factory, 'prototypeEnvironment', [spanLiteral(factory, node)]);
       }
       if (
         ts.isVariableDeclaration(node) &&

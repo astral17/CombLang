@@ -8,6 +8,7 @@ import {
   type ParseWorkerRequest,
   type ParseWorkerResult,
 } from '@comblang/language';
+import type { PrototypeProvider } from '@comblang/prototypes';
 import {
   ElaborationExecutionError,
   ElaborationOperationLimitError,
@@ -23,7 +24,14 @@ export interface CompiledSourceResult extends ParseWorkerResult {
   readonly plan?: DirectElaborationPlan;
 }
 
-export function compileSource(file: ParseWorkerRequest['file']): CompiledSourceResult {
+export interface SourceCompilationEnvironment {
+  readonly prototypes?: PrototypeProvider;
+}
+
+export function compileSource(
+  file: ParseWorkerRequest['file'],
+  environment: SourceCompilationEnvironment = {},
+): CompiledSourceResult {
   const parsed = parseFile(file);
   let plan: DirectElaborationPlan | undefined;
   let elaborationJavaScript: string | undefined;
@@ -34,7 +42,7 @@ export function compileSource(file: ParseWorkerRequest['file']): CompiledSourceR
       const program = transformElaborationModule(parsed);
       elaborationJavaScript = program.code;
       if (!semanticDiagnostics.some(({ severity }) => severity === 'error')) {
-        plan = executeElaborationProgram(program);
+        plan = executeElaborationProgram(program, environment);
         const runtimeDiagnostics = tryElaborateDirectPlan(plan).diagnostics;
         compilerDiagnostics = [
           ...semanticDiagnostics,
