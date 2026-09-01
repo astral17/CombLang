@@ -1,7 +1,12 @@
 import { SparseBus, type SignalId } from '@comblang/factorio';
 import type { DeviceId, NetworkId } from '@comblang/shared';
 
-import { knownBus, type BusValue } from './bus-value.js';
+import { aggregateBusValues, knownBus, throughDevice, type BusValue } from './bus-value.js';
+import {
+  bindCircuitObject,
+  type BoundCircuitObject,
+  type CircuitObjectAdapter,
+} from './object-adapter.js';
 import {
   ValueSimulationKernel,
   type ValueSimulationSnapshot,
@@ -22,6 +27,14 @@ export interface TestSessionOptions<Target> {
 
 export interface SettleOptions {
   readonly maxTicks: number;
+}
+
+export interface TestObjectHandle<Name extends string = string> {
+  readonly kind: 'test-object';
+  readonly id: DeviceId;
+  readonly adapterId: string;
+  readonly instanceId: string;
+  readonly connectors: readonly Name[];
 }
 
 function copyBus(values: TestBusInput): SparseBus {
@@ -57,6 +70,8 @@ export class TestSession<Target = NetworkId> {
   readonly #drives = new Map<NetworkId, SparseBus>();
   readonly #pulses = new Map<NetworkId, SparseBus>();
   readonly #scheduled = new Map<number, (() => void)[]>();
+  readonly #objects = new WeakMap<object, BoundCircuitObject<string>>();
+  readonly #objectIds = new Set<DeviceId>();
   #advancing = false;
   #activeBoundary: number | undefined;
 
@@ -134,6 +149,57 @@ export class TestSession<Target = NetworkId> {
       }
     }
     return this;
+  }
+
+  adaptObject<Instance, Name extends string>(
+    adapter: CircuitObjectAdapter<Instance, Name>,
+    instance: Instance,
+  ): TestObjectHandle<Name> {
+    if (this.currentTick !== 0) {
+      throw new Error('Circuit object adapters must be registered before the first tick.');
+    }
+    const object = bindCircuitObject(adapter, instance);
+    if (this.#objectIds.has(object.id)) {
+      throw new Error(
+        `Duplicate circuit object instance: ${object.adapterId}:${object.instanceId}.`,
+      );
+    }
+    const handle = Object.freeze({
+      kind: 'test-object' as const,
+      id: object.id,
+      adapterId: object.adapterId,
+      instanceId: object.instanceId,
+      connectors: Object.freeze(object.connectors.map(({ name }) => name)),
+    });
+    this.#objectIds.add(object.id);
+    this.#objects.set(handle, object as BoundCircuitObject<string>);
+    const device: ValueSynchronousDevice = {
+      id: object.id,
+      evaluate: () =>
+        object.connectors.flatMap((connector) =>
+          connector.defaultOutput === undefined
+            ? []
+            : connector.outputNetworks.map((networkId) => ({
+                networkId,
+                value: throughDevice(connector.defaultOutput!, object.id),
+              })),
+        ),
+    };
+    this.#kernel.addDevice(device);
+    return handle;
+  }
+
+  readObjectInput<Name extends string>(target: TestObjectHandle<Name>, connector: Name): BusValue {
+    const bound = this.#object(target);
+    const descriptor = bound.connectors.find((candidate) => candidate.name === connector);
+    if (descriptor === undefined) {
+      throw new Error(
+        `Object ${bound.adapterId}:${bound.instanceId} has no connector named ${JSON.stringify(connector)}.`,
+      );
+    }
+    return aggregateBusValues(
+      descriptor.inputNetworks.map((networkId) => this.#kernel.snapshot.read(networkId)),
+    );
   }
 
   drive(target: Target, values: TestBusInput): this {
@@ -224,6 +290,12 @@ export class TestSession<Target = NetworkId> {
 
   #networkId(target: Target): NetworkId {
     return this.#resolveNetwork(target);
+  }
+
+  #object(target: TestObjectHandle<string>): BoundCircuitObject<string> {
+    const object = this.#objects.get(target);
+    if (object === undefined) throw new Error('Foreign or invalid test object handle.');
+    return object;
   }
 
   #isSignalTarget(value: Target | TestSignalTarget<Target>): value is TestSignalTarget<Target> {

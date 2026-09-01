@@ -4,6 +4,7 @@ export * from './circuit-input.js';
 export * from './combinator-device.js';
 export * from './decider.js';
 export * from './kernel.js';
+export * from './object-adapter.js';
 export * from './test-session.js';
 export * from './test-expectation.js';
 export * from './trace.js';

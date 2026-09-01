@@ -192,6 +192,26 @@ advance the test clock. Failure uses structured `DBG2001` expected/actual
 details. The complete matcher contract is documented with the
 [runtime debug index](debug-index.md#structural-assertions).
 
+## Generic object adapters
+
+At tick zero, `adaptObject(adapter, instance)` registers a future typed object's
+stable identity and named connector mapping without changing EG/NCIR. A
+connector declares the Networks aggregated for input and the Networks receiving
+its output contribution. `readObjectInput(handle, connector)` returns the
+current Known/Unknown aggregate.
+
+An adapter may supply a default connector output. It is resolved and copied
+once at registration, then contributes at every synchronous boundary with
+ordinary Network aggregation. Unknown defaults retain their origin and gain the
+object device ID in their dependency path. Registration and handles are bound
+to one `TestSession`, and new objects cannot be registered after tick zero.
+
+This is the generic physical boundary, not yet the mock/model policy. Missing
+adapter defaults currently remain silent; the later strict policy will resolve
+explicit mock/model, instance default, class default, then global Unknown. See
+[generic object test adapters](object-test-adapters.md) for the complete
+contract and Phase 6 boundary.
+
 ## Browser workbench
 
 The current web workbench has a separate `circuit.test.js` editor. Its draft is
