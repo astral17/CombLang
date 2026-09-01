@@ -12,7 +12,7 @@ simulator and must not be a process-global mutable singleton.
 
 ## Package boundary
 
-Phase 5.5 will introduce `packages/prototypes` with these responsibilities:
+Phase 5.5 provides `packages/prototypes` with these responsibilities:
 
 - versioned normalized schema and structural validation;
 - environment metadata and a deterministic content identity;
@@ -20,13 +20,16 @@ Phase 5.5 will introduce `packages/prototypes` with these responsibilities:
 - JSON loading for Node and browser consumers;
 - tiny synthetic fixtures and a generated first-run vanilla/Space Age profile.
 
+The implemented foundation currently covers the first four responsibilities
+and synthetic fixtures. CLI/browser profile loading, the Factorio exporter, and
+the generated first-run database remain subsequent Phase 5.5 slices.
+
 The compiler, language service, typed-object schemas, layout, and blueprint
 backend receive a provider through an explicit compilation environment. They do
 not reach into a giant JSON object or a global registry. The simulator continues
 to consume already-lowered circuit devices and buses rather than prototype data.
 
-The first schema should include only facts required by the next acceptance
-programs:
+Schema version 1 includes only facts required by the next acceptance programs:
 
 - environment: schema/generator version, Factorio version, expansions, ordered
   mod names and versions, and startup-settings identity;
@@ -36,6 +39,27 @@ programs:
   circuit flags;
 - qualities: canonical key and stable ordering information;
 - indexes such as every recipe producing a product.
+
+Every prototype carries a canonical namespaced key such as
+`item:iron-plate`, `fluid:water`, or `entity:assembling-machine-3`. Normalized
+prototype arrays, expansions, mods, categories, qualities, and generated
+indexes have deterministic ordering. Recipe ingredient/product order remains
+part of the normalized content; repeated products do not duplicate a recipe in
+the `recipesByProduct` index.
+
+`validatePrototypeDatabase()` accepts untrusted JSON-shaped values, ignores
+unknown extension fields, copies and freezes accepted data, and rejects:
+
+- unsupported schema versions and malformed required fields;
+- noncanonical or duplicate keys;
+- invalid numeric ranges and item temperature constraints;
+- missing ingredient/product references;
+- a `mainProduct` outside the product list;
+- a supplied index that disagrees with normalized recipe products.
+
+Validation errors carry stable `PT1000`–`PT1006` codes and a structural path.
+`loadPrototypeDatabase()` and `loadPrototypeDatabaseJson()` return the frozen
+database together with an immutable `PrototypeProvider`.
 
 Recipe products are one-to-many, and ingredients/products may be items or
 fluids. Entity data should expose capabilities needed by CombLang instead of
@@ -71,16 +95,27 @@ show the active environment. A project pinned to one environment identity must
 not silently compile against the built-in fallback when that database is
 missing.
 
-The exact content-hash algorithm is intentionally not selected yet. Until the
-optional reproducible-build policy is designed, deterministic canonical content
-identity is required, while timestamps and other provenance metadata must remain
-outside that identity.
+The v1 environment identity is SHA-256 over canonical normalized JSON and is
+prefixed `comblang-prototypes-v1-sha256:`. It includes schema and generator
+versions, Factorio version, sorted expansions/mods, startup-settings identity,
+capability coverage, normalized prototypes, and indexes. Informational
+`generatedAt` provenance is deliberately excluded. This is a cache/project
+identity boundary, not yet the optional reproducible-build policy from Phase
+11; a future schema version may select a different explicitly tagged algorithm.
+
+The provider exposes synchronous immutable queries after asynchronous loading:
+items, fluids, recipes, entities, qualities, recipes producing a product,
+stack size, entity circuit capabilities, and basic crafting-category/fluid
+compatibility. Missing capability coverage is reported separately from an
+unknown key. No provider singleton exists, and the simulator has no dependency
+on this package.
 
 ## Phase boundary
 
-Phase 5 testbench work does not depend on prototype data and should finish
-without this package. Phase 5.5 establishes the provider, validator, fixtures,
-loader injection, and exporter prototype before Phase 6 typed objects introduce
-entity- and recipe-specific configuration. Phase 8 then extends concrete
-configuration values with blueprint parameters without changing the provider
-boundary.
+Phase 5 testbench work does not depend on prototype data. The schema, provider,
+identity, validator, JSON boundary, and synthetic fixtures now establish the
+core Phase 5.5 seam. Explicit compiler/CLI/browser injection, persisted profile
+loading, exporter fixtures, and the built-in vanilla/Space Age snapshot remain
+before Phase 6 typed objects introduce entity- and recipe-specific
+configuration. Phase 8 then extends concrete configuration values with
+blueprint parameters without changing the provider boundary.

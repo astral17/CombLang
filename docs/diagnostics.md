@@ -134,3 +134,19 @@ The production CLI and browser first emit definite `CL` diagnostics from the con
 carries the selected scope path, matcher name, and structured expected/actual
 values. These errors inspect an already elaborated graph and never advance a
 test session.
+
+## Prototype database validation
+
+| Code     | Meaning                                                                     |
+| -------- | --------------------------------------------------------------------------- |
+| `PT1000` | unsupported normalized Prototype Database schema version                    |
+| `PT1001` | malformed required field, array/object shape, or numeric range              |
+| `PT1002` | invalid or noncanonical namespaced prototype key                            |
+| `PT1003` | duplicate prototype, mod, expansion, category, or quality-order identity    |
+| `PT1004` | broken prototype reference or invalid cross-field relationship              |
+| `PT1005` | serialized product-to-recipe index disagrees with normalized recipe content |
+| `PT1006` | malformed JSON at the external loader boundary                              |
+
+`PrototypeValidationError` carries the stable code and a structural JSON path.
+Unknown extension fields are tolerated so compatible exporters may add data
+without changing the v1 consumer contract.

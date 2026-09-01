@@ -62,7 +62,7 @@ The current repository implements the Phase 3 source compiler, the complete Phas
   - [ ] Add focused kernel/lattice/mock/model/query tests plus end-to-end feedback, pulse, settle, Unknown-chain, hierarchy, structural, CLI, and browser cases; use a MemoCell testbench and a test-only object adapter as Phase 5 acceptance programs.
   - [ ] Document the executable testbench language/API and its separation from compile-time assertions, Factorio conformance fixtures, and future Phase 6 typed-object state adapters.
 - [ ] Phase 5.5 — external prototype environment foundation
-  - [ ] Add a versioned normalized Prototype DB, structural validator, immutable `PrototypeProvider`, deterministic environment identity, and synthetic fixtures in a dedicated package.
+  - [x] Add a versioned normalized Prototype DB, structural/referential/index validator, immutable `PrototypeProvider`, deterministic environment identity, browser/Node JSON boundary, and synthetic base/modded fixtures in a dedicated package.
   - [ ] Inject the provider explicitly into compiler consumers; keep prototype facts out of the simulator and avoid a global mutable registry.
   - [ ] Load validated databases from CLI project options and browser-local files/cache, with an explicit built-in vanilla/Space Age first-run profile and no silent fallback for pinned projects.
   - [ ] Build a Factorio-side exporter over the resolved runtime `prototypes` API, active mods, and startup settings; verify base, Space Age, and modded-override fixtures.
