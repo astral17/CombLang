@@ -64,6 +64,42 @@ Phase 7 must complete the native surface without hidden hardware:
 
 Repeated outputs are intentional. For example, copying `A` and emitting constant `1` to `A` yields the sum on the destination Network; the compiler must not deduplicate or combine those rows.
 
+### Each conditions with a concrete output Signal
+
+In final native Each-mode, a copy-count row targeting a concrete SignalID is a
+per-candidate operation. It redirects every matching candidate's count to that
+output Signal; any sum is only the Network aggregation of those separate
+contributions. A constant row targeting the same signal also runs once per
+matching candidate. This must never be represented as `sum`, `reduce`, row
+fusion, or another algebraic simplification, because those abstractions lose
+native row multiplicity.
+
+The current raw source spelling `input[A]` remains valid. `input.into(A)` is the
+leading candidate for a future explicit-intent spelling, but it is not frozen or
+implemented. If adopted, it is a Decider output descriptor only—not a generic
+topology method—and must first be defined for non-Each conditions and verified
+for `pair(red, green)` against Factorio fixtures.
+
+Conditions and output arrays may be assembled by arbitrary elaboration-time
+JavaScript. Consequently native validity and any clarity detection must run on
+the final Decider descriptor after execution; an AST-only check cannot be
+authoritative. The current finalizer already rejects an `Each` output without
+an `Each` condition and an `Everything` output with an `Each` condition, even
+when their rows or conditions were generated dynamically. A future output-row
+descriptor must retain source span, dynamic
+instance path, ordinal, and syntax intent (`implicit-concrete-copy`, explicit
+ergonomic form, or exact/native). Duplicate rows retain distinct descriptors.
+Exact constructors may suppress stylistic advice, but never native correctness
+validation.
+
+An implicit concrete copy in Each-mode is legal, so any readability diagnostic
+must be a configurable note/hint rather than an unconditional warning. Its
+stable semantic rule ID is provisionally
+`decider.each-concrete-copy`. Generated occurrences are grouped once per
+Decider/rule with bounded related locations to avoid diagnostic spam. The
+diagnostic subsystem requirements are recorded in
+[Diagnostics](diagnostics.md#planned-configurable-advisories).
+
 `Everything` remains a first-class wildcard rather than compile-time expansion. Feedback patterns may use an O(1) normal update and an O(n) generated initialization list in `.else(...)`. Wildcard behavior for zero-valued signals and feedback bootstrap must be proven against the simulator and captured Factorio fixtures before the rotating-state benchmark becomes an acceptance test.
 
 Permanent self-initializing topology is preferred over temporary combinators that are deleted after startup. Entity lifecycle and topology mutation must not be introduced implicitly by a convenience form.

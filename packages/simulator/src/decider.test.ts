@@ -16,6 +16,13 @@ const eachPositive: DeciderCondition = {
   right: { kind: 'constant', value: 0 },
 };
 
+const eachNonzero: DeciderCondition = {
+  kind: 'compare',
+  left: { kind: 'wildcard', value: 'each' },
+  comparator: '!=',
+  right: { kind: 'constant', value: 0 },
+};
+
 describe('decider combinator semantics', () => {
   it('treats Everything as vacuously true and Anything as false on an empty bus', () => {
     const constantOutput = [
@@ -107,6 +114,67 @@ describe('decider combinator semantics', () => {
       ),
     );
     expect(result.get(out)).toBe(12);
+  });
+
+  it('treats concrete copy output as one contribution per matching Each signal', () => {
+    const input = singleWireInput(
+      new SparseBus([
+        [b, 10],
+        [c, 20],
+        [out, -5],
+      ]),
+    );
+    const concreteCopy = { mode: 'copy' as const, signal: { kind: 'signal' as const, signal: a } };
+
+    expect(evaluateDecider({ condition: eachNonzero, outputs: [concreteCopy] }, input).get(a)).toBe(
+      25,
+    );
+    expect(
+      evaluateDecider(
+        {
+          condition: eachNonzero,
+          outputs: [
+            concreteCopy,
+            { mode: 'constant', signal: { kind: 'signal', signal: a }, value: 1 },
+          ],
+        },
+        input,
+      ).get(a),
+    ).toBe(28);
+  });
+
+  it('preserves duplicate concrete Each-copy rows without deduplication', () => {
+    const input = singleWireInput(
+      new SparseBus([
+        [b, 10],
+        [c, 20],
+        [out, -5],
+      ]),
+    );
+    const concreteCopy = { mode: 'copy' as const, signal: { kind: 'signal' as const, signal: a } };
+
+    expect(
+      evaluateDecider({ condition: eachNonzero, outputs: [concreteCopy, concreteCopy] }, input).get(
+        a,
+      ),
+    ).toBe(50);
+  });
+
+  it('copies only the concrete-output contributions of matching Each candidates', () => {
+    const result = evaluateDecider(
+      {
+        condition: eachPositive,
+        outputs: [{ mode: 'copy', signal: { kind: 'signal', signal: a } }],
+      },
+      singleWireInput(
+        new SparseBus([
+          [b, 10],
+          [c, -20],
+          [out, 5],
+        ]),
+      ),
+    );
+    expect(result.get(a)).toBe(15);
   });
 
   it('uses injectable signal precedence for Anything output', () => {

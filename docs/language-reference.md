@@ -114,6 +114,22 @@ Here bare Networks mean `Each(network)` in output context. The compiler validate
 
 Output entries remain ordered and are not deduplicated. Two entries targeting the same SignalID intentionally sum on the output Network, matching native Factorio behavior.
 
+A concrete copy-count output has a less obvious meaning when the final
+condition uses native `Each`:
+
+```ts
+const result: Network = when(input != 0).then(input[A]);
+```
+
+This does not read `A` once. For every signal that passes the `Each` condition,
+the decider copies that candidate's input count into output Signal `A`. Thus
+`B=10, C=20, D=-5` produces `A=25`. Adding a second row `1 * A` produces
+`A=28`, because the constant row also contributes once per matching candidate.
+The operation is native per-Each redirection, not a precomputed sum or reduce.
+An explicit ergonomic spelling such as the provisional `input.into(A)` remains
+unimplemented until Factorio conformance tests settle non-Each and red/green
+pair behavior; raw `input[A]` remains legal.
+
 Conditions support finite safe-integer constants on either side; each is canonicalized to signed int32 when it enters the circuit configuration. They also support explicit signal-to-signal comparisons, `&&`, `||`, parentheses, and `!`. Boolean normalization does not allocate extra combinators.
 
 Constant-count Each output is a decider output specification, not multiplication hardware:

@@ -114,4 +114,70 @@ describe('Factorio blueprint JSON generator', () => {
     expect(filter).toMatchObject({ name: 'iron-plate', count: 5 });
     expect(filter).not.toHaveProperty('type');
   });
+
+  test('preserves ordered duplicate-signal Decider output rows', () => {
+    const A = signal('virtual', 'signal-A');
+    const ir: NativeCircuitIr = {
+      format: 'comblang-ncir',
+      version: 2,
+      networks: [
+        {
+          id: network(1),
+          name: 'input',
+          color: 'red',
+          provenance: { instancePath: [], expansionStack: [] },
+        },
+        {
+          id: network(2),
+          name: 'output',
+          color: 'green',
+          provenance: { instancePath: [], expansionStack: [] },
+        },
+      ],
+      producers: [
+        {
+          id: producer(1),
+          kind: 'decider',
+          config: {
+            condition: {
+              kind: 'compare',
+              left: {
+                kind: 'wildcard',
+                value: 'each',
+                refKind: 'single',
+                network: network(1),
+              },
+              comparator: '!=',
+              right: { kind: 'constant', value: 0 },
+            },
+            outputs: [
+              {
+                mode: 'copy',
+                signal: { kind: 'signal', signal: A },
+                input: { refKind: 'single', network: network(1) },
+              },
+              { mode: 'constant', signal: { kind: 'signal', signal: A }, value: 1 },
+            ],
+          },
+          destinations: [network(2)],
+          provenance: { instancePath: [], expansionStack: [] },
+        },
+      ],
+    };
+
+    const entity = generateBlueprintJson(ir).blueprint.entities[0] as {
+      control_behavior: { decider_conditions: { outputs: Record<string, unknown>[] } };
+    };
+    expect(entity.control_behavior.decider_conditions.outputs).toEqual([
+      {
+        signal: { type: 'virtual', name: 'signal-A' },
+        copy_count_from_input: true,
+      },
+      {
+        signal: { type: 'virtual', name: 'signal-A' },
+        copy_count_from_input: false,
+        constant: 1,
+      },
+    ]);
+  });
 });

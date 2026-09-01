@@ -469,6 +469,112 @@ when(a > 0).then(a, 2 * A, b);`,
     expect(simulation.step().read(unused.id).get(signal('virtual', 'signal-A'))).toBe(7);
   });
 
+  test('preserves per-Each concrete-copy and constant row multiplicity end to end', () => {
+    const parsed = parseFile({
+      path: 'each-concrete-copy.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const B = Signal("virtual", "signal-B");
+const C = Signal("virtual", "signal-C");
+const D = Signal("virtual", "signal-D");
+const input = CC(10 * B, 20 * C, -5 * D);
+const output: Network = when(input != 0).then(input[A], 1 * A);`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const execution = elaborateDirectPlan(plan);
+    const output = execution.network('output');
+    const decider = plan.producers.find(({ kind }) => kind === 'decider');
+
+    expect(decider?.kind === 'decider' ? decider.outputs : undefined).toMatchObject([
+      { kind: 'signal', signal: signal('virtual', 'signal-A') },
+      { kind: 'signal-constant', signal: signal('virtual', 'signal-A'), value: 1 },
+    ]);
+    expect(execution.circuit.ir.producers.find(({ kind }) => kind === 'decider')).toMatchObject({
+      config: {
+        outputs: [
+          { mode: 'copy', signal: { kind: 'signal', signal: signal('virtual', 'signal-A') } },
+          {
+            mode: 'constant',
+            signal: { kind: 'signal', signal: signal('virtual', 'signal-A') },
+            value: 1,
+          },
+        ],
+      },
+    });
+
+    const simulation = execution.circuit.createSimulation();
+    simulation.step();
+    expect(simulation.step().read(output.id).get(signal('virtual', 'signal-A'))).toBe(28);
+  });
+
+  test('retains Each concrete-copy semantics for generated conditions and outputs', () => {
+    const parsed = parseFile({
+      path: 'generated-each-concrete-copy.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const B = Signal("virtual", "signal-B");
+const C = Signal("virtual", "signal-C");
+const D = Signal("virtual", "signal-D");
+function BuildCondition(input: Readonly<Network>) {
+  const parts = [];
+  for (const threshold of [0]) parts.push(input != threshold);
+  return parts[0];
+}
+const input = CC(10 * B, 20 * C, -5 * D);
+const outputRows = [];
+for (const mode of ["copy", "constant"]) {
+  outputRows.push(mode === "copy" ? input[A] : 1 * A);
+}
+const output: Network = when(BuildCondition(input)).then(...outputRows);`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const execution = elaborateDirectPlan(plan);
+    const simulation = execution.circuit.createSimulation();
+    simulation.step();
+
+    expect(
+      simulation.step().read(execution.network('output').id).get(signal('virtual', 'signal-A')),
+    ).toBe(28);
+  });
+
+  test.each([
+    {
+      name: 'Each output without an Each condition',
+      condition: 'input[A] > 0',
+      row: 'input',
+      message: 'Each output requires a final condition set that uses Each',
+    },
+    {
+      name: 'Everything output with an Each condition',
+      condition: 'input > 0',
+      row: 'Everything(input)',
+      message: 'Everything output is invalid when the final condition set uses Each',
+    },
+  ])('validates generated Decider modes after execution: $name', ({ condition, row, message }) => {
+    const parsed = parseFile({
+      path: 'generated-invalid-decider-mode.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const input = new Network();
+const rows = [];
+for (const enabled of [true]) {
+  if (enabled) rows.push(${row});
+}
+const output: Network = when(${condition}).then(...rows);`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const result = tryElaborateDirectPlan(plan);
+
+    expect(result.execution).toBeUndefined();
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'RT2027',
+        severity: 'error',
+        message: expect.stringContaining(message),
+        span: expect.any(Object),
+      }),
+    ]);
+  });
+
   test('executes fluent deciders, wildcards, output binding, and method fan-out', () => {
     const parsed = parseFile({
       path: 'surface.factorio.ts',

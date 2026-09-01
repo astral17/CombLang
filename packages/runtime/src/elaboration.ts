@@ -84,6 +84,35 @@ function runtimeFailure(
   });
 }
 
+function conditionUsesEach(condition: LogicalDeciderCondition): boolean {
+  if (condition.kind === 'and' || condition.kind === 'or') {
+    return condition.conditions.some(conditionUsesEach);
+  }
+  return condition.left.kind === 'wildcard' && condition.left.value === 'each';
+}
+
+function validateDeciderOutputModes(config: DeciderProducerConfig, span?: SourceSpan): void {
+  const usesEach = conditionUsesEach(config.condition);
+  const outputs = [...config.outputs, ...(config.elseOutputs ?? [])];
+  for (const output of outputs) {
+    if (output.signal.kind !== 'wildcard') continue;
+    if (output.signal.value === 'each' && !usesEach) {
+      runtimeFailure(
+        'RT2027',
+        'A Decider Each output requires a final condition set that uses Each.',
+        span,
+      );
+    }
+    if (output.signal.value === 'everything' && usesEach) {
+      runtimeFailure(
+        'RT2027',
+        'A Decider Everything output is invalid when the final condition set uses Each.',
+        span,
+      );
+    }
+  }
+}
+
 export interface ElaborationExecutor {
   execute(bundle: ElaborationBundle, limits: ExecutionLimits): Promise<ElaborationResult>;
 }
@@ -330,7 +359,6 @@ export class DslRuntime {
   }
 
   decider(config: RuntimeDeciderConfig, options: RuntimeProducerOptions = {}): ProducerHandle {
-    const id = this.#producerIds.allocate() as unknown as ProducerId;
     const lowered: DeciderProducerConfig = Object.freeze({
       condition: this.#lowerCondition(config.condition, options.source),
       outputs: Object.freeze(config.outputs.map((output) => this.#lowerOutput(output))),
@@ -342,6 +370,8 @@ export class DslRuntime {
             ),
           }),
     });
+    validateDeciderOutputModes(lowered, options.source);
+    const id = this.#producerIds.allocate() as unknown as ProducerId;
     const node: CircuitProducerNode = Object.freeze({
       id,
       kind: 'decider',
