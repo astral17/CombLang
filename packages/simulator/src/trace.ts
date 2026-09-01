@@ -1,5 +1,5 @@
 import { signalKey, type CircuitValue, type SignalId } from '@comblang/factorio';
-import type { NetworkId } from '@comblang/shared';
+import type { DeviceId, NetworkId } from '@comblang/shared';
 
 import type { BusValue, UnknownOrigin } from './bus-value.js';
 import type { ValueSimulationSnapshot } from './value-kernel.js';
@@ -15,7 +15,17 @@ export type TraceTarget =
       readonly kind: 'signal';
       readonly networkId: NetworkId;
       readonly signal: SignalId;
+    }
+  | {
+      readonly id: string;
+      readonly kind: 'object-input' | 'object-output';
+      readonly objectId: DeviceId;
+      readonly adapterId: string;
+      readonly instanceId: string;
+      readonly connector: string;
     };
+
+export type TraceValueReader = (snapshot: ValueSimulationSnapshot) => BusValue;
 
 export interface SignalChange {
   readonly signal: SignalId;
@@ -62,6 +72,33 @@ export function signalTraceTarget(networkId: NetworkId, signal: SignalId): Trace
   });
 }
 
+function objectTargetId(
+  kind: 'object-input' | 'object-output',
+  objectId: DeviceId,
+  connector: string,
+): string {
+  return `${kind}:${JSON.stringify([objectId, connector])}`;
+}
+
+export function objectTraceTarget(
+  kind: 'object-input' | 'object-output',
+  object: {
+    readonly id: DeviceId;
+    readonly adapterId: string;
+    readonly instanceId: string;
+  },
+  connector: string,
+): TraceTarget {
+  return Object.freeze({
+    id: objectTargetId(kind, object.id, connector),
+    kind,
+    objectId: object.id,
+    adapterId: object.adapterId,
+    instanceId: object.instanceId,
+    connector,
+  });
+}
+
 function valueKey(value: BusValue): string {
   return JSON.stringify(value.kind === 'known' ? value.bus.toJSON() : value.origins);
 }
@@ -98,9 +135,17 @@ function knownChanges(
 }
 
 function cloneTarget(target: TraceTarget): TraceTarget {
-  return target.kind === 'network'
-    ? networkTraceTarget(target.networkId)
-    : signalTraceTarget(target.networkId, target.signal);
+  if (target.kind === 'network') return networkTraceTarget(target.networkId);
+  if (target.kind === 'signal') return signalTraceTarget(target.networkId, target.signal);
+  return objectTraceTarget(
+    target.kind,
+    {
+      id: target.objectId,
+      adapterId: target.adapterId,
+      instanceId: target.instanceId,
+    },
+    target.connector,
+  );
 }
 
 function cloneEvent(event: TraceEvent): TraceEvent {
@@ -125,24 +170,35 @@ function cloneEvent(event: TraceEvent): TraceEvent {
 
 /** Delta-compressed, renderer-independent trace storage. */
 export class TraceStore {
-  readonly #targets = new Map<string, TraceTarget>();
+  readonly #targets = new Map<
+    string,
+    { readonly target: TraceTarget; readonly read: TraceValueReader }
+  >();
   readonly #previous = new Map<string, BusValue>();
   readonly #events: TraceEvent[] = [];
 
-  register(target: TraceTarget, snapshot: ValueSimulationSnapshot): void {
+  register(target: TraceTarget, snapshot: ValueSimulationSnapshot, read?: TraceValueReader): void {
     if (snapshot.tick !== 0) {
       throw new Error('Trace targets must be registered at tick 0.');
     }
     if (this.#targets.has(target.id)) return;
-    this.#targets.set(target.id, cloneTarget(target));
-    this.#recordTarget(target, snapshot);
+    const networkId =
+      target.kind === 'network' || target.kind === 'signal' ? target.networkId : undefined;
+    const reader =
+      read ?? (networkId === undefined ? undefined : (current) => current.read(networkId));
+    if (reader === undefined) {
+      throw new Error(`Trace target ${target.id} requires an explicit value reader.`);
+    }
+    const registered = Object.freeze({ target: cloneTarget(target), read: reader });
+    this.#targets.set(target.id, registered);
+    this.#recordTarget(registered.target, snapshot, registered.read);
   }
 
   record(snapshot: ValueSimulationSnapshot): void {
-    for (const target of [...this.#targets.values()].sort((left, right) =>
-      left.id.localeCompare(right.id),
+    for (const registered of [...this.#targets.values()].sort((left, right) =>
+      left.target.id.localeCompare(right.target.id),
     )) {
-      this.#recordTarget(target, snapshot);
+      this.#recordTarget(registered.target, snapshot, registered.read);
     }
   }
 
@@ -161,6 +217,7 @@ export class TraceStore {
       version: 1 as const,
       targets: Object.freeze(
         [...this.#targets.values()]
+          .map(({ target }) => target)
           .sort((left, right) => left.id.localeCompare(right.id))
           .map(cloneTarget),
       ),
@@ -168,8 +225,12 @@ export class TraceStore {
     });
   }
 
-  #recordTarget(target: TraceTarget, snapshot: ValueSimulationSnapshot): void {
-    const current = snapshot.read(target.networkId);
+  #recordTarget(
+    target: TraceTarget,
+    snapshot: ValueSimulationSnapshot,
+    read: TraceValueReader,
+  ): void {
+    const current = read(snapshot);
     const previous = this.#previous.get(target.id);
     if (previous !== undefined && valueKey(previous) === valueKey(current)) return;
 

@@ -6,6 +6,7 @@ import {
   cloneBusValue,
   knownBus,
   throughDevice,
+  unknownBus,
   type BusValue,
 } from './bus-value.js';
 import {
@@ -24,12 +25,31 @@ import {
   SignalExpectation,
   type TestSignalTarget,
 } from './test-expectation.js';
-import { networkTraceTarget, signalTraceTarget, TraceStore } from './trace.js';
+import { networkTraceTarget, objectTraceTarget, signalTraceTarget, TraceStore } from './trace.js';
 
 export type TestBusInput = SparseBus | Iterable<readonly [signal: SignalId, value: number]>;
 
 export interface TestSessionOptions<Target> {
-  readonly resolveNetwork: (target: Target) => NetworkId;
+  readonly resolveNetwork?: (target: Target) => NetworkId;
+  readonly objects?: TestObjectDefaults;
+}
+
+export interface ObjectOutputPolicyContext {
+  readonly objectId: DeviceId;
+  readonly adapterId: string;
+  readonly instanceId: string;
+  readonly connector: string;
+  readonly inputNetworks: readonly NetworkId[];
+  readonly outputNetworks: readonly NetworkId[];
+}
+
+export type ObjectOutputPolicyResult = TestObjectOutput | 'unknown' | 'zero' | undefined;
+
+export type ObjectOutputPolicy =
+  'unknown' | 'zero' | ((context: ObjectOutputPolicyContext) => ObjectOutputPolicyResult);
+
+export interface TestObjectDefaults {
+  readonly default?: ObjectOutputPolicy;
 }
 
 export interface SettleOptions {
@@ -42,6 +62,12 @@ export interface TestObjectHandle<Name extends string = string> {
   readonly adapterId: string;
   readonly instanceId: string;
   readonly connectors: readonly Name[];
+}
+
+export interface TestObjectTraceTarget<Name extends string = string> {
+  readonly kind: 'test-object-input' | 'test-object-output';
+  readonly object: TestObjectHandle<Name>;
+  readonly connector: Name;
 }
 
 export type TestObjectOutput = TestBusInput | BusValue;
@@ -89,6 +115,8 @@ type ObjectOutputProvider = ObjectMockProvider | ObjectModelProvider;
 interface ObjectBindingState {
   readonly object: BoundCircuitObject<string>;
   readonly providers: Map<string, ObjectOutputProvider>;
+  readonly fallbackOutputs: ReadonlyMap<string, BusValue>;
+  readonly committedOutputs: Map<string, BusValue>;
 }
 
 function copyBus(values: TestBusInput): SparseBus {
@@ -151,12 +179,13 @@ export class TestSession<Target = NetworkId> {
   readonly traces = new TraceStore();
   readonly #kernel: ValueSimulationKernel;
   readonly #resolveNetwork: (target: Target) => NetworkId;
+  readonly #objectOutputPolicy: ObjectOutputPolicy;
   readonly #drives = new Map<NetworkId, SparseBus>();
   readonly #pulses = new Map<NetworkId, SparseBus>();
   readonly #scheduled = new Map<number, (() => void)[]>();
   readonly #objects = new WeakMap<object, ObjectBindingState>();
   readonly #objectIds = new Set<DeviceId>();
-  readonly #pendingModelCommits: (() => void)[] = [];
+  readonly #pendingBoundaryCommits: (() => void)[] = [];
   #advancing = false;
   #activeBoundary: number | undefined;
 
@@ -164,6 +193,14 @@ export class TestSession<Target = NetworkId> {
     this.#kernel = kernel;
     this.#resolveNetwork =
       options?.resolveNetwork ?? ((target: Target) => target as unknown as NetworkId);
+    this.#objectOutputPolicy = options?.objects?.default ?? 'unknown';
+    if (
+      this.#objectOutputPolicy !== 'unknown' &&
+      this.#objectOutputPolicy !== 'zero' &&
+      typeof this.#objectOutputPolicy !== 'function'
+    ) {
+      throw new TypeError('Object output default must be "unknown", "zero", or a function.');
+    }
 
     const externalSource: ValueSynchronousDevice = {
       id: 'testbench:external-source' as DeviceId,
@@ -209,6 +246,28 @@ export class TestSession<Target = NetworkId> {
     return Object.freeze({ kind: 'test-signal', network: target, signal });
   }
 
+  objectInput<Name extends string>(
+    target: TestObjectHandle<Name>,
+    connector?: Name,
+  ): TestObjectTraceTarget<Name> {
+    return this.#objectPortTarget('test-object-input', target, connector);
+  }
+
+  objectOutput<Name extends string>(
+    target: TestObjectHandle<Name>,
+    connector?: Name,
+  ): TestObjectTraceTarget<Name> {
+    const traceTarget = this.#objectPortTarget('test-object-output', target, connector);
+    const binding = this.#object(target);
+    const descriptor = this.#objectConnector(binding.object, traceTarget.connector);
+    if (descriptor.outputNetworks.length === 0) {
+      throw new Error(
+        `Object connector ${binding.object.adapterId}:${binding.object.instanceId}:${descriptor.name} has no output Networks.`,
+      );
+    }
+    return traceTarget;
+  }
+
   expect(target: Target): NetworkExpectation;
   expect(target: TestSignalTarget<Target>): SignalExpectation;
   expect(target: Target | TestSignalTarget<Target>): NetworkExpectation | SignalExpectation {
@@ -222,9 +281,22 @@ export class TestSession<Target = NetworkId> {
     return new SignalExpectation(this.#assertionContext(), this.#networkId(target), signal);
   }
 
-  trace(...targets: readonly (Target | TestSignalTarget<Target>)[]): this {
+  trace(
+    ...targets: readonly (Target | TestSignalTarget<Target> | TestObjectTraceTarget<string>)[]
+  ): this {
     for (const target of targets) {
-      if (this.#isSignalTarget(target)) {
+      if (this.#isObjectTraceTarget(target)) {
+        const binding = this.#object(target.object);
+        const descriptor = this.#objectConnector(binding.object, target.connector);
+        const kind = target.kind === 'test-object-input' ? 'object-input' : 'object-output';
+        this.traces.register(
+          objectTraceTarget(kind, binding.object, descriptor.name),
+          this.#kernel.snapshot,
+          kind === 'object-input'
+            ? (snapshot) => this.#connectorInput(descriptor, snapshot)
+            : () => cloneBusValue(binding.committedOutputs.get(descriptor.name) ?? knownBus()),
+        );
+      } else if (this.#isSignalTarget(target)) {
         this.traces.register(
           signalTraceTarget(this.#networkId(target.network), target.signal),
           this.#kernel.snapshot,
@@ -256,11 +328,26 @@ export class TestSession<Target = NetworkId> {
       instanceId: object.instanceId,
       connectors: Object.freeze(object.connectors.map(({ name }) => name)),
     });
-    this.#objectIds.add(object.id);
     const state: ObjectBindingState = {
       object: object as BoundCircuitObject<string>,
       providers: new Map(),
+      fallbackOutputs: new Map(
+        object.connectors
+          .filter((connector) => connector.outputNetworks.length > 0)
+          .map((connector) => [
+            connector.name,
+            connector.instanceDefaultOutput ??
+              connector.classDefaultOutput ??
+              this.#globalObjectOutput(object, connector),
+          ]),
+      ),
+      committedOutputs: new Map(
+        object.connectors
+          .filter((connector) => connector.outputNetworks.length > 0)
+          .map((connector) => [connector.name, knownBus()]),
+      ),
     };
+    this.#objectIds.add(object.id);
     this.#objects.set(handle, state);
     const device: ValueSynchronousDevice = {
       id: object.id,
@@ -281,23 +368,34 @@ export class TestSession<Target = NetworkId> {
             }
             const nextState = copyModelState(result.state);
             output = result.output === undefined ? undefined : copyObjectOutput(result.output);
-            this.#pendingModelCommits.push(() => {
+            this.#pendingBoundaryCommits.push(() => {
               if (state.providers.get(connector.name) === provider) {
                 provider.state = nextState;
               }
             });
           } else {
-            output = connector.defaultOutput;
+            output = state.fallbackOutputs.get(connector.name);
           }
+          const committedOutput =
+            output === undefined ? knownBus() : throughDevice(output, object.id);
+          this.#pendingBoundaryCommits.push(() => {
+            state.committedOutputs.set(connector.name, committedOutput);
+          });
           return output === undefined
             ? []
             : connector.outputNetworks.map((networkId) => ({
                 networkId,
-                value: throughDevice(output, object.id),
+                value: committedOutput,
               }));
         }),
     };
-    this.#kernel.addDevice(device);
+    try {
+      this.#kernel.addDevice(device);
+    } catch (error) {
+      this.#objects.delete(handle);
+      this.#objectIds.delete(object.id);
+      throw error;
+    }
     return handle;
   }
 
@@ -454,16 +552,16 @@ export class TestSession<Target = NetworkId> {
     const callbacks = this.#scheduled.get(nextTick) ?? [];
     this.#scheduled.delete(nextTick);
     for (const callback of callbacks) callback();
-    this.#pendingModelCommits.length = 0;
+    this.#pendingBoundaryCommits.length = 0;
     try {
       const snapshot = this.#kernel.step();
-      for (const commit of this.#pendingModelCommits) commit();
+      for (const commit of this.#pendingBoundaryCommits) commit();
       this.#pulses.clear();
       this.traces.record(snapshot);
       this.#activeBoundary = undefined;
       return snapshot;
     } finally {
-      this.#pendingModelCommits.length = 0;
+      this.#pendingBoundaryCommits.length = 0;
     }
   }
 
@@ -505,9 +603,60 @@ export class TestSession<Target = NetworkId> {
     return aggregateBusValues(connector.inputNetworks.map((networkId) => snapshot.read(networkId)));
   }
 
-  #isSignalTarget(value: Target | TestSignalTarget<Target>): value is TestSignalTarget<Target> {
+  #objectPortTarget<Name extends string>(
+    kind: TestObjectTraceTarget<Name>['kind'],
+    target: TestObjectHandle<Name>,
+    connector: Name | undefined,
+  ): TestObjectTraceTarget<Name> {
+    const binding = this.#object(target);
+    const descriptor = this.#objectConnector(binding.object, connector);
+    return Object.freeze({ kind, object: target, connector: descriptor.name as Name });
+  }
+
+  #globalObjectOutput(
+    object: BoundCircuitObject<string>,
+    connector: BoundCircuitObject<string>['connectors'][number],
+  ): BusValue {
+    const context: ObjectOutputPolicyContext = Object.freeze({
+      objectId: object.id,
+      adapterId: object.adapterId,
+      instanceId: object.instanceId,
+      connector: connector.name,
+      inputNetworks: connector.inputNetworks,
+      outputNetworks: connector.outputNetworks,
+    });
+    const configured =
+      typeof this.#objectOutputPolicy === 'function'
+        ? this.#objectOutputPolicy(context)
+        : this.#objectOutputPolicy;
+    if (configured === 'zero') return knownBus();
+    if (configured !== undefined && configured !== 'unknown') {
+      return copyObjectOutput(configured);
+    }
+    return unknownBus([
+      {
+        id: `unmodeled:${object.adapterId}:${object.instanceId}:${connector.name}`,
+        description: `Unmodeled output ${object.adapterId}:${object.instanceId}:${connector.name}`,
+      },
+    ]);
+  }
+
+  #isSignalTarget(
+    value: Target | TestSignalTarget<Target> | TestObjectTraceTarget<string>,
+  ): value is TestSignalTarget<Target> {
     return (
       typeof value === 'object' && value !== null && 'kind' in value && value.kind === 'test-signal'
+    );
+  }
+
+  #isObjectTraceTarget(
+    value: Target | TestSignalTarget<Target> | TestObjectTraceTarget<string>,
+  ): value is TestObjectTraceTarget<string> {
+    return (
+      typeof value === 'object' &&
+      value !== null &&
+      'kind' in value &&
+      (value.kind === 'test-object-input' || value.kind === 'test-object-output')
     );
   }
 

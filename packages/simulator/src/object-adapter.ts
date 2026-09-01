@@ -18,14 +18,17 @@ export interface CircuitObjectAdapter<Instance, Name extends string = string> {
   readonly id: string;
   instanceId(instance: Instance): string;
   connectors(instance: Instance): readonly CircuitObjectConnector<Name>[];
-  /** Resolved once when the object is bound. `undefined` means no adapter-level default. */
+  /** Per-instance default, resolved once when the object is bound. */
   defaultOutput?(instance: Instance, connector: Name): BusValue | undefined;
+  /** Adapter/class default used when the instance has no default for this connector. */
+  classDefaultOutput?(connector: Name): BusValue | undefined;
 }
 
 export interface BoundCircuitObjectConnector<
   Name extends string = string,
 > extends CircuitObjectConnector<Name> {
-  readonly defaultOutput?: BusValue;
+  readonly instanceDefaultOutput?: BusValue;
+  readonly classDefaultOutput?: BusValue;
 }
 
 export interface BoundCircuitObject<Name extends string = string> {
@@ -69,7 +72,11 @@ export function bindCircuitObject<Instance, Name extends string>(
       throw new Error(`Duplicate object connector name: ${descriptor.name}.`);
     }
     names.add(descriptor.name);
-    const defaultOutput = adapter.defaultOutput?.(instance, descriptor.name);
+    const instanceDefaultOutput = adapter.defaultOutput?.(instance, descriptor.name);
+    const classDefaultOutput =
+      instanceDefaultOutput === undefined
+        ? adapter.classDefaultOutput?.(descriptor.name)
+        : undefined;
     return Object.freeze({
       name: descriptor.name,
       inputNetworks: uniqueNetworks(
@@ -80,7 +87,12 @@ export function bindCircuitObject<Instance, Name extends string>(
         descriptor.outputNetworks,
         `Output Networks for connector ${descriptor.name}`,
       ),
-      ...(defaultOutput === undefined ? {} : { defaultOutput: cloneBusValue(defaultOutput) }),
+      ...(instanceDefaultOutput === undefined
+        ? {}
+        : { instanceDefaultOutput: cloneBusValue(instanceDefaultOutput) }),
+      ...(classDefaultOutput === undefined
+        ? {}
+        : { classDefaultOutput: cloneBusValue(classDefaultOutput) }),
     });
   });
   return Object.freeze({

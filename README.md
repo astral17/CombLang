@@ -45,10 +45,10 @@ The current repository implements the Phase 3 source compiler, the complete Phas
   - [x] Define the generic object circuit-adapter protocol before typed Phase 6 objects: connector input snapshots, output injection, session-bound instance identity, and copied adapter-level defaults, proven with a test-only adapter.
   - [x] Implement persistent manual `mock(entity, connector?).output(bus)` injection through the adapted object's real output Networks; replacement and `clear()` preserve defaults, normal aggregation, scheduling, and self-contamination behavior.
   - [x] Implement reactive `model(entity, { initialState, step })`; the runner invokes `step({ input, state, tick })` exactly once per tick and commits returned output/state atomically only at the next boundary.
-  - [ ] Resolve unmodeled object output in the order explicit mock/model → per-instance default → class default → global policy, with strict `Unknown` as the default and explicit `zero`/custom policies.
-  - [ ] Implement trace registration for selected signals, whole Networks, object inputs, and object outputs; store tick-zero plus sparse/delta changes and expose deterministic JSON/timeline queries without coupling storage to a chart renderer.
+  - [x] Resolve unmodeled object output in the order explicit mock/model → per-instance default → class default → global policy, with strict `Unknown` as the default and explicit `zero`/custom policies.
+  - [x] Implement trace registration for selected signals, whole Networks, object inputs, and object outputs; store tick-zero plus sparse/delta changes and expose deterministic JSON/timeline queries without coupling storage to a chart renderer.
     - [x] Whole-Network and selected-signal targets, tick-zero capture, Known/Unknown transitions, sparse signal deltas, removals, timeline filtering, and deterministic `comblang-trace` JSON.
-    - [ ] Object input/output targets after the generic circuit-adapter protocol exists.
+    - [x] Object input aggregates and isolated committed object-output contributions, including Known/Unknown transitions and stable object/connector metadata.
   - [ ] Surface test results, assertion diagnostics, debug queries, and waveform data consistently through runtime APIs, CLI JSON, and the browser result model; keep visual waveform rendering a consumer of the shared trace model.
     - [x] Browser-local editable test file, isolated worker execution, pass/fail list with assertion/runtime source locations, independent draft persistence, and responsive test editor/results panes.
     - [x] Browser circuit timeline with a compact `ticks × Networks` overview and selectable `ticks × signals` detail table.

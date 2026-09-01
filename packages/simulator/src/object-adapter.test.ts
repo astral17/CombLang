@@ -315,6 +315,78 @@ describe('generic circuit object adapter', () => {
     expect(session.read(output).get(A)).toBe(5);
   });
 
+  it('resolves instance, class, custom, and strict Unknown defaults in order', () => {
+    type Connector = 'instance' | 'class' | 'global' | 'strict';
+    const outputs = {
+      instance: network('network:default-instance'),
+      class: network('network:default-class'),
+      global: network('network:default-global'),
+      strict: network('network:default-strict'),
+    } as const;
+    const instanceBus = new SparseBus([[A, 1]]);
+    const classBus = new SparseBus([[A, 2]]);
+    const globalBus = new SparseBus([[A, 3]]);
+    const policyCalls: string[] = [];
+    const adapter: CircuitObjectAdapter<{ readonly id: string }, Connector> = {
+      id: 'default-object',
+      instanceId: ({ id }) => id,
+      connectors: () =>
+        (Object.keys(outputs) as Connector[]).map((name) => ({
+          name,
+          inputNetworks: [],
+          outputNetworks: [outputs[name]],
+        })),
+      defaultOutput: (_instance, connector) =>
+        connector === 'instance' ? knownBus(instanceBus) : undefined,
+      classDefaultOutput: (connector) => (connector === 'class' ? knownBus(classBus) : undefined),
+    };
+    const session = new TestSession(new ValueSimulationKernel(), {
+      objects: {
+        default: (context) => {
+          policyCalls.push(context.connector);
+          return context.connector === 'global' ? globalBus : undefined;
+        },
+      },
+    });
+    const object = session.adaptObject(adapter, { id: 'defaults' });
+    instanceBus.set(A, 10);
+    classBus.set(A, 20);
+    globalBus.set(A, 30);
+    session.tick();
+
+    expect(policyCalls).toEqual(['global', 'strict']);
+    expect(session.read(outputs.instance).get(A)).toBe(1);
+    expect(session.read(outputs.class).get(A)).toBe(2);
+    expect(session.read(outputs.global).get(A)).toBe(3);
+    expect(session.readValue(outputs.strict)).toEqual({
+      kind: 'unknown',
+      origins: [
+        {
+          id: 'unmodeled:default-object:defaults:strict',
+          description: 'Unmodeled output default-object:defaults:strict',
+          path: [object.id],
+        },
+      ],
+    });
+  });
+
+  it('supports an explicit global zero policy', () => {
+    const output = network('network:zero-default');
+    const adapter: CircuitObjectAdapter<{ readonly id: string }, 'circuit'> = {
+      id: 'zero-default-object',
+      instanceId: ({ id }) => id,
+      connectors: () => [{ name: 'circuit', inputNetworks: [], outputNetworks: [output] }],
+    };
+    const session = new TestSession(new ValueSimulationKernel(), {
+      objects: { default: 'zero' },
+    });
+    session.adaptObject(adapter, { id: 'zero' });
+
+    session.tick();
+    expect(session.readValue(output)).toMatchObject({ kind: 'known' });
+    expect(session.read(output).size).toBe(0);
+  });
+
   it('enforces instance, connector, session, and registration identity', () => {
     const output = network('network:identity-output');
     const instance = {
@@ -339,6 +411,9 @@ describe('generic circuit object adapter', () => {
     expect(() => foreignSession.mock(object)).toThrowError(
       'Foreign or invalid test object handle.',
     );
+    expect(() => foreignSession.objectInput(object)).toThrowError(
+      'Foreign or invalid test object handle.',
+    );
 
     const multiAdapter: CircuitObjectAdapter<{ readonly id: string }, 'left' | 'right'> = {
       id: 'multi-object',
@@ -351,6 +426,8 @@ describe('generic circuit object adapter', () => {
     const multi = session.adaptObject(multiAdapter, { id: 'multi' });
     expect(() => session.mock(multi)).toThrowError('select one explicitly');
     expect(() => session.mock(multi, 'right')).toThrowError('has no output Networks');
+    expect(() => session.objectInput(multi)).toThrowError('select one explicitly');
+    expect(() => session.objectOutput(multi, 'right')).toThrowError('has no output Networks');
 
     session.tick();
     expect(() => session.adaptObject(syntheticAdapter, { ...instance, id: 'late' })).toThrowError(

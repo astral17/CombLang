@@ -8,7 +8,7 @@ objects without introducing those Phase 6 classes early. A
 - named circuit connectors;
 - the logical Networks aggregated as each connector's input;
 - the logical Networks receiving each connector's output contribution;
-- an optional adapter-level default output for each connector.
+- optional per-instance and adapter/class default outputs for each connector.
 
 The adapter describes physical circuit participation and identity. It is not a
 reactive object model and does not own simulation time.
@@ -50,28 +50,48 @@ bus behavior. One Unknown input makes the whole connector input Unknown and
 retains its canonical origins. A connector with no input Networks reads as a
 known empty bus. The returned value is a copy and cannot mutate the snapshot.
 
-## Default output injection
+## Default output resolution
 
 `defaultOutput(instance, connector)` is resolved exactly once during
-registration and copied into the binding. At every synchronous boundary that
-value contributes to every declared output Network. It aggregates normally
-with combinators, external drives, and other objects. An Unknown default gains
-the object's stable device ID in its dependency path.
+registration and is the per-instance level. If it returns `undefined`,
+`classDefaultOutput(connector)` supplies the adapter/class level. Values are
+copied into the binding. At every synchronous boundary the selected value
+contributes to every declared output Network. It aggregates normally with
+combinators, external drives, and other objects. An Unknown default gains the
+object's stable device ID in its dependency path.
 
-The adapter-level default is deliberately only the lowest implemented hook.
-Returning `undefined` means that the adapter contributes nothing until a mock,
-model, or later global policy supplies a value. The completed resolution policy
-will use this order:
+Output resolution uses this order:
 
 1. explicit mock or reactive model;
 2. per-instance default;
 3. class/adapter default;
 4. global policy, strict Unknown by default.
 
-Explicit mock and model providers are implemented. Per-instance/class defaults
-and the global strict/zero/custom policy remain pending. Providers are not
-folded into `CircuitObjectAdapter`; keeping them in the test runner prevents
-object schemas from depending on one test syntax.
+The global policy is configured when the session is created:
+
+```ts
+new TestSession(kernel); // strict Unknown
+new TestSession(kernel, { objects: { default: 'zero' } });
+new TestSession(kernel, {
+  objects: {
+    default: ({ adapterId, instanceId, connector }) =>
+      connector === 'inventory' ? [[SIGNAL_A, 10]] : 'unknown',
+  },
+});
+```
+
+A custom policy may return a sparse bus, explicit Known/Unknown value,
+`'zero'`, `'unknown'`, or `undefined`; the last two both select strict Unknown.
+It is invoked once at registration only when neither instance nor class has a
+default, and its result is copied. Dynamic behavior belongs in `model`, not in
+the default policy. Connectors without output Networks do not need resolution
+and do not invoke the policy.
+
+Strict Unknown origins identify the exact adapter, instance, and connector.
+This makes an assertion failure explain which external behavior was omitted,
+while normal device provenance records how that value reached the assertion.
+Providers remain in `TestSession`, rather than `CircuitObjectAdapter`, so object
+schemas do not depend on one test syntax.
 
 ## Persistent manual mocks
 
@@ -82,7 +102,7 @@ const output = test.mock(probe, 'circuit');
 
 output.output([[SIGNAL_A, 10]]);
 output.output([[SIGNAL_A, 20]]); // replaces 10; it does not aggregate with it
-output.clear(); // removes the manual override and restores the adapter default
+output.clear(); // removes the override and restores the resolved fallback
 ```
 
 The connector argument may be omitted only when the object has exactly one
@@ -93,8 +113,8 @@ values may be a `SparseBus`, signal/value iterable, or explicit Known/Unknown
 The persistent manual value contributes to the connector's declared output
 Networks at every boundary and aggregates normally with drives, combinators,
 and other objects. Calling `output(...)` again replaces only that connector's
-manual contribution. `clear()` removes it and reveals the copied adapter-level
-default, or silence when there is no default.
+manual contribution. `clear()` removes it and reveals the resolved instance,
+class, or global fallback.
 
 Mocks may be changed by an `at(tick, callback)` callback. The new value is
 selected before participants evaluate that boundary. When an output Network is
@@ -137,16 +157,32 @@ for that boundary rather than falling through to the adapter default.
 There is one explicit provider slot per connector. Installing a model replaces
 the active mock or older model; calling a mock controller's `output(...)`
 replaces the active model. A stale controller cannot clear a newer provider.
-Clearing the active provider reveals the adapter default. Models may be
+Clearing the active provider reveals the resolved fallback. Models may be
 installed or replaced by `at(tick, callback)` before participants evaluate that
 boundary.
+
+## Object traces
+
+The generic trace store accepts object ports alongside Networks and signals:
+
+```ts
+test.trace(test.objectInput(probe, 'circuit'), test.objectOutput(probe, 'circuit'));
+```
+
+The input target records the aggregate of the connector's declared input
+Networks. The output target records the object's isolated committed
+contribution before it is aggregated with other participants on the output
+Networks. Both use the shared sparse/delta `comblang-trace` document and retain
+Known/Unknown transitions. Output is known empty at `T0` and first reflects the
+fallback, mock, or model after the first successful boundary.
 
 ## Phase boundary
 
 The synthetic adapter tests prove stable identity, multi-Network input
 snapshots, copied default output, manual/model replacement and clear, scheduled
 changes, immutable transactional model state, multi-output single evaluation,
-self-contamination, ordinary aggregation, Unknown provenance, foreign-handle
-rejection, and tick-zero registration. Phase 6 typed objects can implement the
-same mapping with real connector schemas. Phase 5 object trace targets can
-consume `TestObjectHandle` without changing the adapter contract.
+self-contamination, instance/class/global resolution, strict Unknown and zero
+policies, ordinary aggregation, Unknown provenance, foreign-handle rejection,
+tick-zero registration, and isolated object input/output traces. Phase 6 typed
+objects can implement the same mapping with real connector schemas without
+changing the adapter or trace contracts.

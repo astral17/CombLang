@@ -134,6 +134,7 @@ timeline or serialize the complete document:
 
 ```ts
 test.trace(input, output, test.signal(output, SIGNAL_A));
+test.trace(test.objectInput(chest), test.objectOutput(chest));
 test.run(10);
 
 const events = test.traces.timeline();
@@ -152,10 +153,23 @@ target without changing event objects or ordering. Trace registration after
 tick zero is rejected for now, because the store must not pretend it captured
 history that has already elapsed.
 
-Whole Networks and selected signals are implemented. Object input/output trace
-targets remain pending until the Phase 5 generic object-adapter boundary is
-available. Chart rendering is intentionally outside the trace store; the web
-waveform will consume this shared JSON model later.
+`objectInput(handle, connector?)` records the connector's aggregate input from
+each committed snapshot. `objectOutput(handle, connector?)` records only that
+object connector's own committed contribution, not the Network after other
+devices and drives have been aggregated into it. This distinction remains
+correct for shared output Networks and self-contamination. The connector may be
+omitted only for a single-connector object, and an output target requires a
+connector with at least one output Network.
+
+An object output starts as a known empty bus at `T0`, before the object has
+participated in a boundary. Its fallback, mock, or model result is recorded at
+`T1`; a strict unmodeled fallback therefore produces a Known-to-Unknown event
+with the object's provenance. Object target metadata contains stable object,
+adapter, instance, and connector IDs in the same `comblang-trace` document as
+Network and signal targets.
+
+Chart rendering is intentionally outside the trace store; the web waveform
+will consume this shared JSON model later.
 
 ## Debug index
 
@@ -200,16 +214,19 @@ connector declares the Networks aggregated for input and the Networks receiving
 its output contribution. `readObjectInput(handle, connector)` returns the
 current Known/Unknown aggregate.
 
-An adapter may supply a default connector output. It is resolved and copied
-once at registration, then contributes at every synchronous boundary with
+An adapter may supply per-instance `defaultOutput(instance, connector)` and
+class-level `classDefaultOutput(connector)` values. They are resolved and copied
+once at registration, then contribute at every synchronous boundary with
 ordinary Network aggregation. Unknown defaults retain their origin and gain the
 object device ID in their dependency path. Registration and handles are bound
 to one `TestSession`, and new objects cannot be registered after tick zero.
 
-This is the generic physical boundary, not yet the complete default policy.
-Missing adapter defaults currently remain silent; the later strict policy will
-resolve explicit mock/model, instance default, class default, then global
-Unknown. See
+The complete fallback order is explicit mock/model, instance default, class
+default, then the session's global object policy. The global default is strict
+Unknown; `{ objects: { default: 'zero' } }` selects a known empty bus, while a
+function can return a connector-specific sparse bus, Known/Unknown value, or
+mode. Custom policies run and are copied once at registration, so tick-dependent
+external behavior remains a reactive model. See
 [generic object test adapters](object-test-adapters.md) for the complete
 contract and Phase 6 boundary.
 
@@ -231,10 +248,10 @@ boundary publishes neither its Network output nor its model state, so a retry
 starts from the same `T`.
 
 Mock and model share one explicit-provider slot per connector and replace each
-other. Clearing only the still-active controller restores the copied adapter
-default or silence. An omitted model output is deliberate silence, not a
-request for fallback. Scheduled callbacks can install or replace a model before
-that boundary evaluates. The complete contract is documented in
+other. Clearing only the still-active controller restores the resolved fallback.
+An omitted model output is deliberate silence, not a request for fallback.
+Scheduled callbacks can install or replace a model before that boundary
+evaluates. The complete contract is documented in
 [reactive models](object-test-adapters.md#reactive-models).
 
 ## Browser workbench

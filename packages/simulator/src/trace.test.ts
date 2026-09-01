@@ -3,6 +3,7 @@ import type { NetworkId } from '@comblang/shared';
 import { describe, expect, it } from 'vitest';
 
 import { unknownBus } from './bus-value.js';
+import type { CircuitObjectAdapter } from './object-adapter.js';
 import { TestSession } from './test-session.js';
 import { ValueSimulationKernel } from './value-kernel.js';
 
@@ -89,5 +90,88 @@ describe('delta traces', () => {
     expect(() => test.trace(test.signal(network, A))).toThrow(
       'Trace targets must be registered at tick 0.',
     );
+  });
+
+  it('records object input aggregates and isolated committed output contributions', () => {
+    const input = 'network:object-trace-input' as NetworkId;
+    const output = 'network:object-trace-output' as NetworkId;
+    const adapter: CircuitObjectAdapter<{ readonly id: string }, 'circuit'> = {
+      id: 'traced-object',
+      instanceId: ({ id }) => id,
+      connectors: () => [
+        {
+          name: 'circuit',
+          inputNetworks: [input],
+          outputNetworks: [output],
+        },
+      ],
+    };
+    const test = new TestSession(new ValueSimulationKernel(), {
+      objects: { default: 'zero' },
+    });
+    const object = test.adaptObject(adapter, { id: 'counter' });
+    test.model(object, {
+      initialState: null,
+      step: ({ input: value, state }) => ({
+        state,
+        output: [[A, (value.kind === 'known' ? value.bus.get(A) : 0) + 1]],
+      }),
+    });
+    test.trace(test.objectInput(object), test.objectOutput(object));
+    test
+      .drive(input, [[A, 3]])
+      .drive(output, [[A, 10]])
+      .tick(2);
+
+    expect(test.read(output).get(A)).toBe(14);
+    const document = test.traces.toJSON();
+    const inputTarget = document.targets.find(({ kind }) => kind === 'object-input');
+    const outputTarget = document.targets.find(({ kind }) => kind === 'object-output');
+    expect(inputTarget).toMatchObject({
+      adapterId: 'traced-object',
+      instanceId: 'counter',
+      connector: 'circuit',
+    });
+    expect(outputTarget).toMatchObject({
+      adapterId: 'traced-object',
+      instanceId: 'counter',
+      connector: 'circuit',
+    });
+    expect(test.traces.timeline(inputTarget?.id)).toMatchObject([
+      { kind: 'known', tick: 0, reset: true, changes: [] },
+      { kind: 'known', tick: 1, reset: false, changes: [{ signal: A, value: 3 }] },
+    ]);
+    expect(test.traces.timeline(outputTarget?.id)).toMatchObject([
+      { kind: 'known', tick: 0, reset: true, changes: [] },
+      { kind: 'known', tick: 1, reset: false, changes: [{ signal: A, value: 1 }] },
+      { kind: 'known', tick: 2, reset: false, changes: [{ signal: A, value: 4 }] },
+    ]);
+  });
+
+  it('records strict Unknown object output with object provenance', () => {
+    const output = 'network:unknown-object-trace' as NetworkId;
+    const adapter: CircuitObjectAdapter<{ readonly id: string }, 'circuit'> = {
+      id: 'unknown-traced-object',
+      instanceId: ({ id }) => id,
+      connectors: () => [{ name: 'circuit', inputNetworks: [], outputNetworks: [output] }],
+    };
+    const test = new TestSession(new ValueSimulationKernel());
+    const object = test.adaptObject(adapter, { id: 'external' });
+    test.trace(test.objectOutput(object));
+    test.tick();
+
+    expect(test.traces.timeline()).toMatchObject([
+      { kind: 'known', tick: 0, reset: true },
+      {
+        kind: 'unknown',
+        tick: 1,
+        origins: [
+          {
+            id: 'unmodeled:unknown-traced-object:external:circuit',
+            path: [object.id],
+          },
+        ],
+      },
+    ]);
   });
 });
