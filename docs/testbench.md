@@ -206,11 +206,36 @@ ordinary Network aggregation. Unknown defaults retain their origin and gain the
 object device ID in their dependency path. Registration and handles are bound
 to one `TestSession`, and new objects cannot be registered after tick zero.
 
-This is the generic physical boundary, not yet the mock/model policy. Missing
-adapter defaults currently remain silent; the later strict policy will resolve
-explicit mock/model, instance default, class default, then global Unknown. See
+This is the generic physical boundary, not yet the complete default policy.
+Missing adapter defaults currently remain silent; the later strict policy will
+resolve explicit mock/model, instance default, class default, then global
+Unknown. See
 [generic object test adapters](object-test-adapters.md) for the complete
 contract and Phase 6 boundary.
+
+Persistent manual output is available through
+`mock(object, connector?).output(values)`. Omitting the connector requires an
+object with exactly one connector. Values are copied immediately; another
+`output` replaces the previous override, while `clear()` restores the copied
+adapter default or silence. Manual output uses the connector's declared output
+Networks, participates in ordinary aggregation, may be changed from `at(...)`,
+and remains visible on the connector input snapshot when wiring feeds the
+object's output back into its input.
+
+Reactive connector behavior is available through
+`model(object, { initialState, step }, connector?)`. The runner calls
+`step({ input, state, tick })` once per connector and boundary. The transition
+reads committed snapshot/state `T`; returned `{ state, output? }` becomes
+visible only at `T+1`. State is copied and recursively frozen. A failed kernel
+boundary publishes neither its Network output nor its model state, so a retry
+starts from the same `T`.
+
+Mock and model share one explicit-provider slot per connector and replace each
+other. Clearing only the still-active controller restores the copied adapter
+default or silence. An omitted model output is deliberate silence, not a
+request for fallback. Scheduled callbacks can install or replace a model before
+that boundary evaluates. The complete contract is documented in
+[reactive models](object-test-adapters.md#reactive-models).
 
 ## Browser workbench
 

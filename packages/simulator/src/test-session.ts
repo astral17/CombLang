@@ -1,7 +1,13 @@
 import { SparseBus, type SignalId } from '@comblang/factorio';
 import type { DeviceId, NetworkId } from '@comblang/shared';
 
-import { aggregateBusValues, knownBus, throughDevice, type BusValue } from './bus-value.js';
+import {
+  aggregateBusValues,
+  cloneBusValue,
+  knownBus,
+  throughDevice,
+  type BusValue,
+} from './bus-value.js';
 import {
   bindCircuitObject,
   type BoundCircuitObject,
@@ -9,6 +15,7 @@ import {
 } from './object-adapter.js';
 import {
   ValueSimulationKernel,
+  type ValueSimulationReader,
   type ValueSimulationSnapshot,
   type ValueSynchronousDevice,
 } from './value-kernel.js';
@@ -37,8 +44,85 @@ export interface TestObjectHandle<Name extends string = string> {
   readonly connectors: readonly Name[];
 }
 
+export type TestObjectOutput = TestBusInput | BusValue;
+
+export interface ObjectMockController {
+  output(values: TestObjectOutput): this;
+  clear(): this;
+}
+
+export interface ObjectModelContext<State> {
+  readonly input: BusValue;
+  readonly state: State;
+  /** Snapshot T read by the transition that will commit output/state to T+1. */
+  readonly tick: number;
+}
+
+export interface ObjectModelStep<State> {
+  readonly state: State;
+  readonly output?: TestObjectOutput;
+}
+
+export interface ObjectModelDefinition<State> {
+  readonly initialState: State;
+  readonly step: (context: ObjectModelContext<State>) => ObjectModelStep<State>;
+}
+
+export interface ObjectModelController<State> {
+  readonly state: State;
+  clear(): this;
+}
+
+interface ObjectMockProvider {
+  readonly kind: 'mock';
+  value: BusValue;
+}
+
+interface ObjectModelProvider {
+  readonly kind: 'model';
+  state: unknown;
+  readonly step: (context: ObjectModelContext<unknown>) => ObjectModelStep<unknown>;
+}
+
+type ObjectOutputProvider = ObjectMockProvider | ObjectModelProvider;
+
+interface ObjectBindingState {
+  readonly object: BoundCircuitObject<string>;
+  readonly providers: Map<string, ObjectOutputProvider>;
+}
+
 function copyBus(values: TestBusInput): SparseBus {
   return values instanceof SparseBus ? values.clone() : new SparseBus(values);
+}
+
+function copyObjectOutput(value: TestObjectOutput): BusValue {
+  return typeof value === 'object' && value !== null && 'kind' in value
+    ? cloneBusValue(value as BusValue)
+    : knownBus(copyBus(value as TestBusInput));
+}
+
+function freezeModelState(value: unknown, seen = new WeakSet<object>()): void {
+  if (typeof value !== 'object' || value === null || seen.has(value)) return;
+  const prototype = Object.getPrototypeOf(value);
+  if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) {
+    throw new TypeError(
+      'Object model state must contain only literals, arrays, and plain objects.',
+    );
+  }
+  seen.add(value);
+  for (const child of Object.values(value)) freezeModelState(child, seen);
+  Object.freeze(value);
+}
+
+function copyModelState<State>(value: State): State {
+  let copy: State;
+  try {
+    copy = structuredClone(value);
+  } catch (error) {
+    throw new TypeError('Object model state must be structured-cloneable.', { cause: error });
+  }
+  freezeModelState(copy);
+  return copy;
 }
 
 function snapshotKey(snapshot: ValueSimulationSnapshot): string {
@@ -70,8 +154,9 @@ export class TestSession<Target = NetworkId> {
   readonly #drives = new Map<NetworkId, SparseBus>();
   readonly #pulses = new Map<NetworkId, SparseBus>();
   readonly #scheduled = new Map<number, (() => void)[]>();
-  readonly #objects = new WeakMap<object, BoundCircuitObject<string>>();
+  readonly #objects = new WeakMap<object, ObjectBindingState>();
   readonly #objectIds = new Set<DeviceId>();
+  readonly #pendingModelCommits: (() => void)[] = [];
   #advancing = false;
   #activeBoundary: number | undefined;
 
@@ -172,34 +257,122 @@ export class TestSession<Target = NetworkId> {
       connectors: Object.freeze(object.connectors.map(({ name }) => name)),
     });
     this.#objectIds.add(object.id);
-    this.#objects.set(handle, object as BoundCircuitObject<string>);
+    const state: ObjectBindingState = {
+      object: object as BoundCircuitObject<string>,
+      providers: new Map(),
+    };
+    this.#objects.set(handle, state);
     const device: ValueSynchronousDevice = {
       id: object.id,
-      evaluate: () =>
-        object.connectors.flatMap((connector) =>
-          connector.defaultOutput === undefined
+      evaluate: (snapshot) =>
+        object.connectors.flatMap((connector) => {
+          const provider = state.providers.get(connector.name);
+          let output: BusValue | undefined;
+          if (provider?.kind === 'mock') {
+            output = provider.value;
+          } else if (provider?.kind === 'model') {
+            const result = provider.step({
+              input: this.#connectorInput(connector, snapshot),
+              state: provider.state,
+              tick: snapshot.tick,
+            });
+            if (typeof result !== 'object' || result === null || !('state' in result)) {
+              throw new TypeError('Object model step must return { state, output? }.');
+            }
+            const nextState = copyModelState(result.state);
+            output = result.output === undefined ? undefined : copyObjectOutput(result.output);
+            this.#pendingModelCommits.push(() => {
+              if (state.providers.get(connector.name) === provider) {
+                provider.state = nextState;
+              }
+            });
+          } else {
+            output = connector.defaultOutput;
+          }
+          return output === undefined
             ? []
             : connector.outputNetworks.map((networkId) => ({
                 networkId,
-                value: throughDevice(connector.defaultOutput!, object.id),
-              })),
-        ),
+                value: throughDevice(output, object.id),
+              }));
+        }),
     };
     this.#kernel.addDevice(device);
     return handle;
   }
 
   readObjectInput<Name extends string>(target: TestObjectHandle<Name>, connector: Name): BusValue {
-    const bound = this.#object(target);
+    const bound = this.#object(target).object;
     const descriptor = bound.connectors.find((candidate) => candidate.name === connector);
     if (descriptor === undefined) {
       throw new Error(
         `Object ${bound.adapterId}:${bound.instanceId} has no connector named ${JSON.stringify(connector)}.`,
       );
     }
-    return aggregateBusValues(
-      descriptor.inputNetworks.map((networkId) => this.#kernel.snapshot.read(networkId)),
-    );
+    return this.#connectorInput(descriptor, this.#kernel.snapshot);
+  }
+
+  mock<Name extends string>(
+    target: TestObjectHandle<Name>,
+    connector?: Name,
+  ): ObjectMockController {
+    const state = this.#object(target);
+    const descriptor = this.#objectConnector(state.object, connector);
+    if (descriptor.outputNetworks.length === 0) {
+      throw new Error(
+        `Object connector ${state.object.adapterId}:${state.object.instanceId}:${descriptor.name} has no output Networks.`,
+      );
+    }
+    const provider: ObjectMockProvider = { kind: 'mock', value: knownBus() };
+    const controller: ObjectMockController = {
+      output: (values) => {
+        provider.value = copyObjectOutput(values);
+        state.providers.set(descriptor.name, provider);
+        return controller;
+      },
+      clear: () => {
+        if (state.providers.get(descriptor.name) === provider) {
+          state.providers.delete(descriptor.name);
+        }
+        return controller;
+      },
+    };
+    return Object.freeze(controller);
+  }
+
+  model<Name extends string, State>(
+    target: TestObjectHandle<Name>,
+    definition: ObjectModelDefinition<State>,
+    connector?: Name,
+  ): ObjectModelController<State> {
+    const binding = this.#object(target);
+    const descriptor = this.#objectConnector(binding.object, connector);
+    if (descriptor.outputNetworks.length === 0) {
+      throw new Error(
+        `Object connector ${binding.object.adapterId}:${binding.object.instanceId}:${descriptor.name} has no output Networks.`,
+      );
+    }
+    if (typeof definition.step !== 'function') {
+      throw new TypeError('Object model requires a step function.');
+    }
+    const provider: ObjectModelProvider = {
+      kind: 'model',
+      state: copyModelState(definition.initialState),
+      step: definition.step as (context: ObjectModelContext<unknown>) => ObjectModelStep<unknown>,
+    };
+    binding.providers.set(descriptor.name, provider);
+    const controller: ObjectModelController<State> = {
+      get state() {
+        return provider.state as State;
+      },
+      clear: () => {
+        if (binding.providers.get(descriptor.name) === provider) {
+          binding.providers.delete(descriptor.name);
+        }
+        return controller;
+      },
+    };
+    return Object.freeze(controller);
   }
 
   drive(target: Target, values: TestBusInput): this {
@@ -281,21 +454,55 @@ export class TestSession<Target = NetworkId> {
     const callbacks = this.#scheduled.get(nextTick) ?? [];
     this.#scheduled.delete(nextTick);
     for (const callback of callbacks) callback();
-    const snapshot = this.#kernel.step();
-    this.#pulses.clear();
-    this.traces.record(snapshot);
-    this.#activeBoundary = undefined;
-    return snapshot;
+    this.#pendingModelCommits.length = 0;
+    try {
+      const snapshot = this.#kernel.step();
+      for (const commit of this.#pendingModelCommits) commit();
+      this.#pulses.clear();
+      this.traces.record(snapshot);
+      this.#activeBoundary = undefined;
+      return snapshot;
+    } finally {
+      this.#pendingModelCommits.length = 0;
+    }
   }
 
   #networkId(target: Target): NetworkId {
     return this.#resolveNetwork(target);
   }
 
-  #object(target: TestObjectHandle<string>): BoundCircuitObject<string> {
-    const object = this.#objects.get(target);
-    if (object === undefined) throw new Error('Foreign or invalid test object handle.');
-    return object;
+  #object(target: TestObjectHandle<string>): ObjectBindingState {
+    const state = this.#objects.get(target);
+    if (state === undefined) throw new Error('Foreign or invalid test object handle.');
+    return state;
+  }
+
+  #objectConnector(
+    object: BoundCircuitObject<string>,
+    connector: string | undefined,
+  ): BoundCircuitObject<string>['connectors'][number] {
+    if (connector === undefined) {
+      if (object.connectors.length !== 1) {
+        throw new Error(
+          `Object ${object.adapterId}:${object.instanceId} has ${object.connectors.length} connectors; select one explicitly.`,
+        );
+      }
+      return object.connectors[0]!;
+    }
+    const descriptor = object.connectors.find((candidate) => candidate.name === connector);
+    if (descriptor === undefined) {
+      throw new Error(
+        `Object ${object.adapterId}:${object.instanceId} has no connector named ${JSON.stringify(connector)}.`,
+      );
+    }
+    return descriptor;
+  }
+
+  #connectorInput(
+    connector: BoundCircuitObject<string>['connectors'][number],
+    snapshot: ValueSimulationReader,
+  ): BusValue {
+    return aggregateBusValues(connector.inputNetworks.map((networkId) => snapshot.read(networkId)));
   }
 
   #isSignalTarget(value: Target | TestSignalTarget<Target>): value is TestSignalTarget<Target> {
