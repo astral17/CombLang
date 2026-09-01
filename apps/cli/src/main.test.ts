@@ -16,6 +16,18 @@ async function sourceFile(text: string): Promise<string> {
   return path;
 }
 
+async function circuitTestFiles(
+  source: string,
+  tests: string,
+): Promise<readonly [source: string, tests: string]> {
+  const directory = await mkdtemp(join(tmpdir(), 'comblang-cli-test-'));
+  temporaryDirectories.push(directory);
+  const sourcePath = join(directory, 'main.factorio.ts');
+  const testPath = join(directory, 'circuit.test.js');
+  await Promise.all([writeFile(sourcePath, source, 'utf8'), writeFile(testPath, tests, 'utf8')]);
+  return [sourcePath, testPath];
+}
+
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(
@@ -326,5 +338,60 @@ const output: Network = stages[0] + 1;`);
       diagnostics: [],
       producerCount: 2,
     });
+  });
+});
+
+describe('factorio-dsl test', () => {
+  test('returns shared structured results and trace documents as JSON', async () => {
+    const [sourcePath, testPath] = await circuitTestFiles(
+      `const A = Signal("virtual", "signal-A");
+const input = new Network();
+const output: Network = input + 1;`,
+      `const A = Signal("virtual", "signal-A");
+test("traced pass", ({ network, drive, tick, expectSignal, session }) => {
+  session.trace(network("output"));
+  drive(network("input"), [[A, 4]]);
+  tick(2);
+  expectSignal(network("output"), A).toBe(5);
+});
+test("debug failure", ({ execution }) => {
+  execution.debug.root.network("missing");
+});`,
+    );
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['test', '--json', sourcePath, testPath])).toBe(1);
+    const result = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(result.diagnostics).toEqual([]);
+    expect(result.tests).toMatchObject({ passed: 1, failed: 1 });
+    expect(result.tests.results[0]).toMatchObject({
+      name: 'traced pass',
+      status: 'passed',
+      trace: {
+        format: 'comblang-trace',
+        version: 1,
+        targets: [{ kind: 'network' }],
+      },
+    });
+    expect(result.tests.results[1]).toMatchObject({
+      name: 'debug failure',
+      status: 'failed',
+      failureKind: 'debug-query',
+      code: 'DBG1001',
+      candidates: expect.any(Array),
+    });
+  });
+
+  test('does not execute a test file when circuit compilation fails', async () => {
+    const [sourcePath, testPath] = await circuitTestFiles(
+      'const output = new Network();\noutput += 5;',
+      'throw new Error("must not run");',
+    );
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['test', '--json', sourcePath, testPath])).toBe(1);
+    const result = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(result.diagnostics).not.toEqual([]);
+    expect(result).not.toHaveProperty('tests');
   });
 });

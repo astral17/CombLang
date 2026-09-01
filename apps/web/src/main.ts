@@ -794,6 +794,11 @@ function renderTestRun(run: TestWorkerResponse['run']): void {
     const name = document.createElement('strong');
     name.textContent = testResult.name;
     heading.append(marker, name);
+    if (testResult.code !== undefined) {
+      const code = document.createElement('code');
+      code.textContent = testResult.code;
+      heading.append(code);
+    }
     if (testResult.line !== undefined) {
       const location = document.createElement('button');
       location.type = 'button';
@@ -809,9 +814,16 @@ function renderTestRun(run: TestWorkerResponse['run']): void {
       });
     }
     item.append(heading);
-    if (testResult.message !== undefined) {
+    if (testResult.message !== undefined || testResult.candidates !== undefined) {
       const message = document.createElement('pre');
-      message.textContent = testResult.message;
+      message.textContent = [
+        ...(testResult.message === undefined ? [] : [testResult.message]),
+        ...(testResult.candidates === undefined || testResult.candidates.length === 0
+          ? []
+          : [
+              `Candidates:\n${testResult.candidates.map((candidate) => `  - ${candidate}`).join('\n')}`,
+            ]),
+      ].join('\n');
       item.append(message);
     }
     return item;

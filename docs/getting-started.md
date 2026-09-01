@@ -71,6 +71,23 @@ const constants: Network = CC(50 * IRON, 5 * A, -2 * B);
 npm run cli -- check fixtures/language/scale.ts
 ```
 
-The CLI `check` command validates TypeScript syntax, runs the non-executing DSL semantic pass, executes compile-time elaboration, and validates the resulting circuit topology and color constraints. Use `--json` for structured diagnostics, the generated producer count, and `capabilityUses`: the executed `Readonly`/`Ref`/`Move` function-boundary audit descriptors with their Network, parameter, optional color requirement, source span, and dynamic instance path. The browser result exposes the same descriptors on `result.plan.capabilityUses`; it also retains `networkPairs` and `networkTransfers`. The browser workbench adds the live simulation proof and blueprint preview, but is not required for compiler/runtime validation.
+The CLI `check` command validates TypeScript syntax, runs the non-executing DSL semantic pass, executes compile-time elaboration, and validates the resulting circuit topology and color constraints. Use `--json` for structured diagnostics, the generated producer count, and `capabilityUses`: the executed `Readonly`/`Ref`/`Move` function-boundary audit descriptors with their Network, parameter, optional color requirement, source span, and dynamic instance path. The browser result exposes the same descriptors on `result.plan.capabilityUses`; it also retains `networkPairs` and `networkTransfers`.
+
+The temporary Phase 5 test syntax is also available without starting the web
+workbench:
+
+```sh
+npm run cli -- test --json main.factorio.ts circuit.test.js
+```
+
+`test` first performs the same compiler/runtime validation, then runs every
+`test(name, callback)` against a fresh elaboration and session. JSON contains
+structured assertion, debug-query, and structural failure data plus each test's
+renderer-independent `comblang-trace` document. A compilation error prevents
+the test file from executing. Exit status is `1` when compilation or any test
+fails, and `2` for usage or file-loading errors.
+
+The browser workbench adds the live simulation proof and blueprint preview, but
+is not required for compiler/runtime validation or test execution.
 
 Continue with the [current language reference](language-reference.md) for the exact supported subset.

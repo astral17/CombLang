@@ -53,7 +53,8 @@ The current repository implements the Phase 3 source compiler, the complete Phas
     - [x] Browser-local editable test file, isolated worker execution, pass/fail list with assertion/runtime source locations, independent draft persistence, and responsive test editor/results panes.
     - [x] Browser circuit timeline with a compact `ticks × Networks` overview and selectable `ticks × signals` detail table.
     - [x] Interactive all-zero `T0`, reset/play/pause/step/run controls, configurable history window, historical tick selection/branching, and quality-aware snapshot editing with double-click shortcuts.
-    - [ ] Shared trace-document ingestion, CLI test JSON, and debug-query presentation after the remaining Phase 5 APIs exist.
+    - [x] Shared browser/Node test-result model, per-test trace documents, structured assertion/debug failures, browser result transport/presentation, and `factorio-dsl test --json`.
+    - [ ] Let the browser timeline ingest a selected test's shared trace document and add richer debug-query navigation.
   - [ ] Add focused kernel/lattice/mock/model/query tests plus end-to-end feedback, pulse, settle, Unknown-chain, hierarchy, structural, CLI, and browser cases; use a MemoCell testbench and a test-only object adapter as Phase 5 acceptance programs.
   - [ ] Document the executable testbench language/API and its separation from compile-time assertions, Factorio conformance fixtures, and future Phase 6 typed-object state adapters.
 - [ ] Phase 5.5 — external prototype environment foundation
@@ -153,7 +154,7 @@ npm run dev --workspace @comblang/web -- --host 0.0.0.0 --port 5173 --strictPort
 
 The web build uses relative asset URLs and is kept compatible with GitHub project pages. Responsive desktop and mobile layouts are both release requirements.
 
-The CLI `check` command runs TypeScript parsing, the conservative DSL semantic pass, transformed JavaScript elaboration, and runtime topology/color validation. It is the normal compiler validation path; starting the browser workbench is unnecessary for source checks.
+The CLI `check` command runs TypeScript parsing, the conservative DSL semantic pass, transformed JavaScript elaboration, and runtime topology/color validation. `factorio-dsl test [--json] source.factorio.ts circuit.test.js` additionally executes the same fresh-session JavaScript tests and structured result model as the browser worker, including assertion/debug details and per-test `comblang-trace` documents. Starting the browser workbench is unnecessary for either path.
 
 ## Repository map
 

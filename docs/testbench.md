@@ -263,10 +263,12 @@ overwrite test code. `Add test` appends another test block.
 Each `test(name, callback)` executes against a fresh elaborated circuit in a
 separate worker. A runaway test is terminated by the UI budget instead of
 blocking the editor. Results show every passing or failing test, and failures
-include the structured assertion message; assertion/runtime stacks are mapped
-back to their source line. A syntax error is visible but may lack a line until
-test parsing shares the compiler worker without duplicating TypeScript in the
-small test worker. The temporary JavaScript API exposes:
+include structured assertion details, debug/structural codes and candidates;
+assertion/runtime stacks are mapped back to their source line. Every result also
+carries its session's `comblang-trace` document. A syntax error is visible but
+may lack a line until test parsing shares the compiler worker without
+duplicating TypeScript in the small test worker. The temporary JavaScript API
+exposes:
 
 ```js
 test('example', ({ network, drive, clear, pulse, tick, run, expect, expectSignal }) => {
@@ -276,6 +278,17 @@ test('example', ({ network, drive, clear, pulse, tick, run, expect, expectSignal
   expectSignal(network('output'), A).toBe(8);
 });
 ```
+
+The callback additionally receives `execution` and `session`. They expose the
+complete debug hierarchy, structural assertions, direct trace registration,
+and newer testbench APIs without repeatedly widening the temporary convenience
+wrapper.
+
+`runDirectPlanTests` in `@comblang/runtime` owns this result contract. The web
+worker is a thin availability wrapper, while
+`factorio-dsl test [--json] source.factorio.ts circuit.test.js` invokes the same
+runner under Node. Consequently CLI JSON and browser messages preserve the same
+failure kind, code, details, candidates, source position, and trace schema.
 
 This is an execution surface for the Phase 5 functionality, not the final test
 language syntax. The runner, `TestSession`, assertions, and result model do not

@@ -46,8 +46,11 @@ test("still runs", ({ network, expectSignal }) => {
     expect(run.results[0]).toMatchObject({
       name: 'fails',
       status: 'failed',
+      failureKind: 'assertion',
       line: 3,
       message: expect.stringContaining('Expected: 99'),
+      details: { tick: 0, matcher: 'toBe()' },
+      trace: { format: 'comblang-trace', version: 1 },
     });
     expect(run.results[1]).toMatchObject({ name: 'still runs', status: 'passed' });
   });
@@ -58,6 +61,34 @@ test("still runs", ({ network, expectSignal }) => {
       passed: 0,
       failed: 1,
       results: [{ name: 'Test file', status: 'failed', message: 'broken test file' }],
+    });
+  });
+
+  it('returns trace documents and structured debug-query failures', () => {
+    const run = runWebTests(
+      plan(),
+      `test("traces", ({ network, session, tick }) => {
+  session.trace(network("output"));
+  tick();
+});
+test("bad query", ({ execution }) => {
+  execution.debug.root.network("missing");
+});`,
+    );
+
+    expect(run.results[0]).toMatchObject({
+      status: 'passed',
+      trace: {
+        format: 'comblang-trace',
+        version: 1,
+        targets: [{ kind: 'network' }],
+      },
+    });
+    expect(run.results[1]).toMatchObject({
+      status: 'failed',
+      failureKind: 'debug-query',
+      code: 'DBG1001',
+      candidates: expect.any(Array),
     });
   });
 });
