@@ -209,6 +209,8 @@ export function runDirectPlanTests(
         stackLineOffset,
         session.traces.toJSON(),
       );
+    } finally {
+      session.finish();
     }
   });
   const passed = results.filter(({ status }) => status === 'passed').length;

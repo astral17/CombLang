@@ -186,7 +186,9 @@ export class DebugIndex {
     plan: DirectElaborationPlan,
     circuit: ElaboratedCircuit,
     networkId: (planName: string) => NetworkId,
+    producerId: (planIndex: number) => ProducerId,
   ): DebugIndex {
+    const graphProducerIds = new Set(circuit.graph.producers.map(({ id }) => id));
     const mutable = new Map<string, MutableScope>();
     const order: MutableScope[] = [];
     const ensure = (path: readonly string[]): MutableScope => {
@@ -229,12 +231,16 @@ export class DebugIndex {
     for (const [index, descriptor] of plan.producers.entries()) {
       const scope = ensure(descriptor.instancePath);
       const producerKind = descriptor.kind;
+      const id = producerId(index);
+      if (!graphProducerIds.has(id)) {
+        throw new Error(`Direct-plan Producer ${index + 1} maps to missing EG Producer ${id}.`);
+      }
       scope.producers.push(
         Object.freeze({
           kind: 'producer',
           producerKind,
           ...(descriptor.bindingName === undefined ? {} : { name: descriptor.bindingName }),
-          id: circuit.graph.producers[index]!.id,
+          id,
           ordinal: scope.producers.length + 1,
           kindOrdinal:
             scope.producers.filter((entry) => entry.producerKind === producerKind).length + 1,

@@ -148,6 +148,14 @@ and output committed for `T+1`. If another device throws, the kernel snapshot
 and every model state remain at `T`; retrying evaluates the transition again
 from the same state.
 
+`step` must be synchronous and functionally pure with respect to the external
+world. It cannot mutate `TestSession`, install or clear providers, register
+objects, traces, or devices, or advance/schedule the clock through a captured
+reference. Such calls fail during participant evaluation instead of taking
+effect in traversal order. Only the returned state/output is transactional;
+arbitrary host-language side effects such as writes to a captured array cannot
+be rolled back if another participant later fails.
+
 Model state is structured-cloned and recursively frozen both initially and
 after every transition. It may contain literals, arrays, and plain objects, but
 not class instances or other mutable host objects. `output` accepts the same

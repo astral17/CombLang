@@ -99,6 +99,11 @@ export interface ObjectModelController<State> {
   clear(): this;
 }
 
+export interface TestTraceReader {
+  timeline(targetId?: string): ReturnType<TraceStore['timeline']>;
+  toJSON(): ReturnType<TraceStore['toJSON']>;
+}
+
 interface ObjectMockProvider {
   readonly kind: 'mock';
   value: BusValue;
@@ -176,7 +181,7 @@ function positiveCount(value: number, label: string): number {
  * topology after construction and never re-run source elaboration.
  */
 export class TestSession<Target = NetworkId> {
-  readonly traces = new TraceStore();
+  readonly traces: TestTraceReader;
   readonly #kernel: ValueSimulationKernel;
   readonly #resolveNetwork: (target: Target) => NetworkId;
   readonly #objectOutputPolicy: ObjectOutputPolicy;
@@ -186,11 +191,18 @@ export class TestSession<Target = NetworkId> {
   readonly #objects = new WeakMap<object, ObjectBindingState>();
   readonly #objectIds = new Set<DeviceId>();
   readonly #pendingBoundaryCommits: (() => void)[] = [];
+  readonly #traceStore = new TraceStore();
   #advancing = false;
+  #evaluatingParticipants = false;
+  #finished = false;
   #activeBoundary: number | undefined;
 
   constructor(kernel: ValueSimulationKernel, options?: TestSessionOptions<Target>) {
     this.#kernel = kernel;
+    this.traces = Object.freeze({
+      timeline: (targetId?: string) => this.#traceStore.timeline(targetId),
+      toJSON: () => this.#traceStore.toJSON(),
+    });
     this.#resolveNetwork =
       options?.resolveNetwork ?? ((target: Target) => target as unknown as NetworkId);
     this.#objectOutputPolicy = options?.objects?.default ?? 'unknown';
@@ -284,12 +296,13 @@ export class TestSession<Target = NetworkId> {
   trace(
     ...targets: readonly (Target | TestSignalTarget<Target> | TestObjectTraceTarget<string>)[]
   ): this {
+    this.#assertMutationAllowed('trace');
     for (const target of targets) {
       if (this.#isObjectTraceTarget(target)) {
         const binding = this.#object(target.object);
         const descriptor = this.#objectConnector(binding.object, target.connector);
         const kind = target.kind === 'test-object-input' ? 'object-input' : 'object-output';
-        this.traces.register(
+        this.#traceStore.register(
           objectTraceTarget(kind, binding.object, descriptor.name),
           this.#kernel.snapshot,
           kind === 'object-input'
@@ -297,12 +310,15 @@ export class TestSession<Target = NetworkId> {
             : () => cloneBusValue(binding.committedOutputs.get(descriptor.name) ?? knownBus()),
         );
       } else if (this.#isSignalTarget(target)) {
-        this.traces.register(
+        this.#traceStore.register(
           signalTraceTarget(this.#networkId(target.network), target.signal),
           this.#kernel.snapshot,
         );
       } else {
-        this.traces.register(networkTraceTarget(this.#networkId(target)), this.#kernel.snapshot);
+        this.#traceStore.register(
+          networkTraceTarget(this.#networkId(target)),
+          this.#kernel.snapshot,
+        );
       }
     }
     return this;
@@ -312,6 +328,7 @@ export class TestSession<Target = NetworkId> {
     adapter: CircuitObjectAdapter<Instance, Name>,
     instance: Instance,
   ): TestObjectHandle<Name> {
+    this.#assertMutationAllowed('adaptObject');
     if (this.currentTick !== 0) {
       throw new Error('Circuit object adapters must be registered before the first tick.');
     }
@@ -414,6 +431,7 @@ export class TestSession<Target = NetworkId> {
     target: TestObjectHandle<Name>,
     connector?: Name,
   ): ObjectMockController {
+    this.#assertMutationAllowed('mock');
     const state = this.#object(target);
     const descriptor = this.#objectConnector(state.object, connector);
     if (descriptor.outputNetworks.length === 0) {
@@ -424,11 +442,13 @@ export class TestSession<Target = NetworkId> {
     const provider: ObjectMockProvider = { kind: 'mock', value: knownBus() };
     const controller: ObjectMockController = {
       output: (values) => {
+        this.#assertMutationAllowed('mock.output');
         provider.value = copyObjectOutput(values);
         state.providers.set(descriptor.name, provider);
         return controller;
       },
       clear: () => {
+        this.#assertMutationAllowed('mock.clear');
         if (state.providers.get(descriptor.name) === provider) {
           state.providers.delete(descriptor.name);
         }
@@ -443,6 +463,7 @@ export class TestSession<Target = NetworkId> {
     definition: ObjectModelDefinition<State>,
     connector?: Name,
   ): ObjectModelController<State> {
+    this.#assertMutationAllowed('model');
     const binding = this.#object(target);
     const descriptor = this.#objectConnector(binding.object, connector);
     if (descriptor.outputNetworks.length === 0) {
@@ -464,6 +485,7 @@ export class TestSession<Target = NetworkId> {
         return provider.state as State;
       },
       clear: () => {
+        this.#assertMutationAllowed('model.clear');
         if (binding.providers.get(descriptor.name) === provider) {
           binding.providers.delete(descriptor.name);
         }
@@ -474,11 +496,13 @@ export class TestSession<Target = NetworkId> {
   }
 
   drive(target: Target, values: TestBusInput): this {
+    this.#assertMutationAllowed('drive');
     this.#drives.set(this.#networkId(target), copyBus(values));
     return this;
   }
 
   clear(target: Target): this {
+    this.#assertMutationAllowed('clear');
     const networkId = this.#networkId(target);
     this.#drives.delete(networkId);
     this.#pulses.delete(networkId);
@@ -486,11 +510,13 @@ export class TestSession<Target = NetworkId> {
   }
 
   pulse(target: Target, values: TestBusInput): this {
+    this.#assertMutationAllowed('pulse');
     this.#pulses.set(this.#networkId(target), copyBus(values));
     return this;
   }
 
   at(tick: number, callback: () => void): this {
+    this.#assertMutationAllowed('at');
     positiveCount(tick, 'scheduled tick');
     const earliestBoundary = this.#activeBoundary ?? this.currentTick;
     if (tick <= earliestBoundary) {
@@ -507,6 +533,7 @@ export class TestSession<Target = NetworkId> {
   }
 
   tick(count = 1): ValueSimulationSnapshot {
+    this.#assertMutationAllowed('tick');
     positiveCount(count, 'tick count');
     return this.#advance(() => {
       let snapshot = this.#kernel.snapshot;
@@ -516,10 +543,12 @@ export class TestSession<Target = NetworkId> {
   }
 
   run(count: number): ValueSimulationSnapshot {
+    this.#assertMutationAllowed('run');
     return this.tick(count);
   }
 
   settle({ maxTicks }: SettleOptions): ValueSimulationSnapshot {
+    this.#assertMutationAllowed('settle');
     positiveCount(maxTicks, 'settle maxTicks');
     return this.#advance(() => {
       let previousKey = snapshotKey(this.#kernel.snapshot);
@@ -554,14 +583,40 @@ export class TestSession<Target = NetworkId> {
     for (const callback of callbacks) callback();
     this.#pendingBoundaryCommits.length = 0;
     try {
-      const snapshot = this.#kernel.step();
+      this.#evaluatingParticipants = true;
+      let snapshot: ValueSimulationSnapshot;
+      try {
+        snapshot = this.#kernel.step();
+      } finally {
+        this.#evaluatingParticipants = false;
+      }
       for (const commit of this.#pendingBoundaryCommits) commit();
       this.#pulses.clear();
-      this.traces.record(snapshot);
+      this.#traceStore.record(snapshot);
       this.#activeBoundary = undefined;
       return snapshot;
     } finally {
       this.#pendingBoundaryCommits.length = 0;
+    }
+  }
+
+  /** Permanently seals mutating testbench APIs after one test body completes. */
+  finish(): void {
+    if (this.#finished) return;
+    if (this.#evaluatingParticipants || this.#advancing) {
+      throw new Error('TestSession cannot finish during an active boundary.');
+    }
+    this.#finished = true;
+  }
+
+  #assertMutationAllowed(operation: string): void {
+    if (this.#finished) {
+      throw new Error(`TestSession is finished; ${operation} cannot mutate it.`);
+    }
+    if (this.#evaluatingParticipants) {
+      throw new Error(
+        `TestSession mutation ${operation} is not allowed during participant evaluation.`,
+      );
     }
   }
 

@@ -181,7 +181,11 @@ export class TraceStore {
     if (snapshot.tick !== 0) {
       throw new Error('Trace targets must be registered at tick 0.');
     }
-    if (this.#targets.has(target.id)) return;
+    const existing = this.#targets.get(target.id);
+    if (existing !== undefined) {
+      if (JSON.stringify(existing.target) === JSON.stringify(cloneTarget(target))) return;
+      throw new Error(`Duplicate trace target ID refers to different targets: ${target.id}.`);
+    }
     const networkId =
       target.kind === 'network' || target.kind === 'signal' ? target.networkId : undefined;
     const reader =

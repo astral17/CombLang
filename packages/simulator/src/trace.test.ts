@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { unknownBus } from './bus-value.js';
 import type { CircuitObjectAdapter } from './object-adapter.js';
 import { TestSession } from './test-session.js';
+import { TraceStore, type TraceTarget } from './trace.js';
 import { ValueSimulationKernel } from './value-kernel.js';
 
 const network = 'network:trace' as NetworkId;
@@ -89,6 +90,26 @@ describe('delta traces', () => {
     test.tick();
     expect(() => test.trace(test.signal(network, A))).toThrow(
       'Trace targets must be registered at tick 0.',
+    );
+  });
+
+  it('rejects an internal trace ID collision between different targets', () => {
+    const store = new TraceStore();
+    const snapshot = new ValueSimulationKernel().snapshot;
+    const first: TraceTarget = {
+      id: 'collision',
+      kind: 'network',
+      networkId: 'network:first' as NetworkId,
+    };
+    const second: TraceTarget = {
+      id: 'collision',
+      kind: 'network',
+      networkId: 'network:second' as NetworkId,
+    };
+
+    store.register(first, snapshot);
+    expect(() => store.register(second, snapshot)).toThrow(
+      'Duplicate trace target ID refers to different targets: collision.',
     );
   });
 

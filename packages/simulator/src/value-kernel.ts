@@ -43,12 +43,16 @@ export class ValueSimulationKernel {
   readonly #devices: ValueSynchronousDevice[] = [];
   #networks = new Map<NetworkId, BusValue>();
   #snapshot: ValueSimulationSnapshot = makeSnapshot(0, new Map());
+  #stepping = false;
 
   get snapshot(): ValueSimulationSnapshot {
     return this.#snapshot;
   }
 
   addDevice(device: ValueSynchronousDevice): void {
+    if (this.#stepping) {
+      throw new Error('Value-simulation devices cannot be added during participant evaluation.');
+    }
     if (this.#devices.some((candidate) => candidate.id === device.id)) {
       throw new Error(`Duplicate value-simulation device ID: ${device.id}`);
     }
@@ -56,6 +60,9 @@ export class ValueSimulationKernel {
   }
 
   setInitialNetwork(networkId: NetworkId, value: BusValue): void {
+    if (this.#stepping) {
+      throw new Error('Initial network values cannot change during participant evaluation.');
+    }
     if (this.#snapshot.tick !== 0) {
       throw new Error('Initial network values can only be set before the first tick.');
     }
@@ -64,14 +71,20 @@ export class ValueSimulationKernel {
   }
 
   step(): ValueSimulationSnapshot {
+    if (this.#stepping) throw new Error('ValueSimulationKernel.step() is not reentrant.');
     const previous = this.#snapshot;
     const contributions = new Map<NetworkId, BusValue[]>();
-    for (const device of this.#devices) {
-      for (const output of device.evaluate(previous)) {
-        const values = contributions.get(output.networkId) ?? [];
-        values.push(output.value);
-        contributions.set(output.networkId, values);
+    this.#stepping = true;
+    try {
+      for (const device of this.#devices) {
+        for (const output of device.evaluate(previous)) {
+          const values = contributions.get(output.networkId) ?? [];
+          values.push(output.value);
+          contributions.set(output.networkId, values);
+        }
       }
+    } finally {
+      this.#stepping = false;
     }
 
     const nextNetworks = new Map<NetworkId, BusValue>();

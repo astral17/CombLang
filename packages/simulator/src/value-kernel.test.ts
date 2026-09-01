@@ -53,4 +53,20 @@ describe('ValueSimulationKernel', () => {
 
     expect(build(['b', 'a'])).toEqual(build(['a', 'b']));
   });
+
+  it('rejects topology mutation during participant evaluation', () => {
+    const kernel = new ValueSimulationKernel();
+    kernel.addDevice({
+      id: 'device:mutator' as DeviceId,
+      evaluate: () => {
+        kernel.addDevice({ id: 'device:late' as DeviceId, evaluate: () => [] });
+        return [];
+      },
+    });
+
+    expect(() => kernel.step()).toThrow(
+      'Value-simulation devices cannot be added during participant evaluation.',
+    );
+    expect(kernel.snapshot.tick).toBe(0);
+  });
 });

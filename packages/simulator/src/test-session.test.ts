@@ -205,6 +205,29 @@ describe('TestSession external drives', () => {
     expect(session.currentTick).toBe(2);
   });
 
+  it('seals every mutating API after the session is finished', () => {
+    const session = new TestSession(new ValueSimulationKernel());
+    session.drive(input, [[signalA, 4]]).tick();
+    session.finish();
+    session.finish();
+
+    expect(session.read(input).get(signalA)).toBe(4);
+    expect(session.traces.toJSON().format).toBe('comblang-trace');
+    for (const [operation, mutate] of [
+      ['drive', () => session.drive(input, [])],
+      ['clear', () => session.clear(input)],
+      ['pulse', () => session.pulse(input, [])],
+      ['at', () => session.at(2, () => undefined)],
+      ['trace', () => session.trace(input)],
+      ['tick', () => session.tick()],
+      ['run', () => session.run(1)],
+      ['settle', () => session.settle({ maxTicks: 1 })],
+    ] as const) {
+      expect(mutate).toThrow(`TestSession is finished; ${operation} cannot mutate it.`);
+    }
+    expect(session.currentTick).toBe(1);
+  });
+
   it('settles on observed whole-circuit state and reports non-convergence', () => {
     const stable = new TestSession(new ValueSimulationKernel());
     expect(stable.settle({ maxTicks: 2 }).tick).toBe(1);

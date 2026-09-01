@@ -6,7 +6,7 @@ import type {
   PlanDeciderCondition,
   PlanNetworkRef,
 } from '@comblang/compiler/direct-plan';
-import type { Diagnostic, SourceSpan } from '@comblang/shared';
+import type { Diagnostic, ProducerId, SourceSpan } from '@comblang/shared';
 import type { TestSession } from '@comblang/simulator';
 
 import {
@@ -378,6 +378,7 @@ function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
     );
   }
   const capturedProducers = new Map<string, ProducerHandle>();
+  const producerIds: ProducerId[] = [];
   for (const descriptor of plan.producers) {
     if (
       descriptor.bindingName !== undefined &&
@@ -473,6 +474,7 @@ function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
       }
       capturedProducers.set(captureId, producer);
     }
+    producerIds.push(producer.id);
     runtime.attach(
       producer,
       ...descriptor.destinations.map((destination) => {
@@ -491,7 +493,16 @@ function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
     );
   }
   const circuit = runtime.elaborate();
-  const debug = DebugIndex.fromDirectPlan(plan, circuit, (name) => networks.get(name)!.id);
+  const debug = DebugIndex.fromDirectPlan(
+    plan,
+    circuit,
+    (name) => networks.get(name)!.id,
+    (index) => {
+      const id = producerIds[index];
+      if (id === undefined) throw runtimeFailure('RT1001', 'Missing executed Producer mapping.');
+      return id;
+    },
+  );
   const instances = Object.freeze(
     (plan.debugInstances ?? []).map((instance) =>
       Object.freeze({

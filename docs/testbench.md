@@ -30,6 +30,13 @@ together to `T+1`. Consequently a drive becomes visible on its target Network
 after one `tick()`, while a combinator reading it publishes its response on the
 following tick.
 
+The participant set and testbench configuration are frozen while that
+transition is evaluated. Device and model callbacks cannot call mutating
+`TestSession` APIs (`drive`, `pulse`, `clear`, `at`, `trace`, `mock`, `model`,
+`adaptObject`, or clock methods), and the simulation kernels independently
+reject device registration or reentrant stepping during evaluation. This makes
+the result independent of participant traversal order.
+
 Network handles are resolved by the elaboration session that created the
 circuit. A handle from another runtime is rejected instead of being matched by
 its textual ID. `read()` returns a copy, so test code cannot mutate a committed
@@ -58,6 +65,9 @@ A scheduled callback may change drives, pulses, mocks, and later scheduling, but
 it cannot call `tick`, `run`, or `settle` recursively. One runner boundary call
 therefore commits exactly one transition. While boundary 5 is being evaluated,
 `at(5, ...)` is rejected as already active and `at(6, ...)` remains valid.
+These callbacks run before participant evaluation and are therefore the proper
+place for external-world stimulus; the stricter model callback rules do not
+apply to them.
 
 `settle({ maxTicks })` advances until two consecutive complete simulation
 snapshots are equal. It throws when the bound is exhausted, including for an
@@ -66,8 +76,7 @@ selected observation sets remain a later extension. Future scheduled
 external events do not keep it running: `settle()` finds a fixed point under
 the inputs active now and may return before an event scheduled for a later tick.
 
-Object adapters remain a later Phase 5 slice. Traces and the first physical
-debug index are implemented below.
+Object adapters, traces, and the physical debug index are implemented below.
 
 ## Known and Unknown values
 
@@ -247,6 +256,15 @@ visible only at `T+1`. State is copied and recursively frozen. A failed kernel
 boundary publishes neither its Network output nor its model state, so a retry
 starts from the same `T`.
 
+`step` is a synchronous transition function, not an imperative test callback.
+It may read its frozen input/state/tick and return next state/output, but it may
+not mutate the `TestSession`, providers, traces, topology, or clock through a
+closure. Arbitrary JavaScript side effects outside the model API (such as
+appending to a captured array) cannot be rolled back if a later participant
+fails; model authors must therefore keep `step` functionally pure with respect
+to the external world. Transactionality covers only the state and output
+returned through the model API.
+
 Mock and model share one explicit-provider slot per connector and replace each
 other. Clearing only the still-active controller restores the resolved fallback.
 An omitted model output is deliberate silence, not a request for fallback.
@@ -283,6 +301,14 @@ The callback additionally receives `execution` and `session`. They expose the
 complete debug hierarchy, structural assertions, direct trace registration,
 and newer testbench APIs without repeatedly widening the temporary convenience
 wrapper.
+
+The runner calls `session.finish()` when the synchronous callback returns or
+throws. Every later mutating call is rejected, including one scheduled by a
+detached Promise or `queueMicrotask`, so completed results cannot be changed by
+late callbacks. Async bodies remain unsupported. Session sealing protects
+state correctness; terminating a disposable browser worker remains the
+availability boundary for runaway microtask loops, and stronger CLI process
+isolation is deferred with the hardened sandbox.
 
 `runDirectPlanTests` in `@comblang/runtime` owns this result contract. The web
 worker is a thin availability wrapper, while

@@ -1,4 +1,10 @@
-import type { CircuitProducerNode, ElaborationGraph, EntityPlacement } from '@comblang/compiler/ir';
+import type {
+  CircuitProducerNode,
+  ElaborationGraph,
+  EntityPlacement,
+  LogicalDeciderCondition,
+  LogicalNetworkRef,
+} from '@comblang/compiler/ir';
 import type { NetworkId, ProducerId } from '@comblang/shared';
 
 import type { DebugNetworkEntry, DebugProducerEntry, DebugScope } from './debug-index.js';
@@ -54,25 +60,30 @@ function partialMatch(actual: unknown, expected: unknown): boolean {
   );
 }
 
-function inputNetworks(
-  producer: CircuitProducerNode,
-  networkIds: ReadonlySet<string>,
-): ReadonlySet<NetworkId> {
+function inputNetworks(producer: CircuitProducerNode): ReadonlySet<NetworkId> {
   const result = new Set<NetworkId>();
-  const visit = (value: unknown): void => {
-    if (typeof value === 'string') {
-      if (networkIds.has(value)) result.add(value as NetworkId);
-      return;
-    }
-    if (Array.isArray(value)) {
-      for (const item of value) visit(item);
-      return;
-    }
-    if (typeof value === 'object' && value !== null) {
-      for (const item of Object.values(value)) visit(item);
-    }
+  const addReference = (reference: LogicalNetworkRef): void => {
+    if (reference.refKind === 'single') result.add(reference.network);
+    else for (const network of reference.networks) result.add(network);
   };
-  visit(producer.config);
+  const visitCondition = (condition: LogicalDeciderCondition): void => {
+    if (condition.kind === 'and' || condition.kind === 'or') {
+      for (const child of condition.conditions) visitCondition(child);
+      return;
+    }
+    addReference(condition.left);
+    if (condition.right.kind === 'signal') addReference(condition.right);
+  };
+
+  if (producer.kind === 'arithmetic') {
+    if (producer.config.left.kind !== 'constant') addReference(producer.config.left);
+    if (producer.config.right.kind !== 'constant') addReference(producer.config.right);
+  } else if (producer.kind === 'decider') {
+    visitCondition(producer.config.condition);
+    for (const output of [...producer.config.outputs, ...(producer.config.elseOutputs ?? [])]) {
+      if (output.input !== undefined) addReference(output.input);
+    }
+  }
   return result;
 }
 
@@ -83,7 +94,6 @@ export class DebugStructureExpectation {
   readonly #networks: readonly DebugNetworkEntry[];
   readonly #producers: readonly DebugProducerEntry[];
   readonly #graphProducers: ReadonlyMap<ProducerId, CircuitProducerNode>;
-  readonly #networkIds: ReadonlySet<string>;
 
   constructor(scope: DebugScope, graph: ElaborationGraph) {
     this.#scope = scope;
@@ -91,7 +101,6 @@ export class DebugStructureExpectation {
     this.#networks = Object.freeze(this.#scopes.flatMap((candidate) => candidate.networks));
     this.#producers = Object.freeze(this.#scopes.flatMap((candidate) => candidate.producers));
     this.#graphProducers = new Map(graph.producers.map((producer) => [producer.id, producer]));
-    this.#networkIds = new Set(graph.networks.map(({ id }) => id));
     Object.freeze(this);
   }
 
@@ -264,7 +273,7 @@ export class DebugStructureExpectation {
       const current = queue[cursor]!;
       const nextDistance = distances.get(current)! + 1;
       for (const producer of scoped) {
-        if (!inputNetworks(producer, this.#networkIds).has(current)) continue;
+        if (!inputNetworks(producer).has(current)) continue;
         for (const output of producer.destinations) {
           if (distances.has(output)) continue;
           if (output === destination) return nextDistance;

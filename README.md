@@ -30,8 +30,10 @@ The current repository implements the Phase 3 source compiler, the complete Phas
 - [x] Phase 4 — ownership, multi-network syntax, Producer identity, semantic/runtime boundary hardening, opaque session values, and complete CLI/browser/EG/NCIR acceptance coverage.
 - [ ] Phase 5 — deterministic testbench, external-world adapters, Unknown propagation, traces, and debug hierarchy
   - [x] Define a browser/Node-neutral `TestSession` over an already elaborated circuit; test operations must never mutate EG/NCIR topology or re-execute source elaboration.
-  - [ ] Freeze the synchronous test clock: every participant reads snapshot `T`, all combinators and reactive models evaluate independently, and their writes commit together to `T+1` regardless of traversal order.
+  - [x] Freeze the synchronous test clock: every participant reads snapshot `T`, all combinators and reactive models evaluate independently, and their writes commit together to `T+1` regardless of traversal order.
     - [x] Prevent scheduled callbacks from advancing time reentrantly or scheduling work into the boundary already being evaluated; callbacks may still schedule later boundaries.
+    - [x] Reject TestSession/provider/trace/topology mutation during participant evaluation, independently guard both simulation kernels, and keep scheduled pre-boundary stimulus legal.
+    - [x] Seal each TestSession after its synchronous test body so delayed Promise/microtask callbacks cannot mutate a completed result; document model purity and the limits of rollback for arbitrary JavaScript side effects.
   - [x] Introduce the MVP whole-bus lattice `Known(SparseBus) | Unknown(origins)` with epistemic semantics, deterministic origin canonicalization, three-valued AND/OR short-circuiting, and inactive-branch elimination for non-`Each` Deciders.
   - [x] Keep ordinary production simulation on the concrete fast path while allowing a test session to opt into Known/Unknown propagation without widening `SparseBus` itself.
   - [x] Implement persistent `drive(network, values)`, replacement, `clear(network)`, and one-boundary `pulse(network, values)` external broadcasters with canonical Signal identity and int32 conversion.
@@ -42,6 +44,7 @@ The current repository implements the Phase 3 source compiler, the complete Phas
   - [x] Implement test-only `t.instantiate(fn, ...args)` so `dut.value` has topology identical to an ordinary call while the completed execution resolves `dut.$` to only that captured debug scope root.
   - [x] Provide the v1 string/query hierarchy for `network(name)`, `combinator(name/index)`, nested calls, repeated function calls, and loop instances; ambiguous and missing queries are deterministic diagnostics rather than first-match guesses.
   - [x] Add structural assertions over a debug scope and its descendants: physical producer counts by kind, Network/Producer presence, placement/config inspection, zero-tick aliases, and shortest combinator tick latency without advancing simulation.
+    - [x] Carry the executed Producer ID explicitly into the debug index and visit typed IR Network references for latency instead of relying on producer array position or recursive string matching.
   - [x] Define the generic object circuit-adapter protocol before typed Phase 6 objects: connector input snapshots, output injection, session-bound instance identity, and copied adapter-level defaults, proven with a test-only adapter.
   - [x] Implement persistent manual `mock(entity, connector?).output(bus)` injection through the adapted object's real output Networks; replacement and `clear()` preserve defaults, normal aggregation, scheduling, and self-contamination behavior.
   - [x] Implement reactive `model(entity, { initialState, step })`; the runner invokes `step({ input, state, tick })` exactly once per tick and commits returned output/state atomically only at the next boundary.
@@ -49,6 +52,7 @@ The current repository implements the Phase 3 source compiler, the complete Phas
   - [x] Implement trace registration for selected signals, whole Networks, object inputs, and object outputs; store tick-zero plus sparse/delta changes and expose deterministic JSON/timeline queries without coupling storage to a chart renderer.
     - [x] Whole-Network and selected-signal targets, tick-zero capture, Known/Unknown transitions, sparse signal deltas, removals, timeline filtering, and deterministic `comblang-trace` JSON.
     - [x] Object input aggregates and isolated committed object-output contributions, including Known/Unknown transitions and stable object/connector metadata.
+    - [x] Treat colliding trace IDs for different targets as an invariant violation while keeping repeated registration of the same target idempotent.
   - [ ] Surface test results, assertion diagnostics, debug queries, and waveform data consistently through runtime APIs, CLI JSON, and the browser result model; keep visual waveform rendering a consumer of the shared trace model.
     - [x] Browser-local editable test file, isolated worker execution, pass/fail list with assertion/runtime source locations, independent draft persistence, and responsive test editor/results panes.
     - [x] Browser circuit timeline with a compact `ticks × Networks` overview and selectable `ticks × signals` detail table.

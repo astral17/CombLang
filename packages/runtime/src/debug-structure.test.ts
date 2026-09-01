@@ -81,4 +81,25 @@ describe('debug structural assertions', () => {
     expect(() => structure.toHaveNetwork('missing')).toThrowError(StructureAssertionError);
     expect(session.currentTick).toBe(0);
   });
+
+  it('visits typed Network references instead of matching arbitrary config strings', () => {
+    const parsed = parseFile({
+      path: 'structure-string-collision.factorio.ts',
+      text: `const COLLISION = Signal("item", "network:1");
+const unrelated = new Network();
+const output: Network = CC(1 * COLLISION);`,
+    });
+    const execution = elaborateDirectPlan(
+      executeElaborationProgram(transformElaborationModule(parsed)),
+    );
+
+    expect(execution.debug.root.network('unrelated').id).toBe('network:1');
+    expect(() => execution.structure().toHaveTickLatency('unrelated', 'output', 1)).toThrowError(
+      expect.objectContaining({
+        code: 'DBG2001',
+        message: expect.stringContaining('received no path'),
+        details: expect.objectContaining({ matcher: 'toHaveTickLatency' }),
+      }),
+    );
+  });
 });

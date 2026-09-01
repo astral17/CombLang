@@ -293,6 +293,103 @@ describe('generic circuit object adapter', () => {
     expect(session.read(firstOutput).get(A)).toBe(1);
   });
 
+  it('rejects model side-channel mutations independently of participant order', () => {
+    const run = (order: readonly ['source' | 'target', 'source' | 'target']) => {
+      const session = new TestSession(new ValueSimulationKernel());
+      const handles = new Map(
+        order.map((id) => [
+          id,
+          session.adaptObject(syntheticAdapter, {
+            id,
+            inputs: [],
+            output: network(`network:${id}`),
+            defaultValue: new SparseBus(),
+          }),
+        ]),
+      );
+      session.model(handles.get('source')!, {
+        initialState: 0,
+        step: ({ state }) => {
+          session.mock(handles.get('target')!).output([[A, 123]]);
+          return { state: state + 1, output: [] };
+        },
+      });
+
+      let error: unknown;
+      try {
+        session.tick();
+      } catch (caught) {
+        error = caught;
+      }
+      expect(session.currentTick).toBe(0);
+      return error;
+    };
+
+    const sourceFirst = run(['source', 'target']);
+    const targetFirst = run(['target', 'source']);
+    expect(sourceFirst).toBeInstanceOf(Error);
+    expect((sourceFirst as Error).message).toBe(
+      'TestSession mutation mock is not allowed during participant evaluation.',
+    );
+    expect((targetFirst as Error).message).toBe((sourceFirst as Error).message);
+  });
+
+  it('keeps the participant set fixed during a model transition', () => {
+    const session = new TestSession(new ValueSimulationKernel());
+    const source = session.adaptObject(syntheticAdapter, {
+      id: 'source',
+      inputs: [],
+      output: network('network:source'),
+      defaultValue: new SparseBus(),
+    });
+    session.model(source, {
+      initialState: null,
+      step: ({ state }) => {
+        session.adaptObject(syntheticAdapter, {
+          id: 'late',
+          inputs: [],
+          output: network('network:late'),
+          defaultValue: new SparseBus(),
+        });
+        return { state, output: [] };
+      },
+    });
+
+    expect(() => session.tick()).toThrow(
+      'TestSession mutation adaptObject is not allowed during participant evaluation.',
+    );
+    expect(session.currentTick).toBe(0);
+  });
+
+  it('seals object registration and provider controllers after finish', () => {
+    const session = new TestSession(new ValueSimulationKernel());
+    const object = session.adaptObject(syntheticAdapter, {
+      id: 'finished',
+      inputs: [],
+      output: network('network:finished'),
+      defaultValue: new SparseBus(),
+    });
+    const mock = session.mock(object).output([]);
+    const model = session.model(object, {
+      initialState: null,
+      step: ({ state }) => ({ state, output: [] }),
+    });
+    session.finish();
+
+    expect(() => session.mock(object)).toThrow('TestSession is finished; mock cannot mutate it.');
+    expect(() => mock.output([])).toThrow('TestSession is finished; mock.output cannot mutate it.');
+    expect(() => mock.clear()).toThrow('TestSession is finished; mock.clear cannot mutate it.');
+    expect(() => model.clear()).toThrow('TestSession is finished; model.clear cannot mutate it.');
+    expect(() =>
+      session.adaptObject(syntheticAdapter, {
+        id: 'too-late',
+        inputs: [],
+        output: network('network:too-late'),
+        defaultValue: new SparseBus(),
+      }),
+    ).toThrow('TestSession is finished; adaptObject cannot mutate it.');
+  });
+
   it('can install a reactive model from a scheduled boundary action', () => {
     const output = network('network:scheduled-model');
     const session = new TestSession(new ValueSimulationKernel());

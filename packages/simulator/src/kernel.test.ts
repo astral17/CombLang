@@ -50,4 +50,20 @@ describe('snapshot tick kernel', () => {
 
     expect(kernel.step().read(output).get(signalA)).toBe(30);
   });
+
+  it('rejects topology mutation and reentrant stepping during evaluation', () => {
+    const kernel = new SimulationKernel();
+    kernel.addDevice({
+      id: 'device:mutator' as DeviceId,
+      evaluate: () => {
+        kernel.addDevice({ id: 'device:late' as DeviceId, evaluate: () => [] });
+        return [];
+      },
+    });
+
+    expect(() => kernel.step()).toThrow(
+      'Simulation devices cannot be added during participant evaluation.',
+    );
+    expect(kernel.snapshot.tick).toBe(0);
+  });
 });
