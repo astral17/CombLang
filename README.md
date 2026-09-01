@@ -38,7 +38,7 @@ The current repository implements the Phase 3 source compiler, the complete Phas
   - [ ] Define whether testbench drives bypass source-level Network capabilities: the test environment acts as an external circuit participant, while stale/moved handles and session-crossing handles remain invalid.
   - [x] Implement signal and whole-bus assertions: exact value/bus, partial containment, empty/support checks, known/unknown checks, and failures that report tick, target, expected/actual values, and Unknown dependency chains.
   - [x] Implement `tick()`, `tick(count)`, scheduled `at(tick, callback)`, bounded `run(count)`, and `settle({ maxTicks })`; settling uses observed whole-circuit state equality and fails clearly for oscillation/non-convergence.
-  - [ ] Build a shared `DebugIndex` from lexical bindings, source spans, function-call instance paths, loop provenance, Networks, and physical Producers without exposing function locals to ordinary production code.
+  - [x] Build a shared `DebugIndex` from lexical bindings, source spans, function-call instance paths, loop provenance, Networks, and physical Producers without exposing function locals to ordinary production code.
   - [ ] Implement `instantiate(fn, ...args)` so `dut.value` has topology identical to an ordinary call while `dut.$` retains only a test/debug scope root.
   - [ ] Provide the v1 string/query hierarchy for `network(name)`, `combinator(name/index)`, nested calls, and repeated loop instances; ambiguous and missing queries must be deterministic diagnostics rather than first-match guesses.
   - [ ] Add structural assertions over the debug scope: physical producer counts by kind, Network/Producer presence, placement/config inspection, and zero-tick/tick-latency expectations without advancing simulation.
@@ -77,6 +77,7 @@ Later phases cover testbenches, typed Factorio objects, exact constructors, the 
 - [Phase 4 ownership design](docs/ownership-and-multi-network.md) — completed affine ownership, borrows, consuming transfer, read-only `pair`, and its acceptance matrix.
 - [Native objects, Deciders, and parameters](docs/native-objects-deciders-and-parameters.md) — planned Phase 6–8 semantic domains and conformance requirements.
 - [Prototype environment](docs/prototype-environment.md) — the Phase 5.5 normalized modded-data provider, Factorio exporter, loading, and environment-identity boundary.
+- [Runtime debug index](docs/debug-index.md) — exact lexical scopes, physical Network/Producer mappings, deterministic queries, and current ambiguity boundary.
 - [Producer and Entity materialization policy](docs/producer-materialization-policy.md) — the Phase 4.5 benchmark decision for inferred Networks, explicit combinator handles, and future typed-object identity.
 - [Diagnostics](docs/diagnostics.md) — compiler/runtime code families and the most common actionable errors.
 - [Blueprint JSON preview](docs/blueprint-json.md) — generated structure, wiring model, and current limitations.

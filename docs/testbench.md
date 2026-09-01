@@ -54,11 +54,12 @@ therefore commits exactly one transition. While boundary 5 is being evaluated,
 `settle({ maxTicks })` advances until two consecutive complete simulation
 snapshots are equal. It throws when the bound is exhausted, including for an
 oscillating circuit. Settling deliberately observes the whole circuit for now;
-selected observation sets will be introduced with traces. Future scheduled
+selected observation sets remain a later extension. Future scheduled
 external events do not keep it running: `settle()` finds a fixed point under
 the inputs active now and may return before an event scheduled for a later tick.
 
-Object adapters, traces, and debug hierarchy are later Phase 5 slices.
+Object adapters remain a later Phase 5 slice. Traces and the first physical
+debug index are implemented below.
 
 ## Known and Unknown values
 
@@ -147,6 +148,25 @@ Whole Networks and selected signals are implemented. Object input/output trace
 targets remain pending until the Phase 5 generic object-adapter boundary is
 available. Chart rendering is intentionally outside the trace store; the web
 waveform will consume this shared JSON model later.
+
+## Debug index
+
+`elaborateDirectPlan(plan)` returns both `circuit` and an immutable `debug`
+index. It maps exact lexical function/loop scopes and source spans to the
+physical Networks and Producers created by that execution:
+
+```ts
+const execution = elaborateDirectPlan(plan);
+const stage = execution.debug.root.child('function Stage');
+
+const local = stage.network('local');
+const firstProducer = stage.combinator(1);
+```
+
+Missing and ambiguous queries throw deterministic `DebugQueryError` values;
+ordinary repeated calls are intentionally ambiguous until `instantiate(...)`
+adds a unique DUT scope. See the [runtime debug index](debug-index.md) for the
+query contract and retained metadata.
 
 ## Browser workbench
 

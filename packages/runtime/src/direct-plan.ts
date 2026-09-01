@@ -7,6 +7,7 @@ import type {
 } from '@comblang/compiler/direct-plan';
 import type { Diagnostic, SourceSpan } from '@comblang/shared';
 
+import { DebugIndex } from './debug-index.js';
 import {
   DslRuntime,
   RuntimeDiagnosticError,
@@ -21,6 +22,7 @@ import {
 export interface ExecutedDirectPlan {
   readonly circuit: ElaboratedCircuit;
   readonly capabilityUses: readonly DirectPlanCapabilityUse[];
+  readonly debug: DebugIndex;
   network(name: string): NetworkHandle;
 }
 
@@ -391,9 +393,11 @@ function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
     );
   }
   const circuit = runtime.elaborate();
+  const debug = DebugIndex.fromDirectPlan(plan, circuit, (name) => networks.get(name)!.id);
   return Object.freeze({
     circuit,
     capabilityUses,
+    debug,
     network(name: string) {
       const movedAt = consumed.get(name);
       if (movedAt !== undefined) {
