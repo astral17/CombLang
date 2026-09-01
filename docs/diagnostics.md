@@ -58,38 +58,39 @@ The production CLI and browser first emit definite `CL` diagnostics from the con
 
 ## Common runtime diagnostics
 
-| Code     | Meaning                                                           |
-| -------- | ----------------------------------------------------------------- |
-| `RT1001` | unsupported direct-plan format or version                         |
-| `RT1002` | duplicate Network descriptor                                      |
-| `RT1003` | producer references an unknown input Network                      |
-| `RT1004` | attachment references an unknown destination Network              |
-| `RT1005` | a requested named Network does not exist                          |
-| `RT1099` | unexpected lower-level failure contained at the result API        |
-| `RT2001` | foreign or invalid runtime Network handle                         |
-| `RT2002` | unknown or foreign runtime producer handle                        |
-| `RT2003` | attachment has no destination                                     |
-| `RT2004` | attachment repeats a destination Network                          |
-| `RT2005` | output connector has more than two destinations                   |
-| `RT2006` | one physical Producer identity was attached through another alias |
-| `RT2007` | producer has no destination during elaboration                    |
-| `RT2008` | invalid empty native condition group                              |
-| `RT2009` | a physical connector needs more than two logical Networks         |
-| `RT2010` | red/green color constraints are mutually inconsistent             |
-| `RT2011` | transfer references an unknown Network                            |
-| `RT2012` | moved Network is used or consumed again                           |
-| `RT2013` | Network takes itself or an already unified alias                  |
-| `RT2014` | transfer unifies contradictory fixed color requirements           |
-| `RT2015` | executed operation exceeds a Network capability                   |
-| `RT2016` | mutable/shared borrow overlap or alias access conflicts           |
-| `RT2017` | an escaped function borrow is used after its lifetime             |
-| `RT2018` | color-qualified borrow conflicts with an existing color           |
-| `RT2019` | ownership was dropped or returned without a valid transfer        |
-| `RT2020` | pair input is repeated, malformed, or used as ownership/output    |
-| `RT2021` | `.as(...)` target crossed a function or materialization boundary  |
-| `RT2022` | an executed Producer boundary received a wrong value or kind      |
-| `RT2023` | destination Signal conflicts with the physical producer output    |
-| `RT2024` | circuit Condition was used as a JavaScript control-flow test      |
-| `RT2025` | a delayed asynchronous DSL call reached a sealed elaboration plan |
+| Code     | Meaning                                                                                                     |
+| -------- | ----------------------------------------------------------------------------------------------------------- |
+| `RT1001` | unsupported direct-plan format or version                                                                   |
+| `RT1002` | duplicate Network descriptor                                                                                |
+| `RT1003` | producer references an unknown input Network                                                                |
+| `RT1004` | attachment references an unknown destination Network                                                        |
+| `RT1005` | a requested named Network does not exist                                                                    |
+| `RT1099` | unexpected lower-level failure contained at the result API                                                  |
+| `RT2001` | foreign or invalid runtime Network handle                                                                   |
+| `RT2002` | unknown or foreign runtime producer handle                                                                  |
+| `RT2003` | attachment has no destination                                                                               |
+| `RT2004` | attachment repeats a destination Network                                                                    |
+| `RT2005` | output connector has more than two destinations                                                             |
+| `RT2006` | one physical Producer identity was attached through another alias                                           |
+| `RT2007` | producer has no destination during elaboration                                                              |
+| `RT2008` | invalid empty native condition group                                                                        |
+| `RT2009` | a physical connector needs more than two logical Networks                                                   |
+| `RT2010` | red/green color constraints are mutually inconsistent                                                       |
+| `RT2011` | transfer references an unknown Network                                                                      |
+| `RT2012` | moved Network is used or consumed again                                                                     |
+| `RT2013` | Network takes itself or an already unified alias                                                            |
+| `RT2014` | transfer unifies contradictory fixed color requirements                                                     |
+| `RT2015` | executed operation exceeds a Network capability                                                             |
+| `RT2016` | mutable/shared borrow overlap or alias access conflicts                                                     |
+| `RT2017` | an escaped function borrow is used after its lifetime                                                       |
+| `RT2018` | color-qualified borrow conflicts with an existing color                                                     |
+| `RT2019` | ownership was dropped or returned without a valid transfer                                                  |
+| `RT2020` | pair input is repeated, malformed, or used as ownership/output                                              |
+| `RT2021` | `.as(...)` target crossed a function or materialization boundary                                            |
+| `RT2022` | an executed Producer boundary received a wrong value or kind                                                |
+| `RT2023` | destination Signal conflicts with the physical producer output                                              |
+| `RT2024` | circuit Condition was used as a JavaScript control-flow test                                                |
+| `RT2025` | a delayed asynchronous DSL call reached a sealed elaboration plan                                           |
+| `RT2026` | test instantiation received a non-function, uninstrumented factory, or unsupported cyclic/host return value |
 
 `tryElaborateDirectPlan()` returns these runtime diagnostics without throwing. `elaborateDirectPlan()` throws `RuntimeDiagnosticError` carrying the same structured value.

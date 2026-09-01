@@ -195,7 +195,9 @@ export interface ElaboratedCircuit {
   readonly graph: ElaborationGraph;
   readonly ir: NativeCircuitIr;
   createSimulation(initial?: readonly SimulationInitialValue[]): SimulationKernel;
-  createTestSession(): TestSession<NetworkHandle>;
+  createTestSession<Target = NetworkHandle>(
+    mapTarget?: (target: Target) => NetworkHandle,
+  ): TestSession<Target>;
 }
 
 interface RuntimeProvenanceOptions {
@@ -465,9 +467,12 @@ export class DslRuntime {
       ir,
       createSimulation: (initial: readonly SimulationInitialValue[] = []) =>
         this.#createSimulation(ir, initial),
-      createTestSession: () =>
-        new TestSession<NetworkHandle>(this.#createValueSimulation(ir), {
-          resolveNetwork: (network) => this.#networkId(network),
+      createTestSession: <Target = NetworkHandle>(mapTarget?: (target: Target) => NetworkHandle) =>
+        new TestSession<Target>(this.#createValueSimulation(ir), {
+          resolveNetwork: (target) =>
+            this.#networkId(
+              mapTarget === undefined ? (target as unknown as NetworkHandle) : mapTarget(target),
+            ),
         }),
     });
   }

@@ -1,18 +1,26 @@
 import type {
   DirectElaborationPlan,
   DirectPlanCapabilityUse,
+  DirectPlanDebugValue,
   PlanArithmeticOperand,
   PlanDeciderCondition,
   PlanNetworkRef,
 } from '@comblang/compiler/direct-plan';
 import type { Diagnostic, SourceSpan } from '@comblang/shared';
+import type { TestSession } from '@comblang/simulator';
 
-import { DebugIndex } from './debug-index.js';
+import {
+  DebugIndex,
+  DebugQueryError,
+  type DebugNetworkEntry,
+  type DebugScope,
+} from './debug-index.js';
 import {
   DslRuntime,
   RuntimeDiagnosticError,
   type ElaboratedCircuit,
   type NetworkHandle,
+  type ProducerHandle,
   type RuntimeArithmeticOperand,
   type RuntimeConstantConfig,
   type RuntimeDeciderConfig,
@@ -23,7 +31,30 @@ export interface ExecutedDirectPlan {
   readonly circuit: ElaboratedCircuit;
   readonly capabilityUses: readonly DirectPlanCapabilityUse[];
   readonly debug: DebugIndex;
+  readonly instances: readonly ExecutedDebugInstance[];
+  createTestSession(): TestSession<DirectPlanTestTarget>;
+  instance(name: string): ExecutedDebugInstance;
+  instance(index: number): ExecutedDebugInstance;
   network(name: string): NetworkHandle;
+}
+
+export type DirectPlanTestTarget = NetworkHandle | DebugNetworkEntry;
+export type ExecutedDebugValue =
+  | NetworkHandle
+  | ProducerHandle
+  | string
+  | number
+  | boolean
+  | null
+  | undefined
+  | readonly ExecutedDebugValue[]
+  | { readonly [key: string]: ExecutedDebugValue };
+
+export interface ExecutedDebugInstance {
+  readonly name: string;
+  readonly value: ExecutedDebugValue;
+  readonly $: DebugScope;
+  readonly source: SourceSpan;
 }
 
 export interface DirectPlanExecutionResult {
@@ -38,6 +69,37 @@ function runtimeFailure(code: string, message: string, span?: SourceSpan): Runti
     message,
     ...(span === undefined ? {} : { span }),
   });
+}
+
+function executeDebugValue(
+  value: DirectPlanDebugValue,
+  networks: ReadonlyMap<string, NetworkHandle>,
+  producers: ReadonlyMap<string, ProducerHandle>,
+  source: SourceSpan,
+): ExecutedDebugValue {
+  if (value.kind === 'network') return requiredNetwork(value.network, networks, source);
+  if (value.kind === 'producer') {
+    const producer = producers.get(value.captureId);
+    if (producer === undefined) {
+      throw runtimeFailure('RT1001', 'Unknown captured Producer in direct plan.', source);
+    }
+    return producer;
+  }
+  if (value.kind === 'literal') return value.value;
+  if (value.kind === 'undefined') return undefined;
+  if (value.kind === 'array') {
+    return Object.freeze(
+      value.values.map((item) => executeDebugValue(item, networks, producers, source)),
+    );
+  }
+  return Object.freeze(
+    Object.fromEntries(
+      value.entries.map((entry) => [
+        entry.key,
+        executeDebugValue(entry.value, networks, producers, source),
+      ]),
+    ),
+  );
 }
 
 function lowerOperand(
@@ -313,7 +375,31 @@ function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
       { source: descriptor.provenance, instancePath: descriptor.instancePath },
     );
   }
+  const capturedProducers = new Map<string, ProducerHandle>();
   for (const descriptor of plan.producers) {
+    if (
+      descriptor.bindingName !== undefined &&
+      (typeof descriptor.bindingName !== 'string' || descriptor.bindingName.length === 0)
+    ) {
+      throw runtimeFailure(
+        'RT1001',
+        'Invalid Producer binding name in direct plan.',
+        descriptor.source,
+      );
+    }
+    if (
+      descriptor.debugCaptureIds !== undefined &&
+      (!Array.isArray(descriptor.debugCaptureIds) ||
+        descriptor.debugCaptureIds.some(
+          (captureId) => typeof captureId !== 'string' || captureId.length === 0,
+        ))
+    ) {
+      throw runtimeFailure(
+        'RT1001',
+        'Invalid Producer debug capture in direct plan.',
+        descriptor.source,
+      );
+    }
     const provenance = {
       source: descriptor.source,
       instancePath: descriptor.instancePath,
@@ -375,6 +461,16 @@ function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
               } satisfies RuntimeDeciderConfig,
               provenance,
             );
+    for (const captureId of descriptor.debugCaptureIds ?? []) {
+      if (capturedProducers.has(captureId)) {
+        throw runtimeFailure(
+          'RT1001',
+          'Duplicate Producer debug capture in direct plan.',
+          descriptor.source,
+        );
+      }
+      capturedProducers.set(captureId, producer);
+    }
     runtime.attach(
       producer,
       ...descriptor.destinations.map((destination) => {
@@ -394,10 +490,68 @@ function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
   }
   const circuit = runtime.elaborate();
   const debug = DebugIndex.fromDirectPlan(plan, circuit, (name) => networks.get(name)!.id);
+  const instances = Object.freeze(
+    (plan.debugInstances ?? []).map((instance) =>
+      Object.freeze({
+        name: instance.name,
+        value: executeDebugValue(instance.value, networks, capturedProducers, instance.source),
+        $: debug.scope(instance.path),
+        source: instance.source,
+      }),
+    ),
+  );
+  const debugNetworks = new WeakSet<object>(
+    debug.scopes.flatMap((scope) => scope.networks).map((entry) => entry as object),
+  );
   return Object.freeze({
     circuit,
     capabilityUses,
     debug,
+    instances,
+    createTestSession() {
+      return circuit.createTestSession<DirectPlanTestTarget>((target) => {
+        if (typeof target !== 'object' || target === null || !('planName' in target)) return target;
+        if (!debugNetworks.has(target)) {
+          throw runtimeFailure('RT2001', 'Foreign or invalid debug Network target.');
+        }
+        if (target.moved) {
+          throw runtimeFailure(
+            'RT2012',
+            `Cannot use moved debug Network: ${target.planName}.`,
+            target.source,
+          );
+        }
+        return networks.get(target.planName)!;
+      });
+    },
+    instance(nameOrIndex: string | number) {
+      if (typeof nameOrIndex === 'number') {
+        if (!Number.isSafeInteger(nameOrIndex) || nameOrIndex < 1) {
+          throw new RangeError('Debug instance index must be a positive safe integer.');
+        }
+        const instance = instances[nameOrIndex - 1];
+        if (instance !== undefined) return instance;
+        throw new DebugQueryError(
+          'DBG1001',
+          `No debug instance exists at index ${nameOrIndex}.`,
+          instances.map(({ name }, index) => `${index + 1}: ${name}`),
+        );
+      }
+      const matches = instances.filter(({ name }) => name === nameOrIndex);
+      if (matches.length === 1) return matches[0]!;
+      if (matches.length === 0) {
+        throw new DebugQueryError(
+          'DBG1001',
+          `No debug instance is named ${JSON.stringify(nameOrIndex)}.`,
+          instances.map(({ name }, index) => `${index + 1}: ${name}`),
+        );
+      }
+      throw new DebugQueryError(
+        'DBG1002',
+        `Debug instance ${JSON.stringify(nameOrIndex)} is ambiguous.`,
+        matches.map(({ $ }, index) => `${index + 1}: ${$.path.join(' / ')}`),
+      );
+    },
     network(name: string) {
       const movedAt = consumed.get(name);
       if (movedAt !== undefined) {

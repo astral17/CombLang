@@ -32,6 +32,7 @@ export interface DebugNetworkEntry {
 export interface DebugProducerEntry {
   readonly kind: 'producer';
   readonly producerKind: DirectPlanProducer['kind'];
+  readonly name?: string;
   readonly id: ProducerId;
   /** One-based ordinal among every physical Producer in this exact scope. */
   readonly ordinal: number;
@@ -98,7 +99,28 @@ export class DebugScope {
     );
   }
 
-  combinator(index: number): DebugProducerEntry {
+  combinator(index: number): DebugProducerEntry;
+  combinator(name: string): DebugProducerEntry;
+  combinator(nameOrIndex: string | number): DebugProducerEntry {
+    if (typeof nameOrIndex === 'string') {
+      const matches = this.producers.filter((entry) => entry.name === nameOrIndex);
+      if (matches.length === 1) return matches[0]!;
+      if (matches.length === 0) {
+        throw new DebugQueryError(
+          'DBG1001',
+          `Debug scope ${scopeLabel(this.path)} has no combinator named ${JSON.stringify(nameOrIndex)}.`,
+          this.producers.flatMap((entry) =>
+            entry.name === undefined ? [] : [`${entry.ordinal}: ${entry.name}`],
+          ),
+        );
+      }
+      throw new DebugQueryError(
+        'DBG1002',
+        `Combinator ${JSON.stringify(nameOrIndex)} is ambiguous in debug scope ${scopeLabel(this.path)}.`,
+        matches.map((entry) => `${entry.ordinal}: ${entry.name}`),
+      );
+    }
+    const index = nameOrIndex;
     if (!Number.isSafeInteger(index) || index < 1) {
       throw new RangeError('Debug combinator index must be a positive safe integer.');
     }
@@ -186,6 +208,7 @@ export class DebugIndex {
       return scope;
     };
     ensure([]);
+    for (const instance of plan.debugInstances ?? []) ensure(instance.path);
 
     const movedNames = new Set((plan.networkTransfers ?? []).map((transfer) => transfer.source));
     for (const declaration of plan.networks) {
@@ -210,6 +233,7 @@ export class DebugIndex {
         Object.freeze({
           kind: 'producer',
           producerKind,
+          ...(descriptor.bindingName === undefined ? {} : { name: descriptor.bindingName }),
           id: circuit.graph.producers[index]!.id,
           ordinal: scope.producers.length + 1,
           kindOrdinal:

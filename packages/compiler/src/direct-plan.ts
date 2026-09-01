@@ -96,6 +96,9 @@ export interface DirectPlanCapabilityUse {
 
 export interface DirectPlanArithmetic {
   readonly kind: 'arithmetic';
+  /** Explicit source Producer binding retained for debug queries. */
+  readonly bindingName?: string;
+  readonly debugCaptureIds?: readonly string[];
   readonly left: PlanArithmeticOperand;
   readonly operation: ArithmeticOperation;
   readonly right: PlanArithmeticOperand;
@@ -108,6 +111,9 @@ export interface DirectPlanArithmetic {
 
 export interface DirectPlanDecider {
   readonly kind: 'decider';
+  /** Explicit source Producer binding retained for debug queries. */
+  readonly bindingName?: string;
+  readonly debugCaptureIds?: readonly string[];
   readonly condition: PlanDeciderCondition;
   readonly output:
     | ({ readonly kind: 'each' } & PlanNetworkRef)
@@ -128,6 +134,9 @@ export interface DirectPlanDecider {
 
 export interface DirectPlanConstant {
   readonly kind: 'constant';
+  /** Explicit source Producer binding retained for debug queries. */
+  readonly bindingName?: string;
+  readonly debugCaptureIds?: readonly string[];
   readonly outputs: readonly { readonly signal: SignalId; readonly value: number }[];
   readonly destinations: readonly PlanAttachment[];
   readonly source: SourceSpan;
@@ -137,6 +146,27 @@ export interface DirectPlanConstant {
 
 export type DirectPlanProducer = DirectPlanArithmetic | DirectPlanDecider | DirectPlanConstant;
 
+export type DirectPlanDebugValue =
+  | { readonly kind: 'network'; readonly network: string }
+  | { readonly kind: 'producer'; readonly captureId: string }
+  | { readonly kind: 'literal'; readonly value: string | number | boolean | null }
+  | { readonly kind: 'undefined' }
+  | { readonly kind: 'array'; readonly values: readonly DirectPlanDebugValue[] }
+  | {
+      readonly kind: 'object';
+      readonly entries: readonly {
+        readonly key: string;
+        readonly value: DirectPlanDebugValue;
+      }[];
+    };
+
+export interface DirectPlanDebugInstance {
+  readonly name: string;
+  readonly path: readonly string[];
+  readonly source: SourceSpan;
+  readonly value: DirectPlanDebugValue;
+}
+
 export interface DirectElaborationPlan {
   readonly format: 'comblang-direct-plan';
   readonly version: 2;
@@ -144,6 +174,7 @@ export interface DirectElaborationPlan {
   readonly networkTransfers?: readonly DirectPlanNetworkTransfer[];
   readonly networkPairs?: readonly DirectPlanNetworkPair[];
   readonly capabilityUses?: readonly DirectPlanCapabilityUse[];
+  readonly debugInstances?: readonly DirectPlanDebugInstance[];
   readonly producers: readonly DirectPlanProducer[];
   readonly diagnostics?: readonly Diagnostic[];
 }

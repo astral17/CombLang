@@ -60,7 +60,15 @@ function producerArrayElementTypeName(
  * First executable-transform slice. Ordinary JavaScript control flow is deliberately
  * left to the JS engine; only DSL-sensitive nodes are replaced with allowlisted calls.
  */
-export function transformElaborationModule(file: ParsedSourceFile): ElaborationJavaScript {
+export interface ElaborationTransformOptions {
+  /** Enables the test-only `context.instantiate(fn, ...args)` capture primitive. */
+  readonly testContextName?: string;
+}
+
+export function transformElaborationModule(
+  file: ParsedSourceFile,
+  options: ElaborationTransformOptions = {},
+): ElaborationJavaScript {
   const sourceIdentifiers = new Set<string>();
   let containsUnsupportedAsync = false;
   const collectIdentifiers = (node: ts.Node): void => {
@@ -338,6 +346,28 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
       );
       return member?.type;
     };
+    const testInstantiation = (
+      node: ts.CallExpression,
+      bindingName?: string,
+    ): ts.Expression | undefined => {
+      if (
+        options.testContextName === undefined ||
+        node.questionDotToken !== undefined ||
+        !ts.isPropertyAccessExpression(node.expression) ||
+        node.expression.questionDotToken !== undefined ||
+        !ts.isIdentifier(node.expression.expression) ||
+        node.expression.expression.text !== options.testContextName ||
+        node.expression.name.text !== 'instantiate' ||
+        node.arguments.length < 1
+      ) {
+        return undefined;
+      }
+      return dslCall(factory, 'instantiate', [
+        factory.createStringLiteral(bindingName ?? `instance@${node.getStart(file.ast)}`),
+        ...node.arguments.map((argument) => ts.visitNode(argument, visit) as ts.Expression),
+        spanLiteral(factory, node),
+      ]);
+    };
     const instrumentLoopBody = (
       statement: ts.Statement,
       name: string,
@@ -529,6 +559,7 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
                   dslCall(factory, 'producerHandle', [
                     parameter.name,
                     factory.createStringLiteral(producerType),
+                    factory.createStringLiteral(parameter.name.text),
                     spanLiteral(factory, parameter),
                   ]),
                 ),
@@ -735,13 +766,17 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
         ) {
           initializer = networkCall(node.initializer, node.name.text);
         } else {
-          initializer = ts.visitNode(node.initializer, visit) as ts.Expression;
+          initializer =
+            (ts.isCallExpression(node.initializer)
+              ? testInstantiation(node.initializer, node.name.text)
+              : undefined) ?? (ts.visitNode(node.initializer, visit) as ts.Expression);
         }
         const producerType = producerHandleTypeName(file, node.type);
         if (producerType !== undefined) {
           initializer = dslCall(factory, 'producerHandle', [
             initializer,
             factory.createStringLiteral(producerType),
+            factory.createStringLiteral(node.name.text),
             spanLiteral(factory, node),
           ]);
         } else if (!ts.isNewExpression(node.initializer)) {
@@ -795,6 +830,11 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
             spanLiteral(factory, node),
           ]);
         }
+      }
+
+      if (ts.isCallExpression(node)) {
+        const instantiated = testInstantiation(node);
+        if (instantiated !== undefined) return instantiated;
       }
 
       if (
@@ -872,6 +912,7 @@ export function transformElaborationModule(file: ParsedSourceFile): ElaborationJ
               dslCall(factory, 'producerHandle', [
                 ts.visitNode(node.right, visit) as ts.Expression,
                 factory.createStringLiteral(producerType),
+                factory.createStringLiteral(node.left.getText(file.ast)),
                 spanLiteral(factory, node.right),
               ]),
             );

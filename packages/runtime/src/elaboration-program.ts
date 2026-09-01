@@ -1,6 +1,7 @@
 import { circuitConstant, sameSignal, Signal, type SignalId } from '@comblang/factorio';
 import type {
   DirectElaborationPlan,
+  DirectPlanDebugValue,
   DirectPlanProducer,
   ElaborationJavaScript,
   PlanEntityPlacement,
@@ -50,6 +51,11 @@ interface BindingDescriptor {
   readonly producerType?: string;
 }
 
+interface PendingDebugInstance {
+  readonly segment: string;
+  path?: readonly string[];
+}
+
 export interface ElaborationExecutionOptions {
   readonly dslCallBudget?: number;
   /** @deprecated Use dslCallBudget. */
@@ -83,20 +89,26 @@ class ElaborationRecorder {
   readonly #networkTransfers: NonNullable<DirectElaborationPlan['networkTransfers']>[number][] = [];
   readonly #networkPairs: NonNullable<DirectElaborationPlan['networkPairs']>[number][] = [];
   readonly #capabilityUses: NonNullable<DirectElaborationPlan['capabilityUses']>[number][] = [];
+  readonly #debugInstances: NonNullable<DirectElaborationPlan['debugInstances']>[number][] = [];
   readonly #producers: DirectPlanProducer[] = [];
   readonly #diagnostics: Diagnostic[] = [];
   readonly #producerAttachments = new WeakMap<object, SourceSpan>();
+  readonly #debugProducerCaptures = new WeakMap<object, string[]>();
   readonly #knownProducers = new Map<object, ProducerValue>();
   readonly #runtimeValues = new RuntimeValueRegistry();
   readonly #ownership = createElaborationOwnershipPolicy((network) => this.#networkState(network));
   #unusedProducersFinalized = false;
   #sealed = false;
   #anonymousOrdinal = 0;
+  #debugProducerOrdinal = 0;
   readonly #networkNameCounts = new Map<string, number>();
+  readonly #functionCallCounts = new Map<string, number>();
+  readonly #debugInstanceCounts = new Map<string, number>();
   readonly #anonymousLoopCounts = new Map<string, number>();
   readonly #provenanceFormatter = new ElaborationProvenanceFormatter();
   readonly #instancePath: string[] = [];
   readonly #ownershipFrames: (FunctionOwnershipFrame | undefined)[] = [];
+  #pendingDebugInstance: PendingDebugInstance | undefined;
   readonly #dslCallBudget: number;
   #dslCalls = 0;
   readonly #operatorContext: ElaborationOperatorDispatchContext<RawSpan> = {
@@ -122,7 +134,19 @@ class ElaborationRecorder {
 
   readonly api = Object.freeze({
     enterFunction: (name: string, rawSpan: RawSpan): void => {
-      this.#instancePath.push(`function ${name}`);
+      const pending = this.#pendingDebugInstance;
+      let segment: string;
+      if (pending === undefined) {
+        const key = JSON.stringify([...this.#instancePath, name]);
+        const occurrence = (this.#functionCallCounts.get(key) ?? 0) + 1;
+        this.#functionCallCounts.set(key, occurrence);
+        segment = `function ${name}${occurrence === 1 ? '' : ` #${occurrence}`}`;
+      } else {
+        segment = pending.segment;
+        pending.path = Object.freeze([...this.#instancePath, segment]);
+        this.#pendingDebugInstance = undefined;
+      }
+      this.#instancePath.push(segment);
       this.#ownershipFrames.push({
         owner: Symbol(name),
         source: this.#span(rawSpan),
@@ -148,6 +172,57 @@ class ElaborationRecorder {
       if (frame !== undefined) {
         this.#ownership.releaseFrame(frame, isRawSpan(rawSpan) ? this.#span(rawSpan) : undefined);
       }
+    },
+    instantiate: (...args: unknown[]): unknown => {
+      this.#recordDslCall();
+      const rawSpan = args.at(-1);
+      const bindingName = args[0];
+      const factory = args[1];
+      const values = args.slice(2, -1);
+      if (!isRawSpan(rawSpan)) throw new Error('t.instantiate(...) is missing provenance.');
+      if (typeof bindingName !== 'string' || bindingName.length === 0) {
+        throw new Error('t.instantiate(...) requires a stable instance name.');
+      }
+      if (typeof factory !== 'function') {
+        throw new ElaborationExecutionError(
+          't.instantiate(fn, ...args) requires a function as its first argument.',
+          this.#span(rawSpan),
+          'RT2026',
+        );
+      }
+      if (this.#pendingDebugInstance !== undefined) {
+        throw new Error('A debug instance factory entered another capture before function entry.');
+      }
+      const key = JSON.stringify([...this.#instancePath, bindingName]);
+      const occurrence = (this.#debugInstanceCounts.get(key) ?? 0) + 1;
+      this.#debugInstanceCounts.set(key, occurrence);
+      const capture: PendingDebugInstance = {
+        segment: `DUT ${bindingName}${occurrence === 1 ? '' : ` #${occurrence}`}`,
+      };
+      this.#pendingDebugInstance = capture;
+      let value: unknown;
+      try {
+        value = (factory as (...factoryArgs: unknown[]) => unknown)(...values);
+      } finally {
+        if (this.#pendingDebugInstance === capture) this.#pendingDebugInstance = undefined;
+      }
+      if (capture.path === undefined) {
+        throw new ElaborationExecutionError(
+          't.instantiate(...) requires an instrumented function declaration.',
+          this.#span(rawSpan),
+          'RT2026',
+        );
+      }
+      this.#debugInstances.push({
+        name: bindingName,
+        path: capture.path,
+        source: this.#span(rawSpan),
+        value: this.#debugValue(value, rawSpan, new Set()),
+      });
+      return Object.freeze({
+        value,
+        $: Object.freeze({ kind: 'debug-scope-token', name: bindingName, path: capture.path }),
+      });
     },
     signal: (...args: unknown[]) => {
       this.#recordDslCall();
@@ -344,8 +419,13 @@ class ElaborationRecorder {
         { ownership: state.ownership },
       );
     },
-    producerHandle: (value: unknown, expectedType: unknown, rawSpan: RawSpan): ProducerValue => {
-      return this.#producerHandle(value, expectedType, rawSpan);
+    producerHandle: (
+      value: unknown,
+      expectedType: unknown,
+      bindingName: unknown,
+      rawSpan: RawSpan,
+    ): ProducerValue => {
+      return this.#producerHandle(value, expectedType, rawSpan, bindingName);
     },
     returnValue: (value: unknown, rawSpan: RawSpan, producerType?: unknown): unknown => {
       if (producerType !== undefined) return this.#producerHandle(value, producerType, rawSpan);
@@ -439,7 +519,12 @@ class ElaborationRecorder {
         const result = [...value];
         for (const [index, descriptor] of descriptors.entries()) {
           if (descriptor?.producerType !== undefined) {
-            result[index] = this.#producerHandle(result[index], descriptor.producerType, rawSpan);
+            result[index] = this.#producerHandle(
+              result[index],
+              descriptor.producerType,
+              rawSpan,
+              descriptor.name,
+            );
           }
         }
         return result;
@@ -485,6 +570,7 @@ class ElaborationRecorder {
             snapshot[descriptor.property],
             descriptor.producerType,
             rawSpan,
+            descriptor.name,
           );
         }
         return snapshot;
@@ -819,6 +905,7 @@ class ElaborationRecorder {
       networkTransfers: Object.freeze([...this.#networkTransfers]),
       networkPairs: Object.freeze([...this.#networkPairs]),
       capabilityUses: Object.freeze([...this.#capabilityUses]),
+      debugInstances: Object.freeze([...this.#debugInstances]),
       producers: Object.freeze([...this.#producers]),
       diagnostics: Object.freeze([...this.#diagnostics]),
     };
@@ -871,6 +958,69 @@ class ElaborationRecorder {
 
   #span(raw: RawSpan): SourceSpan {
     return { fileId: this.#fileId, start: raw.start, end: raw.end };
+  }
+
+  #debugValue(value: unknown, rawSpan: RawSpan, seen: Set<object>): DirectPlanDebugValue {
+    if (this.#isNetwork(value)) {
+      this.#assertReadableNetwork(value, rawSpan);
+      return { kind: 'network', network: value.name };
+    }
+    if (this.#isProducer(value)) {
+      const captureId = `producer:${++this.#debugProducerOrdinal}`;
+      const captures = this.#debugProducerCaptures.get(value.identity) ?? [];
+      captures.push(captureId);
+      this.#debugProducerCaptures.set(value.identity, captures);
+      return { kind: 'producer', captureId };
+    }
+    if (value === undefined) return { kind: 'undefined' };
+    if (
+      value === null ||
+      typeof value === 'string' ||
+      typeof value === 'number' ||
+      typeof value === 'boolean'
+    ) {
+      return { kind: 'literal', value };
+    }
+    if (typeof value !== 'object') {
+      throw new ElaborationExecutionError(
+        't.instantiate(...) cannot retain this function return value for the test runtime.',
+        this.#span(rawSpan),
+        'RT2026',
+      );
+    }
+    if (seen.has(value)) {
+      throw new ElaborationExecutionError(
+        't.instantiate(...) cannot retain a cyclic function return value.',
+        this.#span(rawSpan),
+        'RT2026',
+      );
+    }
+    seen.add(value);
+    try {
+      if (Array.isArray(value)) {
+        return {
+          kind: 'array',
+          values: value.map((item) => this.#debugValue(item, rawSpan, seen)),
+        };
+      }
+      const prototype = Object.getPrototypeOf(value);
+      if (prototype === Object.prototype || prototype === null) {
+        return {
+          kind: 'object',
+          entries: Object.entries(value).map(([key, item]) => ({
+            key,
+            value: this.#debugValue(item, rawSpan, seen),
+          })),
+        };
+      }
+    } finally {
+      seen.delete(value);
+    }
+    throw new ElaborationExecutionError(
+      't.instantiate(...) can retain only Networks, Producers, literals, arrays, and plain objects.',
+      this.#span(rawSpan),
+      'RT2026',
+    );
   }
 
   #finalizeUnusedProducers(): void {
@@ -1004,6 +1154,9 @@ class ElaborationRecorder {
     const boundValue = this.#bindOutputSignal(value, outputSignal, rawSpan);
     this.#producers.push({
       ...boundValue.producer,
+      ...(this.#debugProducerCaptures.get(value.identity) === undefined
+        ? {}
+        : { debugCaptureIds: this.#debugProducerCaptures.get(value.identity) }),
       destinations: networks.map((network) => ({
         network: network.name,
         source,
@@ -1099,7 +1252,12 @@ class ElaborationRecorder {
     return changed ? result : value;
   }
 
-  #producerHandle(value: unknown, expectedType: unknown, rawSpan: RawSpan): ProducerValue {
+  #producerHandle(
+    value: unknown,
+    expectedType: unknown,
+    rawSpan: RawSpan,
+    bindingName?: unknown,
+  ): ProducerValue {
     const expectedKinds = {
       Producer: undefined,
       DeciderCombinator: 'decider',
@@ -1120,7 +1278,16 @@ class ElaborationRecorder {
         'RT2022',
       );
     }
-    return value;
+    if (bindingName !== undefined && typeof bindingName !== 'string') {
+      throw new Error('Producer binding name must be a string.');
+    }
+    return bindingName === undefined
+      ? value
+      : this.#runtimeValue({
+          kind: 'producer',
+          identity: value.identity,
+          producer: { ...value.producer, bindingName },
+        });
   }
 
   #returnOwnedNetwork(value: NetworkValue, rawSpan: RawSpan): NetworkValue {

@@ -35,6 +35,14 @@ circuit. A handle from another runtime is rejected instead of being matched by
 its textual ID. `read()` returns a copy, so test code cannot mutate a committed
 snapshot.
 
+For an executed source plan, prefer `execution.createTestSession()`. Its targets
+may be either public handles returned by `execution.network(name)` or internal
+Network entries returned by `execution.debug`. A test drive models an external
+circuit participant, so source-level `Readonly<Network>` and `Ref<Network>`
+capabilities do not restrict it. This does not revive ownership aliases: a moved
+debug entry is rejected, as are handles and debug entries belonging to another
+execution.
+
 ## Time control
 
 `tick(count)` and its explicit alias `run(count)` advance the synchronous clock.
@@ -157,16 +165,24 @@ physical Networks and Producers created by that execution:
 
 ```ts
 const execution = elaborateDirectPlan(plan);
+const test = execution.createTestSession();
 const stage = execution.debug.root.child('function Stage');
 
 const local = stage.network('local');
 const firstProducer = stage.combinator(1);
+
+test.drive(local, [[SIGNAL_A, 5]]);
+test.tick();
+test.expect(local).toContain([[SIGNAL_A, 5]]);
 ```
 
-Missing and ambiguous queries throw deterministic `DebugQueryError` values;
-ordinary repeated calls are intentionally ambiguous until `instantiate(...)`
-adds a unique DUT scope. See the [runtime debug index](debug-index.md) for the
-query contract and retained metadata.
+Missing and ambiguous queries throw deterministic `DebugQueryError` values.
+Repeated calls use sibling scopes such as `function Stage` and
+`function Stage #2`. The test-only transform supports
+`const dut = t.instantiate(Stage, input)` and the completed execution exposes
+its physical value and unique root through `execution.instance('dut')`. See the
+[runtime debug index](debug-index.md) for the two-phase capture contract, query
+rules, and retained metadata.
 
 ## Browser workbench
 
