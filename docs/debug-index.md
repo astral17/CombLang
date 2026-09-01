@@ -111,5 +111,44 @@ rewrite `t`, and cannot create a debug capture accidentally. The temporary web
 test runner is not yet wired to this transform; that belongs to the remaining
 shared runner/CLI/browser ingestion task.
 
+## Structural assertions
+
+`execution.structure(scope)` creates a tick-free expectation over that exact
+scope and all of its descendants. Omitting the argument selects the complete
+module root:
+
+```ts
+const structure = execution.structure(dut.$);
+
+structure
+  .toHaveProducerCounts({ arithmetic: 2, decider: 1, constant: 0 })
+  .toHaveNetwork('mem')
+  .toHaveProducer('copy', { producerKind: 'arithmetic' })
+  .toHavePlacement('copy', { x: 10, y: 20, direction: 2 })
+  .toMatchConfiguration('copy', {
+    operation: 'add',
+    right: { kind: 'constant', value: 1 },
+  })
+  .toBeZeroTickAlias('destination', 'consumedSource')
+  .toHaveTickLatency(inputDebugEntry, 'output', 2);
+```
+
+String Network and Producer selectors search the selected subtree and fail on
+ambiguity. Exact entries from `DebugIndex` can be supplied when a repeated name
+is intentional. Numeric Producer selectors are one-based preorder indices over
+the subtree.
+
+Configuration and placement matchers use recursive partial matching. Producer
+counts compare only the explicitly supplied kinds, allowing either focused or
+complete expectations. `toBeZeroTickAlias` compares physical `NetworkId`
+identity. `toHaveTickLatency` computes the shortest directed dependency path
+through physical Producers belonging to the selected subtree; an external
+input may be supplied as an exact debug entry.
+
+Failures are structured `StructureAssertionError` values with code `DBG2001`,
+scope path, matcher, expected value, and actual value. The expectation reads EG
+and `DebugIndex` only: it does not create probes, step a kernel, or change a
+`TestSession.currentTick`.
+
 The current API completes the v1 physical string/query hierarchy and DUT-root
-capture. Structural assertion matchers remain separate Phase 5 work.
+capture together with its structural assertion layer.

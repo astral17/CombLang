@@ -15,6 +15,7 @@ import {
   type DebugNetworkEntry,
   type DebugScope,
 } from './debug-index.js';
+import { DebugStructureExpectation } from './debug-structure.js';
 import {
   DslRuntime,
   RuntimeDiagnosticError,
@@ -36,6 +37,7 @@ export interface ExecutedDirectPlan {
   instance(name: string): ExecutedDebugInstance;
   instance(index: number): ExecutedDebugInstance;
   network(name: string): NetworkHandle;
+  structure(scope?: DebugScope): DebugStructureExpectation;
 }
 
 export type DirectPlanTestTarget = NetworkHandle | DebugNetworkEntry;
@@ -551,6 +553,9 @@ function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
         `Debug instance ${JSON.stringify(nameOrIndex)} is ambiguous.`,
         matches.map(({ $ }, index) => `${index + 1}: ${$.path.join(' / ')}`),
       );
+    },
+    structure(scope = debug.root) {
+      return new DebugStructureExpectation(scope, circuit.graph);
     },
     network(name: string) {
       const movedAt = consumed.get(name);

@@ -4,14 +4,16 @@ CombLang diagnostics are structured values with a stable code, severity, message
 
 ## Code families
 
-| Range    | Layer                    | Meaning                                                   |
-| -------- | ------------------------ | --------------------------------------------------------- |
-| `CL0xxx` | parser                   | source-file and TypeScript syntax diagnostics             |
-| `CL1xxx` | source compiler          | unsupported or invalid circuit-language constructs        |
-| `CL2xxx` | source compiler warnings | valid lowering that is suspicious but remains checkable   |
-| `EX1xxx` | elaboration execution    | transformed JavaScript failure or execution limit         |
-| `RT1xxx` | direct-plan boundary     | malformed descriptors or unresolved serialized references |
-| `RT2xxx` | elaboration/runtime      | ownership, topology, native-mode, and wire-color failures |
+| Range     | Layer                    | Meaning                                                   |
+| --------- | ------------------------ | --------------------------------------------------------- |
+| `CL0xxx`  | parser                   | source-file and TypeScript syntax diagnostics             |
+| `CL1xxx`  | source compiler          | unsupported or invalid circuit-language constructs        |
+| `CL2xxx`  | source compiler warnings | valid lowering that is suspicious but remains checkable   |
+| `EX1xxx`  | elaboration execution    | transformed JavaScript failure or execution limit         |
+| `RT1xxx`  | direct-plan boundary     | malformed descriptors or unresolved serialized references |
+| `RT2xxx`  | elaboration/runtime      | ownership, topology, native-mode, and wire-color failures |
+| `DBG1xxx` | debug query              | missing or ambiguous scope, Network, Producer, or DUT     |
+| `DBG2xxx` | structural assertion     | executed topology does not match a structural expectation |
 
 An error prevents a valid direct plan or elaborated circuit. A warning does not; its topology is still checked.
 
@@ -94,3 +96,16 @@ The production CLI and browser first emit definite `CL` diagnostics from the con
 | `RT2026` | test instantiation received a non-function, uninstrumented factory, or unsupported cyclic/host return value |
 
 `tryElaborateDirectPlan()` returns these runtime diagnostics without throwing. `elaborateDirectPlan()` throws `RuntimeDiagnosticError` carrying the same structured value.
+
+## Debug and structural diagnostics
+
+| Code      | Meaning                                                                    |
+| --------- | -------------------------------------------------------------------------- |
+| `DBG1001` | an exact debug query has no result and reports deterministic candidates    |
+| `DBG1002` | an exact debug query has multiple results and refuses a first-match choice |
+| `DBG2001` | a tick-free structural matcher failed with expected/actual details         |
+
+`DebugQueryError` carries its candidate list. `StructureAssertionError`
+carries the selected scope path, matcher name, and structured expected/actual
+values. These errors inspect an already elaborated graph and never advance a
+test session.

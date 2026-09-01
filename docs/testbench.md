@@ -184,6 +184,14 @@ its physical value and unique root through `execution.instance('dut')`. See the
 [runtime debug index](debug-index.md) for the two-phase capture contract, query
 rules, and retained metadata.
 
+Structural assertions are available through `execution.structure(dut.$)`.
+They recursively inspect physical producer counts, named Networks/Producers,
+placement, configuration, zero-tick aliases, and shortest combinator latency.
+They operate entirely on EG and `DebugIndex`; they neither create a probe nor
+advance the test clock. Failure uses structured `DBG2001` expected/actual
+details. The complete matcher contract is documented with the
+[runtime debug index](debug-index.md#structural-assertions).
+
 ## Browser workbench
 
 The current web workbench has a separate `circuit.test.js` editor. Its draft is
