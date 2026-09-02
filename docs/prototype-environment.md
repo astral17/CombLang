@@ -20,9 +20,9 @@ Phase 5.5 provides `packages/prototypes` with these responsibilities:
 - JSON loading for Node and browser consumers;
 - tiny synthetic fixtures and a generated first-run vanilla/Space Age profile.
 
-The implemented foundation currently covers the first four responsibilities
-and synthetic fixtures. CLI/browser profile loading, the Factorio exporter, and
-the generated first-run database remain subsequent Phase 5.5 slices.
+The implemented foundation now also includes an offline native-dump normalizer
+and CLI command. CLI/browser profile selection, conformance completion, and the
+generated first-run database remain subsequent Phase 5.5 slices.
 
 The compiler, language service, typed-object schemas, layout, and blueprint
 backend receive a provider through an explicit compilation environment. They do
@@ -34,7 +34,8 @@ Schema version 1 includes only facts required by the next acceptance programs:
 - environment: schema/generator version, Factorio version, expansions, ordered
   mod names and versions, and startup-settings identity;
 - items and fluids: canonical key and item stack size;
-- recipes: key, category, ingredients, products, and energy;
+- recipes: key, one or more categories, ingredients, products, energy, exact
+  fluid temperature, and the 2.x integer-plus-fraction result count form;
 - entities: key, type, footprint, crafting categories, and capability-oriented
   circuit flags;
 - qualities: canonical key and stable ordering information;
@@ -53,7 +54,7 @@ unknown extension fields, copies and freezes accepted data, and rejects:
 
 - unsupported schema versions and malformed required fields;
 - noncanonical or duplicate keys;
-- invalid numeric ranges and item temperature constraints;
+- invalid numeric ranges and non-fluid temperature constraints;
 - missing ingredient/product references;
 - a `mainProduct` outside the product list;
 - a supplied index that disagrees with normalized recipe products.
@@ -75,6 +76,49 @@ stage and writes the resolved raw prototype dump under `script-output`. A
 separate offline CombLang converter can then select and normalize the small v1
 schema instead of requiring an exporter mod or loading raw prototype JSON in
 the compiler.
+
+The command is:
+
+```text
+factorio-dsl prototypes normalize data-raw-dump.json metadata.json prototypes.json
+```
+
+`metadata.json` is required because `data-raw-dump.json` does not identify the
+Factorio version, active mod versions, expansions, or startup-settings state:
+
+```json
+{
+  "factorioVersion": "2.1.16",
+  "expansions": ["space-age"],
+  "mods": [
+    { "name": "base", "version": "2.1.16" },
+    { "name": "space-age", "version": "2.1.16" }
+  ],
+  "startupSettingsIdentity": "project-specific-hash-or-label"
+}
+```
+
+The converter reads every item subtype carrying the resolved `stack_size`, not
+only the literal `item` table. It applies the raw RecipePrototype defaults
+(`categories = ["crafting"]`, `energy_required = 0.5`, and enabled by default),
+preserves multiple categories, exact fluid temperature, and
+`amount + extra_count_fraction`, and derives entity tile dimensions from the
+resolved bounding boxes. Empty engine sentinel/parameter recipes are skipped
+with `PD2001` warnings.
+
+The supplied real dump smoke test produced a valid 669 KB normalized database
+with 342 items, 651 non-sentinel recipes, and 744 entity prototypes. It also
+proved that some 2.x component fields remain outside the intentionally narrow
+v1 subset (`independent_probability`, `shared_probability`, statistics,
+productivity, spoilage, and fluidbox metadata); the converter reports each
+lossy field family instead of silently claiming exact coverage.
+
+The raw entity records expose connector geometry and wire distance, but not the
+normalized behavior-level flags in `EntityCircuitCapabilities`. The converter
+therefore emits entities and crafting data while setting
+`entityCircuitCapabilities: false`; a later Lua probe or verified per-type rule
+table must supply those facts. It never infers them merely from the presence of
+a connector.
 
 This path still requires conformance verification. In particular, fixtures
 must establish whether the dump contains every capability-oriented circuit and

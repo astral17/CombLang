@@ -1,9 +1,13 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, describe, expect, test, vi } from 'vitest';
-import { loadPrototypeDatabase, syntheticPrototypeDatabase } from '@comblang/prototypes';
+import {
+  loadPrototypeDatabase,
+  syntheticPrototypeDatabase,
+  validatePrototypeDatabase,
+} from '@comblang/prototypes';
 
 import { run } from './main.js';
 
@@ -352,6 +356,58 @@ const output: Network = stages[0] + 1;`);
       diagnostics: [],
       producerCount: 2,
     });
+  });
+});
+
+describe('factorio-dsl prototypes normalize', () => {
+  test('writes a validated Prototype DB from a native dump and explicit metadata', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'comblang-prototype-dump-'));
+    temporaryDirectories.push(directory);
+    const dumpPath = join(directory, 'data-raw-dump.json');
+    const metadataPath = join(directory, 'metadata.json');
+    const outputPath = join(directory, 'prototypes.json');
+    await Promise.all([
+      writeFile(
+        dumpPath,
+        JSON.stringify({
+          item: { plate: { type: 'item', name: 'plate', stack_size: 100 } },
+          fluid: { water: { type: 'fluid', name: 'water' } },
+          recipe: {
+            plate: {
+              type: 'recipe',
+              name: 'plate',
+              ingredients: [],
+              results: [{ type: 'item', name: 'plate', amount: 1 }],
+            },
+          },
+          'recipe-category': {
+            crafting: { type: 'recipe-category', name: 'crafting' },
+          },
+          quality: { normal: { type: 'quality', name: 'normal', level: 0 } },
+          'virtual-signal': {
+            'signal-A': { type: 'virtual-signal', name: 'signal-A' },
+          },
+        }),
+        'utf8',
+      ),
+      writeFile(
+        metadataPath,
+        JSON.stringify({
+          factorioVersion: '2.1.16',
+          expansions: [],
+          mods: [{ name: 'base', version: '2.1.16' }],
+        }),
+        'utf8',
+      ),
+    ]);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    expect(await run(['prototypes', 'normalize', dumpPath, metadataPath, outputPath])).toBe(0);
+    const database = validatePrototypeDatabase(JSON.parse(await readFile(outputPath, 'utf8')));
+    expect(database.items).toEqual([{ key: 'item:plate', name: 'plate', stackSize: 100 }]);
+    expect(database.recipes[0]).toMatchObject({ categories: ['crafting'], energy: 0.5 });
+    expect(String(log.mock.calls[0]?.[0])).toContain('1 item(s), 1 recipe(s)');
   });
 });
 

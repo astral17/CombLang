@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import { relative, resolve } from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
@@ -13,7 +13,11 @@ import type {
   DirectPlanNetworkTransfer,
 } from '@comblang/compiler/direct-plan';
 import { parseProject, validateDslSemantics } from '@comblang/language';
-import type { PrototypeProvider } from '@comblang/prototypes';
+import {
+  normalizeFactorioDataDump,
+  type FactorioDumpMetadata,
+  type PrototypeProvider,
+} from '@comblang/prototypes';
 import {
   ElaborationExecutionError,
   ElaborationOperationLimitError,
@@ -28,8 +32,9 @@ const usage = `factorio-dsl
 Usage:
   factorio-dsl check [--json] <file...>
   factorio-dsl test [--json] <source.factorio.ts> <circuit.test.js>
+  factorio-dsl prototypes normalize <data-raw-dump.json> <metadata.json> <output.json>
 
-Checks circuits or executes browser/Node-neutral JavaScript test files.`;
+Checks circuits, executes browser/Node-neutral JavaScript test files, or normalizes a native Factorio prototype dump.`;
 
 interface LoadedSource {
   readonly path: string;
@@ -223,6 +228,35 @@ async function testCircuit(
   return tests !== undefined && tests.failed > 0 ? 1 : 0;
 }
 
+async function normalizePrototypes(fileNames: readonly string[]): Promise<number> {
+  if (fileNames.length !== 4 || fileNames[0] !== 'normalize') {
+    console.error(usage);
+    return 2;
+  }
+  const [, dumpName, metadataName, outputName] = fileNames as readonly [
+    'normalize',
+    string,
+    string,
+    string,
+  ];
+  const [dumpSource, metadataSource] = await Promise.all([
+    readFile(resolve(dumpName), 'utf8'),
+    readFile(resolve(metadataName), 'utf8'),
+  ]);
+  const normalized = normalizeFactorioDataDump(
+    JSON.parse(dumpSource) as unknown,
+    JSON.parse(metadataSource) as FactorioDumpMetadata,
+  );
+  await writeFile(resolve(outputName), `${JSON.stringify(normalized.database, null, 2)}\n`, 'utf8');
+  console.log(
+    `Normalized ${normalized.database.items.length} item(s), ${normalized.database.recipes.length} recipe(s), and ${normalized.database.entities.length} entity prototype(s).`,
+  );
+  for (const warning of normalized.warnings) {
+    console.warn(`${warning.code} ${warning.path}: ${warning.message}`);
+  }
+  return 0;
+}
+
 export async function run(
   args: readonly string[],
   environment: CliCompilationEnvironment = {},
@@ -232,7 +266,7 @@ export async function run(
     console.log(usage);
     return 0;
   }
-  if (command !== 'check' && command !== 'test') {
+  if (command !== 'check' && command !== 'test' && command !== 'prototypes') {
     console.error(`Unknown command: ${command}\n\n${usage}`);
     return 2;
   }
@@ -240,12 +274,15 @@ export async function run(
   const json = rest.includes('--json');
   try {
     const files = rest.filter((argument) => argument !== '--json');
+    if (command === 'prototypes') return await normalizePrototypes(files);
     return command === 'check'
       ? await check(files, json, environment)
       : await testCircuit(files, json, environment);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    console.error(`Unable to ${command} source files: ${message}`);
+    const action =
+      command === 'prototypes' ? 'normalize prototype data' : `${command} source files`;
+    console.error(`Unable to ${action}: ${message}`);
     return 2;
   }
 }

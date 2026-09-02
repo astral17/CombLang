@@ -151,3 +151,9 @@ test session.
 `PrototypeValidationError` carries the stable code and a structural JSON path.
 Unknown extension fields are tolerated so compatible exporters may add data
 without changing the v1 consumer contract.
+
+Native dump conversion uses `PD1001` for a malformed or internally inconsistent
+`data-raw-dump` shape. `PD2001` reports intentionally unrepresented raw recipe
+fields or skipped engine sentinels, while `PD2002` reports capability data that
+the native dump cannot prove. Conversion warnings are explicit coverage notices;
+they do not make the normalized v1 subset invalid.

@@ -45,7 +45,7 @@ const fixture: PrototypeDatabaseV1 = {
     {
       key: 'recipe:iron-gear-wheel',
       name: 'iron-gear-wheel',
-      category: 'crafting',
+      categories: ['chemistry', 'crafting'],
       energy: 0.5,
       ingredients: [{ prototype: 'item:iron-plate', amount: 2 }],
       products: [{ prototype: 'item:iron-gear-wheel', amount: 1 }],
@@ -54,7 +54,7 @@ const fixture: PrototypeDatabaseV1 = {
     {
       key: 'recipe:modded-gear-wheel',
       name: 'modded-gear-wheel',
-      category: 'crafting',
+      categories: ['crafting'],
       energy: 1,
       ingredients: [{ prototype: 'item:copper-plate', amount: 3 }],
       products: [{ prototype: 'item:iron-gear-wheel', amountMin: 1, amountMax: 2 }],
@@ -62,10 +62,10 @@ const fixture: PrototypeDatabaseV1 = {
     {
       key: 'recipe:water-cycle',
       name: 'water-cycle',
-      category: 'chemistry',
+      categories: ['chemistry'],
       energy: 2,
       ingredients: [{ prototype: 'fluid:water', amount: 10, temperatureMin: 15 }],
-      products: [{ prototype: 'fluid:water', amount: 10, probability: 0.9 }],
+      products: [{ prototype: 'fluid:water', amount: 10, probability: 0.9, temperature: 25 }],
     },
   ],
   entities: [

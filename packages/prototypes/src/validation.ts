@@ -213,13 +213,26 @@ function parseComponent(value: unknown, path: string): RecipeComponent {
   const amount = optionalFinite(input.amount, `${path}.amount`);
   const amountMin = optionalFinite(input.amountMin, `${path}.amountMin`);
   const amountMax = optionalFinite(input.amountMax, `${path}.amountMax`);
+  const extraCountFraction = optionalFinite(input.extraCountFraction, `${path}.extraCountFraction`);
   if ((amount === undefined) === (amountMin === undefined && amountMax === undefined)) {
     invalid('PT1001', path, 'expected either amount or an amountMin/amountMax range.');
   }
   if ((amountMin === undefined) !== (amountMax === undefined)) {
     invalid('PT1001', path, 'amountMin and amountMax must be provided together.');
   }
-  if (amount !== undefined && amount <= 0) invalid('PT1001', `${path}.amount`, 'must be positive.');
+  if (extraCountFraction !== undefined && (extraCountFraction < 0 || extraCountFraction >= 1)) {
+    invalid(
+      'PT1001',
+      `${path}.extraCountFraction`,
+      'expected a value from 0 up to, but not including, 1.',
+    );
+  }
+  if (
+    amount !== undefined &&
+    (amount < 0 || (amount === 0 && (extraCountFraction === undefined || extraCountFraction === 0)))
+  ) {
+    invalid('PT1001', `${path}.amount`, 'must be positive unless extraCountFraction is positive.');
+  }
   if (amountMin !== undefined && amountMax !== undefined) {
     if (amountMin <= 0 || amountMax <= 0 || amountMin > amountMax) {
       invalid('PT1001', path, 'expected a positive amount range with amountMin <= amountMax.');
@@ -229,13 +242,17 @@ function parseComponent(value: unknown, path: string): RecipeComponent {
   if (probability !== undefined && (probability < 0 || probability > 1)) {
     invalid('PT1001', `${path}.probability`, 'expected a value from 0 through 1.');
   }
+  const temperature = optionalFinite(input.temperature, `${path}.temperature`);
   const temperatureMin = optionalFinite(input.temperatureMin, `${path}.temperatureMin`);
   const temperatureMax = optionalFinite(input.temperatureMax, `${path}.temperatureMax`);
   if (
-    (temperatureMin !== undefined || temperatureMax !== undefined) &&
+    (temperature !== undefined || temperatureMin !== undefined || temperatureMax !== undefined) &&
     !prototype.startsWith('fluid:')
   ) {
     invalid('PT1004', path, 'temperature constraints are valid only for fluids.');
+  }
+  if (temperature !== undefined && (temperatureMin !== undefined || temperatureMax !== undefined)) {
+    invalid('PT1001', path, 'exact temperature cannot be combined with a temperature range.');
   }
   if (
     temperatureMin !== undefined &&
@@ -249,7 +266,9 @@ function parseComponent(value: unknown, path: string): RecipeComponent {
     ...(amount === undefined ? {} : { amount }),
     ...(amountMin === undefined ? {} : { amountMin }),
     ...(amountMax === undefined ? {} : { amountMax }),
+    ...(extraCountFraction === undefined ? {} : { extraCountFraction }),
     ...(probability === undefined ? {} : { probability }),
+    ...(temperature === undefined ? {} : { temperature }),
     ...(temperatureMin === undefined ? {} : { temperatureMin }),
     ...(temperatureMax === undefined ? {} : { temperatureMax }),
   });
@@ -265,13 +284,18 @@ function parseRecipes(value: unknown): readonly RecipePrototype[] {
     );
     if (products.length === 0) invalid('PT1001', `${path}.products`, 'must not be empty.');
     const mainProduct = optionalString(input.mainProduct, `${path}.mainProduct`);
+    const categories = array(input.categories, `${path}.categories`).map(
+      (category, categoryIndex) => string(category, `${path}.categories[${categoryIndex}]`),
+    );
+    if (categories.length === 0) invalid('PT1001', `${path}.categories`, 'must not be empty.');
+    unique(categories, `${path}.categories`);
     if (mainProduct !== undefined && !products.some(({ prototype }) => prototype === mainProduct)) {
       invalid('PT1004', `${path}.mainProduct`, 'must reference one of the recipe products.');
     }
     return Object.freeze({
       key: canonicalKey('recipe', name, input.key, `${path}.key`) as RecipePrototype['key'],
       name,
-      category: string(input.category, `${path}.category`),
+      categories: Object.freeze([...categories].sort()),
       energy: positive(input.energy, `${path}.energy`),
       ingredients: Object.freeze(
         array(input.ingredients, `${path}.ingredients`).map((component, componentIndex) =>
@@ -452,15 +476,17 @@ function validateReferences(database: PrototypeDatabaseV1): void {
     ...database.fluids.map(({ key }) => key),
   ]);
   for (const recipe of database.recipes) {
-    if (
-      database.capabilities.recipeCategories &&
-      !database.recipeCategories.some(({ name }) => name === recipe.category)
-    ) {
-      invalid(
-        'PT1004',
-        `recipes.${recipe.name}.category`,
-        `unknown recipe category ${JSON.stringify(recipe.category)}.`,
-      );
+    if (database.capabilities.recipeCategories) {
+      const knownCategories = new Set(database.recipeCategories.map(({ name }) => name));
+      for (const [index, category] of recipe.categories.entries()) {
+        if (!knownCategories.has(category)) {
+          invalid(
+            'PT1004',
+            `recipes.${recipe.name}.categories[${index}]`,
+            `unknown recipe category ${JSON.stringify(category)}.`,
+          );
+        }
+      }
     }
     for (const [kind, components] of [
       ['ingredients', recipe.ingredients],

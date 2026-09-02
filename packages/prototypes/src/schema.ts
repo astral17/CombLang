@@ -58,7 +58,9 @@ export interface RecipeComponent {
   readonly amount?: number;
   readonly amountMin?: number;
   readonly amountMax?: number;
+  readonly extraCountFraction?: number;
   readonly probability?: number;
+  readonly temperature?: number;
   readonly temperatureMin?: number;
   readonly temperatureMax?: number;
 }
@@ -66,7 +68,7 @@ export interface RecipeComponent {
 export interface RecipePrototype {
   readonly key: RecipePrototypeKey;
   readonly name: string;
-  readonly category: string;
+  readonly categories: readonly string[];
   readonly energy: number;
   readonly ingredients: readonly RecipeComponent[];
   readonly products: readonly RecipeComponent[];

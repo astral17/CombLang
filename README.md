@@ -68,6 +68,9 @@ The current repository implements the Phase 3 source compiler, the complete Phas
     - [ ] Construct/select the provider inside CLI and browser Worker profile loaders; never structured-clone provider methods across the Worker boundary.
   - [ ] Load validated databases from CLI project options and browser-local files/cache, with an explicit built-in vanilla/Space Age first-run profile and no silent fallback for pinned projects.
   - [ ] Build an offline normalizer for native `factorio.exe --dump-data` output, supplementing it with a narrow Lua `prototypes` probe only for missing derived facts; verify base, Space Age, and modded-override fixtures.
+    - [x] Normalize resolved item subtypes, fluids, multi-category recipes and 2.x count/temperature defaults, qualities, virtual signals, recipe categories, and bounding-box entity footprints; expose it through `factorio-dsl prototypes normalize` with explicit environment metadata and loss warnings.
+    - [x] Smoke-test the external dump without making repository code or tests depend on `../Analysis`.
+    - [ ] Resolve reported probability/spoilage/fluidbox fields and derive or probe exact circuit capabilities; then lock base, Space Age, and modded-override conformance fixtures.
 - [ ] Phase 6 — typed Factorio objects: shared circuit inputs, native single-comparison `enable`, Roboport, Lamp, Constant, logistics entities, belts, displays, and train stops.
 - [ ] Phase 7 — exact constructors and native-config stress: Arithmetic, full Decider normal/else output lists, duplicate outputs, `Everything`, Selector, raw entities, LUTs, and large generated configurations.
   - [x] Validate the currently implemented `Each`/`Everything` output compatibility against the final post-execution Decider descriptor, including dynamically generated rows and conditions.

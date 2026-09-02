@@ -243,7 +243,12 @@ function createPrototypeProvider(
         entityValue.crafting === undefined
       )
         return false;
-      if (!entityValue.crafting.categories.includes(recipeValue.category)) return false;
+      if (
+        !recipeValue.categories.some((category) =>
+          entityValue.crafting?.categories.includes(category),
+        )
+      )
+        return false;
       const requiresFluid = [...recipeValue.ingredients, ...recipeValue.products].some(
         ({ prototype }) => prototype.startsWith('fluid:'),
       );

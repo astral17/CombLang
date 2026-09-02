@@ -90,4 +90,14 @@ fails, and `2` for usage or file-loading errors.
 The browser workbench adds the live simulation proof and blueprint preview, but
 is not required for compiler/runtime validation or test execution.
 
+To normalize Factorio's native prototype dump without starting the game again:
+
+```sh
+npm run cli -- prototypes normalize data-raw-dump.json metadata.json prototypes.json
+```
+
+The dump omits environment identity data, so the separate metadata file is
+mandatory. Its exact format and the currently reported lossy 2.x fields are
+documented in [Prototype environment](prototype-environment.md).
+
 Continue with the [current language reference](language-reference.md) for the exact supported subset.

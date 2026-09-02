@@ -78,6 +78,8 @@ describe('PrototypeDatabase v1', () => {
     expect(prototypes.canCraft('assembling-machine-3', 'iron-gear-wheel')).toBe(true);
     expect(prototypes.canCraft('assembling-machine-3', 'water-cycle')).toBe(false);
     expect(prototypes.canCraft('chemical-plant', 'water-cycle')).toBe(true);
+    expect(prototypes.canCraft('chemical-plant', 'iron-gear-wheel')).toBe(true);
+    expect(prototypes.getRecipe('water-cycle')?.products[0]?.temperature).toBe(25);
     expect(prototypes.entityCircuitCapabilities('assembling-machine-3').setRecipe).toBe(true);
 
     raw.items[0]!.stackSize = 1;
@@ -109,7 +111,7 @@ describe('PrototypeDatabase v1', () => {
       ({ name }) => name !== 'chemistry',
     );
     expect(() => validatePrototypeDatabase(badCategory)).toThrowError(
-      expect.objectContaining({ code: 'PT1004', path: 'recipes.water-cycle.category' }),
+      expect.objectContaining({ code: 'PT1004', path: 'recipes.iron-gear-wheel.categories[0]' }),
     );
 
     const staleIndex = mutableFixture();
