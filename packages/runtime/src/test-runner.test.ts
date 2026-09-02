@@ -1,6 +1,6 @@
 import { transformElaborationModule } from '@comblang/compiler';
 import { parseFile } from '@comblang/language';
-import type { TestSession } from '@comblang/simulator';
+import { TraceReader, type TestSession } from '@comblang/simulator';
 import { afterEach, describe, expect, test } from 'vitest';
 
 import { executeElaborationProgram } from './elaboration-program.js';
@@ -19,6 +19,41 @@ afterEach(() => {
 });
 
 describe('direct plan test runner lifecycle', () => {
+  test('retains replayable quiet tails for passing and failing test bodies', () => {
+    const parsed = parseFile({
+      path: 'trace-horizon.factorio.ts',
+      text: 'const input = new Network();',
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const result = runDirectPlanTests(
+      plan,
+      `test('quiet pass', ({ network, session, tick }) => {
+  session.trace(network('input'));
+  tick(8);
+});
+test('quiet failure', ({ network, session, tick, expectSignal }) => {
+  const input = network('input');
+  session.trace(input);
+  tick(6);
+  expectSignal(input, Signal('virtual', 'signal-A')).toBe(1);
+});`,
+    );
+    expect(result).toMatchObject({
+      passed: 1,
+      failed: 1,
+      results: [
+        { status: 'passed', trace: { endTick: 8 } },
+        { status: 'failed', failureKind: 'assertion', trace: { endTick: 6 } },
+      ],
+    });
+    for (const entry of result.results) {
+      const trace = JSON.parse(JSON.stringify(entry.trace));
+      const reader = new TraceReader(trace);
+      expect(trace.events).toHaveLength(1);
+      expect([...reader.snapshots({ fromTick: reader.endTick })]).toHaveLength(1);
+    }
+  });
+
   test('seals a completed session before a delayed microtask can mutate it', async () => {
     const parsed = parseFile({
       path: 'late-test-circuit.factorio.ts',

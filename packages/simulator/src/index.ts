@@ -8,4 +8,5 @@ export * from './object-adapter.js';
 export * from './test-session.js';
 export * from './test-expectation.js';
 export * from './trace.js';
+export * from './trace-reader.js';
 export * from './value-kernel.js';

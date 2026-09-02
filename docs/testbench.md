@@ -156,6 +156,11 @@ signals; a removed signal is represented by a change to zero. An event has
 `reset: true` at registration and after a transition from Unknown to Known.
 Unknown events retain their complete origin paths.
 
+New version 1 documents also include `endTick`, the last committed test tick.
+It includes unchanged final ticks and is retained even when no targets were
+registered or a test assertion fails. The last delta event is not necessarily
+the end of the test.
+
 Targets and events have stable structural IDs and canonical ordering. Repeated
 registration of the same target is harmless. `timeline(targetId)` filters one
 target without changing event objects or ordering. Trace registration after
@@ -179,6 +184,47 @@ Network and signal targets.
 
 Chart rendering is intentionally outside the trace store; the web waveform
 will consume this shared JSON model later.
+
+### Reading a saved trace
+
+`TraceReader` from `@comblang/simulator` restores captured values without
+re-executing source or advancing a simulator:
+
+```ts
+const reader = new TraceReader(document);
+const target = reader.targets[0]!;
+const finalValue = reader.read(target.id, reader.endTick); // BusValue
+
+for (const row of reader.snapshots({
+  fromTick: Math.max(0, reader.endTick - 31),
+  toTick: reader.endTick,
+  targets: [target.id],
+})) {
+  // row.tick; row.values: [{ target, value: Known(...) | Unknown(...) }]
+}
+```
+
+The tick range is inclusive. Omit `targets` to read every registered target;
+an empty list produces tick rows without values. The iterator is lazy and
+replays only selected target histories, so a small window near the end of a
+long unchanged trace does not expand every earlier tick. `read()` performs a
+single-target lookup. Returned buses are copies: changing one cannot alter
+later reads or another row.
+
+Network, selected-signal, object-input, and object-output columns remain
+distinct targets. In particular, a selected-signal trace is not a complete
+Network snapshot, and an object-output trace is its isolated contribution,
+not the aggregate wire bus. Quality and Unknown origin paths are retained;
+zero deltas remove signals and Known resets clear earlier state.
+
+The reader checks target IDs, tick-zero snapshots, event ordering/duplicates,
+int32 changes, selected-signal identity, and resets after Unknown. Unknown
+targets and out-of-range tick queries throw instead of inventing zero values.
+Input arrays may be unsorted; events are ordered per target during loading.
+Legacy v1 documents without `endTick` use the latest event tick and expose
+`hasExplicitEndTick === false`: an unrecorded quiet tail cannot be recovered.
+This reader is shared infrastructure; choosing a test trace in the browser
+timeline remains a separate UI integration task.
 
 ## Debug index
 

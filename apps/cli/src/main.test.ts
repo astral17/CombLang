@@ -467,6 +467,7 @@ test("debug failure", ({ execution }) => {
       trace: {
         format: 'comblang-trace',
         version: 1,
+        endTick: 2,
         targets: [{ kind: 'network' }],
       },
     });

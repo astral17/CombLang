@@ -81,6 +81,7 @@ test("bad query", ({ execution }) => {
       trace: {
         format: 'comblang-trace',
         version: 1,
+        endTick: 1,
         targets: [{ kind: 'network' }],
       },
     });

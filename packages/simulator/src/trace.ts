@@ -51,6 +51,8 @@ export type TraceEvent =
 export interface TraceDocument {
   readonly format: 'comblang-trace';
   readonly version: 1;
+  /** Last captured tick, including a stable tail. Legacy v1 documents may omit it. */
+  readonly endTick?: number;
   readonly targets: readonly TraceTarget[];
   readonly events: readonly TraceEvent[];
 }
@@ -170,6 +172,7 @@ function cloneEvent(event: TraceEvent): TraceEvent {
 
 /** Delta-compressed, renderer-independent trace storage. */
 export class TraceStore {
+  #endTick = 0;
   readonly #targets = new Map<
     string,
     { readonly target: TraceTarget; readonly read: TraceValueReader }
@@ -204,6 +207,7 @@ export class TraceStore {
     )) {
       this.#recordTarget(registered.target, snapshot, registered.read);
     }
+    this.#endTick = snapshot.tick;
   }
 
   timeline(targetId?: string): readonly TraceEvent[] {
@@ -219,6 +223,7 @@ export class TraceStore {
     return Object.freeze({
       format: 'comblang-trace' as const,
       version: 1 as const,
+      endTick: this.#endTick,
       targets: Object.freeze(
         [...this.#targets.values()]
           .map(({ target }) => target)
