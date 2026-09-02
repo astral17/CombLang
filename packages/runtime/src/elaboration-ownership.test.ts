@@ -84,6 +84,11 @@ describe('elaboration ownership policy', () => {
     );
 
     const moved = view(original, 'move');
+    const generation = stateFor(moved).ownership.generation;
+    ownership.assertReturnable(moved, span(32), current);
+    expect(stateFor(moved).ownership.generation).toBe(generation);
+    expect(stateFor(moved).ownership.owner).toBe(current.owner);
+    expect(current.moves[0]?.returned).toBe(false);
     ownership.returnToCaller(moved, span(32), current, undefined);
     expect(stateFor(original).ownership.owner).toBe('top-level');
     expect(current.moves[0]?.returned).toBe(true);

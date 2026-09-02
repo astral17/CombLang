@@ -29,6 +29,11 @@ export interface ElaborationOwnershipPolicy {
     frame: FunctionOwnershipFrame,
   ): NetworkBorrow;
   moveToFrame(network: NetworkValue, source: SourceSpan, frame: FunctionOwnershipFrame): void;
+  assertReturnable(
+    network: NetworkValue,
+    source: SourceSpan,
+    frame: FunctionOwnershipFrame | undefined,
+  ): void;
   returnToCaller(
     network: NetworkValue,
     source: SourceSpan,
@@ -244,7 +249,7 @@ export function createElaborationOwnershipPolicy(
       ownership.lastMove = { source, generation: ownership.generation };
       frame.moves.push({ ownership, source, returned: false });
     },
-    returnToCaller: (network, source, frame, caller) => {
+    assertReturnable: (network, source, frame) => {
       assertReadable(stateFor, network, source);
       const state = stateFor(network);
       if (network.capability === 'readonly' || network.capability === 'ref') {
@@ -257,7 +262,7 @@ export function createElaborationOwnershipPolicy(
             : [{ message: 'Borrow created here.', span: state.borrow.source }],
         );
       }
-      if (state.ownership.owner !== frame.owner) {
+      if (frame === undefined || state.ownership.owner !== frame.owner) {
         throw new ElaborationExecutionError(
           `Function cannot return Network ${network.name} because it does not own that value; accept it as Move<Network> first.`,
           source,
@@ -265,6 +270,10 @@ export function createElaborationOwnershipPolicy(
           [{ message: 'Network declared here.', span: network.declaration }],
         );
       }
+    },
+    returnToCaller: (network, source, frame, caller) => {
+      policy.assertReturnable(network, source, frame);
+      const state = stateFor(network);
       const move = frame.moves.findLast(({ ownership }) => ownership === state.ownership);
       if (move !== undefined) move.returned = true;
       state.ownership.generation += 1;

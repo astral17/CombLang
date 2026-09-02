@@ -53,6 +53,8 @@ Source attribution follows the boundary that can actually correct the error:
 
 Ordinary JavaScript methods named `to`, `take`, `at`, or `as` use the same argument provenance as other methods; these names alone do not select a DSL contract. A DSL method's invalid argument count after spread expansion points to the complete method call, rather than producing a speculative static arity error.
 
+The browser's source-error panel includes the diagnostic code and available line/column. Exceptions raised while building the preview retain structured runtime spans and editor markers; unstructured preview failures use `WEB1001` without an invented source position. A preview-only failure is labelled separately from compilation failure and does not block circuit tests. Preview endpoints resolve pre-transfer names to the surviving physical Network after `.take(...)`; this does not make consumed source handles readable again.
+
 Call provenance is associated with the executed function identity, not its textual name. Optional calls, native callback invocation (for example `array.map(fn)` invoking `fn`), and other calls without a matching instrumented entry retain the parameter declaration as fallback. A JavaScript exception inside an instrumented call receives that call's span unless a more precise inner DSL diagnostic already exists; exceptions outside instrumented operations may still lack a source span.
 
 ## Common compiler diagnostics

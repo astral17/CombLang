@@ -298,8 +298,19 @@ export function runSourcePlanDemo(
   }
 
   const executed = elaborateDirectPlan(plan);
-  const input = inputNetworkName === undefined ? undefined : executed.network(inputNetworkName);
-  const output = executed.network(outputName);
+  // Producer descriptors retain pre-take names. Preview the surviving physical
+  // Network via the shared debug mapping, not a consumed source-level handle.
+  const physicalNames = new Map(executed.circuit.ir.networks.map(({ id, name }) => [id, name]));
+  const survivingNames = new Map(
+    executed.debug.scopes
+      .flatMap((scope) => scope.networks)
+      .map(({ planName, id }) => [planName, physicalNames.get(id)] as const),
+  );
+  const survivor = (name: string): string => survivingNames.get(name) ?? name;
+  const inputName = inputNetworkName === undefined ? undefined : survivor(inputNetworkName);
+  const survivingOutputName = survivor(outputName);
+  const input = inputName === undefined ? undefined : executed.network(inputName);
+  const output = executed.network(survivingOutputName);
   const A = signal('virtual', 'signal-A');
   const simulation = executed.circuit.createSimulation(
     input === undefined ? [] : [{ network: input, values: new SparseBus([[A, inputValue]]) }],
@@ -329,8 +340,8 @@ export function runSourcePlanDemo(
     combinators: executed.circuit.graph.producers.length,
     attachments: executed.circuit.graph.attachments.length,
     stages,
-    ...(inputNetworkName === undefined ? {} : { inputNetwork: inputNetworkName, inputValue }),
-    outputNetwork: outputName,
+    ...(inputName === undefined ? {} : { inputNetwork: inputName, inputValue }),
+    outputNetwork: survivingOutputName,
     outputValue: snapshot.read(output.id).get(A),
     colors: executed.circuit.ir.networks
       .filter((network) => !network.name?.startsWith('$unused:'))

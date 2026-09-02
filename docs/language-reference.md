@@ -405,7 +405,9 @@ Each function declaration call receives an independent provenance scope, so gene
 
 Static checks resolve user function declarations lexically, including nested declarations. A local binding with the same name does not inherit an outer function's annotations. If the function binding is reassigned, its call signature is treated as uncertain and checked from executed values instead. This uses TypeScript symbol binding only, not TypeScript assignability rules for DSL operators.
 
-Returning an array/plain object inspects its own data properties for Network ownership transfer without invoking getters or custom array iterators. Accessors remain lazy; sparse indices, symbol keys, property descriptors, and null prototypes are preserved when a returned Network requires a new container view.
+Returning an array/plain object inspects its own data properties for Network ownership transfer without invoking getters or custom array iterators. Accessors remain lazy; sparse indices, symbol keys, property descriptors, null prototypes, and frozen/sealed/non-extensible state are preserved when a returned Network requires a new container view. Cycles and shared container references are retained. Ordinary branches without transferred Networks keep their original JavaScript identity, including purely ordinary cycles. A shared container is visited once; two distinct member slots holding the same Network (such as `[input, input]`) remain a double-move error.
+
+All reachable data-member handles are validated before any return transfer. If a later member is borrowed, stale, duplicated, or owned by another function, the failed return leaves earlier members' ownership unchanged, so a `catch` inside the callee can still use them. This is not general JavaScript or circuit-construction rollback: effects performed while evaluating the return expression remain. Maps, class instances, and values hidden behind accessors are not traversed for automatic ownership transfer.
 
 ## Executed compile-time control flow
 

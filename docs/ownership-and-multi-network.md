@@ -64,6 +64,8 @@ A read-only parameter may feed arithmetic, conditions, selections, and typed Fac
 
 `Move<Network>` is the only owned parameter mode. It invalidates all caller aliases at entry, permits reads, writes, and consuming transfer, and gives returned ownership a new runtime generation. Arrays and plain objects recursively transfer owned members on return. A duplicated member such as `[input, input]` is a double move. If the callee neither returns the moved owner nor consumes it with `.take(...)`, the value is dropped; stale caller aliases remain invalid. Returning a Network owned by an outer caller without first accepting it through `Move` is rejected as an implicit steal.
 
+Container returns are checked as a graph before transferring any owner. A rejected member does not partially invalidate earlier members. Cycles and shared containers are preserved (the same container is inspected once), along with sparse indices, own-property descriptors, and frozen/sealed/non-extensible state. Containers that do not lead to transferred Networks retain their identity. Getters are not invoked, and Maps/class instances are not traversed; this boundary does not roll back effects from evaluating the return expression.
+
 Bare `Network` parameters are forbidden because an implicit mode would hide whether the call borrows or consumes ownership. Bare `Network` remains valid for local bindings and return annotations.
 
 Borrowed values must not outlive their owner. The checker should reject a definite borrow escape. If ordinary JavaScript control flow or a dynamically selected container element prevents proof, the runtime must validate the actual handle state instead of the checker guessing.

@@ -39,6 +39,7 @@ import {
   type ElaborationOperatorDispatchContext,
 } from './elaboration-operators.js';
 import { createElaborationOwnershipPolicy } from './elaboration-ownership.js';
+import { inspectReturnValueGraph } from './return-value-graph.js';
 
 interface RawSpan {
   readonly start: number;
@@ -553,7 +554,7 @@ class ElaborationRecorder {
     },
     returnValue: (value: unknown, rawSpan: RawSpan, producerType?: unknown): unknown => {
       if (producerType !== undefined) return this.#producerHandle(value, producerType, rawSpan);
-      return this.#returnOwnedValue(value, rawSpan, new Map());
+      return this.#returnOwnedValue(value, rawSpan);
     },
     returnNetwork: (
       value: unknown,
@@ -1516,41 +1517,50 @@ class ElaborationRecorder {
     this.#ownership.assertConsumable(network, this.#span(rawSpan), role);
   }
 
-  #returnOwnedValue(value: unknown, rawSpan: RawSpan, seen: Map<object, unknown>): unknown {
-    if (this.#isProducer(value)) return value;
-    if (this.#isPair(value) || this.#isPairSelection(value)) {
-      throw new ElaborationExecutionError(
-        'pair(a, b) is a read-only input view and cannot carry ownership across a return.',
-        this.#span(rawSpan),
-        'RT2020',
-        this.#isPair(value)
-          ? [{ message: 'The pair view was created here.', span: value.source }]
-          : undefined,
-      );
+  #returnOwnedValue(value: unknown, rawSpan: RawSpan): unknown {
+    const graph = inspectReturnValueGraph(
+      value,
+      (item) =>
+        this.#isProducer(item) ||
+        this.#isNetwork(item) ||
+        this.#isPair(item) ||
+        this.#isPairSelection(item),
+    );
+    const networks: NetworkValue[] = [];
+    const owners = new Set<NetworkOwnershipState>();
+    const frame = this.#currentFunctionFrame();
+    for (const handle of graph.handles) {
+      if (this.#isPair(handle) || this.#isPairSelection(handle)) {
+        throw new ElaborationExecutionError(
+          'pair(a, b) is a read-only input view and cannot carry ownership across a return.',
+          this.#span(rawSpan),
+          'RT2020',
+          this.#isPair(handle)
+            ? [{ message: 'The pair view was created here.', span: handle.source }]
+            : undefined,
+        );
+      }
+      if (!this.#isNetwork(handle)) continue;
+      this.#ownership.assertReturnable(handle, this.#span(rawSpan), frame);
+      const owner = this.#networkState(handle).ownership;
+      if (owners.has(owner)) {
+        throw new ElaborationExecutionError(
+          `Cannot return Network ${handle.name} more than once; duplicated members are a double move.`,
+          this.#span(rawSpan),
+          'RT2012',
+          [{ message: 'Network declared here.', span: handle.declaration }],
+        );
+      }
+      owners.add(owner);
+      networks.push(handle);
     }
-    if (this.#isNetwork(value)) return this.#returnOwnedNetwork(value, rawSpan);
-    if (typeof value !== 'object' || value === null) return value;
-    const previous = seen.get(value);
-    if (previous !== undefined) return previous;
-    const prototype = Object.getPrototypeOf(value);
-    if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) return value;
-    const result = Array.isArray(value)
-      ? Object.setPrototypeOf([], prototype)
-      : Object.create(prototype);
-    seen.set(value, result);
-    const descriptors = Object.getOwnPropertyDescriptors(value);
-    let changed = false;
-    for (const key of Reflect.ownKeys(descriptors)) {
-      const descriptor = descriptors[key as keyof typeof descriptors]!;
-      // Accessors remain lazy. Inspecting an ownership boundary must not call user getters.
-      if (!('value' in descriptor)) continue;
-      const returned = this.#returnOwnedValue(descriptor.value, rawSpan, seen);
-      if (returned !== descriptor.value) changed = true;
-      descriptor.value = returned;
-    }
-    Object.defineProperties(result, descriptors);
-    if (!changed) seen.set(value, value);
-    return changed ? result : value;
+    // Charge the complete transfer before mutation, so a caught budget failure also
+    // cannot leave a partially transferred return value.
+    for (const _network of networks) this.#recordDslCall();
+    const replacements = new Map<object, unknown>();
+    for (const network of networks)
+      replacements.set(network, this.#returnOwnedNetwork(network, rawSpan, false));
+    return graph.replace(replacements);
   }
 
   #producerHandle(
@@ -1591,8 +1601,8 @@ class ElaborationRecorder {
         });
   }
 
-  #returnOwnedNetwork(value: NetworkValue, rawSpan: RawSpan): NetworkValue {
-    this.#recordDslCall();
+  #returnOwnedNetwork(value: NetworkValue, rawSpan: RawSpan, recordCall = true): NetworkValue {
+    if (recordCall) this.#recordDslCall();
     const frame = this.#currentFunctionFrame();
     if (frame === undefined) {
       throw new ElaborationExecutionError(

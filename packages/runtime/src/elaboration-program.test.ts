@@ -21,6 +21,132 @@ for (let i = 0; i < 10; i++) {
 }`;
 
 describe('executed elaboration program', () => {
+  test('returns cyclic Network containers while retaining shared container references', () => {
+    const parsed = parseFile({
+      path: 'return-shared-network.factorio.ts',
+      text: `const ordinary = {};
+ordinary.self = ordinary;
+function Bundle() {
+  const output = new Network();
+  const values = [output];
+  const result = { values, alias: values, ordinary };
+  result.self = result;
+  result.values.push(result);
+  return result;
+}
+const result = Bundle();
+if (result.self !== result || result.values[1] !== result || result.alias !== result.values) {
+  throw new Error('lost returned graph identity');
+}
+if (result.ordinary !== ordinary) throw new Error('copied an unchanged cycle');
+result.values[0] += CC();`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    expect(plan.networks).toHaveLength(1);
+    expect(plan.producers).toHaveLength(1);
+    expect(() => elaborateDirectPlan(plan)).not.toThrow();
+  });
+
+  test('preserves identity of ordinary cyclic values returned from functions', () => {
+    const parsed = parseFile({
+      path: 'return-ordinary-cycle.factorio.ts',
+      text: `const value = {};
+value.self = value;
+function Identity() { return value; }
+if (Identity() !== value) throw new Error('ordinary return cloned a cycle');`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).not.toThrow();
+  });
+
+  test('preserves frozen and sealed return containers while transferring Networks', () => {
+    const parsed = parseFile({
+      path: 'return-container-integrity.factorio.ts',
+      text: `function Bundle() {
+  const output = new Network();
+  return Object.freeze({ values: Object.freeze([output]), sealed: Object.seal({ value: 5 }) });
+}
+const result = Bundle();
+if (!Object.isFrozen(result) || !Object.isFrozen(result.values) || !Object.isSealed(result.sealed)) {
+  throw new Error('lost container integrity');
+}
+result.values[0] += CC();`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).not.toThrow();
+  });
+
+  test('validates all returned handles before transferring any ownership', () => {
+    const parsed = parseFile({
+      path: 'return-atomic-validation.factorio.ts',
+      text: `const external = new Network();
+function Recover() {
+  const output = new Network();
+  try { return [output, external]; } catch {}
+  output += CC();
+  return output;
+}
+const result = Recover();
+result += CC();`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    expect(plan.producers).toHaveLength(2);
+    expect(() => elaborateDirectPlan(plan)).not.toThrow();
+  });
+
+  test.each([
+    { invalid: '[output, { duplicate: output }]', code: 'RT2012' },
+    { invalid: '[output, { borrowed: input }]', code: 'RT2017' },
+    { invalid: '[output, pair(new Network(), new Network())]', code: 'RT2020' },
+  ])('rejects $invalid without invalidating an earlier owned member', ({ invalid, code }) => {
+    const parsed = parseFile({
+      path: 'recover-return-validation.factorio.ts',
+      text: `function Recover(input: Readonly<Network>): Network {
+  const output = new Network();
+  function Attempt(value: Move<Network>) {
+    const output = value;
+    try { return ${invalid}; } catch (error) {
+      if (error.code !== '${code}') throw error;
+    }
+    output += CC();
+    return output;
+  }
+  return Attempt(output);
+}
+const output = Recover(new Network());
+output += CC();`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    expect(plan.producers).toHaveLength(2);
+    expect(() => elaborateDirectPlan(plan)).not.toThrow();
+  });
+
+  test('invalidates pre-return aliases while allowing the returned cyclic container', () => {
+    const parsed = parseFile({
+      path: 'return-cycle-stale-alias.factorio.ts',
+      text: `const old = [];
+function Bundle() {
+  const output = new Network();
+  old.push(output);
+  const result = { output };
+  result.self = result;
+  return result;
+}
+const result = Bundle();
+result.output += CC();
+old[0] += CC();`,
+    });
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected the pre-return alias to be invalidated.');
+    } catch (error) {
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2012');
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe('old[0] += CC()');
+    }
+  });
+
   test.each(
     ['to', 'take', 'at', 'as'].flatMap((method) =>
       [false, true].map((computed) => ({ method, computed })),

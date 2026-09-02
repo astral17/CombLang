@@ -6,6 +6,7 @@ import { blueprintJsonForPlan } from './blueprint-demo.js';
 import { createSourceEditor, type SourceEditorKind } from './code-editor.js';
 import { registerOfflineSupport, warmOfflineCache } from './offline.js';
 import { loadSourceDraft, saveSourceDraft, type SourceDraftStorage } from './source-draft.js';
+import { formatSourceDiagnostic, sourcePreviewDiagnostic } from './source-diagnostics.js';
 import {
   runSourcePlanDemo,
   SourceSimulationController,
@@ -646,9 +647,9 @@ function renderProofPending(): void {
   resetCopyButton();
 }
 
-function renderProofError(message: string): void {
+function renderProofError(message: string, compiledPlan?: DirectElaborationPlan): void {
   pauseSimulation();
-  currentPlan = undefined;
+  currentPlan = compiledPlan;
   currentDemo = undefined;
   sourceSimulation = undefined;
   selectedSimulationTick = 0;
@@ -657,7 +658,10 @@ function renderProofError(message: string): void {
   stateStatus.textContent = '';
   proof.dataset.state = 'invalid';
   proof.setAttribute('aria-busy', 'false');
-  proofTitle.textContent = 'Current source is not simulatable yet';
+  proofTitle.textContent =
+    compiledPlan === undefined
+      ? 'Current source is not simulatable yet'
+      : 'Circuit compiled; preview failed';
   proofDescription.textContent = message;
   proofCombinators.textContent = '—';
   proofAttachments.textContent = '—';
@@ -666,7 +670,9 @@ function renderProofError(message: string): void {
   const empty = document.createElement('p');
   empty.className = 'proof-empty';
   empty.textContent =
-    'Fix the source or return to the supported arithmetic Network subset to resume the live proof.';
+    compiledPlan === undefined
+      ? 'Fix the source diagnostic to resume the live proof.'
+      : 'The source compiled successfully, but the preview failed. Circuit tests remain available.';
   waveform.replaceChildren(empty);
   waveformNetwork.replaceChildren(
     Object.assign(document.createElement('option'), { value: '', textContent: 'All Networks' }),
@@ -991,8 +997,14 @@ function handleWorkerMessage(event: MessageEvent<CompilerWorkerResponse>, worker
           : `executed JS · ${sourceFunctions} functions · ${parsed.plan?.producers.length ?? 0} producers · ${foldedOperations} folds ready`;
   status.dataset.state = valid ? (warnings.length > 0 ? 'warning' : 'valid') : 'invalid';
   if (!valid || parsed.plan === undefined) {
-    const firstMessage = syntaxErrors[0]?.message ?? compilerErrors[0]?.message;
-    renderProofError(firstMessage ?? 'The source produced no executable direct plan.');
+    const firstError = [...parsed.diagnostics, ...parsed.compilerDiagnostics].find(
+      ({ severity }) => severity === 'error',
+    );
+    renderProofError(
+      firstError === undefined
+        ? 'The source produced no executable direct plan.'
+        : formatSourceDiagnostic(firstError, sourceEditor.getValue()),
+    );
     renderTestsBlocked('Fix the circuit source before running its tests.');
   } else {
     try {
@@ -1000,11 +1012,17 @@ function handleWorkerMessage(event: MessageEvent<CompilerWorkerResponse>, worker
       renderSourceProof(parsed.plan, foldedOperations);
       scheduleTestRender();
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Runtime proof failed.';
-      status.textContent = 'runtime color/topology diagnostic';
+      const diagnostic = sourcePreviewDiagnostic(error);
+      status.textContent = diagnostic.code === 'WEB1001' ? 'preview error' : 'runtime diagnostic';
       status.dataset.state = 'invalid';
-      renderProofError(message);
-      renderTestsBlocked('Fix the runtime topology diagnostic before running tests.');
+      sourceEditor.setDiagnostics([
+        ...parsed.diagnostics,
+        ...parsed.compilerDiagnostics,
+        diagnostic,
+      ]);
+      renderProofError(formatSourceDiagnostic(diagnostic, sourceEditor.getValue()), parsed.plan);
+      // Preview failures do not turn a successfully compiled circuit into invalid source.
+      scheduleTestRender();
     }
   }
   result.textContent =

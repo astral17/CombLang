@@ -1,12 +1,14 @@
 import { compileDirectPlan } from '@comblang/compiler/direct-plan';
 import { transformElaborationModule } from '@comblang/compiler/elaboration-transform';
 import { parseFile } from '@comblang/language';
-import { executeElaborationProgram } from '@comblang/runtime';
+import { elaborateDirectPlan, executeElaborationProgram } from '@comblang/runtime';
 import { describe, expect, test } from 'vitest';
 
 import { signal } from '@comblang/factorio';
 
 import { runSourcePlanDemo, SourceSimulationController } from './source-demo.js';
+import { compileSource } from './compile-source.js';
+import { blueprintJsonForPlan } from './blueprint-demo.js';
 
 function compileScale(multiplier: number) {
   const parsed = parseFile({
@@ -23,6 +25,69 @@ const output: Network = Scale(input);`,
 }
 
 describe('source-driven homepage proof', () => {
+  test('previews merged MemoCell outputs without reading a consumed source handle', () => {
+    const compiled = compileSource({
+      path: 'memo-take.factorio.ts',
+      text: `const SIGNAL_A = Signal("virtual", "signal-A");
+const SIGNAL_B = Signal("virtual", "signal-B");
+function MemoCell(input: Readonly<Network>): Network {
+  let out = new Network(), mem = new Network();
+  to(out, mem) += input + 0;
+  to(out, mem) += when(input == 0 && mem != 0).then(mem);
+  return out;
+}
+let input = CC(5 * SIGNAL_A, 3 * SIGNAL_B);
+let output = MemoCell(input);
+output.take(MemoCell(input * 2));`,
+    });
+    expect(compiled.compilerDiagnostics).toEqual([]);
+    const plan = compiled.plan!;
+    expect(() => elaborateDirectPlan(plan).network(plan.networkTransfers![0]!.source)).toThrowError(
+      expect.objectContaining({ diagnostic: expect.objectContaining({ code: 'RT2012' }) }),
+    );
+    const demo = runSourcePlanDemo(plan, 0, 0);
+    expect(demo.combinators).toBe(6);
+    expect(demo.outputNetwork).toBe(plan.networkTransfers![0]!.destination);
+    expect(demo.timeline[0]?.networks.every(({ signals }) => signals.length === 0)).toBe(true);
+    expect(blueprintJsonForPlan(plan).blueprint.entities).toHaveLength(6);
+    const controller = new SourceSimulationController(plan);
+    controller.stepFrom(0, 4);
+    expect(controller.signalValueAt(4, demo.outputNetwork!, signal('virtual', 'signal-A'))).toBe(
+      15,
+    );
+    expect(controller.signalValueAt(4, demo.outputNetwork!, signal('virtual', 'signal-B'))).toBe(9);
+    const output = controller.timeline[0]!.networks.find(
+      ({ name }) => name === demo.outputNetwork,
+    )!;
+    controller.setSignalAt(0, output.id, signal('virtual', 'signal-A'), 1);
+    controller.stepFrom(0, 4);
+    expect(controller.signalValueAt(4, demo.outputNetwork!, signal('virtual', 'signal-A'))).toBe(
+      15,
+    );
+  });
+
+  test('resolves both preview endpoints through chained transfers', () => {
+    const compiled = compileSource({
+      path: 'preview-transfer-chain.factorio.ts',
+      text: `const input = new Network();
+const output = new Network();
+output += input + 1;
+const middle = new Network();
+middle.take(input);
+const survivingInput = new Network();
+survivingInput.take(middle);
+const survivingOutput = new Network();
+survivingOutput.take(output);`,
+    });
+    expect(compiled.compilerDiagnostics).toEqual([]);
+    const demo = runSourcePlanDemo(compiled.plan!, 7);
+    expect(demo).toMatchObject({
+      inputNetwork: 'survivingInput',
+      outputNetwork: 'survivingOutput',
+      outputValue: 8,
+    });
+  });
+
   test('starts interactive simulation at an all-zero T0 and branches edited history', () => {
     const plan = compileScale(2);
     const controller = new SourceSimulationController(plan);
