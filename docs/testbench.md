@@ -252,6 +252,16 @@ Source or test edits invalidate the displayed history immediately; a pending
 test result from the old source cannot restore a stale trace. This selection
 is presentation state, not another execution of the circuit or test body.
 
+The collapsible **Inspect source scopes and combinators** area browses the same
+test's `comblang-debug` snapshot. A selected Network/signal trace lists every
+source alias and connected physical Producer, labelled as reading/writing the
+bus. Source buttons select exact spans; **Configuration** shows physical IDs,
+configuration and placement. The scope selector distinguishes repeated function
+calls and loop iterations. Failed debug queries open their exact scope when it
+exists, while failure line buttons select the test-editor location. See
+[portable debug inspection](debug-index.md#portable-inspection-and-browser-navigation)
+for identity rules and the current object-adapter mapping boundary.
+
 ## Debug index
 
 `elaborateDirectPlan(plan)` returns both `circuit` and an immutable `debug`

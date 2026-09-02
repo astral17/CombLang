@@ -1,5 +1,7 @@
 import { TraceReader } from '@comblang/simulator';
+import type { SourceSpan } from '@comblang/shared';
 
+import { TestDebugPanel } from './test-debug-panel.js';
 import { buildTestTraceTable, traceTargetLabel } from './test-trace-view.js';
 import type { WebTestRun } from './web-test-runner.js';
 
@@ -13,10 +15,11 @@ export class TestTracePanel {
   readonly #next: HTMLButtonElement;
   readonly #status: HTMLOutputElement;
   readonly #table: HTMLElement;
+  readonly #debug: TestDebugPanel;
   #run: WebTestRun | undefined;
   #reader: TraceReader | undefined;
 
-  constructor(host: HTMLElement) {
+  constructor(host: HTMLElement, revealSource: (span: SourceSpan) => void) {
     this.#host = host;
     const element = <T extends HTMLElement>(selector: string): T => {
       const value = host.querySelector<T>(selector);
@@ -31,8 +34,9 @@ export class TestTracePanel {
     this.#next = element('#trace-next');
     this.#status = element('#trace-status');
     this.#table = element('#test-trace-table');
+    this.#debug = new TestDebugPanel(element('#test-debug'), revealSource);
     this.#case.addEventListener('change', () => this.#selectCase());
-    this.#target.addEventListener('change', () => this.#render());
+    this.#target.addEventListener('change', () => this.#selectTarget());
     this.#start.addEventListener('input', () => this.#render());
     this.#window.addEventListener('input', () => this.#render());
     this.#previous.addEventListener('click', () => this.#page(-1));
@@ -43,6 +47,7 @@ export class TestTracePanel {
   clear(message: string): void {
     this.#run = undefined;
     this.#reader = undefined;
+    this.#debug.setResult(undefined);
     this.#case.replaceChildren();
     this.#target.replaceChildren();
     this.#case.disabled = true;
@@ -87,6 +92,7 @@ export class TestTracePanel {
     this.#enableRange(false);
     this.#target.replaceChildren();
     const result = this.#run?.results[Number(this.#case.value)];
+    this.#debug.setResult(result);
     if (result?.trace === undefined) {
       this.#status.textContent = 'No recorded history';
       this.#message('This test has no trace document.');
@@ -124,6 +130,11 @@ export class TestTracePanel {
         ),
       ),
     );
+    this.#render();
+  }
+
+  #selectTarget(): void {
+    this.#debug.selectTarget(this.#reader?.targets.find(({ id }) => id === this.#target.value));
     this.#render();
   }
 
@@ -166,7 +177,7 @@ export class TestTracePanel {
           button.title = 'Show signal columns for this recorded target';
           button.addEventListener('click', () => {
             this.#target.value = column.targetId!;
-            this.#render();
+            this.#selectTarget();
           });
           th.append(button);
         }

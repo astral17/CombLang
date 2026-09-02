@@ -464,6 +464,11 @@ test("debug failure", ({ execution }) => {
     expect(result.tests.results[0]).toMatchObject({
       name: 'traced pass',
       status: 'passed',
+      debug: {
+        format: 'comblang-debug',
+        version: 1,
+        scopes: [{ path: [], producers: [{ producerKind: 'arithmetic' }] }],
+      },
       trace: {
         format: 'comblang-trace',
         version: 1,
@@ -477,7 +482,10 @@ test("debug failure", ({ execution }) => {
       failureKind: 'debug-query',
       code: 'DBG1001',
       candidates: expect.any(Array),
+      debugScopePath: [],
     });
+    const tracedNetworkId = result.tests.results[0].trace.targets[0].networkId;
+    expect(result.tests.results[0].debug.scopes[0].producers[0].outputs).toContain(tracedNetworkId);
   });
 
   test('does not execute a test file when circuit compilation fails', async () => {

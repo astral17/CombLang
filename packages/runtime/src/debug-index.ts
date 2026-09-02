@@ -8,12 +8,19 @@ export type DebugQueryCode = 'DBG1001' | 'DBG1002';
 export class DebugQueryError extends Error {
   readonly code: DebugQueryCode;
   readonly candidates: readonly string[];
+  readonly scopePath?: readonly string[];
 
-  constructor(code: DebugQueryCode, message: string, candidates: readonly string[] = []) {
+  constructor(
+    code: DebugQueryCode,
+    message: string,
+    candidates: readonly string[] = [],
+    scopePath?: readonly string[],
+  ) {
     super(message);
     this.name = 'DebugQueryError';
     this.code = code;
     this.candidates = Object.freeze([...candidates]);
+    if (scopePath !== undefined) this.scopePath = Object.freeze([...scopePath]);
   }
 }
 
@@ -79,6 +86,7 @@ export class DebugScope {
       'DBG1001',
       `Debug scope ${scopeLabel(this.path)} has no child named ${JSON.stringify(name)}.`,
       this.children.map((candidate) => candidate.path.at(-1)!),
+      this.path,
     );
   }
 
@@ -90,12 +98,14 @@ export class DebugScope {
         'DBG1001',
         `Debug scope ${scopeLabel(this.path)} has no Network named ${JSON.stringify(name)}.`,
         this.networks.filter((entry) => !entry.internal).map(candidateLabel),
+        this.path,
       );
     }
     throw new DebugQueryError(
       'DBG1002',
       `Network ${JSON.stringify(name)} is ambiguous in debug scope ${scopeLabel(this.path)}.`,
       matches.map(candidateLabel),
+      this.path,
     );
   }
 
@@ -112,12 +122,14 @@ export class DebugScope {
           this.producers.flatMap((entry) =>
             entry.name === undefined ? [] : [`${entry.ordinal}: ${entry.name}`],
           ),
+          this.path,
         );
       }
       throw new DebugQueryError(
         'DBG1002',
         `Combinator ${JSON.stringify(nameOrIndex)} is ambiguous in debug scope ${scopeLabel(this.path)}.`,
         matches.map((entry) => `${entry.ordinal}: ${entry.name}`),
+        this.path,
       );
     }
     const index = nameOrIndex;
@@ -130,6 +142,7 @@ export class DebugScope {
       'DBG1001',
       `Debug scope ${scopeLabel(this.path)} has no combinator at index ${index}.`,
       this.producers.map((entry) => `${entry.ordinal}: ${entry.producerKind}`),
+      this.path,
     );
   }
 
@@ -179,6 +192,7 @@ export class DebugIndex {
       'DBG1001',
       `Unknown debug scope ${scopeLabel(path)}.`,
       this.scopes.map((candidate) => scopeLabel(candidate.path)),
+      path,
     );
   }
 

@@ -72,6 +72,43 @@ Ambiguity is still possible when the source binds the same Producer name more
 than once in one exact dynamic scope. Such a query reports every physical
 ordinal instead of guessing.
 
+## Portable inspection and browser navigation
+
+`createDebugDocument(execution.debug, execution.circuit.graph)` produces a detached
+`comblang-debug` v1 document. It preserves exact scope paths, Network bindings
+(including internal and moved aliases), physical Producer IDs/ordinals, and source
+spans. Producer records include physical input/output Network IDs, final EG
+configuration, and explicit placement. Input discovery visits typed references,
+including both sides of `pair` and both Decider branches; strings in configuration
+are never treated as Network IDs. Records are joined by physical Producer ID, not
+array position.
+
+`inspectDebugNetwork(document, networkId)` returns **all** source bindings and
+connected physical Producers. It does not pick one alias after `take`, and it is
+structural connectivity, not proof that a conditional dependency is active on a
+particular tick. These detached records are inspection data, not session-bound
+handles accepted by `TestSession`.
+
+Each successfully elaborated test result carries its own `debug` document beside
+its trace, for both passing and failing tests. CLI JSON and browser Worker messages
+use the same result shape. Missing/ambiguous debug queries additionally carry
+`debugScopePath` when the query has an exact scope; structural assertion failures
+carry their selected scope too. Display labels are not parsed to recover identity.
+
+In **Test trace**, expand **Inspect source scopes and combinators** and select an
+exact scope. Network/Producer buttons select the corresponding source expression;
+**Configuration** displays input/output IDs, placement and configuration. Selecting
+a recorded Network or signal shows its aliases and reading/writing Producers
+across scopes. Test-created object adapters have no source mapping in the current
+trace schema; their object IDs are not guessed to be Producer IDs.
+
+The failed test's line button selects its position in the test editor. Selection
+works in CodeMirror and the native textarea without changing code, rerunning tests,
+or stepping the simulation. Editing source/tests invalidates this navigation with
+the result. No link resolves against another execution or a different source file.
+The document is generated transport data; loading arbitrary external debug
+documents is not an implemented import surface.
+
 ## Test-only DUT capture
 
 The test transform enables `t.instantiate(fn, ...args)` explicitly:

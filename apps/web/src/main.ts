@@ -7,6 +7,7 @@ import { createSourceEditor, type SourceEditorKind } from './code-editor.js';
 import { registerOfflineSupport, warmOfflineCache } from './offline.js';
 import { loadSourceDraft, saveSourceDraft, type SourceDraftStorage } from './source-draft.js';
 import { formatSourceDiagnostic, sourcePreviewDiagnostic } from './source-diagnostics.js';
+import { sourceNavigationRange, testFailureRange } from './source-navigation.js';
 import {
   runSourcePlanDemo,
   SourceSimulationController,
@@ -127,7 +128,14 @@ const testEditorMode = requiredElement<HTMLButtonElement>('#test-editor-mode');
 const testEditorLabel = requiredElement<HTMLElement>('#test-editor-label');
 const testStatus = requiredElement<HTMLOutputElement>('#test-status');
 const testResults = requiredElement<HTMLElement>('#test-results');
-const testTracePanel = new TestTracePanel(requiredElement<HTMLElement>('#test-trace'));
+const testTracePanel = new TestTracePanel(requiredElement<HTMLElement>('#test-trace'), (span) => {
+  const range = sourceNavigationRange(
+    sourceEditor.getValue(),
+    sourceFileId('main.factorio.ts'),
+    span,
+  );
+  if (range !== undefined) sourceEditor.revealRange(range.start, range.end);
+});
 const addTest = requiredElement<HTMLButtonElement>('#add-test');
 let parserWorker: Worker | undefined;
 let workerTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -769,6 +777,7 @@ copyBlueprint.addEventListener('click', () => {
 
 function setTestsWaiting(message: string): void {
   testTracePanel.clear(message);
+  for (const button of testResults.querySelectorAll('button')) button.disabled = true;
   testStatus.textContent = message;
   testStatus.dataset.state = 'pending';
 }
@@ -828,6 +837,11 @@ function renderTestRun(run: TestWorkerResponse['run']): void {
       location.type = 'button';
       location.textContent = `line ${testResult.line}${testResult.column === undefined ? '' : `:${testResult.column}`}`;
       location.title = 'Failure location in circuit.test.js';
+      const selection = testFailureRange(source, testResult.line, testResult.column);
+      location.disabled = selection === undefined;
+      location.addEventListener('click', () => {
+        if (selection !== undefined) testEditor.revealRange(selection.start, selection.end);
+      });
       heading.append(location);
       const span = offsetForTestLine(source, testResult.line);
       diagnostics.push({

@@ -14,9 +14,11 @@ import {
   bracketMatching,
   foldGutter,
   foldKeymap,
+  foldedRanges,
   HighlightStyle,
   indentOnInput,
   syntaxHighlighting,
+  unfoldEffect,
 } from '@codemirror/language';
 import {
   lintGutter,
@@ -130,6 +132,7 @@ export interface SourceEditor {
   readonly kind: SourceEditorKind;
   getValue(): string;
   insertText(text: string): void;
+  revealRange(start: number, end: number): void;
   setDiagnostics(diagnostics: readonly Diagnostic[]): void;
   destroy(): void;
 }
@@ -170,6 +173,33 @@ export function createSourceEditor(
     return {
       kind,
       getValue: () => textarea.value,
+      revealRange: (start, end) => {
+        textarea.focus();
+        textarea.setSelectionRange(start, end);
+        const before = textarea.value.slice(0, start).split('\n');
+        const line = before.length - 1;
+        const style = getComputedStyle(textarea);
+        const lineHeight = Number.parseFloat(style.lineHeight) || 20;
+        textarea.scrollTop = Math.max(0, line * lineHeight - textarea.clientHeight / 2);
+        const measure = document.createElement('canvas').getContext('2d');
+        if (measure !== null) {
+          measure.font = `${style.fontSize} ${style.fontFamily}`;
+          const tabSize = Number.parseInt(style.tabSize, 10) || 4;
+          const prefix = before
+            .at(-1)!
+            .split('\t')
+            .reduce(
+              (text, part, index) =>
+                text + (index === 0 ? '' : ' '.repeat(tabSize - (text.length % tabSize))) + part,
+              '',
+            );
+          textarea.scrollLeft = Math.max(
+            0,
+            measure.measureText(prefix).width - textarea.clientWidth / 3,
+          );
+        }
+        textarea.scrollIntoView({ block: 'center' });
+      },
       insertText: (text) => {
         const separator = textarea.value.length === 0 || textarea.value.endsWith('\n') ? '' : '\n';
         const insertion = `${separator}${text}`;
@@ -233,6 +263,15 @@ export function createSourceEditor(
   return {
     kind,
     getValue: () => view.state.doc.toString(),
+    revealRange: (start, end) => {
+      const effects: ReturnType<typeof unfoldEffect.of>[] = [];
+      foldedRanges(view.state).between(start, end, (from, to) => {
+        effects.push(unfoldEffect.of({ from, to }));
+      });
+      view.dispatch({ selection: { anchor: start, head: end }, effects, scrollIntoView: true });
+      view.focus();
+      view.dom.scrollIntoView({ block: 'center' });
+    },
     insertText: (text) => {
       const separator =
         view.state.doc.length === 0 || view.state.doc.toString().endsWith('\n') ? '' : '\n';

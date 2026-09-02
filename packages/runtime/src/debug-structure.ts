@@ -60,7 +60,8 @@ function partialMatch(actual: unknown, expected: unknown): boolean {
   );
 }
 
-function inputNetworks(producer: CircuitProducerNode): ReadonlySet<NetworkId> {
+/** Physical input dependencies, including pair inputs and both Decider branches. */
+export function producerInputNetworks(producer: CircuitProducerNode): ReadonlySet<NetworkId> {
   const result = new Set<NetworkId>();
   const addReference = (reference: LogicalNetworkRef): void => {
     if (reference.refKind === 'single') result.add(reference.network);
@@ -273,7 +274,7 @@ export class DebugStructureExpectation {
       const current = queue[cursor]!;
       const nextDistance = distances.get(current)! + 1;
       for (const producer of scoped) {
-        if (!inputNetworks(producer).has(current)) continue;
+        if (!producerInputNetworks(producer).has(current)) continue;
         for (const output of producer.destinations) {
           if (distances.has(output)) continue;
           if (output === destination) return nextDistance;

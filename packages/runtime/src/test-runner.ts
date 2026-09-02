@@ -10,6 +10,7 @@ import {
 } from '@comblang/simulator';
 
 import { DebugQueryError } from './debug-index.js';
+import { createDebugDocument, type DebugDocument } from './debug-document.js';
 import { StructureAssertionError } from './debug-structure.js';
 import {
   elaborateDirectPlan,
@@ -33,6 +34,9 @@ export interface DirectPlanTestCaseResult {
   readonly trace?: TraceDocument;
   /** Display names from this execution, never inferred by matching another circuit's IDs. */
   readonly traceNetworkNames?: Readonly<Record<string, string>>;
+  readonly debug?: DebugDocument;
+  /** Exact query/structural failure scope; never parsed from candidate display text. */
+  readonly debugScopePath?: readonly string[];
 }
 
 export interface DirectPlanTestRun {
@@ -111,6 +115,7 @@ function failure(
       failureKind: 'debug-query',
       code: error.code,
       candidates: error.candidates,
+      ...(error.scopePath === undefined ? {} : { debugScopePath: error.scopePath }),
     };
   }
   if (error instanceof StructureAssertionError) {
@@ -119,6 +124,7 @@ function failure(
       failureKind: 'structure',
       code: error.code,
       details: error.details,
+      debugScopePath: error.details.scopePath,
     };
   }
   return { ...common, failureKind: 'runtime' };
@@ -171,6 +177,7 @@ export function runDirectPlanTests(
       return failure(registeredTest.name, error, sourceName, stackLineOffset);
     }
     const session = execution.createTestSession();
+    const debug = createDebugDocument(execution.debug, execution.circuit.graph);
     const traceNetworkNames = Object.freeze(
       Object.fromEntries(execution.circuit.ir.networks.map(({ id, name }) => [id, name ?? id])),
     );
@@ -206,6 +213,7 @@ export function runDirectPlanTests(
         status: 'passed',
         trace: session.traces.toJSON(),
         traceNetworkNames,
+        debug,
       };
     } catch (error) {
       return {
@@ -217,6 +225,7 @@ export function runDirectPlanTests(
           session.traces.toJSON(),
         ),
         traceNetworkNames,
+        debug,
       };
     } finally {
       session.finish();

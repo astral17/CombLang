@@ -90,6 +90,13 @@ test("bad query", ({ execution }) => {
       failureKind: 'debug-query',
       code: 'DBG1001',
       candidates: expect.any(Array),
+      debugScopePath: [],
+      debug: { format: 'comblang-debug', version: 1 },
     });
+    const transported = structuredClone(run.results[0]!);
+    expect(transported.debug).toEqual(run.results[0]!.debug);
+    const target = transported.trace!.targets[0]!;
+    if (target.kind !== 'network') throw new Error('Expected a Network trace.');
+    expect(transported.debug!.scopes[0]!.producers[0]!.outputs).toContain(target.networkId);
   });
 });

@@ -520,6 +520,56 @@ code {
   max-height: 360px;
   margin: 0 14px 14px;
 }
+.test-debug {
+  margin: 0 14px 14px;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+.test-debug > details > div {
+  max-height: 360px;
+  overflow: auto;
+}
+.test-debug summary {
+  cursor: pointer;
+  padding: 8px 0;
+}
+.test-debug label {
+  display: grid;
+  gap: 5px;
+  margin: 8px 0;
+}
+.test-debug select,
+.test-debug button {
+  max-width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 6px 8px;
+  border: 1px solid #47594f;
+  border-radius: 5px;
+  background: #202b24;
+  color: #d0dbd4;
+  font: inherit;
+  text-align: left;
+}
+.test-debug button {
+  cursor: pointer;
+}
+.debug-entry {
+  padding: 6px 0;
+  border-top: 1px solid #304038;
+}
+.test-debug pre {
+  min-height: 0;
+  max-height: 240px;
+  overflow: auto;
+  padding: 8px;
+}
+@media (max-width: 850px) {
+  .test-debug select,
+  .test-debug button {
+    min-height: 44px;
+  }
+}
 .trace-controls {
   display: grid;
   grid-template-columns: minmax(120px, 1fr) minmax(140px, 1.5fr) 90px 110px auto auto;
