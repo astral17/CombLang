@@ -172,6 +172,40 @@
         </div>
       </section>
 
+      <section id="test-trace" class="test-trace" aria-labelledby="test-trace-title">
+        <div class="test-panel-header">
+          <div>
+            <p class="section-kicker">Saved test history · read-only</p>
+            <h2 id="test-trace-title">Test trace</h2>
+          </div>
+          <output id="trace-status" aria-live="polite">Waiting for tests…</output>
+        </div>
+        <div class="trace-controls">
+          <label>Test<select id="trace-case" aria-label="Trace test"></select></label>
+          <label>View<select id="trace-target" aria-label="Trace target"></select></label>
+          <label
+            >Start tick<input id="trace-start" type="number" min="0" step="1" value="0"
+          /></label>
+          <label
+            >Ticks per page<input
+              id="trace-window"
+              type="number"
+              min="1"
+              max="256"
+              step="1"
+              value="32"
+          /></label>
+          <button id="trace-previous" type="button">Previous</button>
+          <button id="trace-next" type="button">Next</button>
+        </div>
+        <div
+          id="test-trace-table"
+          class="waveform"
+          tabindex="0"
+          aria-label="Scrollable test trace"
+        ></div>
+      </section>
+
       <section class="blueprint-panel" aria-labelledby="blueprint-title">
         <div class="result-header">
           <div>

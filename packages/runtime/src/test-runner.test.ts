@@ -49,6 +49,11 @@ test('quiet failure', ({ network, session, tick, expectSignal }) => {
     for (const entry of result.results) {
       const trace = JSON.parse(JSON.stringify(entry.trace));
       const reader = new TraceReader(trace);
+      expect(
+        entry.traceNetworkNames?.[
+          reader.targets[0]!.kind === 'network' ? reader.targets[0]!.networkId : ''
+        ],
+      ).toBe('input');
       expect(trace.events).toHaveLength(1);
       expect([...reader.snapshots({ fromTick: reader.endTick })]).toHaveLength(1);
     }

@@ -182,8 +182,9 @@ with the object's provenance. Object target metadata contains stable object,
 adapter, instance, and connector IDs in the same `comblang-trace` document as
 Network and signal targets.
 
-Chart rendering is intentionally outside the trace store; the web waveform
-will consume this shared JSON model later.
+Chart rendering is intentionally outside the trace store. The browser's
+read-only Test trace panel consumes this shared JSON model independently of
+the interactive live simulation.
 
 ### Reading a saved trace
 
@@ -223,8 +224,33 @@ targets and out-of-range tick queries throw instead of inventing zero values.
 Input arrays may be unsorted; events are ordered per target during loading.
 Legacy v1 documents without `endTick` use the latest event tick and expose
 `hasExplicitEndTick === false`: an unrecorded quiet tail cannot be recovered.
-This reader is shared infrastructure; choosing a test trace in the browser
-timeline remains a separate UI integration task.
+This reader is shared infrastructure; the browser uses the same range queries
+for its saved test-history table.
+
+### Browser test-history table
+
+Register targets with `session.trace(...)` before advancing the test clock.
+After the run, choose **View trace** on a result or select the test in the
+**Test trace** panel. Failed assertions keep all history captured before the
+failure. Tests without registered targets show an explanation rather than an
+invented all-zero circuit history.
+
+The overview has one column per recorded target and up to three signal/value
+lines in each cell, followed by an overflow count. Click a target header or
+choose it in **View** to display one column per signal. Quality-qualified
+signals remain distinct. An Unknown cell is labelled explicitly; expand it
+to inspect origin descriptions and dependency paths. Network, selected-signal,
+object-input, and isolated object-output targets are separate observations.
+Network display names travel with each test result as `traceNetworkNames`,
+so the browser does not resolve IDs against a different execution.
+
+**Start tick**, **Ticks per page** (1–256), and **Previous/Next** select an
+inclusive read-only window; by default the panel opens at the last 32 ticks.
+Long stable tails remain browseable through `endTick`. This does not change
+the live simulation's selected tick, snapshots, play/pause state, or editors.
+Source or test edits invalidate the displayed history immediately; a pending
+test result from the old source cannot restore a stale trace. This selection
+is presentation state, not another execution of the circuit or test body.
 
 ## Debug index
 
@@ -376,9 +402,9 @@ The old single-signal bar waveform has been replaced by two table views:
   keeps ticks as rows, making pipelines, disappearing signals, and exact values
   easy to compare.
 
-Both tables scroll horizontally on narrow screens. Their model remains separate
-from DOM rendering so it can later consume the shared `comblang-trace` document
-and evolve toward richer waveform views.
+Both live tables scroll horizontally on narrow screens. Their model remains
+separate from DOM rendering. The read-only **Test trace** panel uses the shared
+`comblang-trace` replay API; it does not replace or mutate the live simulation.
 
 The live circuit view starts paused with one explicit all-zero `T0`; absent
 signals are displayed and read as zero. `Play`/`Pause`, `Step`, `Run N`, and

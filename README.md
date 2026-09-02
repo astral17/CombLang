@@ -59,7 +59,8 @@ The current repository implements the Phase 3 source compiler, the complete Phas
     - [x] Interactive all-zero `T0`, reset/play/pause/step/run controls, configurable history window, historical tick selection/branching, and quality-aware snapshot editing with double-click shortcuts.
     - [x] Shared browser/Node test-result model, per-test trace documents, structured assertion/debug failures, browser result transport/presentation, and `factorio-dsl test --json`.
     - [x] Shared delta-trace replay with explicit final tick, Known/Unknown and quality preservation, validated history, and lazy selected-target tick ranges; legacy v1 traces retain an explicitly inferred horizon.
-    - [ ] Let the browser timeline ingest a selected test's shared trace document and add richer debug-query navigation.
+    - [x] Browse a selected test's shared trace in a separate read-only overview/detail table with bounded tick windows, quality-aware columns, Unknown origin inspection, execution-local Network names, and mobile layout.
+    - [ ] Add richer debug-query navigation from tests and recorded trace targets to source scopes and physical Producers.
   - [ ] Add focused kernel/lattice/mock/model/query tests plus end-to-end feedback, pulse, settle, Unknown-chain, hierarchy, structural, CLI, and browser cases; use a MemoCell testbench and a test-only object adapter as Phase 5 acceptance programs.
   - [ ] Document the executable testbench language/API and its separation from compile-time assertions, Factorio conformance fixtures, and future Phase 6 typed-object state adapters.
 - [ ] Phase 5.5 — external prototype environment foundation

@@ -508,6 +508,91 @@ code {
   background: #18201b;
   box-shadow: 0 24px 70px rgb(0 0 0 / 0.25);
 }
+.test-trace {
+  margin-top: 24px;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid #304038;
+  border-radius: 14px;
+  background: #151d18;
+}
+.test-trace .waveform {
+  max-height: 360px;
+  margin: 0 14px 14px;
+}
+.trace-controls {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(140px, 1.5fr) 90px 110px auto auto;
+  align-items: end;
+  gap: 10px;
+  padding: 14px;
+}
+.trace-controls label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  color: #a7b5ac;
+  font-size: 0.7rem;
+}
+.trace-controls select,
+.trace-controls input,
+.trace-controls button {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  padding: 5px 8px;
+  border: 1px solid #47594f;
+  border-radius: 5px;
+  color: #d0dbd4;
+  background: #202b24;
+  font: inherit;
+  font-size: 0.75rem;
+}
+.trace-controls :disabled {
+  opacity: 0.5;
+}
+#trace-status {
+  color: #a7b5ac;
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+#test-trace-table td {
+  white-space: pre-line;
+}
+#test-trace-table .trace-unknown {
+  color: #e3bd86;
+  white-space: normal;
+}
+#test-trace-table summary {
+  cursor: pointer;
+}
+#test-trace-table pre {
+  min-height: 0;
+  max-height: 140px;
+  max-width: 300px;
+  padding: 8px 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.test-result .view-test-trace {
+  cursor: pointer;
+  flex-shrink: 0;
+}
+@media (max-width: 850px) {
+  .trace-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .trace-controls button {
+    min-height: 44px;
+  }
+  .test-trace .test-panel-header {
+    flex-direction: column;
+    align-items: start;
+    gap: 8px;
+  }
+}
 .test-panel-header {
   display: flex;
   min-height: 76px;

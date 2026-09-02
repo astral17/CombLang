@@ -14,6 +14,7 @@ import {
   type SourcePlanDemo,
 } from './source-demo.js';
 import { loadTestDraft, saveTestDraft } from './test-draft.js';
+import { TestTracePanel } from './test-trace-panel.js';
 import type { TestWorkerRequest, TestWorkerResponse } from './test-worker-protocol.js';
 import { buildDetailTimeline, buildOverviewTimeline, signalLabel } from './timeline-view.js';
 import type { CompilerWorkerRequest, CompilerWorkerResponse } from './worker-protocol.js';
@@ -48,13 +49,15 @@ Gate(biased, threshold).to(output, mirror);
 
 const sampleTests = `const SIGNAL_A = Signal("virtual", "signal-A");
 
-test("gate opens above the threshold", ({ network, drive, tick, expectSignal }) => {
+test("gate opens above the threshold", ({ network, drive, tick, expectSignal, session }) => {
+  session.trace(network("input"), network("output"));
   drive(network("input"), [[SIGNAL_A, 7]]);
   tick(5);
   expectSignal(network("output"), SIGNAL_A).toBe(41);
 });
 
-test("gate stays closed below the threshold", ({ network, drive, tick, expectSignal }) => {
+test("gate stays closed below the threshold", ({ network, drive, tick, expectSignal, session }) => {
+  session.trace(network("input"), network("output"));
   drive(network("input"), [[SIGNAL_A, 2]]);
   tick(5);
   expectSignal(network("output"), SIGNAL_A).toBe(0);
@@ -124,6 +127,7 @@ const testEditorMode = requiredElement<HTMLButtonElement>('#test-editor-mode');
 const testEditorLabel = requiredElement<HTMLElement>('#test-editor-label');
 const testStatus = requiredElement<HTMLOutputElement>('#test-status');
 const testResults = requiredElement<HTMLElement>('#test-results');
+const testTracePanel = new TestTracePanel(requiredElement<HTMLElement>('#test-trace'));
 const addTest = requiredElement<HTMLButtonElement>('#add-test');
 let parserWorker: Worker | undefined;
 let workerTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -199,8 +203,9 @@ updateTestEditorModeUi();
 addTest.addEventListener('click', () => {
   const number = addedTestNumber;
   addedTestNumber += 1;
-  testEditor.insertText(`test("new circuit test ${number}", ({ network, tick, expectSignal }) => {
+  testEditor.insertText(`test("new circuit test ${number}", ({ network, tick, expectSignal, session }) => {
   const SIGNAL_A = Signal("virtual", "signal-A");
+  session.trace(network("output"));
   tick(1);
   expectSignal(network("output"), SIGNAL_A).toBe(0);
 });
@@ -763,11 +768,13 @@ copyBlueprint.addEventListener('click', () => {
 });
 
 function setTestsWaiting(message: string): void {
+  testTracePanel.clear(message);
   testStatus.textContent = message;
   testStatus.dataset.state = 'pending';
 }
 
 function renderTestsBlocked(message: string): void {
+  testTracePanel.clear(message);
   testEditor.setDiagnostics([]);
   testStatus.textContent = 'Tests not run';
   testStatus.dataset.state = 'invalid';
@@ -786,12 +793,13 @@ function offsetForTestLine(source: string, line: number): { start: number; end: 
 }
 
 function renderTestRun(run: TestWorkerResponse['run']): void {
+  testTracePanel.setRun(run);
   testStatus.textContent = `${run.passed} passed · ${run.failed} failed`;
   testStatus.dataset.state = run.failed === 0 ? 'valid' : 'invalid';
   const source = testEditor.getValue();
   const fileId = sourceFileId('circuit.test.js');
   const diagnostics: Diagnostic[] = [];
-  const items = run.results.map((testResult) => {
+  const items = run.results.map((testResult, index) => {
     const item = document.createElement('article');
     item.className = 'test-result';
     item.dataset.state = testResult.status;
@@ -802,6 +810,14 @@ function renderTestRun(run: TestWorkerResponse['run']): void {
     const name = document.createElement('strong');
     name.textContent = testResult.name;
     heading.append(marker, name);
+    if (testResult.trace !== undefined) {
+      const trace = document.createElement('button');
+      trace.type = 'button';
+      trace.className = 'view-test-trace';
+      trace.textContent = 'View trace';
+      trace.addEventListener('click', () => testTracePanel.show(index));
+      heading.append(trace);
+    }
     if (testResult.code !== undefined) {
       const code = document.createElement('code');
       code.textContent = testResult.code;
@@ -919,6 +935,10 @@ function render(): void {
 function scheduleRender(): void {
   saveSourceDraft(draftStorage, sourceEditor.getValue());
   currentRevision += 1;
+  testRevision += 1;
+  terminateTestWorker();
+  if (testRenderTimer !== undefined) clearTimeout(testRenderTimer);
+  testRenderTimer = undefined;
   if (renderTimer !== undefined) clearTimeout(renderTimer);
   sourceEditor.setDiagnostics([]);
   status.textContent = 'Waiting for input…';

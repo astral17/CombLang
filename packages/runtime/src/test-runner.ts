@@ -31,6 +31,8 @@ export interface DirectPlanTestCaseResult {
   readonly line?: number;
   readonly column?: number;
   readonly trace?: TraceDocument;
+  /** Display names from this execution, never inferred by matching another circuit's IDs. */
+  readonly traceNetworkNames?: Readonly<Record<string, string>>;
 }
 
 export interface DirectPlanTestRun {
@@ -169,6 +171,9 @@ export function runDirectPlanTests(
       return failure(registeredTest.name, error, sourceName, stackLineOffset);
     }
     const session = execution.createTestSession();
+    const traceNetworkNames = Object.freeze(
+      Object.fromEntries(execution.circuit.ir.networks.map(({ id, name }) => [id, name ?? id])),
+    );
     try {
       const api: DirectPlanTestApi = {
         execution,
@@ -200,15 +205,19 @@ export function runDirectPlanTests(
         name: registeredTest.name,
         status: 'passed',
         trace: session.traces.toJSON(),
+        traceNetworkNames,
       };
     } catch (error) {
-      return failure(
-        registeredTest.name,
-        error,
-        sourceName,
-        stackLineOffset,
-        session.traces.toJSON(),
-      );
+      return {
+        ...failure(
+          registeredTest.name,
+          error,
+          sourceName,
+          stackLineOffset,
+          session.traces.toJSON(),
+        ),
+        traceNetworkNames,
+      };
     } finally {
       session.finish();
     }
