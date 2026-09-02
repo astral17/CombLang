@@ -411,6 +411,8 @@ Returning an array/plain object inspects its own data properties for Network own
 
 The semantic pass reports only violations it can prove without executing the program. The transformed elaboration runtime is authoritative for dynamic operator and method dispatch: the same instrumented syntax may perform ordinary JavaScript work or construct a circuit descriptor depending on the values reached in that execution. The exact supported metaprogramming surface and optional-chain boundary are listed in [Compile-time JavaScript](compile-time-javascript.md).
 
+DSL method arguments may be spread from executed arrays/iterables, for example `producer.at(...coordinates).to(...destinations)` or `destination.take(...sources)`. These calls retain the usual constraints (two or three placement arguments, one or two output Networks with an optional Signal, exactly one source for `take`); argument count is checked after expansion. Computed method names use the same runtime dispatch as dot access. An ordinary JavaScript method with the same name retains its own argument convention and is looked up once before arguments are evaluated.
+
 Free DSL identifiers are reserved in v1 and cannot be shadowed by user bindings. This includes constructors/functions and every documented wildcard alias. `CL1045` points at the conflicting declaration. Object property and method names are unaffected: `object.to(...)` or `object.as(...)` still dispatches from the executed receiver.
 
 Ordinary functions, `if` branches, arrays, objects, and all JavaScript loop families execute during elaboration. For example, a regular `for` loop can generate compact `IF` attachments:

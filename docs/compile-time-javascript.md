@@ -22,6 +22,8 @@ The v1 language reserves all free DSL identifiers. User variables, parameters, d
 
 User function signatures are resolved by lexical symbol identity rather than name matching; a shadowing local binding never inherits an outer function's contract. Reassigned function bindings are left to executed validation. Non-optional calls carry argument provenance through aliases, object/array members, and spreads. Ordinary method receivers, getter-before-argument evaluation, spread iteration order, and direct `eval` scope are retained; this tracing does not consume the circuit-recording DSL-call budget. Optional calls, native callbacks, `super`, and private-method calls retain native invocation and may use the parameter declaration as diagnostic fallback.
 
+Method lookup happens once, before argument evaluation, including ordinary methods named `.to`, `.take`, `.at`, and `.as`. The runtime selects the circuit operation only for a DSL receiver; ordinary objects retain their own methods, getters, and `this`. Arguments remain in their original lexical environment rather than an injected callback, including a suspended `yield` argument. Computed method calls such as `producer['to'](output)` follow the same dispatch. For DSL calls with spread arguments, arity is validated after expansion: `(input + 0).at(...coordinates).to(...destinations)` does not require a statically known array length.
+
 ## Accepted with limited DSL integration
 
 - callbacks such as `.map(...)` execute normally, but their iterations do not currently add a distinct provenance frame; use an explicit loop when per-iteration diagnostic identity matters;

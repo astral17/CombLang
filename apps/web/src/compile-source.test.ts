@@ -4,6 +4,23 @@ import { loadPrototypeDatabase, syntheticPrototypeDatabase } from '@comblang/pro
 import { compileSource } from './compile-source.js';
 
 describe('browser source compilation', () => {
+  test('compiles spread placement and attachment through the shared runtime', () => {
+    const result = compileSource({
+      path: 'main.factorio.ts',
+      text: `const output = new Network();
+const coordinates = [1, 2, 4];
+CC().at(...coordinates).to(...[output]);`,
+    });
+    expect(result.compilerDiagnostics).toEqual([]);
+    expect(result.plan?.producers).toMatchObject([
+      {
+        kind: 'constant',
+        placement: { x: 1, y: 2, direction: 4 },
+        destinations: [{ network: 'output' }],
+      },
+    ]);
+  });
+
   test('retains the argument span for a function stored in an object', () => {
     const argument = 'values[0]';
     const text = `function Read(input: Readonly<Network>): Network { return input + 0; }

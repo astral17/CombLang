@@ -41,6 +41,20 @@ afterEach(async () => {
 });
 
 describe('factorio-dsl check', () => {
+  test('prints the call location for an executed spread placement error', async () => {
+    const path = await sourceFile(`const coordinates = [1, 2, 4, 8];
+CC().at(...coordinates);`);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect(await run(['check', path])).toBe(1);
+    expect(error.mock.calls).toEqual([
+      [
+        expect.stringContaining(
+          'main.factorio.ts:2:1 - error EX1001: .at(x, y, direction?) requires two or three arguments.',
+        ),
+      ],
+    ]);
+  });
+
   test('prints the caller line and column for an aliased spread argument failure', async () => {
     const path =
       await sourceFile(`function Read(input: Readonly<Network>): Network { return input + 0; }

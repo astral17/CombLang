@@ -177,9 +177,12 @@ const output: Network<G> = (input + 1).at(10.5, -2, 8);`,
     });
     const program = transformElaborationModule(source);
 
-    expect(program.code).toContain('__dsl.place(');
+    expect(program.code).toContain('__dsl.invokePrepared(__dsl.prepareMember(');
+    expect(program.code).toContain('"at", { start:');
     expect(program.code).toContain('"green"');
-    expect(program.code).toContain('10.5, -2, 8');
+    expect(program.code).toContain('value: 10.5, source:');
+    expect(program.code).toContain('value: -2, source:');
+    expect(program.code).toContain('value: 8, source:');
   });
 
   test('defers property and element += classification to runtime without repeating targets', () => {
@@ -208,7 +211,9 @@ const source = new Network();
 destination.take(source);`,
     });
 
-    expect(transformElaborationModule(source).code).toContain('__dsl.take(destination, source');
+    expect(transformElaborationModule(source).code).toContain(
+      '__dsl.invokePrepared(__dsl.prepareMember(destination, "take",',
+    );
   });
 
   test('routes pair views and their selections through runtime dispatch', () => {

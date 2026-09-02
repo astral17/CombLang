@@ -51,6 +51,8 @@ Source attribution follows the boundary that can actually correct the error:
 - attachment, placement, selection, `CC`, `IF`, and complete chained `when(...).then(...).else(...)` failures point to their source operation;
 - ownership and color failures add earlier declarations, borrows, moves, producer creation, or attachment sites as related spans.
 
+Ordinary JavaScript methods named `to`, `take`, `at`, or `as` use the same argument provenance as other methods; these names alone do not select a DSL contract. A DSL method's invalid argument count after spread expansion points to the complete method call, rather than producing a speculative static arity error.
+
 Call provenance is associated with the executed function identity, not its textual name. Optional calls, native callback invocation (for example `array.map(fn)` invoking `fn`), and other calls without a matching instrumented entry retain the parameter declaration as fallback. A JavaScript exception inside an instrumented call receives that call's span unless a more precise inner DSL diagnostic already exists; exceptions outside instrumented operations may still lack a source span.
 
 ## Common compiler diagnostics

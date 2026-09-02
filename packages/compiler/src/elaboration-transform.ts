@@ -463,8 +463,6 @@ export function transformElaborationModule(
       }
       return ts.isDeleteExpression(parent);
     };
-    const containsYield = (node: ts.Node): boolean =>
-      ts.isYieldExpression(node) || (node.forEachChild(containsYield) ?? false);
     const callArguments = (args: readonly ts.Expression[]): ts.ArrayLiteralExpression =>
       factory.createArrayLiteralExpression(
         args.map((argument) =>
@@ -973,40 +971,11 @@ export function transformElaborationModule(
             spanLiteral(factory, node),
           ]);
         }
-        if (method === 'to') {
-          return dslCall(factory, 'attachTo', [
-            ts.visitNode(receiver, visit) as ts.Expression,
-            ...node.arguments.map((argument) => ts.visitNode(argument, visit) as ts.Expression),
-            spanLiteral(factory, node),
-          ]);
-        }
-        if (method === 'take') {
-          return dslCall(factory, 'take', [
-            ts.visitNode(receiver, visit) as ts.Expression,
-            ...node.arguments.map((argument) => ts.visitNode(argument, visit) as ts.Expression),
-            spanLiteral(factory, node),
-          ]);
-        }
-        if (method === 'as' && node.arguments.length === 1) {
-          return dslCall(factory, 'bindOutput', [
-            ts.visitNode(receiver, visit) as ts.Expression,
-            ts.visitNode(node.arguments[0]!, visit) as ts.Expression,
-            spanLiteral(factory, node),
-          ]);
-        }
-        if (method === 'at' && (node.arguments.length === 2 || node.arguments.length === 3)) {
-          return dslCall(factory, 'place', [
-            ts.visitNode(receiver, visit) as ts.Expression,
-            ...node.arguments.map((argument) => ts.visitNode(argument, visit) as ts.Expression),
-            spanLiteral(factory, node),
-          ]);
-        }
       }
 
       if (
         ts.isCallExpression(node) &&
         node.questionDotToken === undefined &&
-        !node.arguments.some(containsYield) &&
         (ts.isPropertyAccessExpression(node.expression) ||
           ts.isElementAccessExpression(node.expression)) &&
         node.expression.expression.kind !== ts.SyntaxKind.SuperKeyword &&
@@ -1015,19 +984,15 @@ export function transformElaborationModule(
           ts.isPrivateIdentifier(node.expression.name)
         )
       ) {
-        return dslCall(factory, 'invokeMember', [
-          ts.visitNode(node.expression.expression, visit) as ts.Expression,
-          ts.isPropertyAccessExpression(node.expression)
-            ? factory.createStringLiteral(node.expression.name.text)
-            : (ts.visitNode(node.expression.argumentExpression, visit) as ts.Expression),
-          factory.createArrowFunction(
-            undefined,
-            undefined,
-            [],
-            undefined,
-            factory.createToken(ts.SyntaxKind.EqualsGreaterThanToken),
-            callArguments(node.arguments),
-          ),
+        return dslCall(factory, 'invokePrepared', [
+          dslCall(factory, 'prepareMember', [
+            ts.visitNode(node.expression.expression, visit) as ts.Expression,
+            ts.isPropertyAccessExpression(node.expression)
+              ? factory.createStringLiteral(node.expression.name.text)
+              : (ts.visitNode(node.expression.argumentExpression, visit) as ts.Expression),
+            spanLiteral(factory, node),
+          ]),
+          callArguments(node.arguments),
           spanLiteral(factory, node),
         ]);
       }

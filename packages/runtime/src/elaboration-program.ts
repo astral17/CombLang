@@ -57,6 +57,11 @@ interface Invocation {
   entered: boolean;
 }
 
+interface PreparedInvocation {
+  readonly callable: unknown;
+  readonly receiver: unknown;
+}
+
 interface BindingDescriptor {
   readonly name: string;
   readonly color?: 'red' | 'green';
@@ -175,15 +180,40 @@ class ElaborationRecorder {
     invoke: (callable: unknown, args: readonly CallArgument[], rawSpan: RawSpan): unknown => {
       return this.#invoke(callable, undefined, args, rawSpan);
     },
+    prepareMember: (receiver: unknown, key: PropertyKey, rawSpan: RawSpan): PreparedInvocation => {
+      // Resolve the member before evaluating arguments, but leave those arguments in
+      // their original lexical environment (not a thunk: eval and yield depend on it).
+      if (this.#isCircuitDslValue(receiver)) {
+        const property = Reflect.ownKeys({ [key]: undefined })[0]!;
+        const operations: Record<string, ((...values: unknown[]) => unknown) | undefined> = {
+          to: (...values) => this.api.attachTo(receiver, ...values, rawSpan),
+          take: (...values) => this.api.take(receiver, ...values, rawSpan),
+          at: (...values) => this.api.place(receiver, ...values, rawSpan),
+          as: (...values) => this.api.bindOutput(receiver, values[0] as SignalId, rawSpan),
+        };
+        const operation =
+          typeof property === 'string' && Object.hasOwn(operations, property)
+            ? operations[property]
+            : undefined;
+        if (operation !== undefined) return { callable: operation, receiver };
+        return { callable: this.api.element(receiver, property, rawSpan), receiver };
+      }
+      return { callable: this.api.element(receiver, key, rawSpan), receiver };
+    },
+    invokePrepared: (
+      prepared: PreparedInvocation,
+      args: readonly CallArgument[],
+      rawSpan: RawSpan,
+    ): unknown => this.#invoke(prepared.callable, prepared.receiver, args, rawSpan),
     invokeMember: (
       receiver: unknown,
       key: PropertyKey,
       evaluateArguments: () => readonly CallArgument[],
       rawSpan: RawSpan,
     ): unknown => {
-      // Property lookup (including getters) precedes argument evaluation, as in JavaScript.
-      const callable = this.api.element(receiver, key, rawSpan);
-      return this.#invoke(callable, receiver, evaluateArguments(), rawSpan);
+      // Compatibility with already-generated v2 programs using argument thunks.
+      const prepared = this.api.prepareMember(receiver, key, rawSpan);
+      return this.api.invokePrepared(prepared, evaluateArguments(), rawSpan);
     },
     spreadCallArguments: (values: Iterable<unknown>, rawSpan: RawSpan): readonly CallArgument[] => {
       const result: CallArgument[] = [];
@@ -961,6 +991,9 @@ class ElaborationRecorder {
         return (producer as { at: (...values: unknown[]) => unknown }).at(...args.slice(1, -1));
       }
       this.#recordDslCall();
+      if (args.length !== 4 && args.length !== 5) {
+        throw new Error('.at(x, y, direction?) requires two or three arguments.');
+      }
       if (this.#producerAttachments.has(producer.identity)) {
         throw new Error('.at(...) must be applied before .to(...) or another attachment.');
       }

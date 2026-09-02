@@ -21,6 +21,156 @@ for (let i = 0; i < 10; i++) {
 }`;
 
 describe('executed elaboration program', () => {
+  test.each(
+    ['to', 'take', 'at', 'as'].flatMap((method) =>
+      [false, true].map((computed) => ({ method, computed })),
+    ),
+  )(
+    'preserves getter-before-argument evaluation for $method (computed=$computed)',
+    ({ method, computed }) => {
+      const parsed = parseFile({
+        path: 'ordinary-dsl-named-method.factorio.ts',
+        text: `const events = [];
+const object = {};
+function original(value: number) {
+  if (this !== object) throw new Error('lost receiver');
+  events.push('call');
+  return value + 1;
+}
+Object.defineProperty(object, '${method}', {
+  configurable: true,
+  get() { events.push('getter'); return original; }
+});
+function receiver() { events.push('receiver'); return object; }
+function key() { events.push('key'); return '${method}'; }
+function argument() {
+  events.push('argument');
+  Object.defineProperty(object, '${method}', { value() { throw new Error('looked up too late'); } });
+  return 5;
+}
+const result = receiver()${computed ? '[key()]' : `.${method}`}(argument()${method === 'at' ? ', 2' : ''});
+if (events.join(',') !== '${computed ? 'receiver,key,getter,argument,call' : 'receiver,getter,argument,call'}') {
+  throw new Error('wrong evaluation order: ' + events.join(','));
+}
+const output = CC(result * Signal('signal-A'));`,
+      });
+      expect(validateDslSemantics(parsed)).toEqual([]);
+      const plan = executeElaborationProgram(transformElaborationModule(parsed));
+      expect(plan.producers).toMatchObject([{ kind: 'constant', outputs: [{ value: 6 }] }]);
+    },
+  );
+
+  test.each(['to', 'take', 'at', 'as'])(
+    'keeps argument provenance in ordinary .%s calls',
+    (method) => {
+      const parsed = parseFile({
+        path: 'dsl-named-method-source.factorio.ts',
+        text: `function Read(input: Readonly<Network>): Network { return input + 0; }
+const object = { ${method}: Read };
+const values = [5, 6];
+object.${method}(...values);`,
+      });
+      expect(validateDslSemantics(parsed)).toEqual([]);
+      try {
+        executeElaborationProgram(transformElaborationModule(parsed));
+        expect.fail('Expected the argument contract to reject a number.');
+      } catch (error) {
+        const failure = error as ElaborationExecutionError;
+        expect(failure.code).toBe('RT2015');
+        expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe('...values');
+      }
+    },
+  );
+
+  test('dispatches computed DSL methods and spread arguments by the executed receiver', () => {
+    const parsed = parseFile({
+      path: 'computed-dsl-method.factorio.ts',
+      text: `const input = new Network();
+const output = new Network();
+const mirror = new Network();
+const coordinates = [10.5, -2, 8];
+const destinations = [output, mirror];
+let keyReads = 0;
+const placementKey = { [Symbol.toPrimitive]() { keyReads++; return 'at'; } };
+(input + 0)[placementKey](...coordinates)['to'](...destinations);
+const extra = new Network();
+output['take'](...[extra]);
+(input + 1).at(...coordinates).to(...[output]);
+if (keyReads !== 1) throw new Error('key evaluated repeatedly');`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    expect(plan.producers).toHaveLength(2);
+    expect(plan.producers[0]).toMatchObject({
+      kind: 'arithmetic',
+      placement: { x: 10.5, y: -2, direction: 8 },
+      destinations: [{ network: 'output' }, { network: 'mirror' }],
+    });
+    expect(plan.networkTransfers).toHaveLength(1);
+    expect(() => elaborateDirectPlan(plan)).not.toThrow();
+  });
+
+  test.each(['[]', '[1]', '[1, 2, 4, 8]'])(
+    'rejects executed placement arity from spread %s at the call',
+    (values) => {
+      const parsed = parseFile({
+        path: 'spread-placement-arity.factorio.ts',
+        text: `const input = new Network();
+const values = ${values};
+(input + 0).at(...values);`,
+      });
+      expect(validateDslSemantics(parsed)).toEqual([]);
+      try {
+        executeElaborationProgram(transformElaborationModule(parsed));
+        expect.fail('Expected invalid placement arity.');
+      } catch (error) {
+        const failure = error as ElaborationExecutionError;
+        expect(failure.message).toContain('requires two or three arguments');
+        expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(
+          '(input + 0).at(...values)',
+        );
+      }
+    },
+  );
+
+  test('checks callability after arguments, but null receivers before arguments', () => {
+    const parsed = parseFile({
+      path: 'member-call-failures.factorio.ts',
+      text: `let calls = 0;
+function argument() { calls++; return 1; }
+const missing = { to: 5 };
+try { missing.to(argument()); } catch {}
+try { null.to(argument()); } catch {}
+const broken = { get to() { throw new Error('getter failed'); } };
+try { broken.to(argument()); } catch {}
+if (calls !== 1) throw new Error('wrong argument evaluation');
+const output = CC();`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).not.toThrow();
+  });
+
+  test('keeps suspended member-call lookup and argument provenance across yield', () => {
+    const parsed = parseFile({
+      path: 'yield-call-source.factorio.ts',
+      text: `function Read(input: Readonly<Network>): Network { return input + 0; }
+let reads = 0;
+const object = { get run() { reads++; return Read; } };
+const iterator = (function* () { object.run(yield 1); })();
+iterator.next();
+if (reads !== 1) throw new Error('getter not evaluated before suspension');
+iterator.next(5);`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected the yielded argument to fail the Network contract.');
+    } catch (error) {
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2015');
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe('yield 1');
+    }
+  });
+
   test.each([
     { call: 'alias(values[0])', source: 'values[0]' },
     { call: 'alias(...values)', source: '...values' },

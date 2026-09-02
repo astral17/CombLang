@@ -996,6 +996,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
       const receiver = node.expression.expression;
       const method = node.expression.name.text;
+      const hasSpread = node.arguments.some(ts.isSpreadElement);
       if (
         method === 'as' &&
         node.arguments.length === 1 &&
@@ -1026,10 +1027,19 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
         if (method === 'as' && node.arguments.length !== 1) {
           report('CL1031', '.as(SIGNAL) requires exactly one output Signal.', node);
         }
-        if (method === 'at' && node.arguments.length !== 2 && node.arguments.length !== 3) {
+        if (
+          method === 'at' &&
+          !hasSpread &&
+          node.arguments.length !== 2 &&
+          node.arguments.length !== 3
+        ) {
           report('CL1035', '.at(x, y, direction?) requires two or three arguments.', node);
         }
-        if (method === 'to' && (node.arguments.length < 1 || node.arguments.length > 3)) {
+        if (
+          method === 'to' &&
+          !hasSpread &&
+          (node.arguments.length < 1 || node.arguments.length > 3)
+        ) {
           report(
             'CL1021',
             '.to(...) requires one or two Network destinations and an optional output Signal.',
@@ -1038,6 +1048,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
         }
         if (
           method === 'to' &&
+          !hasSpread &&
           node.arguments.length === 3 &&
           isDefinitelyNotOutputSignal(node.arguments[2]!)
         ) {
@@ -1048,7 +1059,12 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
           );
         }
       }
-      if (method === 'take' && isNetworkExpression(receiver) && node.arguments.length !== 1) {
+      if (
+        method === 'take' &&
+        !hasSpread &&
+        isNetworkExpression(receiver) &&
+        node.arguments.length !== 1
+      ) {
         report('CL1037', '.take(source) requires exactly one source Network.', node);
       }
       if (method === 'take' && isNetworkExpression(receiver) && node.arguments.length === 1) {
