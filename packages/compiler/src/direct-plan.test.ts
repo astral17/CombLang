@@ -4,6 +4,19 @@ import { describe, expect, test } from 'vitest';
 import { compileDirectPlan } from './direct-plan.js';
 
 describe('direct elaboration plan compiler', () => {
+  test('retains an empty constant combinator', () => {
+    const result = compileDirectPlan(
+      parseFile({
+        path: 'empty-constant.factorio.ts',
+        text: 'const output: Network = CC();',
+      }),
+    );
+    expect(result.diagnostics).toEqual([]);
+    expect(result.plan?.producers).toMatchObject([
+      { kind: 'constant', outputs: [], destinations: [{ network: 'output' }] },
+    ]);
+  });
+
   test('compiles Scale without executing source', () => {
     const file = parseFile({
       path: 'scale.factorio.ts',
@@ -914,72 +927,19 @@ const output: Network = Scale(input);`,
     ]);
   });
 
-  test('binds an arithmetic producer output with .as(Signal) without adding hardware', () => {
-    const file = parseFile({
-      path: 'arithmetic-as.factorio.ts',
-      text: `const INPUT = Signal("virtual", "signal-A");
-const RESULT = Signal("virtual", "signal-B");
-function Remap(input: Readonly<Network>): Network {
-  return (input[INPUT] + 1).as(RESULT);
-}
+  test('rejects .as(Signal) instead of exposing a second output-binding syntax', () => {
+    for (const expression of ['(input + 1).as(A)', 'IF(input > 0, input).as(A)']) {
+      const file = parseFile({
+        path: 'unsupported-as.factorio.ts',
+        text: `const A = Signal("virtual", "signal-A");
 const input = new Network<R>();
-const output: Network = Remap(input);`,
-    });
+const output: Network = ${expression};`,
+      });
 
-    const result = compileDirectPlan(file);
-    expect(result.diagnostics).toEqual([]);
-    expect(result.plan?.producers).toHaveLength(1);
-    expect(result.plan?.producers[0]).toMatchObject({
-      kind: 'arithmetic',
-      left: { kind: 'signal', signal: { name: 'signal-A' } },
-      output: { kind: 'signal', signal: { name: 'signal-B' } },
-      destinations: [{ network: 'output' }],
-    });
-  });
-
-  test('binds a compact decider output with .as(Signal)', () => {
-    const file = parseFile({
-      path: 'decider-as.factorio.ts',
-      text: `const RESULT = Signal("virtual", "signal-B");
-function Gate(input: Readonly<Network>): Network {
-  return IF(input > 0, input).as(RESULT);
-}
-const input = new Network<R>();
-const output: Network = Gate(input);`,
-    });
-
-    const result = compileDirectPlan(file);
-    expect(result.diagnostics).toEqual([]);
-    expect(result.plan?.producers[0]).toMatchObject({
-      kind: 'decider',
-      output: { kind: 'signal', network: 'input', signal: { name: 'signal-B' } },
-    });
-  });
-
-  test('rejects malformed and conflicting .as(Signal) bindings', () => {
-    const malformed = parseFile({
-      path: 'malformed-as.factorio.ts',
-      text: `function Scale(input: Readonly<Network>): Network {
-  return (input + 1).as(UNKNOWN);
-}
-const input = new Network<R>();
-const output: Network = Scale(input);`,
-    });
-    const conflicting = parseFile({
-      path: 'conflicting-as.factorio.ts',
-      text: `const A = Signal("virtual", "signal-A");
-const B = Signal("virtual", "signal-B");
-const input = new Network<R>();
-const output = new Network();
-output[A] += (input + 1).as(B);`,
-    });
-
-    expect(compileDirectPlan(malformed).diagnostics).toContainEqual(
-      expect.objectContaining({ code: 'CL1031', severity: 'error' }),
-    );
-    expect(compileDirectPlan(conflicting).diagnostics).toContainEqual(
-      expect.objectContaining({ code: 'CL1032', severity: 'error' }),
-    );
+      expect(compileDirectPlan(file).diagnostics).toContainEqual(
+        expect.objectContaining({ code: 'CL1043', severity: 'error' }),
+      );
+    }
   });
 
   test('keeps compound IF predicates inside one decider descriptor', () => {

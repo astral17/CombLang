@@ -379,6 +379,40 @@ function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
   }
   const capturedProducers = new Map<string, ProducerHandle>();
   const producerIds: ProducerId[] = [];
+  const lowerDeciderOutput = (
+    output: Extract<DirectElaborationPlan['producers'][number], { kind: 'decider' }>['output'],
+    networks: ReadonlyMap<string, NetworkHandle>,
+    source: SourceSpan,
+  ): RuntimeDeciderConfig['outputs'][number] =>
+    output.kind === 'signal'
+      ? {
+          mode: 'copy',
+          signal: { kind: 'signal', signal: output.signal },
+          ...lowerOutputInputs(output, networks, source),
+        }
+      : output.kind === 'each-constant'
+        ? {
+            mode: 'constant',
+            signal: { kind: 'wildcard', value: 'each' },
+            value: output.value,
+          }
+        : output.kind === 'signal-constant'
+          ? {
+              mode: 'constant',
+              signal: { kind: 'signal', signal: output.signal },
+              value: output.value,
+            }
+          : output.kind === 'wildcard'
+            ? {
+                mode: 'copy',
+                signal: { kind: 'wildcard', value: output.wildcard },
+                ...lowerOutputInputs(output, networks, source),
+              }
+            : {
+                mode: 'copy',
+                signal: { kind: 'wildcard', value: 'each' },
+                ...lowerOutputInputs(output, networks, source),
+              };
   for (const descriptor of plan.producers) {
     if (
       descriptor.bindingName !== undefined &&
@@ -428,39 +462,15 @@ function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
               {
                 condition: lowerCondition(descriptor.condition, networks, descriptor.source),
                 outputs: (descriptor.outputs ?? [descriptor.output]).map((output) =>
-                  output.kind === 'signal'
-                    ? {
-                        mode: 'copy',
-                        signal: { kind: 'signal', signal: output.signal },
-                        ...lowerOutputInputs(output, networks, descriptor.source),
-                      }
-                    : output.kind === 'each-constant'
-                      ? {
-                          mode: 'constant',
-                          signal: { kind: 'wildcard', value: 'each' },
-                          value: output.value,
-                        }
-                      : output.kind === 'signal-constant'
-                        ? {
-                            mode: 'constant',
-                            signal: { kind: 'signal', signal: output.signal },
-                            value: output.value,
-                          }
-                        : output.kind === 'wildcard'
-                          ? {
-                              mode: 'copy',
-                              signal: {
-                                kind: 'wildcard',
-                                value: output.wildcard,
-                              },
-                              ...lowerOutputInputs(output, networks, descriptor.source),
-                            }
-                          : {
-                              mode: 'copy',
-                              signal: { kind: 'wildcard', value: 'each' },
-                              ...lowerOutputInputs(output, networks, descriptor.source),
-                            },
+                  lowerDeciderOutput(output, networks, descriptor.source),
                 ),
+                ...(descriptor.elseOutputs === undefined
+                  ? {}
+                  : {
+                      elseOutputs: descriptor.elseOutputs.map((output) =>
+                        lowerDeciderOutput(output, networks, descriptor.source),
+                      ),
+                    }),
               } satisfies RuntimeDeciderConfig,
               provenance,
             );

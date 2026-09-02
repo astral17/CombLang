@@ -107,7 +107,7 @@ for (let i = 0; i < 10; i++) {
           : { operator, left, right },
       ),
       controlTest: vi.fn((value) => value),
-      decider: vi.fn((condition, value) => ({ producer: 'decider', condition, value })),
+      deciderBranches: vi.fn((condition, value) => ({ producer: 'decider', condition, value })),
       attach: vi.fn(),
       addAssign: vi.fn((left, right, assign) => {
         if (typeof left === 'object' && right?.producer !== undefined) {
@@ -126,7 +126,7 @@ for (let i = 0; i < 10; i++) {
 
     expect(dsl.constant).toHaveBeenCalledTimes(1);
     expect(dsl.compare).toHaveBeenCalledTimes(21);
-    expect(dsl.decider).toHaveBeenCalledTimes(10);
+    expect(dsl.deciderBranches).toHaveBeenCalledTimes(10);
     expect(dsl.attach).toHaveBeenCalledTimes(10);
     expect(
       dsl.compare.mock.calls.filter((call) => typeof call[1] === 'object').map((call) => call[2]),
@@ -238,8 +238,8 @@ to(first, second)[A] += comb;`,
     });
     const code = transformElaborationModule(source).code;
 
-    expect(code).toContain('let comb = __dsl.producerHandle(__dsl.decider(');
-    expect(code).not.toContain('__dsl.materialize(__dsl.decider(');
+    expect(code).toContain('let comb = __dsl.producerHandle(__dsl.deciderBranches(');
+    expect(code).not.toContain('__dsl.materialize(__dsl.deciderBranches(');
     expect(code).toContain('__dsl.attach(__dsl.select(__dsl.destinations(first, second');
   });
 
@@ -299,6 +299,21 @@ to(first, second)[A] += comb;`,
     expect(code).toContain('"Producer"');
   });
 
+  test('validates concrete Producer arguments at direct call sites', () => {
+    const source = parseFile({
+      path: 'producer-call.factorio.ts',
+      text: `function Configure(value: ArithmeticCombinator): Producer {
+  return value;
+}
+const values = [5];
+Configure(values[0]);`,
+    });
+    const code = transformElaborationModule(source).code;
+
+    expect(code).toContain('Configure(__dsl.producerHandle(__dsl.element(values, 0');
+    expect(code).toContain('"ArithmeticCombinator", "value"');
+  });
+
   test('carries concrete Producer types into destructuring descriptors', () => {
     const source = parseFile({
       path: 'producer-destructuring.factorio.ts',
@@ -346,7 +361,7 @@ record.constant = dynamicValue;
     const code = transformElaborationModule(source).code;
 
     expect(code).toContain('__dsl.moveParameter(input, "input", "green"');
-    expect(code).toContain('return __dsl.returnValue(input');
+    expect(code).toContain('return __dsl.returnNetwork(input');
   });
 
   test('does not treat a nested callback return as the surrounding ownership boundary', () => {
@@ -359,7 +374,7 @@ record.constant = dynamicValue;
     });
     const code = transformElaborationModule(source).code;
 
-    expect(code.match(/__dsl\.returnValue/g)).toHaveLength(1);
+    expect(code.match(/__dsl\.returnNetwork/g)).toHaveLength(1);
     expect(code).toContain('return input;');
   });
 });

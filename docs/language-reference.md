@@ -99,9 +99,10 @@ The transformed module dispatches operators from their executed values. When nei
 
 Without an explicit destination signal, arithmetic uses the first concrete input signal from left to right when one exists, otherwise native `Each` output.
 
-`expression.as(SIGNAL)` explicitly binds the output Signal of the same arithmetic or compact-decider producer. It does not allocate another combinator or tick. A destination such as `out[SIGNAL]` may repeat the same constraint, but conflicting Signal identities are rejected.
-
-`.as(...)` belongs to the producer expression, not to the resulting `Network`. A function declared to return `Network` therefore has to apply `.as(...)` inside its body. Calling `Gate(...).as(SIGNAL)` across that return boundary is `CL1043` (or `RT2021` when the boundary is only known during execution); assigning the result to a local Network cannot change this rule.
+Output Signal binding belongs to the attachment: use `out[SIGNAL] += expression`,
+`to(out)[SIGNAL] += expression`, or `expression.to(out, SIGNAL)`. Producer
+`.as(...)` is deliberately not a second spelling and reports `CL1043` (or
+`RT2021` when only the executed receiver proves it is a DSL value).
 
 ## Decider producers
 
@@ -113,13 +114,23 @@ const selected: Network = IF(input[A] > 0, input[A]);
 const fluent: Network = when(input[A] > 0).then(input[A]);
 ```
 
-`when(...).then(...)` accepts multiple native output specifications while still creating exactly one decider:
+`IF` has explicit true and optional false branches. `when` offers the same
+shape fluently, including a false-only form:
 
 ```ts
-when(a > 0).then(a, 2 * SIGNAL_A, b);
+const compact = IF(a > 0, [a, 2 * SIGNAL_A], { fallback: b });
+const fluent = when(a > 0)
+  .then(a, 2 * SIGNAL_A)
+  .else(b);
+const falseOnly = when(a > 0).else(b);
 ```
 
-Here bare Networks mean `Each(network)` in output context. The compiler validates all output filters and the combined input-connector color capacity as one physical device.
+Each branch accepts one output, nested arrays, or ordinary objects; arrays and
+object values are recursively flattened in JavaScript iteration order. Bare
+Networks mean `Each(network)` in output context. Both branches remain native
+`outputs`/`else_outputs` of one physical Factorio 2.x decider. The compiler
+validates all output filters and the combined input-connector color capacity as
+one device.
 
 Output entries remain ordered and are not deduplicated. Two entries targeting the same SignalID intentionally sum on the output Network, matching native Factorio behavior.
 
@@ -149,7 +160,7 @@ const colors: Network = IF(input > 0, 0x00ff00 * EACH);
 
 The decider emits the constant for every active `Each` candidate. The count must be a finite safe integer and is canonicalized to signed int32.
 
-An ergonomic `.else(...)` branch and the exact `Decider({...})` constructor are not implemented yet.
+The exact `Decider({...})` constructor remains Phase 7 work.
 
 ## Constant combinator
 
@@ -160,6 +171,8 @@ to(first, second) += CC(5 * A, -2 * B);
 ```
 
 Each argument is a finite safe-integer value multiplied by a declared Signal value; the count is canonicalized to signed int32. A Signal may occur only once in one `CC` call.
+
+`CC()` is valid and creates one empty physical constant combinator. It emits no signals but can still be placed and attached, for example `CC().at(1, 2).to(out)`. An empty generated list in `CC(...entries)` has the same meaning. Like any other Producer, an unattached standalone `CC()` receives `CL2001`, not an error.
 
 This implemented form creates one default Factorio 2.1 section. Multiple sections, section `multiplier`/`group`/`active`, and the entity-wide `isOn` switch are planned for the Phase 7 exact Constant surface. Their accepted design is documented in [Native objects, Deciders, and blueprint parameters](native-objects-deciders-and-parameters.md); `CC.section(...)` is not executable syntax yet.
 
@@ -184,10 +197,30 @@ An explicit combinator-handle annotation suppresses that automatic Network mater
 
 ```ts
 let comb: DeciderCombinator = when(input > 0).then(input);
-output += comb.as(RESULT).at(10, 4);
+comb.at(10, 4).to(output, RESULT);
 ```
 
-`Producer` is the common handle type. The more precise public types are `DeciderCombinator`, `ArithmeticCombinator`, and `ConstantCombinator`; use the precise type when it is known. Declarations, later writes to supported typed slots, function parameters, and function returns check both that the executed value is still an unmaterialized producer and that its physical combinator kind matches the annotation. Passing a handle through a typed parameter preserves its physical identity. A function may return one of these types to preserve the producer handle across its return boundary. Returning `Network` instead intentionally hides producer-only methods. Producer handles represent one physical entity and remain single-attachment values: storing one does not clone it, fluent `.as(...)`/`.at(...)` wrappers retain the same physical identity, and attaching any alias twice is `RT2006`.
+`Producer` is the common handle type. The more precise public types are `DeciderCombinator`, `ArithmeticCombinator`, and `ConstantCombinator`; use the precise type when it is known. Declarations, later writes to supported typed slots, function parameters, and function returns check both that the executed value is still an unmaterialized producer and that its physical combinator kind matches the annotation. Passing a handle through a typed parameter preserves its physical identity. A function may return one of these types to preserve the producer handle across its return boundary. Returning `Network` instead materializes a producer expression exactly once and exposes only the resulting logical Network. Producer handles represent one physical entity and remain single-attachment values: storing one does not clone it, `.at(...)` retains the same physical identity, and attaching any alias twice is `RT2006`.
+
+A `Network`-returning call is therefore one Network, never implicit fan-out:
+
+```ts
+function Gate(input: Readonly<Network>): Network {
+  return IF(input > 0, input);
+}
+
+const output = Gate(input);
+// let [a, b] = Gate(input); // CL1046: one Network is not a tuple
+```
+
+To retain attachment/fan-out powers, declare the honest producer return type,
+such as `DeciderCombinator`, and attach that returned handle explicitly. A
+producer expression passed to a `Readonly<Network>`, `Ref<Network>`, or
+`Move<Network>` parameter is contextually materialized at the call argument;
+dynamic type/capability failures in direct, non-spread calls point to that argument
+rather than the callee's parameter declaration. Indirect and spread calls also
+materialize Producer arguments, but currently use the parameter declaration as
+fallback diagnostic provenance.
 
 Producers may pass through dynamically indexed arrays and ordinary objects. Assignment and ignored expression results are not treated as immediately discarded producers because they may be aliases of a handle attached later. After the executed module finishes, the runtime checks every created physical producer identity: a value later returned or attached has no warning, while a producer still abandoned in a container or expression receives `CL2001` and an internal unused sink so its topology is still validated. `CL1044` reports a statically definite annotation mismatch at a declaration, assignment, argument, or `return`; dynamically determined mismatches use `RT2022` at the executed type boundary.
 
@@ -238,7 +271,7 @@ to(first, second)[RESULT] += left[A] + right[B];
 
 A free destination set binds its output Signal as `to(first, second)[SIGNAL]`. The fluent producer form instead uses `.to(first, second, SIGNAL)`, because an element selection after `.to(...)` would occur after that method has already attached the producer. `.to(first[SIGNAL], second[SIGNAL])` remains invalid. The output binding adds no combinator. Two destinations share one physical output connector and therefore receive opposite wire colors. The right side of `Network += value` must be a combinator producer. Constants and `Network += Network` are deliberately rejected rather than invoking JavaScript object coercion.
 
-All attachment spellings use one executed validation path. An attachment requires one or two distinct writable Networks: dynamically computed empty, duplicate, and over-capacity destination lists report `RT2003`, `RT2004`, and `RT2005` at the attachment expression. Output Signal binding is also shared by `network[SIGNAL] += producer`, `to(...)[SIGNAL] += producer`, and `producer.to(..., SIGNAL)`. A destination may override an arithmetic output inferred from an input selection, but it cannot contradict an explicit `.as(...)`, rename constant-combinator filters, collapse a multi-output decider, or replace an incompatible explicit decider output. Those executed conflicts report `RT2023` and retain the explicit binding and producer-creation spans where available. The third fluent `.to(...)` argument is only an output `Signal`; a statically definite Network or ordinary value there is `CL1021`.
+All attachment spellings use one executed validation path. An attachment requires one or two distinct writable Networks: dynamically computed empty, duplicate, and over-capacity destination lists report `RT2003`, `RT2004`, and `RT2005` at the attachment expression. Output Signal binding is also shared by `network[SIGNAL] += producer`, `to(...)[SIGNAL] += producer`, and `producer.to(..., SIGNAL)`. A destination may override an inferred arithmetic output, but it cannot rename constant-combinator filters, collapse a multi-output/branched decider, or replace an incompatible explicit decider output. Those executed conflicts report `RT2023` and retain producer-creation provenance. The third fluent `.to(...)` argument is only an output `Signal`; a statically definite Network or ordinary value there is `CL1021`.
 
 ## Explicit Network transfer
 

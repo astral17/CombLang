@@ -37,8 +37,8 @@ if (values[0] !== 2 || values[1] !== 4 || values[2] !== 7 || values[3] !== 4 || 
 const input = new Network<R>();
 const first = new Network<R>();
 const second = new Network<G>();
-const producer: ArithmeticCombinator = (input + 1).as(A).at(1, 2);
-producer.to(first, second);
+const producer: ArithmeticCombinator = (input + 1).at(1, 2);
+producer.to(first, second, A);
 const combined: Network = pair(first, second)[A] + 0;`,
     });
 

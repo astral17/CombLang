@@ -43,6 +43,16 @@ configuration/provenance boundary that must exist before adding it.
 
 The production CLI and browser first emit definite `CL` diagnostics from the conservative semantic pass, then execute transformed values, and finally report structured `RT` topology diagnostics. General JavaScript failures discovered during execution use `EX1001`; ownership failures retain their `RT2xxx` code, primary span, and related declaration/move spans across both frontends. The bootstrap `compileDirectPlan()` regression oracle has several more specific `CL` codes listed below; those codes describe the failure accurately but are not all guaranteed to appear from the executed CLI path until diagnostic unification is complete.
 
+Source attribution follows the boundary that can actually correct the error:
+
+- a definite type or capability mismatch points to the offending source expression;
+- an executed argument mismatch at a direct, non-spread call to a known annotated function points to the call argument, not the parameter declaration; indirect and spread calls retain the parameter boundary as fallback;
+- a return-contract mismatch points to the `return` statement;
+- attachment, placement, selection, `CC`, `IF`, and complete chained `when(...).then(...).else(...)` failures point to their source operation;
+- ownership and color failures add earlier declarations, borrows, moves, producer creation, or attachment sites as related spans.
+
+Unexpected JavaScript exceptions outside an instrumented DSL operation may still lack a source span. This is distinct from an executed DSL validation failure, whose runtime bridge always carries the original half-open source range.
+
 ## Common compiler diagnostics
 
 | Code     | Meaning                                                                   | Typical correction                                                         |
@@ -62,8 +72,7 @@ The production CLI and browser first emit definite `CL` diagnostics from the con
 | `CL1028` | invalid explicit `Each(...)` selection                                    | pass exactly one Network                                                   |
 | `CL1029` | `EACH` output used without an Each condition                              | emit a specific Signal for `Any`/`All` conditions                          |
 | `CL1030` | invalid wildcard output mode or destination-signal rebinding              | respect native `Everything`/Each restrictions                              |
-| `CL1031` | malformed explicit producer output binding                                | write `.as(DECLARED_SIGNAL)`                                               |
-| `CL1032` | producer and destination output signals conflict                          | use the same Signal in `.as(...)` and `out[...]`                           |
+| `CL1031` | malformed unsupported `.as(...)` call                                     | bind through `out[SIGNAL]` or `.to(out, SIGNAL)`                           |
 | `CL1033` | unsupported body in the bootstrap direct-plan compiler                    | use the executed compiler path used by the CLI and web app                 |
 | `CL1034` | definite non-producer used on the right side of `Network +=`              | attach `CC`, arithmetic, `IF`, or `when(...).then(...)`                    |
 | `CL1035` | malformed `Network` construction or producer placement                    | use `new Network()` or `.at(x, y, direction?)`                             |
@@ -74,9 +83,11 @@ The production CLI and browser first emit definite `CL` diagnostics from the con
 | `CL1040` | definite function escape of a borrowed Network                            | return a producer or an independently owned Network                        |
 | `CL1041` | bare `Network` function parameter has ambiguous ownership                 | choose `Readonly<Network>`, `Ref<Network>`, or `Move<Network>`             |
 | `CL1042` | definite misuse of immutable `pair(a, b)` input view                      | use pair only for reads; use `to`/`.to` for output fan-out                 |
-| `CL1043` | `.as(...)` crosses a function's `Network` return boundary                 | bind the producer output Signal inside the function                        |
+| `CL1043` | unsupported `.as(...)` on a definite DSL Producer or Network              | bind the output Signal at the destination                                  |
 | `CL1044` | combinator-handle declaration, assignment, argument, or return mismatches | use a compatible unmaterialized producer of the annotated physical kind    |
 | `CL1045` | user binding shadows a reserved free DSL identifier                       | rename the variable, parameter, function, class, or enum                   |
+| `CL1046` | one returned Network is destructured as producer fan-out                  | return an explicit container or retain a Producer return type              |
+| `CL1047` | definite missing or non-Network argument for a known Network parameter    | pass a Network or a producer expression that can be materialized as one    |
 | `CL2001` | producer has no user destination                                          | attach it, or keep the warning if intentional                              |
 | `EX1001` | transformed elaboration program threw                                     | inspect the execution message and supported executed subset                |
 | `EX1002` | compile-time execution exceeded the worker time budget                    | fix an infinite/expensive loop or reduce generated work                    |
@@ -113,8 +124,8 @@ The production CLI and browser first emit definite `CL` diagnostics from the con
 | `RT2018` | color-qualified borrow conflicts with an existing color                                                     |
 | `RT2019` | ownership was dropped or returned without a valid transfer                                                  |
 | `RT2020` | pair input is repeated, malformed, or used as ownership/output                                              |
-| `RT2021` | `.as(...)` target crossed a function or materialization boundary                                            |
-| `RT2022` | an executed Producer boundary received a wrong value or kind                                                |
+| `RT2021` | executed DSL value used the unsupported `.as(...)` method                                                   |
+| `RT2022` | an executed Producer/Network return or destructuring boundary received a wrong value or kind                |
 | `RT2023` | destination Signal conflicts with the physical producer output                                              |
 | `RT2024` | circuit Condition was used as a JavaScript control-flow test                                                |
 | `RT2025` | a delayed asynchronous DSL call reached a sealed elaboration plan                                           |

@@ -126,6 +126,8 @@ export interface DirectPlanDecider {
     | ({ readonly kind: 'signal'; readonly signal: SignalId } & PlanNetworkRef);
   /** Multiple native Factorio 2.x output filters. `output` remains the first-filter compatibility view. */
   readonly outputs?: readonly DirectPlanDecider['output'][];
+  /** Native Factorio 2.x false-branch output filters. */
+  readonly elseOutputs?: readonly DirectPlanDecider['output'][];
   readonly destinations: readonly PlanAttachment[];
   readonly source: SourceSpan;
   readonly instancePath: readonly string[];
@@ -572,56 +574,14 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
       ts.isPropertyAccessExpression(expression.expression) &&
       expression.expression.name.text === 'as'
     ) {
-      const receiver = expression.expression.expression;
-      if (
-        ts.isCallExpression(receiver) &&
-        ts.isIdentifier(receiver.expression) &&
-        declaredFunctions.has(receiver.expression.text)
-      ) {
-        diagnostics.push({
-          code: 'CL1043',
-          severity: 'error',
-          message: `.as(SIGNAL) cannot cross the Network return boundary of ${receiver.expression.text}(...); bind the producer output inside that function.`,
-          span: spanForNode(file, expression),
-        });
-        return undefined;
-      }
-      const signalExpression = expression.arguments[0];
-      const selectedSignal =
-        expression.arguments.length === 1 &&
-        signalExpression !== undefined &&
-        ts.isIdentifier(signalExpression)
-          ? signals.get(signalExpression.text)
-          : undefined;
-      if (selectedSignal === undefined) {
-        diagnostics.push({
-          code: 'CL1031',
-          severity: 'error',
-          message: '.as(...) requires exactly one declared Signal identifier.',
-          span: spanForNode(file, expression),
-        });
-        return undefined;
-      }
-      if (
-        requestedOutputSignal !== undefined &&
-        !sameSignal(requestedOutputSignal, selectedSignal)
-      ) {
-        diagnostics.push({
-          code: 'CL1032',
-          severity: 'error',
-          message: 'The producer .as(...) Signal conflicts with its destination Signal.',
-          span: spanForNode(file, expression),
-        });
-        return undefined;
-      }
-      return lowerExpression(
-        expression.expression.expression,
-        template,
-        argumentNetworks,
-        context,
-        destination,
-        selectedSignal,
-      );
+      diagnostics.push({
+        code: 'CL1043',
+        severity: 'error',
+        message:
+          '.as(...) is not part of the Producer API; bind an arithmetic output through destination[SIGNAL] or producer.to(destination, SIGNAL).',
+        span: spanForNode(file, expression),
+      });
+      return undefined;
     }
     if (ts.isIdentifier(expression) && argumentNetworks.has(expression.text)) {
       return { kind: 'network', network: argumentNetworks.get(expression.text)! };
@@ -763,15 +723,6 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
           return undefined;
         }
         constantOutputs.push({ signal: outputSignal, value: normalizedCount });
-      }
-      if (constantOutputs.length === 0) {
-        diagnostics.push({
-          code: 'CL1024',
-          severity: 'error',
-          message: 'CC requires at least one count * Signal entry.',
-          span: spanForNode(file, expression),
-        });
-        return undefined;
       }
       const signalKeys = constantOutputs.map(
         ({ signal }) => `${signal.type}:${signal.name}:${signal.quality ?? ''}`,

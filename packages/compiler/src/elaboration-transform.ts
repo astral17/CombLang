@@ -6,6 +6,7 @@ import {
   parseDslTypeText,
   producerHandleTypeFromAnnotation,
   wildcardDslNames,
+  type NetworkTypeSyntax,
   type ParsedSourceFile,
 } from '@comblang/language';
 
@@ -93,6 +94,33 @@ export function transformElaborationModule(
 
   const signalNames = new Set<string>();
   const networkNames = new Set<string>();
+  interface FunctionNetworkParameter {
+    readonly index: number;
+    readonly name: string;
+    readonly type: NetworkTypeSyntax;
+  }
+  const functionNetworkParameters = new Map<string, readonly FunctionNetworkParameter[]>();
+  interface FunctionProducerParameter {
+    readonly index: number;
+    readonly name: string;
+    readonly type: string;
+  }
+  const functionProducerParameters = new Map<string, readonly FunctionProducerParameter[]>();
+  for (const statement of file.ast.statements) {
+    if (!ts.isFunctionDeclaration(statement) || statement.name === undefined) continue;
+    const parameters = statement.parameters.flatMap((parameter, index) => {
+      if (!ts.isIdentifier(parameter.name)) return [];
+      const type = networkTypeFromAnnotation(parameter.type, file.ast);
+      return type === undefined ? [] : [{ index, name: parameter.name.text, type }];
+    });
+    functionNetworkParameters.set(statement.name.text, parameters);
+    const producerParameters = statement.parameters.flatMap((parameter, index) => {
+      if (!ts.isIdentifier(parameter.name)) return [];
+      const type = producerHandleTypeName(file, parameter.type);
+      return type === undefined ? [] : [{ index, name: parameter.name.text, type }];
+    });
+    functionProducerParameters.set(statement.name.text, producerParameters);
+  }
 
   const collect = (node: ts.Node): void => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
@@ -554,15 +582,25 @@ export function transformElaborationModule(
         enclosingFunctionDeclaration(node) !== undefined
       ) {
         const owner = enclosingFunctionDeclaration(node)!;
+        const networkReturn = networkTypeFromAnnotation(owner.type, file.ast);
         return factory.updateReturnStatement(
           node,
-          dslCall(factory, 'returnValue', [
-            ts.visitNode(node.expression, visit) as ts.Expression,
-            spanLiteral(factory, node),
-            producerHandleTypeName(file, owner.type) === undefined
-              ? factory.createVoidZero()
-              : factory.createStringLiteral(producerHandleTypeName(file, owner.type)!),
-          ]),
+          networkReturn === undefined
+            ? dslCall(factory, 'returnValue', [
+                ts.visitNode(node.expression, visit) as ts.Expression,
+                spanLiteral(factory, node),
+                producerHandleTypeName(file, owner.type) === undefined
+                  ? factory.createVoidZero()
+                  : factory.createStringLiteral(producerHandleTypeName(file, owner.type)!),
+              ])
+            : dslCall(factory, 'returnNetwork', [
+                ts.visitNode(node.expression, visit) as ts.Expression,
+                factory.createStringLiteral(networkReturn.capability),
+                networkReturn.color === undefined
+                  ? factory.createVoidZero()
+                  : factory.createStringLiteral(networkReturn.color),
+                spanLiteral(factory, node),
+              ]),
         );
       }
 
@@ -849,15 +887,68 @@ export function transformElaborationModule(
         const mapped = {
           Signal: 'signal',
           CC: 'constant',
-          IF: 'decider',
           to: 'destinations',
           pair: 'pair',
         }[node.expression.text];
+        if (node.expression.text === 'IF' && node.arguments.length >= 2) {
+          return dslCall(factory, 'deciderBranches', [
+            ts.visitNode(node.arguments[0]!, visit) as ts.Expression,
+            ts.visitNode(node.arguments[1]!, visit) as ts.Expression,
+            node.arguments[2] === undefined
+              ? factory.createVoidZero()
+              : (ts.visitNode(node.arguments[2], visit) as ts.Expression),
+            spanLiteral(factory, node),
+          ]);
+        }
         if (mapped !== undefined) {
           return dslCall(factory, mapped, [
             ...node.arguments.map((argument) => ts.visitNode(argument, visit) as ts.Expression),
             spanLiteral(factory, node),
           ]);
+        }
+        const networkParameters = functionNetworkParameters.get(node.expression.text) ?? [];
+        const producerParameters = functionProducerParameters.get(node.expression.text) ?? [];
+        if (
+          (networkParameters.length > 0 || producerParameters.length > 0) &&
+          !node.arguments.some(ts.isSpreadElement)
+        ) {
+          const functionName = node.expression.text;
+          const networksByIndex = new Map(
+            networkParameters.map((parameter) => [parameter.index, parameter]),
+          );
+          const producersByIndex = new Map(
+            producerParameters.map((parameter) => [parameter.index, parameter]),
+          );
+          return factory.updateCallExpression(
+            node,
+            node.expression,
+            node.typeArguments,
+            node.arguments.map((argument, index) => {
+              const visited = ts.visitNode(argument, visit) as ts.Expression;
+              const networkParameter = networksByIndex.get(index);
+              if (networkParameter !== undefined) {
+                return dslCall(factory, 'networkArgument', [
+                  visited,
+                  factory.createStringLiteral(functionName),
+                  factory.createStringLiteral(networkParameter.name),
+                  factory.createStringLiteral(networkParameter.type.capability),
+                  networkParameter.type.color === undefined
+                    ? factory.createVoidZero()
+                    : factory.createStringLiteral(networkParameter.type.color),
+                  spanLiteral(factory, argument),
+                ]);
+              }
+              const producerParameter = producersByIndex.get(index);
+              return producerParameter === undefined
+                ? visited
+                : dslCall(factory, 'producerHandle', [
+                    visited,
+                    factory.createStringLiteral(producerParameter.type),
+                    factory.createStringLiteral(producerParameter.name),
+                    spanLiteral(factory, argument),
+                  ]);
+            }),
+          );
         }
       }
 
@@ -875,16 +966,48 @@ export function transformElaborationModule(
         const method = node.expression.name.text;
         const receiver = node.expression.expression;
         if (
-          method === 'then' &&
+          method === 'else' &&
+          ts.isCallExpression(receiver) &&
+          ts.isPropertyAccessExpression(receiver.expression) &&
+          receiver.expression.name.text === 'then' &&
+          ts.isCallExpression(receiver.expression.expression) &&
+          ts.isIdentifier(receiver.expression.expression.expression) &&
+          receiver.expression.expression.expression.text === 'when' &&
+          receiver.expression.expression.arguments.length === 1 &&
+          node.arguments.length >= 1
+        ) {
+          const whenCall = receiver.expression.expression;
+          return dslCall(factory, 'deciderBranches', [
+            ts.visitNode(whenCall.arguments[0]!, visit) as ts.Expression,
+            factory.createArrayLiteralExpression(
+              receiver.arguments.map((argument) => ts.visitNode(argument, visit) as ts.Expression),
+            ),
+            factory.createArrayLiteralExpression(
+              node.arguments.map((argument) => ts.visitNode(argument, visit) as ts.Expression),
+            ),
+            spanLiteral(factory, node),
+          ]);
+        }
+        if (
+          (method === 'then' || method === 'else') &&
           ts.isCallExpression(receiver) &&
           ts.isIdentifier(receiver.expression) &&
           receiver.expression.text === 'when' &&
           receiver.arguments.length === 1 &&
           node.arguments.length >= 1
         ) {
-          return dslCall(factory, 'decider', [
+          return dslCall(factory, 'deciderBranches', [
             ts.visitNode(receiver.arguments[0]!, visit) as ts.Expression,
-            ...node.arguments.map((argument) => ts.visitNode(argument, visit) as ts.Expression),
+            method === 'then'
+              ? factory.createArrayLiteralExpression(
+                  node.arguments.map((argument) => ts.visitNode(argument, visit) as ts.Expression),
+                )
+              : factory.createVoidZero(),
+            method === 'else'
+              ? factory.createArrayLiteralExpression(
+                  node.arguments.map((argument) => ts.visitNode(argument, visit) as ts.Expression),
+                )
+              : factory.createVoidZero(),
             spanLiteral(factory, node),
           ]);
         }

@@ -127,7 +127,7 @@ const output: Network = ${expression};`;
     const text = `const A = Signal('virtual', 'signal-A');
 const input = new Network();
 const producer: ArithmeticCombinator = input + 0;
-const configured: ArithmeticCombinator = producer.as(A);
+const configured: ArithmeticCombinator = producer.at(1, 2);
 const first = new Network();
 const second = new Network();
 first += producer;
@@ -144,20 +144,21 @@ ${repeated}`;
     expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(repeated.slice(0, -1));
   });
 
-  test('reports a dynamic concrete Producer parameter mismatch at its boundary', () => {
+  test('reports a dynamic concrete Producer parameter mismatch at the call argument', () => {
     const parameter = 'value: ArithmeticCombinator';
+    const argument = 'values[0]';
     const text = `function Configure(${parameter}): ArithmeticCombinator {
   return value;
 }
 const input = new Network();
 const values = [when(input > 0).then(input)];
-const output = Configure(values[0]);`;
+const output = Configure(${argument});`;
     const result = compileSource({ path: 'main.factorio.ts', text });
     const diagnostic = result.compilerDiagnostics.find(({ code }) => code === 'RT2022');
 
     expect(result.plan).toBeUndefined();
     expect(diagnostic).toMatchObject({ severity: 'error', span: expect.any(Object) });
-    expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(parameter);
+    expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(argument);
   });
 
   test('reports a dynamic Producer tuple mismatch at its destructuring boundary', () => {
@@ -190,7 +191,7 @@ slots[0] = ${assigned};`;
   });
 
   test('reports a structured output Signal conflict from the common attachment path', () => {
-    const expression = 'to(output)[B] += (input + 0).as(A)';
+    const expression = 'to(output)[B] += IF(input[A] > 0, input[A])';
     const text = `const A = Signal('virtual', 'signal-A');
 const B = Signal('virtual', 'signal-B');
 const input = new Network();

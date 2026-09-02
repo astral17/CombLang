@@ -264,7 +264,7 @@ if (formatted !== "ok!" || incremented !== 5) {
   });
 
   test('treats Signal quality as part of an output binding constraint', () => {
-    const conflict = '(input[normal] + 1).as(normal).to(output, legendary)';
+    const conflict = 'IF(input[normal] > 0, input[normal]).to(output, legendary)';
     const parsed = parseFile({
       path: 'quality-output-conflict.factorio.ts',
       text: `const normal = Signal("item", "iron-plate", "normal");
@@ -499,6 +499,191 @@ when(a > 0).then(a, 2 * A, b);`,
     expect(simulation.step().read(unused.id).get(signal('virtual', 'signal-A'))).toBe(7);
   });
 
+  test('lowers then/else branches and recursively flattens array and object outputs', () => {
+    const parsed = parseFile({
+      path: 'decider-branches.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const B = Signal("virtual", "signal-B");
+const input = CC(5 * A);
+const first: Network = IF(input > 0, [input, {extra: 2 * B}], {fallback: 3 * A});
+const second: Network = when(input < 0).else({fallback: [input[A], 4 * B]});`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const deciders = plan.producers.filter(({ kind }) => kind === 'decider');
+    const execution = elaborateDirectPlan(plan);
+    const simulation = execution.circuit.createSimulation();
+
+    expect(deciders[0]).toMatchObject({ outputs: [{}, {}], elseOutputs: [{}] });
+    expect(deciders[1]).toMatchObject({ outputs: [], elseOutputs: [{}, {}] });
+    expect(execution.circuit.ir.producers.filter(({ kind }) => kind === 'decider')).toMatchObject([
+      { config: { outputs: [{}, {}], elseOutputs: [{}] } },
+      { config: { outputs: [], elseOutputs: [{}, {}] } },
+    ]);
+    simulation.step();
+    const tick = simulation.step();
+    expect(tick.read(execution.network('first').id).get(signal('virtual', 'signal-A'))).toBe(5);
+    expect(tick.read(execution.network('first').id).get(signal('virtual', 'signal-B'))).toBe(2);
+    expect(tick.read(execution.network('second').id).get(signal('virtual', 'signal-A'))).toBe(5);
+    expect(tick.read(execution.network('second').id).get(signal('virtual', 'signal-B'))).toBe(4);
+    const blueprint = generateBlueprintJson(execution.circuit.ir);
+    expect(JSON.stringify(blueprint)).toContain('"else_outputs"');
+  });
+
+  test('materializes a producer argument at the call site before Readonly borrowing', () => {
+    const parsed = parseFile({
+      path: 'producer-network-argument.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+function MemoCell(input: Readonly<Network>): Network {
+  const out = new Network();
+  out += input + 0;
+  return out;
+}
+const input = CC(5 * A);
+const output = new Network();
+output.take(MemoCell(input * 2));`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.producers.filter(({ kind }) => kind === 'arithmetic')).toHaveLength(2);
+    expect(plan.networkTransfers).toEqual([
+      expect.objectContaining({ destination: 'output', source: 'out' }),
+    ]);
+    expect(plan.capabilityUses).toContainEqual(
+      expect.objectContaining({ network: '$argument:MemoCell:input', parameter: 'input' }),
+    );
+  });
+
+  test('materializes a Network return exactly once and adopts its caller binding name', () => {
+    const parsed = parseFile({
+      path: 'materialized-network-return.factorio.ts',
+      text: `function Gate(input: Readonly<Network>): Network {
+  return IF(input > 0, input);
+}
+const input = new Network();
+const output = Gate(input);
+const next: Network = output + 1;`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.networks.map(({ name }) => name)).toEqual(['input', 'output', 'next']);
+    expect(plan.producers).toMatchObject([
+      { kind: 'decider', destinations: [{ network: 'output' }] },
+      { kind: 'arithmetic', left: { network: 'output' }, destinations: [{ network: 'next' }] },
+    ]);
+    expect(plan.diagnostics).toEqual([]);
+    expect(() => elaborateDirectPlan(plan)).not.toThrow();
+  });
+
+  test('materializes a producer argument before a Move parameter consumes its ownership', () => {
+    const parsed = parseFile({
+      path: 'producer-move-argument.factorio.ts',
+      text: `function Pass(input: Move<Network>): Network { return input; }
+const input = new Network();
+const output = Pass(input * 2);
+const next: Network = output + 1;`,
+    });
+
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    expect(plan.producers).toHaveLength(2);
+    expect(plan.capabilityUses).toContainEqual(
+      expect.objectContaining({ capability: 'move', network: '$argument:Pass:input' }),
+    );
+    expect(() => elaborateDirectPlan(plan)).not.toThrow();
+  });
+
+  test.each(['Read(...values)', 'alias(...values)'])(
+    'materializes generated Network arguments in %s',
+    (call) => {
+      const parsed = parseFile({
+        path: 'spread-network-arguments.factorio.ts',
+        text: `function Read(left: Readonly<Network>, right: Readonly<Network>): Network {
+  return left + right;
+}
+const input = new Network();
+const values = [input * 2, input + 1];
+const alias = Read;
+const output = ${call};`,
+      });
+      expect(validateDslSemantics(parsed)).toEqual([]);
+      const plan = executeElaborationProgram(transformElaborationModule(parsed));
+      expect(plan.producers).toHaveLength(3);
+      expect(plan.diagnostics).toEqual([]);
+      expect(() => elaborateDirectPlan(plan)).not.toThrow();
+    },
+  );
+
+  test('attributes reuse after a consuming helper to the later caller expression', () => {
+    const reuse = 'input * 2';
+    const parsed = parseFile({
+      path: 'memo-move-reuse.factorio.ts',
+      text: `function MemoCell(input: Move<Network>): Network {
+  const out = new Network();
+  out += input + 0;
+  return out;
+}
+const input = new Network();
+const output = MemoCell(input);
+output.take(MemoCell(${reuse}));`,
+    });
+
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected Move to invalidate the caller input.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ElaborationExecutionError);
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2019');
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(reuse);
+      expect(failure.related).toContainEqual(
+        expect.objectContaining({ message: 'Ownership moved here.' }),
+      );
+    }
+  });
+
+  test('does not upgrade a returned Readonly Network through a dynamic Ref argument', () => {
+    const argument = 'values[0]';
+    const parsed = parseFile({
+      path: 'readonly-return-ref.factorio.ts',
+      text: `function Build(input: Readonly<Network>): Readonly<Network> { return input + 0; }
+function Write(output: Ref<Network>): void { output += output + 1; }
+const input = new Network();
+const readonlyOutput = Build(input);
+const values = [readonlyOutput];
+Write(${argument});`,
+    });
+
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected a Readonly return to reject a writable Ref view.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ElaborationExecutionError);
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2015');
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(argument);
+    }
+  });
+
+  test('reports a wrong dynamic Network argument at the call expression', () => {
+    const argument = 'values[0]';
+    const parsed = parseFile({
+      path: 'wrong-network-argument.factorio.ts',
+      text: `function Read(input: Readonly<Network>): Network { return input + 0; }
+const values = [5];
+const output = Read(${argument});`,
+    });
+
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected the executed argument boundary to reject a number.');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'RT2015', span: expect.any(Object) });
+      const span = (error as ElaborationExecutionError).span;
+      expect(parsed.text.slice(span.start, span.end)).toBe(argument);
+    }
+  });
+
   test('preserves per-Each concrete-copy and constant row multiplicity end to end', () => {
     const parsed = parseFile({
       path: 'each-concrete-copy.factorio.ts',
@@ -612,7 +797,7 @@ const output: Network = when(${condition}).then(...rows);`,
 const input = new Network();
 const selected: Network = when(Any(input) > 0).then(input[A]);
 const painted: Network = IF(input > 0, 2 * EACH);
-const rebound: Network = (input + 1).as(A);
+const rebound: Network = input + 1;
 const first = new Network();
 const second = new Network();
 (input + 2).to(first, second);`,
@@ -626,7 +811,7 @@ const second = new Network();
     expect(generateBlueprintJson(execution.circuit.ir).blueprint.entities).toHaveLength(4);
   });
 
-  test('does not leak .as across a function Network return boundary', () => {
+  test('rejects .as on a materialized function Network with source provenance', () => {
     const call = 'Gate(input).as(A)';
     const parsed = parseFile({
       path: 'function-return-as.factorio.ts',
@@ -649,26 +834,27 @@ const output: Network = ${call};`,
       const failure = error as ElaborationExecutionError;
       expect(failure.code).toBe('RT2021');
       expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(call);
-      expect(failure.related).toHaveLength(1);
+      expect(failure.message).toContain('.as(...) is not part of the Producer API');
     }
   });
 
-  test('keeps .as valid inside the function that creates the producer', () => {
+  test('rejects .as directly on a producer', () => {
+    const expression = 'IF(input > 0, input).as(A)';
     const parsed = parseFile({
       path: 'local-producer-as.factorio.ts',
       text: `const A = Signal('virtual', 'signal-A');
-function Gate(input: Readonly<Network>): Network {
-  return IF(input > 0, input).as(A);
-}
 const input = new Network();
-const output: Network = Gate(input);`,
+const output: Network = ${expression};`,
     });
-    const plan = executeElaborationProgram(transformElaborationModule(parsed));
 
-    expect(plan.producers[0]).toMatchObject({
-      kind: 'decider',
-      output: { kind: 'signal', signal: { type: 'virtual', name: 'signal-A' } },
-    });
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected .as(...) to be rejected.');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'RT2021', span: expect.any(Object) });
+      const span = (error as ElaborationExecutionError).span;
+      expect(parsed.text.slice(span.start, span.end)).toBe(expression);
+    }
   });
 
   test('binds one concrete output Signal through the final .to(...) argument', () => {
@@ -719,7 +905,7 @@ to(first, second)[A] += input + 1;`,
 const input = new Network();
 let comb: DeciderCombinator = when(input > 0).then(input);
 const output = new Network();
-output += comb.as(A);`,
+output[A] += comb;`,
     });
     const plan = executeElaborationProgram(transformElaborationModule(parsed));
 
@@ -741,7 +927,7 @@ function Gate(input: Readonly<Network>): DeciderCombinator {
 }
 const input = new Network();
 const output = new Network();
-output += Gate(input).as(A);`,
+output[A] += Gate(input);`,
     });
     const plan = executeElaborationProgram(transformElaborationModule(parsed));
 
@@ -869,7 +1055,7 @@ producer.to(output);`,
       text: `const A = Signal('virtual', 'signal-A');
 const input = new Network();
 const producer: ArithmeticCombinator = input + 0;
-const configured: ArithmeticCombinator = producer.as(A);
+const configured: ArithmeticCombinator = producer.at(1, 2);
 const first = new Network();
 const second = new Network();
 first += producer;
@@ -895,7 +1081,7 @@ ${secondAttachment}`,
       path: 'producer-parameter.factorio.ts',
       text: `const A = Signal('virtual', 'signal-A');
 function Configure(value: ArithmeticCombinator): ArithmeticCombinator {
-  return value.as(A);
+  return value.at(1, 2);
 }
 const input = new Network();
 const producer: ArithmeticCombinator = input + 0;
@@ -909,7 +1095,6 @@ output += configured;`,
     expect(plan.producers).toMatchObject([
       {
         kind: 'arithmetic',
-        output: { kind: 'signal', signal: { type: 'virtual', name: 'signal-A' } },
         destinations: [{ network: 'output' }],
       },
     ]);
@@ -934,7 +1119,7 @@ const output = Configure(values[0]);`,
       expect(error).toBeInstanceOf(ElaborationExecutionError);
       const failure = error as ElaborationExecutionError;
       expect(failure.code).toBe('RT2022');
-      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(parameter);
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe('values[0]');
     }
   });
 
@@ -1178,7 +1363,7 @@ const output = new Network();
     });
   });
 
-  test('lets a destination override inferred arithmetic output but not an explicit .as signal', () => {
+  test('lets a destination override inferred arithmetic output but not an explicit decider signal', () => {
     const inferred = parseFile({
       path: 'inferred-output.factorio.ts',
       text: `const A = Signal("virtual", "signal-A");
@@ -1193,7 +1378,7 @@ const output = new Network();
       output: { kind: 'signal', signal: { type: 'virtual', name: 'signal-B' } },
     });
 
-    const conflictingCall = '(input[A] + 1).as(A).to(output[B])';
+    const conflictingCall = 'IF(input[A] > 0, input[A]).to(output[B])';
     const conflicting = parseFile({
       path: 'explicit-output-conflict.factorio.ts',
       text: `const A = Signal("virtual", "signal-A");
@@ -1203,7 +1388,7 @@ const output = new Network();
 ${conflictingCall};`,
     });
     expect(() => executeElaborationProgram(transformElaborationModule(conflicting))).toThrowError(
-      'Explicit producer output Signal conflicts with its destination binding.',
+      'Decider output Signal conflicts with its destination binding.',
     );
     try {
       executeElaborationProgram(transformElaborationModule(conflicting));
@@ -1212,7 +1397,7 @@ ${conflictingCall};`,
       expect(error).toBeInstanceOf(ElaborationExecutionError);
       const failure = error as ElaborationExecutionError;
       expect(failure.code).toBe('RT2023');
-      expect(failure.related).toHaveLength(2);
+      expect(failure.related).toHaveLength(1);
       const span = failure.span;
       expect(conflicting.text.slice(span.start, span.end)).toBe(conflictingCall);
     }
@@ -1302,9 +1487,9 @@ ${expected.expression};`,
 
   test('uses RT2023 for output binding conflicts across every attachment spelling', () => {
     const cases = [
-      'output[B] += (input + 0).as(A)',
-      'to(output)[B] += (input + 0).as(A)',
-      '(input + 0).as(A).to(output, B)',
+      'output[B] += IF(input[A] > 0, input[A])',
+      'to(output)[B] += IF(input[A] > 0, input[A])',
+      'IF(input[A] > 0, input[A]).to(output, B)',
     ] as const;
 
     for (const expression of cases) {
@@ -1324,7 +1509,7 @@ ${expression};`,
         const failure = error as ElaborationExecutionError;
         expect(failure.code).toBe('RT2023');
         expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(expression);
-        expect(failure.related).toHaveLength(2);
+        expect(failure.related).toHaveLength(1);
       }
     }
   });
@@ -1404,19 +1589,26 @@ function MemoCell(input: Readonly<Network>): Network {
   let out = new Network();
   let mem = new Network();
   to(out, mem) += input + 0;
-  to(out, mem) += IF(input == 0 && mem != 0, mem);
+  to(out, mem) += when(input == 0 && mem != 0).then(mem).else(input);
   return out;
 }
 let input: Network = CC(42 * A);
-let output = MemoCell(input);`,
+let output = MemoCell(input);
+output.take(MemoCell(input * 2));`,
     });
     const plan = executeElaborationProgram(transformElaborationModule(parsed));
     const execution = elaborateDirectPlan(plan);
 
-    expect(plan.producers).toHaveLength(3);
-    expect(plan.producers.filter(({ kind }) => kind === 'arithmetic')).toHaveLength(1);
-    expect(plan.producers.filter(({ kind }) => kind === 'decider')).toHaveLength(1);
-    expect(execution.circuit.graph.attachments).toHaveLength(5);
+    expect(plan.producers).toHaveLength(6);
+    expect(plan.producers.filter(({ kind }) => kind === 'arithmetic')).toHaveLength(3);
+    expect(plan.producers.filter(({ kind }) => kind === 'decider')).toHaveLength(2);
+    expect(
+      plan.producers
+        .filter((producer) => producer.kind === 'decider')
+        .every((producer) => producer.elseOutputs?.length === 1),
+    ).toBe(true);
+    expect(plan.networkTransfers).toHaveLength(1);
+    expect(execution.circuit.graph.attachments.length).toBeGreaterThan(5);
     expect(plan.producers[1]?.instancePath).toEqual(['function MemoCell']);
   });
 
@@ -1433,7 +1625,7 @@ function Bias(input: Readonly<Network>): Network {
   const bias = 10 / 2;
   return input + bias;
 }
-function Gate(input: Readonly<Network>, threshold: Readonly<Network>): Network {
+function Gate(input: Readonly<Network>, threshold: Readonly<Network>): DeciderCombinator {
   return IF(input[SIGNAL_A] > threshold[SIGNAL_A], input[SIGNAL_A]);
 }
 const input = new Network<R>();
@@ -1443,7 +1635,7 @@ const threshold = new Network();
 threshold += CC(40 * SIGNAL_A);
 const output = new Network();
 const mirror = new Network();
-to(output, mirror)[SIGNAL_A] += Gate(biased, threshold);`,
+Gate(biased, threshold).to(output, mirror);`,
     });
     const plan = executeElaborationProgram(transformElaborationModule(parsed));
     const execution = elaborateDirectPlan(plan);
@@ -1472,6 +1664,54 @@ to(output, mirror)[SIGNAL_A] += Gate(biased, threshold);`,
         outputs: [{ signal: { type: 'virtual', name: 'signal-A' }, value: 5 }],
       },
     ]);
+  });
+
+  test('retains empty constant combinators from literal and generated calls', () => {
+    const parsed = parseFile({
+      path: 'empty-constant.factorio.ts',
+      text: `const outputs = [];
+const first = CC();
+const second = CC(...outputs);
+const third = new Network();
+CC().at(1, 2).to(third);
+CC();`,
+    });
+
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    expect(plan.producers).toHaveLength(4);
+    expect(
+      plan.producers.every(
+        (producer) => producer.kind === 'constant' && producer.outputs.length === 0,
+      ),
+    ).toBe(true);
+    expect(plan.diagnostics).toEqual([
+      expect.objectContaining({ code: 'CL2001', severity: 'warning' }),
+    ]);
+    const execution = elaborateDirectPlan(plan);
+    const tick = execution.circuit.createSimulation().step();
+    expect(tick.read(execution.network('first').id).get(signal('virtual', 'signal-A'))).toBe(0);
+    expect(generateBlueprintJson(execution.circuit.ir).blueprint.entities).toHaveLength(4);
+  });
+
+  test('attributes an invalid chained else output to the complete when expression', () => {
+    const call = 'when(input > 0).then(input).else(5)';
+    const parsed = parseFile({
+      path: 'invalid-else-output.factorio.ts',
+      text: `const input = new Network();
+const invalid: Network = ${call};`,
+    });
+
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected an invalid else output to be rejected.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ElaborationExecutionError);
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('EX1001');
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(call);
+      expect(failure.message).toContain('Unsupported decider output specification');
+    }
   });
 
   test('uses the default item type for Signal(name) and omits it from blueprint JSON', () => {

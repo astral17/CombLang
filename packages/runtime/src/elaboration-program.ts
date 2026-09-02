@@ -352,6 +352,16 @@ class ElaborationRecorder {
       if (!isRawSpan(rawSpan) || (capability !== 'readonly' && capability !== 'ref')) {
         throw new Error('Invalid Network parameter capability descriptor.');
       }
+      if (this.#isProducer(value)) {
+        value = this.api.networkArgument(
+          value,
+          '<indirect>',
+          parameter,
+          capability,
+          fixedColor,
+          rawSpan,
+        );
+      }
       if (!this.#isNetwork(value)) {
         throw new ElaborationExecutionError(
           `${capability === 'readonly' ? 'Readonly<Network>' : 'Ref<Network>'} parameter ${parameter} received a non-Network value.`,
@@ -360,10 +370,11 @@ class ElaborationRecorder {
         );
       }
       this.#recordDslCall();
-      const source = this.#span(rawSpan);
+      const source = this.#networkState(value).callArgument ?? this.#span(rawSpan);
+      const sourceRaw = { start: source.start, end: source.end };
       this.#ownership.assertReadable(value, source);
       if (fixedColor !== undefined)
-        this.#requireNetworkColor(value, capability, fixedColor, rawSpan);
+        this.#requireNetworkColor(value, capability, fixedColor, sourceRaw);
       const frame = this.#currentFunctionFrame();
       if (frame === undefined) {
         throw new Error('Network parameter borrow was created outside a function frame.');
@@ -395,6 +406,16 @@ class ElaborationRecorder {
       rawSpan: RawSpan,
     ): NetworkValue => {
       if (!isRawSpan(rawSpan)) throw new Error('Invalid Move<Network> parameter descriptor.');
+      if (this.#isProducer(value)) {
+        value = this.api.networkArgument(
+          value,
+          '<indirect>',
+          parameter,
+          'move',
+          fixedColor,
+          rawSpan,
+        );
+      }
       if (this.#isPair(value) || this.#isPairSelection(value)) {
         throw new ElaborationExecutionError(
           'pair(a, b) is a read-only input view and cannot transfer ownership.',
@@ -410,13 +431,14 @@ class ElaborationRecorder {
         );
       }
       this.#recordDslCall();
-      const source = this.#span(rawSpan);
+      const source = this.#networkState(value).callArgument ?? this.#span(rawSpan);
+      const sourceRaw = { start: source.start, end: source.end };
       this.#ownership.assertConsumable(value, source, 'source');
       const frame = this.#currentFunctionFrame();
       if (frame === undefined) {
         throw new Error('Network ownership transfer was created outside a function frame.');
       }
-      if (fixedColor !== undefined) this.#requireNetworkColor(value, 'move', fixedColor, rawSpan);
+      if (fixedColor !== undefined) this.#requireNetworkColor(value, 'move', fixedColor, sourceRaw);
       const state = this.#networkState(value);
       this.#ownership.moveToFrame(value, source, frame);
       this.#capabilityUses.push({
@@ -449,6 +471,91 @@ class ElaborationRecorder {
     returnValue: (value: unknown, rawSpan: RawSpan, producerType?: unknown): unknown => {
       if (producerType !== undefined) return this.#producerHandle(value, producerType, rawSpan);
       return this.#returnOwnedValue(value, rawSpan, new Map());
+    },
+    returnNetwork: (
+      value: unknown,
+      capability: unknown,
+      fixedColor: unknown,
+      rawSpan: RawSpan,
+    ): NetworkValue => {
+      if (
+        !isRawSpan(rawSpan) ||
+        (capability !== 'owned' && capability !== 'readonly') ||
+        (fixedColor !== undefined && fixedColor !== 'red' && fixedColor !== 'green')
+      ) {
+        throw new Error(
+          'A function Network return must be Network or Readonly<Network>, optionally with R/G.',
+        );
+      }
+      let network: NetworkValue;
+      if (this.#isProducer(value)) {
+        network = this.#network('$return', rawSpan, fixedColor);
+        this.#networkState(network).returnBindingAvailable = true;
+        this.#attach(network, value, rawSpan);
+      } else if (this.#isNetwork(value)) {
+        network = value;
+        if (fixedColor !== undefined) {
+          this.#requireNetworkColor(
+            network,
+            capability === 'readonly' ? 'readonly' : 'move',
+            fixedColor,
+            rawSpan,
+          );
+        }
+      } else {
+        throw new ElaborationExecutionError(
+          'A function declared to return Network must return a Network or a combinator expression.',
+          this.#span(rawSpan),
+          'RT2022',
+        );
+      }
+      const returned = this.#returnOwnedNetwork(network, rawSpan);
+      if (capability === 'owned') return returned;
+      return this.#networkValue(
+        { ...returned, capability: 'readonly' },
+        { ...this.#networkState(returned) },
+      );
+    },
+    networkArgument: (
+      value: unknown,
+      functionName: unknown,
+      parameter: unknown,
+      capability: unknown,
+      fixedColor: unknown,
+      rawSpan: RawSpan,
+    ): NetworkValue => {
+      if (
+        !isRawSpan(rawSpan) ||
+        typeof functionName !== 'string' ||
+        typeof parameter !== 'string' ||
+        !['owned', 'readonly', 'ref', 'move'].includes(String(capability)) ||
+        (fixedColor !== undefined && fixedColor !== 'red' && fixedColor !== 'green')
+      ) {
+        throw new Error('Invalid Network call-argument descriptor.');
+      }
+      let network: NetworkValue;
+      if (this.#isProducer(value)) {
+        network = this.#network(`$argument:${functionName}:${parameter}`, rawSpan, fixedColor);
+        this.#attach(network, value, rawSpan);
+      } else if (this.#isNetwork(value)) {
+        network = value;
+      } else {
+        throw new ElaborationExecutionError(
+          `${String(capability) === 'readonly' ? 'Readonly<Network>' : String(capability) === 'ref' ? 'Ref<Network>' : String(capability) === 'move' ? 'Move<Network>' : 'Network'} parameter ${parameter} received a non-Network value.`,
+          this.#span(rawSpan),
+          'RT2015',
+        );
+      }
+      this.#assertReadableNetwork(network, rawSpan, `argument ${parameter}`);
+      const state = this.#networkState(network);
+      return this.#networkValue(
+        { ...network },
+        {
+          ownership: state.ownership,
+          ...(state.borrow === undefined ? {} : { borrow: state.borrow }),
+          callArgument: this.#span(rawSpan),
+        },
+      );
     },
     take: (...args: unknown[]): unknown => {
       const rawSpan = args.at(-1);
@@ -512,6 +619,9 @@ class ElaborationRecorder {
       fixedColor: 'red' | 'green' | undefined,
       rawSpan: RawSpan,
     ): unknown => {
+      if (this.#isNetwork(producer) && this.#networkState(producer).returnBindingAvailable) {
+        return this.#bindReturnedNetwork(producer, name, fixedColor, rawSpan);
+      }
       if (!this.#isProducer(producer)) return producer;
       const network = this.#network(name, rawSpan, fixedColor);
       this.#attach(network, producer, rawSpan);
@@ -523,6 +633,13 @@ class ElaborationRecorder {
       rawSpan: RawSpan,
     ): unknown => {
       if (!Array.isArray(descriptors)) throw new Error('Invalid array binding descriptors.');
+      if (this.#isNetwork(value)) {
+        throw new ElaborationExecutionError(
+          'A Network value cannot be destructured; return an explicit array of Networks.',
+          this.#span(rawSpan),
+          'RT2022',
+        );
+      }
       const hasProducerBindings = descriptors.some(
         (descriptor) => descriptor?.producerType !== undefined,
       );
@@ -568,6 +685,13 @@ class ElaborationRecorder {
       rawSpan: RawSpan,
     ): unknown => {
       if (!Array.isArray(descriptors)) throw new Error('Invalid object binding descriptors.');
+      if (this.#isNetwork(value)) {
+        throw new ElaborationExecutionError(
+          'A Network value cannot be destructured; return an explicit object of Networks.',
+          this.#span(rawSpan),
+          'RT2022',
+        );
+      }
       const producerDescriptors = descriptors.filter(
         (descriptor): descriptor is BindingDescriptor => descriptor?.producerType !== undefined,
       );
@@ -651,6 +775,34 @@ class ElaborationRecorder {
         },
       });
     },
+    deciderBranches: (
+      condition: unknown,
+      thenValue: unknown,
+      elseValue: unknown,
+      rawSpan: RawSpan,
+    ): ProducerValue => {
+      this.#recordDslCall();
+      if (!isRawSpan(rawSpan)) throw new Error('IF/when is missing provenance.');
+      if (!this.#isCondition(condition)) throw new Error('IF/when requires a circuit condition.');
+      const thenOutputs = this.#deciderOutputs(thenValue, rawSpan);
+      const elseOutputs = this.#deciderOutputs(elseValue, rawSpan);
+      if (thenOutputs.length === 0 && elseOutputs.length === 0) {
+        throw new Error('IF/when requires at least one output specification.');
+      }
+      return this.#runtimeValue({
+        kind: 'producer',
+        identity: {},
+        producer: {
+          kind: 'decider',
+          condition: condition.condition,
+          output: thenOutputs[0] ?? elseOutputs[0]!,
+          outputs: thenOutputs,
+          ...(elseOutputs.length === 0 ? {} : { elseOutputs }),
+          source: this.#span(rawSpan),
+          instancePath: this.#path(),
+        },
+      });
+    },
     logical: (
       operator: 'and' | 'or',
       evaluateLeft: () => unknown,
@@ -720,32 +872,21 @@ class ElaborationRecorder {
     },
     bindOutput: (producer: unknown, signal: SignalId, rawSpan: RawSpan): unknown => {
       if (!isRawSpan(rawSpan)) throw new Error('.as(...) is missing provenance.');
-      if (!this.#isProducer(producer)) {
-        if (
-          (typeof producer !== 'object' && typeof producer !== 'function') ||
-          producer === null ||
-          typeof (producer as { as?: unknown }).as !== 'function'
-        ) {
-          throw new Error('.as(...) requires a combinator producer or an ordinary .as method.');
-        }
-        return (producer as { as: (value: unknown) => unknown }).as(signal);
-      }
-      this.#recordDslCall();
-      if (!this.#isSignal(signal)) throw new Error('.as(...) requires a Signal.');
-      if (producer.functionReturn !== undefined) {
+      if (this.#isNetwork(producer) || this.#isProducer(producer)) {
         throw new ElaborationExecutionError(
-          '.as(SIGNAL) cannot cross a function Network return boundary; bind the producer output inside that function.',
+          '.as(...) is not part of the Producer API; bind an arithmetic output through destination[SIGNAL] or producer.to(destination, SIGNAL).',
           this.#span(rawSpan),
           'RT2021',
-          [
-            {
-              message: 'Producer crossed the Network return boundary here.',
-              span: producer.functionReturn,
-            },
-          ],
         );
       }
-      return this.#bindOutputSignal(producer, signal, rawSpan, true);
+      if (
+        (typeof producer !== 'object' && typeof producer !== 'function') ||
+        producer === null ||
+        typeof (producer as { as?: unknown }).as !== 'function'
+      ) {
+        throw new Error('.as(...) requires an ordinary .as method; DSL values do not support it.');
+      }
+      return (producer as { as: (value: unknown) => unknown }).as(signal);
     },
     place: (...args: unknown[]): unknown => {
       const rawSpan = args.at(-1);
@@ -1111,6 +1252,48 @@ class ElaborationRecorder {
     return this.#network(descriptor.name, rawSpan, descriptor.color);
   }
 
+  #bindReturnedNetwork(
+    value: NetworkValue,
+    name: string,
+    fixedColor: 'red' | 'green' | undefined,
+    rawSpan: RawSpan,
+  ): NetworkValue {
+    const state = this.#networkState(value);
+    state.returnBindingAvailable = false;
+    const occurrence = (this.#networkNameCounts.get(name) ?? 0) + 1;
+    this.#networkNameCounts.set(name, occurrence);
+    const boundName = occurrence === 1 ? name : `$instance:${occurrence}:${name}`;
+    const declarationIndex = this.#networks.findIndex(
+      ({ name: candidate }) => candidate === value.name,
+    );
+    const declaration = this.#networks[declarationIndex];
+    if (declaration === undefined)
+      throw new Error('Cannot bind a missing function return Network.');
+    this.#networks[declarationIndex] = {
+      ...declaration,
+      name: boundName,
+      source: this.#span(rawSpan),
+      ...(fixedColor === undefined ? {} : { fixedColor }),
+    };
+    for (let index = 0; index < this.#producers.length; index += 1) {
+      const producer = this.#producers[index]!;
+      if (!producer.destinations.some(({ network }) => network === value.name)) continue;
+      this.#producers[index] = {
+        ...producer,
+        destinations: producer.destinations.map((destination) =>
+          destination.network === value.name ? { ...destination, network: boundName } : destination,
+        ),
+      };
+    }
+    const rebound = this.#networkValue(
+      { ...value, name: boundName, declaration: this.#span(rawSpan) },
+      { ownership: state.ownership },
+    );
+    if (fixedColor !== undefined)
+      this.#requireNetworkColor(rebound, 'readonly', fixedColor, rawSpan);
+    return rebound;
+  }
+
   #attach(network: NetworkValue, value: ProducerValue, rawSpan: RawSpan): void {
     this.#attachMany([network], value, rawSpan);
   }
@@ -1228,11 +1411,7 @@ class ElaborationRecorder {
   }
 
   #returnOwnedValue(value: unknown, rawSpan: RawSpan, seen: Map<object, unknown>): unknown {
-    if (this.#isProducer(value)) {
-      return value.functionReturn === undefined
-        ? this.#runtimeValue({ ...value, functionReturn: this.#span(rawSpan) })
-        : value;
-    }
+    if (this.#isProducer(value)) return value;
     if (this.#isPair(value) || this.#isPairSelection(value)) {
       throw new ElaborationExecutionError(
         'pair(a, b) is a read-only input view and cannot carry ownership across a return.',
@@ -1331,7 +1510,10 @@ class ElaborationRecorder {
         capability: 'owned',
         generation: state.ownership.generation,
       },
-      { ownership: state.ownership },
+      {
+        ownership: state.ownership,
+        ...(state.returnBindingAvailable ? { returnBindingAvailable: true } : {}),
+      },
     );
   }
 
@@ -1542,20 +1724,46 @@ class ElaborationRecorder {
     throw new Error('Unsupported decider output specification.');
   }
 
+  #deciderOutputs(
+    value: unknown,
+    rawSpan: RawSpan,
+    seen: Set<object> = new Set(),
+  ): readonly Extract<DirectPlanProducer, { kind: 'decider' }>['output'][] {
+    if (value === undefined) return [];
+    if (
+      this.#isSignalValue(value) ||
+      this.#isWildcardCount(value) ||
+      this.#isSelected(value) ||
+      this.#isPair(value) ||
+      this.#isNetwork(value)
+    ) {
+      return [this.#deciderOutput(value, rawSpan)];
+    }
+    if (typeof value !== 'object' || value === null) {
+      return [this.#deciderOutput(value, rawSpan)];
+    }
+    if (seen.has(value)) throw new Error('IF/when output containers cannot be cyclic.');
+    seen.add(value);
+    try {
+      if (Array.isArray(value)) {
+        return value.flatMap((item) => this.#deciderOutputs(item, rawSpan, seen));
+      }
+      const prototype = Object.getPrototypeOf(value);
+      if (prototype === Object.prototype || prototype === null) {
+        return Object.values(value).flatMap((item) => this.#deciderOutputs(item, rawSpan, seen));
+      }
+      return [this.#deciderOutput(value, rawSpan)];
+    } finally {
+      seen.delete(value);
+    }
+  }
+
   #bindOutputSignal(
     value: ProducerValue,
     signal: SignalId | undefined,
     rawSpan: RawSpan,
-    explicit = false,
   ): ProducerValue {
     if (signal === undefined) return value;
-    if (value.boundOutputSignal !== undefined && !sameSignal(value.boundOutputSignal, signal)) {
-      this.#outputBindingFailure(
-        'Explicit producer output Signal conflicts with its destination binding.',
-        value,
-        rawSpan,
-      );
-    }
     let bound: ProducerValue;
     if (value.producer.kind === 'constant') {
       this.#outputBindingFailure(
@@ -1570,6 +1778,13 @@ class ElaborationRecorder {
         producer: { ...value.producer, output: { kind: 'signal', signal } },
       });
     } else {
+      if (value.producer.elseOutputs !== undefined) {
+        this.#outputBindingFailure(
+          'A decider with an else branch cannot be rebound to one destination Signal.',
+          value,
+          rawSpan,
+        );
+      }
       if ((value.producer.outputs?.length ?? 1) !== 1) {
         this.#outputBindingFailure(
           'A multi-output decider cannot be rebound to one destination Signal.',
@@ -1619,26 +1834,12 @@ class ElaborationRecorder {
         );
       }
     }
-    return explicit || value.boundOutputSignal !== undefined
-      ? this.#runtimeValue({
-          ...bound,
-          boundOutputSignal: signal,
-          boundOutputSource: value.boundOutputSource ?? this.#span(rawSpan),
-        })
-      : bound;
+    return bound;
   }
 
   #outputBindingFailure(message: string, value: ProducerValue, rawSpan: RawSpan): never {
     const primary = this.#span(rawSpan);
     const related = [
-      ...(value.boundOutputSource === undefined
-        ? []
-        : [
-            {
-              message: 'Producer output was explicitly bound here.',
-              span: value.boundOutputSource,
-            },
-          ]),
       { message: 'Physical producer was created here.', span: value.producer.source },
     ].filter(
       (entry, index, entries) =>

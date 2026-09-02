@@ -51,7 +51,7 @@ Object schemas should leave room for separate circuit and logistic conditions wh
 
 ## Native Decider completeness
 
-The lower simulator and blueprint IR already represent normal and else output lists. The source language currently supports ordered multi-output `.then(...)` but not `.else(...)`.
+The source language, lower simulator, and blueprint IR represent ordered normal and else output lists. Compact syntax supports `IF(condition, then, else)`, `when(condition).then(...).else(...)`, and false-only `when(condition).else(...)`; exact native configuration remains future work.
 
 Phase 7 must complete the native surface without hidden hardware:
 

@@ -203,6 +203,14 @@ export function createElaborationOwnershipPolicy(
     },
     borrow: (network, capability, parameter, source, frame) => {
       assertReadable(stateFor, network, source);
+      if (capability === 'ref' && network.capability === 'readonly') {
+        throw new ElaborationExecutionError(
+          `Cannot create Ref<Network> parameter ${parameter} from Readonly<Network>.`,
+          source,
+          'RT2015',
+          [{ message: 'Network declared here.', span: network.declaration }],
+        );
+      }
       const ownership = stateFor(network).ownership;
       const conflicting =
         capability === 'readonly'

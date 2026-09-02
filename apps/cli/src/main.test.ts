@@ -248,7 +248,7 @@ const output: Network = test(input);`);
     const path = await sourceFile(`const A = Signal('virtual', 'signal-A');
 const input = new Network();
 const producer: ArithmeticCombinator = input + 0;
-const configured: ArithmeticCombinator = producer.as(A);
+const configured: ArithmeticCombinator = producer.at(1, 2);
 const first = new Network();
 const second = new Network();
 first += producer;
@@ -332,7 +332,7 @@ second += slots[0];`);
 const B = Signal('virtual', 'signal-B');
 const input = new Network();
 const output = new Network();
-(input + 0).as(A).to(output, B);`);
+IF(input[A] > 0, input[A]).to(output, B);`);
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
     expect(await run(['check', '--json', path])).toBe(1);

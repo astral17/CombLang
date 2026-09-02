@@ -31,8 +31,8 @@ function Bias(input: Readonly<Network>): Network {
   return input + bias;
 }
 
-function Gate(input: Readonly<Network>, threshold: Readonly<Network>): Network {
-  return IF(input[SIGNAL_A] > threshold[SIGNAL_A], input[SIGNAL_A]).as(SIGNAL_A);
+function Gate(input: Readonly<Network>, threshold: Readonly<Network>): DeciderCombinator {
+  return IF(input[SIGNAL_A] > threshold[SIGNAL_A], input[SIGNAL_A]);
 }
 
 const input = new Network<R>();
@@ -40,7 +40,9 @@ const middle = Scale(input);
 const biased = Bias(middle);
 const threshold = new Network();
 threshold += CC(40 * SIGNAL_A).at(0.5, 2.5, 4);
-let [output, mirror]: [Network, Network] = Gate(biased, threshold);
+const output = new Network();
+const mirror = new Network();
+Gate(biased, threshold).to(output, mirror);
 `;
 
 const sampleTests = `const SIGNAL_A = Signal("virtual", "signal-A");

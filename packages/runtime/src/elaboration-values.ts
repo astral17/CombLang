@@ -48,6 +48,10 @@ export interface NetworkValue {
 export interface NetworkRuntimeState {
   readonly ownership: NetworkOwnershipState;
   readonly borrow?: NetworkBorrow;
+  /** A producer materialized only to satisfy a function Network return may adopt its caller binding. */
+  returnBindingAvailable?: boolean;
+  /** Direct call-site provenance carried into the callee's capability check. */
+  readonly callArgument?: SourceSpan;
 }
 
 export interface SignalValue {
@@ -107,11 +111,6 @@ export interface ProducerValue {
   /** Shared identity of one physical entity across fluent wrapper values. */
   readonly identity: object;
   readonly producer: WithoutDestinations<DirectPlanProducer>;
-  /** Explicit `.as(...)` constraint; inferred arithmetic outputs remain overridable. */
-  readonly boundOutputSignal?: SignalId;
-  readonly boundOutputSource?: SourceSpan;
-  /** A declared function returned this internal producer through its public Network boundary. */
-  readonly functionReturn?: SourceSpan;
 }
 
 export type DslValue =

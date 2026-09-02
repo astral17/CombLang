@@ -63,7 +63,7 @@ count += 2;`,
     expect(parsed.text.slice(span.start, span.end)).toBe('input += 5');
   });
 
-  test('accepts producer expressions and Network-returning structural calls', () => {
+  test('separates producer expressions from Network-returning structural calls', () => {
     const parsed = parseFile({
       path: 'valid-attachments.ts',
       text: `function Delay(input: Readonly<Network>): Network { return input + 0; }
@@ -71,14 +71,14 @@ const input = new Network();
 const output = new Network();
 output += input + 1;
 output += IF(input > 0, input);
-output += Delay(input);`,
+const delayed = Delay(input);`,
     });
 
     expect(validateDslSemantics(parsed)).toEqual([]);
   });
 
-  test('rejects .as after a declared Network return boundary', () => {
-    const call = 'Gate(input).as(A)';
+  test('rejects .as on DSL producers and materialized Networks', () => {
+    const call = 'IF(input > 0, input).as(A)';
     const parsed = parseFile({
       path: 'function-return-as.ts',
       text: `const A = Signal('virtual', 'signal-A');
@@ -86,13 +86,71 @@ function Gate(input: Readonly<Network>): Network {
   return IF(input > 0, input);
 }
 const input = new Network();
-const output: Network = ${call};`,
+const output: Network = ${call};
+Gate(input).as(A);`,
     });
     const diagnostics = validateDslSemantics(parsed);
 
-    expect(diagnostics).toContainEqual(expect.objectContaining({ code: 'CL1043' }));
+    expect(diagnostics.filter(({ code }) => code === 'CL1043')).toHaveLength(2);
     const diagnostic = diagnostics.find(({ code }) => code === 'CL1043')!;
     expect(parsed.text.slice(diagnostic.span!.start, diagnostic.span!.end)).toBe(call);
+  });
+
+  test('does not destructure one Network returned by a function into several outputs', () => {
+    const call = 'Gate(input, threshold)';
+    const parsed = parseFile({
+      path: 'network-return-destructuring.ts',
+      text: `function Gate(input: Readonly<Network>, threshold: Readonly<Network>): Network {
+  return IF(input > threshold, input);
+}
+const input = new Network();
+const threshold = new Network();
+let [output, mirror]: [Network, Network] = ${call};`,
+    });
+    const diagnostic = validateDslSemantics(parsed).find(({ code }) => code === 'CL1046');
+
+    expect(diagnostic).toMatchObject({ severity: 'error', span: expect.any(Object) });
+    expect(parsed.text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(call);
+  });
+
+  test('preserves a Readonly Network function return in an inferred binding', () => {
+    const write = 'time += CC(1 * CLOCK)';
+    const parsed = parseFile({
+      path: 'readonly-return.ts',
+      text: `const CLOCK = Signal('virtual', 'signal-C');
+function Timer(): Readonly<Network> {
+  const out = new Network();
+  return out;
+}
+let time = Timer();
+${write};`,
+    });
+    const diagnostic = validateDslSemantics(parsed).find(({ code }) => code === 'CL1038');
+
+    expect(diagnostic).toMatchObject({ severity: 'error', span: expect.any(Object) });
+    expect(parsed.text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe('time');
+  });
+
+  test('checks definite Network function arguments at the call site', () => {
+    const invalidArgument = '5';
+    const missingCall = 'Read()';
+    const parsed = parseFile({
+      path: 'network-arguments.ts',
+      text: `function Read(input: Readonly<Network>): Network { return input + 0; }
+const invalid = Read(${invalidArgument});
+const missing = ${missingCall};
+const input = new Network();
+const contextual = Read(input * 2);`,
+    });
+    const diagnostics = validateDslSemantics(parsed).filter(({ code }) => code === 'CL1047');
+
+    expect(diagnostics).toHaveLength(2);
+    expect(parsed.text.slice(diagnostics[0]!.span!.start, diagnostics[0]!.span!.end)).toBe(
+      invalidArgument,
+    );
+    expect(parsed.text.slice(diagnostics[1]!.span!.start, diagnostics[1]!.span!.end)).toBe(
+      missingCall,
+    );
   });
 
   test('accepts stored Producer handles and rejects definite non-producer initializers', () => {
@@ -260,7 +318,6 @@ const second = new Network();
     expect(validateDslSemantics(parsed).map(({ code }) => code)).toEqual([
       'CL1019',
       'CL1035',
-      'CL1024',
       'CL1014',
       'CL1031',
       'CL1035',
