@@ -4,6 +4,60 @@ import { parseFile } from './parser.js';
 import { classifyDslSemantics, validateDslSemantics } from './semantic.js';
 
 describe('DSL semantic classifier', () => {
+  test('resolves function annotations lexically instead of matching shadowed names', () => {
+    const parsed = parseFile({
+      path: 'shadowed-functions.ts',
+      text: `function Gate(input: Readonly<Network>): Network { return input + 0; }
+function Clock(): Readonly<Network> { return new Network(); }
+{
+  const Gate = (value: number) => [value, value];
+  const Clock = () => new Network();
+  let [first, second] = Gate(5);
+  const out = Clock();
+  out += CC();
+}
+function Outer(Gate: unknown) {
+  let [first, second] = Gate(7);
+}
+{
+  function Gate(value: number) { return [value]; }
+  const [first] = Gate(2);
+}`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+  });
+
+  test.each([
+    'Gate = () => [1, 2];',
+    '[Gate] = [() => [1, 2]];',
+    '({ Gate } = { Gate: () => [1, 2] });',
+    'for (Gate of [() => [1, 2]]) {}',
+  ])('defers annotations of a reassigned function: %s', (assignment) => {
+    const parsed = parseFile({
+      path: 'reassigned-function.ts',
+      text: `function Gate(): Network { return new Network(); }
+${assignment}
+const [first, second] = Gate();`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+  });
+
+  test('checks nested function declarations at their actual call sites', () => {
+    const parsed = parseFile({
+      path: 'nested-function.ts',
+      text: `function Outer() {
+  function Gate(): Network { return new Network(); }
+  const [a, b] = Gate();
+}`,
+    });
+    const diagnostics = validateDslSemantics(parsed);
+    expect(diagnostics).toHaveLength(1);
+    expect(diagnostics[0]?.code).toBe('CL1046');
+    expect(parsed.text.slice(diagnostics[0]!.span!.start, diagnostics[0]!.span!.end)).toBe(
+      'Gate()',
+    );
+  });
+
   test('classifies Network arithmetic separately from compile-time arithmetic', () => {
     const parsed = parseFile({
       path: 'scale.ts',

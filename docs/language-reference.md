@@ -217,10 +217,11 @@ To retain attachment/fan-out powers, declare the honest producer return type,
 such as `DeciderCombinator`, and attach that returned handle explicitly. A
 producer expression passed to a `Readonly<Network>`, `Ref<Network>`, or
 `Move<Network>` parameter is contextually materialized at the call argument;
-dynamic type/capability failures in direct, non-spread calls point to that argument
-rather than the callee's parameter declaration. Indirect and spread calls also
-materialize Producer arguments, but currently use the parameter declaration as
-fallback diagnostic provenance.
+dynamic type/capability failures point to that argument rather than the callee's
+parameter declaration. This includes aliases, functions stored in arrays/objects,
+and spread calls (which point to the spread expression). Optional calls and native
+callback invocation still use the parameter declaration when no matching call
+provenance is available.
 
 Producers may pass through dynamically indexed arrays and ordinary objects. Assignment and ignored expression results are not treated as immediately discarded producers because they may be aliases of a handle attached later. After the executed module finishes, the runtime checks every created physical producer identity: a value later returned or attached has no warning, while a producer still abandoned in a container or expression receives `CL2001` and an internal unused sink so its topology is still validated. `CL1044` reports a statically definite annotation mismatch at a declaration, assignment, argument, or `return`; dynamically determined mismatches use `RT2022` at the executed type boundary.
 
@@ -401,6 +402,10 @@ const output: Network = MemoCell(input);
 Returning a producer lets the caller materialize or attach it contextually. Returning an independently owned local Network returns that runtime handle; other local Networks remain private unless returned or otherwise attached. A borrowed parameter cannot be promoted to an owned return. A function that returns an ordinary value remains an ordinary JavaScript function, and an error is reported only if the executed value is later used in an operation that requires a Network, Signal, Condition, or Producer.
 
 Each function declaration call receives an independent provenance scope, so generated Networks, producers, and attachments retain the dynamic function path. Async syntax is rejected before execution; imports and multi-module elaboration are not implemented yet.
+
+Static checks resolve user function declarations lexically, including nested declarations. A local binding with the same name does not inherit an outer function's annotations. If the function binding is reassigned, its call signature is treated as uncertain and checked from executed values instead. This uses TypeScript symbol binding only, not TypeScript assignability rules for DSL operators.
+
+Returning an array/plain object inspects its own data properties for Network ownership transfer without invoking getters or custom array iterators. Accessors remain lazy; sparse indices, symbol keys, property descriptors, and null prototypes are preserved when a returned Network requires a new container view.
 
 ## Executed compile-time control flow
 

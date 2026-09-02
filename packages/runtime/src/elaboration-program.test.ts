@@ -21,6 +21,229 @@ for (let i = 0; i < 10; i++) {
 }`;
 
 describe('executed elaboration program', () => {
+  test.each([
+    { call: 'alias(values[0])', source: 'values[0]' },
+    { call: 'alias(...values)', source: '...values' },
+    { call: 'Read(...values)', source: '...values' },
+    { call: 'object.read(values[0])', source: 'values[0]' },
+    { call: 'functions[0](...values)', source: '...values' },
+  ])('attributes Network argument failures in $call', ({ call, source }) => {
+    const parsed = parseFile({
+      path: 'indirect-argument-source.factorio.ts',
+      text: `function Read(input: Readonly<Network>): Network { return input + 0; }
+const alias = Read;
+const object = { read: Read };
+const functions = [Read];
+const values = [5];
+const output = ${call};`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected a Network argument mismatch.');
+    } catch (error) {
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2015');
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(source);
+    }
+  });
+
+  test('attributes a Producer kind mismatch through an alias and spread', () => {
+    const parsed = parseFile({
+      path: 'indirect-producer-source.factorio.ts',
+      text: `function Configure(value: ArithmeticCombinator): Producer { return value; }
+const alias = Configure;
+const input = new Network();
+const values = [IF(input > 0, input)];
+const output = alias(...values);`,
+    });
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected a Producer kind mismatch.');
+    } catch (error) {
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2022');
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe('...values');
+    }
+  });
+
+  test('does not apply an outer signature to a shadowing ordinary function', () => {
+    const parsed = parseFile({
+      path: 'runtime-function-shadow.factorio.ts',
+      text: `function Gate(input: Readonly<Network>): Network { return input + 0; }
+{
+  const Gate = (value: number) => [value, value];
+  const [a, b] = Gate(5);
+  const output = CC((a + b) * Signal('virtual', 'signal-A'));
+}`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    expect(plan.producers).toMatchObject([{ kind: 'constant', outputs: [{ value: 10 }] }]);
+  });
+
+  test('preserves ordinary spread evaluation order, strict this and direct eval', () => {
+    const parsed = parseFile({
+      path: 'ordinary-call-semantics.factorio.ts',
+      text: `const events = [];
+const lexical = 17;
+function value(n: number) { events.push(n); return n; }
+function sum(...values: number[]) {
+  if (this !== undefined) throw new Error('wrong receiver');
+  events.push('call');
+  return values.reduce((a, b) => a + b, 0) + eval('lexical');
+}
+const iterable = {
+  *[Symbol.iterator]() {
+    events.push('spread-start');
+    yield value(2);
+    events.push('spread-end');
+  }
+};
+const result = sum(value(1), ...iterable, value(3));
+if (JSON.stringify(events) !== '[1,"spread-start",2,"spread-end",3,"call"]') {
+  throw new Error('wrong argument evaluation order');
+}
+const output = CC(result * Signal('virtual', 'signal-A'));`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    expect(plan.producers).toMatchObject([{ kind: 'constant', outputs: [{ value: 23 }] }]);
+  });
+
+  test('preserves computed method receivers, getters and argument evaluation order', () => {
+    const parsed = parseFile({
+      path: 'computed-method-call.factorio.ts',
+      text: `const events = [];
+const object = {
+  base: 40,
+  get method() {
+    events.push('get');
+    return function(value: number) {
+      if (this !== object) throw new Error('wrong this');
+      events.push('call');
+      return this.base + value;
+    };
+  }
+};
+function receiver() { events.push('receiver'); return object; }
+function key() { events.push('key'); return 'method'; }
+function argument() { events.push('argument'); return 2; }
+const result = receiver()[key()](argument());
+if (events.join(',') !== 'receiver,key,get,argument,call') throw new Error('wrong order');
+const output = CC(result * Signal('virtual', 'signal-A'));`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    expect(plan.producers).toMatchObject([{ kind: 'constant', outputs: [{ value: 42 }] }]);
+  });
+
+  test('retains native super and private method receivers', () => {
+    const parsed = parseFile({
+      path: 'class-method-call.factorio.ts',
+      text: `class Base { value(n: number) { return n + 1; } }
+class Child extends Base {
+  #extra() { return 2; }
+  value(n: number) { return super.value(n) + this.#extra(); }
+}
+const instance = new Child();
+const output = CC(instance.value(4) * Signal('virtual', 'signal-A'));`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    expect(plan.producers).toMatchObject([{ kind: 'constant', outputs: [{ value: 7 }] }]);
+  });
+
+  test('keeps yield-containing method arguments in their generator scope', () => {
+    const parsed = parseFile({
+      path: 'yield-call-argument.factorio.ts',
+      text: `const iterator = (function* () {
+  const object = { base: 2, run(value: number) { return this.base + value; } };
+  return object.run(yield 1);
+})();
+const first = iterator.next();
+const last = iterator.next(5);
+if (first.value !== 1 || last.value !== 7 || !last.done) throw new Error('wrong yield behavior');
+const output = CC(last.value * Signal('virtual', 'signal-A'));`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    expect(plan.producers).toMatchObject([{ kind: 'constant', outputs: [{ value: 7 }] }]);
+  });
+
+  test('returns Network containers without forcing getters or dropping descriptors', () => {
+    const parsed = parseFile({
+      path: 'return-data-descriptors.factorio.ts',
+      text: `let reads = 0;
+const symbolKey = Symbol('network');
+function Bundle() {
+  const values = [new Network()];
+  values.length = 3;
+  Object.defineProperty(values, 1, { get() { reads++; return 7; }, enumerable: true });
+  const result = Object.create(null);
+  Object.defineProperties(result, {
+    network: { value: new Network(), enumerable: false, writable: false },
+    values: { value: values, enumerable: true },
+    lazy: { get() { reads++; return 'ok'; }, enumerable: true }
+  });
+  result[symbolKey] = new Network();
+  return result;
+}
+const result = Bundle();
+if (reads !== 0 || Object.getPrototypeOf(result) !== null || 2 in result.values) {
+  throw new Error('return changed container semantics');
+}
+if (Object.getOwnPropertyDescriptor(result, 'network').enumerable !== false) throw new Error('lost descriptor');
+const destination = new Network();
+destination.take(result.network);
+destination.take(result.values[0]);
+destination.take(result[symbolKey]);
+destination += CC();
+if (result.lazy !== 'ok' || result.values[1] !== 7 || reads !== 2) throw new Error('getters are not lazy');
+const shared = { count: 1 };
+function Repeated() { return [shared, shared]; }
+const repeated = Repeated();
+if (repeated[0] !== shared || repeated[1] !== shared) throw new Error('lost ordinary alias');`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    expect(plan.networkTransfers).toHaveLength(3);
+    expect(plan.producers).toHaveLength(1);
+    expect(() => elaborateDirectPlan(plan)).not.toThrow();
+  });
+
+  test('unwinds invocation provenance after a caught parameter error', () => {
+    const parsed = parseFile({
+      path: 'caught-call-source.factorio.ts',
+      text: `function Read(input: Readonly<Network>): Network { return input + 0; }
+const alias = Read;
+const values = [5, 6];
+try { alias(values[0]); } catch {}
+alias(values[1]);`,
+    });
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected the second call to fail.');
+    } catch (error) {
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2015');
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe('values[1]');
+    }
+  });
+
+  test('does not attribute an uninstrumented callback invocation to its outer caller', () => {
+    const parameter = 'input: Readonly<Network>';
+    const parsed = parseFile({
+      path: 'native-callback-source.factorio.ts',
+      text: `function Read(${parameter}): Network { return input + 0; }
+const relay = (callback) => [5].map(callback);
+relay(Read);`,
+    });
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected the native callback parameter check.');
+    } catch (error) {
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2015');
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(parameter);
+    }
+  });
+
   test('exposes an explicitly injected immutable prototype environment to source', async () => {
     const { prototypes } = await loadPrototypeDatabase(syntheticPrototypeDatabase());
     const parsed = parseFile({

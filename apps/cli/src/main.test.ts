@@ -41,6 +41,19 @@ afterEach(async () => {
 });
 
 describe('factorio-dsl check', () => {
+  test('prints the caller line and column for an aliased spread argument failure', async () => {
+    const path =
+      await sourceFile(`function Read(input: Readonly<Network>): Network { return input + 0; }
+const alias = Read;
+const values = [5];
+alias(...values);`);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect(await run(['check', path])).toBe(1);
+    expect(error.mock.calls).toEqual([
+      [expect.stringContaining('main.factorio.ts:4:7 - error RT2015:')],
+    ]);
+  });
+
   test('uses an explicitly injected prototype environment', async () => {
     const path = await sourceFile(`const PLATE = Signal(prototypes.item['iron-plate'].name);
 const source = CC(prototypes.item['iron-plate'].stackSize * PLATE);`);

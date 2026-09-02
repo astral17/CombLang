@@ -45,6 +45,18 @@ interface RawSpan {
   readonly end: number;
 }
 
+interface CallArgument {
+  readonly value: unknown;
+  readonly source: RawSpan;
+}
+
+interface Invocation {
+  readonly callable: unknown;
+  readonly arguments: readonly CallArgument[];
+  readonly source: RawSpan;
+  entered: boolean;
+}
+
 interface BindingDescriptor {
   readonly name: string;
   readonly color?: 'red' | 'green';
@@ -111,6 +123,14 @@ class ElaborationRecorder {
   readonly #provenanceFormatter = new ElaborationProvenanceFormatter();
   readonly #instancePath: string[] = [];
   readonly #ownershipFrames: (FunctionOwnershipFrame | undefined)[] = [];
+  readonly #invocations: Invocation[] = [];
+  readonly #functionCalls = new WeakMap<
+    FunctionOwnershipFrame,
+    {
+      readonly name: string;
+      readonly invocation?: Invocation;
+    }
+  >();
   #pendingDebugInstance: PendingDebugInstance | undefined;
   readonly #dslCallBudget: number;
   readonly #prototypes: PrototypeProvider | undefined;
@@ -152,7 +172,34 @@ class ElaborationRecorder {
       }
       return this.#prototypes;
     },
-    enterFunction: (name: string, rawSpan: RawSpan): void => {
+    invoke: (callable: unknown, args: readonly CallArgument[], rawSpan: RawSpan): unknown => {
+      return this.#invoke(callable, undefined, args, rawSpan);
+    },
+    invokeMember: (
+      receiver: unknown,
+      key: PropertyKey,
+      evaluateArguments: () => readonly CallArgument[],
+      rawSpan: RawSpan,
+    ): unknown => {
+      // Property lookup (including getters) precedes argument evaluation, as in JavaScript.
+      const callable = this.api.element(receiver, key, rawSpan);
+      return this.#invoke(callable, receiver, evaluateArguments(), rawSpan);
+    },
+    spreadCallArguments: (values: Iterable<unknown>, rawSpan: RawSpan): readonly CallArgument[] => {
+      const result: CallArgument[] = [];
+      for (const value of values) result.push({ value, source: rawSpan });
+      return result;
+    },
+    parameterSource: (index: number, rawSpan: RawSpan): RawSpan => {
+      const frame = this.#currentFunctionFrame();
+      const invocation =
+        frame === undefined ? undefined : this.#functionCalls.get(frame)?.invocation;
+      return invocation?.arguments[index]?.source ?? invocation?.source ?? rawSpan;
+    },
+    enterFunction: (name: string, callableOrSpan: unknown, source?: RawSpan): void => {
+      // The two-argument form keeps already-generated v2 programs executable.
+      const rawSpan = source ?? (callableOrSpan as RawSpan);
+      const callable = source === undefined ? undefined : callableOrSpan;
       const pending = this.#pendingDebugInstance;
       let segment: string;
       if (pending === undefined) {
@@ -166,12 +213,18 @@ class ElaborationRecorder {
         this.#pendingDebugInstance = undefined;
       }
       this.#instancePath.push(segment);
-      this.#ownershipFrames.push({
+      const frame: FunctionOwnershipFrame = {
         owner: Symbol(name),
         source: this.#span(rawSpan),
         borrows: [],
         moves: [],
-      });
+      };
+      this.#ownershipFrames.push(frame);
+      const invocation = this.#invocations.at(-1);
+      const matches =
+        invocation !== undefined && !invocation.entered && invocation.callable === callable;
+      if (matches) invocation.entered = true;
+      this.#functionCalls.set(frame, { name, ...(matches ? { invocation } : {}) });
     },
     enterLoop: (name: string, value: unknown, _rawSpan: RawSpan): void => {
       if (value === undefined) {
@@ -355,7 +408,7 @@ class ElaborationRecorder {
       if (this.#isProducer(value)) {
         value = this.api.networkArgument(
           value,
-          '<indirect>',
+          this.#currentFunctionName(),
           parameter,
           capability,
           fixedColor,
@@ -409,7 +462,7 @@ class ElaborationRecorder {
       if (this.#isProducer(value)) {
         value = this.api.networkArgument(
           value,
-          '<indirect>',
+          this.#currentFunctionName(),
           parameter,
           'move',
           fixedColor,
@@ -1120,6 +1173,26 @@ class ElaborationRecorder {
     return { fileId: this.#fileId, start: raw.start, end: raw.end };
   }
 
+  #invoke(
+    callable: unknown,
+    receiver: unknown,
+    args: readonly CallArgument[],
+    rawSpan: RawSpan,
+  ): unknown {
+    if (typeof callable !== 'function') throw new TypeError('Called value is not a function.');
+    const invocation: Invocation = { callable, arguments: args, source: rawSpan, entered: false };
+    this.#invocations.push(invocation);
+    try {
+      return Reflect.apply(
+        callable,
+        receiver,
+        args.map(({ value }) => value),
+      );
+    } finally {
+      this.#invocations.pop();
+    }
+  }
+
   #debugValue(value: unknown, rawSpan: RawSpan, seen: Set<object>): DirectPlanDebugValue {
     if (this.#isNetwork(value)) {
       this.#assertReadableNetwork(value, rawSpan);
@@ -1426,27 +1499,24 @@ class ElaborationRecorder {
     if (typeof value !== 'object' || value === null) return value;
     const previous = seen.get(value);
     if (previous !== undefined) return previous;
-    if (Array.isArray(value)) {
-      const result: unknown[] = [];
-      seen.set(value, result);
-      let changed = false;
-      for (const item of value) {
-        const returned = this.#returnOwnedValue(item, rawSpan, seen);
-        result.push(returned);
-        if (returned !== item) changed = true;
-      }
-      return changed ? result : value;
-    }
     const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) return value;
-    const result: Record<string, unknown> = {};
+    if (!Array.isArray(value) && prototype !== Object.prototype && prototype !== null) return value;
+    const result = Array.isArray(value)
+      ? Object.setPrototypeOf([], prototype)
+      : Object.create(prototype);
     seen.set(value, result);
+    const descriptors = Object.getOwnPropertyDescriptors(value);
     let changed = false;
-    for (const [key, item] of Object.entries(value)) {
-      const returned = this.#returnOwnedValue(item, rawSpan, seen);
-      result[key] = returned;
-      if (returned !== item) changed = true;
+    for (const key of Reflect.ownKeys(descriptors)) {
+      const descriptor = descriptors[key as keyof typeof descriptors]!;
+      // Accessors remain lazy. Inspecting an ownership boundary must not call user getters.
+      if (!('value' in descriptor)) continue;
+      const returned = this.#returnOwnedValue(descriptor.value, rawSpan, seen);
+      if (returned !== descriptor.value) changed = true;
+      descriptor.value = returned;
     }
+    Object.defineProperties(result, descriptors);
+    if (!changed) seen.set(value, value);
     return changed ? result : value;
   }
 
@@ -1523,6 +1593,13 @@ class ElaborationRecorder {
 
   #currentFunctionFrame(): FunctionOwnershipFrame | undefined {
     return this.#ownershipFrames.findLast((frame) => frame !== undefined);
+  }
+
+  #currentFunctionName(): string {
+    const frame = this.#currentFunctionFrame();
+    return frame === undefined
+      ? '<indirect>'
+      : (this.#functionCalls.get(frame)?.name ?? '<indirect>');
   }
 
   #parentFunctionFrame(): FunctionOwnershipFrame | undefined {

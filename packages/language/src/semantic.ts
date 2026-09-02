@@ -4,6 +4,7 @@ import type { Diagnostic, SourceSpan } from '@comblang/shared';
 
 import { spanForNode, type ParsedSourceFile } from './parser.js';
 import { reservedDslValueNames } from './dsl-names.js';
+import { createFunctionResolver } from './function-resolution.js';
 import {
   parseDslTypeAnnotation,
   networkTypeFromAnnotation,
@@ -64,13 +65,7 @@ function operatorText(kind: ts.SyntaxKind): string | undefined {
 export function classifyDslSemantics(file: ParsedSourceFile): readonly SemanticSummary[] {
   const summaries: SemanticSummary[] = [];
   const scopes: Map<string, DslValueType>[] = [new Map()];
-  const functions = new Map<string, DslValueType>();
-
-  for (const statement of file.ast.statements) {
-    if (ts.isFunctionDeclaration(statement) && statement.name !== undefined) {
-      functions.set(statement.name.text, typeFromAnnotation(statement.type));
-    }
-  }
+  const resolveFunction = createFunctionResolver(file);
 
   const lookup = (name: string): DslValueType => {
     for (let index = scopes.length - 1; index >= 0; index -= 1) {
@@ -97,7 +92,7 @@ export function classifyDslSemantics(file: ParsedSourceFile): readonly SemanticS
       if (expression.expression.text === 'CC' || expression.expression.text === 'IF') {
         return 'network';
       }
-      return functions.get(expression.expression.text) ?? 'unknown';
+      return typeFromAnnotation(resolveFunction(expression.expression)?.type);
     }
     if (ts.isBinaryExpression(expression)) {
       const operator = operatorText(expression.operatorToken.kind);
@@ -239,15 +234,16 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     readonly properties?: ReadonlyMap<string, string>;
   }
   const producerSlotScopes: Map<string, ProducerSlotType | undefined>[] = [new Map()];
-  const networkFunctionReturns = new Map<string, NetworkTypeSyntax>();
-  const producerFunctionReturns = new Map<string, string>();
-  const producerParameterTypes = new Map<string, readonly (string | undefined)[]>();
+  const resolveFunction = createFunctionResolver(file);
+  const networkFunctionReturn = (name: ts.Identifier): NetworkTypeSyntax | undefined =>
+    networkTypeFromAnnotation(resolveFunction(name)?.type, file.ast);
+  const producerFunctionReturn = (name: ts.Identifier): string | undefined =>
+    producerHandleTypeFromAnnotation(resolveFunction(name)?.type, file.ast);
   interface NetworkParameterType {
     readonly name: string;
     readonly type: NetworkTypeSyntax;
     readonly optional: boolean;
   }
-  const networkParameterTypes = new Map<string, readonly (NetworkParameterType | undefined)[]>();
   const isDslBuiltin = (name: string): boolean => reservedDslValueNames.has(name);
 
   const isNetworkType = (node: ts.TypeNode | undefined): boolean =>
@@ -287,32 +283,18 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     const syntax = parseDslTypeAnnotation(node, file.ast);
     return syntax?.kind === 'array' && syntax.element.kind === 'network';
   };
-  for (const statement of file.ast.statements) {
-    if (ts.isFunctionDeclaration(statement) && statement.name !== undefined) {
-      const networkReturn = networkTypeFromAnnotation(statement.type, file.ast);
-      if (networkReturn !== undefined)
-        networkFunctionReturns.set(statement.name.text, networkReturn);
-      const producerReturn = producerHandleTypeName(statement.type);
-      if (producerReturn !== undefined)
-        producerFunctionReturns.set(statement.name.text, producerReturn);
-      producerParameterTypes.set(
-        statement.name.text,
-        statement.parameters.map((parameter) => producerHandleTypeName(parameter.type)),
-      );
-      networkParameterTypes.set(
-        statement.name.text,
-        statement.parameters.map((parameter) => {
-          const type = networkTypeFromAnnotation(parameter.type, file.ast);
-          if (type === undefined || !ts.isIdentifier(parameter.name)) return undefined;
-          return {
-            name: parameter.name.text,
-            type,
-            optional: parameter.questionToken !== undefined || parameter.initializer !== undefined,
-          };
-        }),
-      );
-    }
-  }
+  const networkParametersOf = (
+    declaration: ts.FunctionDeclaration | undefined,
+  ): readonly (NetworkParameterType | undefined)[] | undefined =>
+    declaration?.parameters.map((parameter) => {
+      const type = networkTypeFromAnnotation(parameter.type, file.ast);
+      if (type === undefined || !ts.isIdentifier(parameter.name)) return undefined;
+      return {
+        name: parameter.name.text,
+        type,
+        optional: parameter.questionToken !== undefined || parameter.initializer !== undefined,
+      };
+    });
   const lookupNetwork = (name: string): boolean => {
     for (let index = networkScopes.length - 1; index >= 0; index -= 1) {
       if (networkScopes[index]!.has(name)) return true;
@@ -380,7 +362,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     if (
       ts.isCallExpression(node) &&
       ts.isIdentifier(node.expression) &&
-      networkFunctionReturns.has(node.expression.text)
+      networkFunctionReturn(node.expression) !== undefined
     ) {
       return true;
     }
@@ -410,7 +392,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     if (ts.isIdentifier(node)) return lookupCapability(node.text);
     if (ts.isElementAccessExpression(node)) return capabilityOfNetworkExpression(node.expression);
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
-      return networkFunctionReturns.get(node.expression.text)?.capability;
+      return networkFunctionReturn(node.expression)?.capability;
     }
     return isNetworkExpression(node) ? 'owned' : undefined;
   };
@@ -438,9 +420,9 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       if (ts.isIdentifier(node.expression)) {
         return (node.expression.text === 'CC' && isDslBuiltin('CC')) ||
           (node.expression.text === 'IF' && isDslBuiltin('IF')) ||
-          producerFunctionReturns.has(node.expression.text)
+          producerFunctionReturn(node.expression) !== undefined
           ? 'producer'
-          : networkFunctionReturns.has(node.expression.text)
+          : networkFunctionReturn(node.expression) !== undefined
             ? 'non-producer'
             : node.expression.text === 'Signal' && isDslBuiltin('Signal')
               ? 'non-producer'
@@ -482,7 +464,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     if (ts.isIdentifier(node.expression)) {
       if (node.expression.text === 'CC' && isDslBuiltin('CC')) return 'constant';
       if (node.expression.text === 'IF' && isDslBuiltin('IF')) return 'decider';
-      const returned = producerFunctionReturns.get(node.expression.text);
+      const returned = producerFunctionReturn(node.expression);
       if (returned === 'ArithmeticCombinator') return 'arithmetic';
       if (returned === 'DeciderCombinator') return 'decider';
       if (returned === 'ConstantCombinator') return 'constant';
@@ -905,7 +887,8 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
       const name = node.expression.text;
       const hasSpreadArgument = node.arguments.some(ts.isSpreadElement);
-      const networkParameters = hasSpreadArgument ? undefined : networkParameterTypes.get(name);
+      const declaration = resolveFunction(node.expression);
+      const networkParameters = hasSpreadArgument ? undefined : networkParametersOf(declaration);
       if (networkParameters !== undefined) {
         for (const [index, parameter] of networkParameters.entries()) {
           if (parameter === undefined) continue;
@@ -922,7 +905,9 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
           }
         }
       }
-      const producerParameters = hasSpreadArgument ? undefined : producerParameterTypes.get(name);
+      const producerParameters = hasSpreadArgument
+        ? undefined
+        : declaration?.parameters.map((parameter) => producerHandleTypeName(parameter.type));
       if (producerParameters !== undefined) {
         for (const [index, producerType] of producerParameters.entries()) {
           const argument = node.arguments[index];

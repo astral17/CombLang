@@ -46,12 +46,12 @@ The production CLI and browser first emit definite `CL` diagnostics from the con
 Source attribution follows the boundary that can actually correct the error:
 
 - a definite type or capability mismatch points to the offending source expression;
-- an executed argument mismatch at a direct, non-spread call to a known annotated function points to the call argument, not the parameter declaration; indirect and spread calls retain the parameter boundary as fallback;
+- an executed argument mismatch points to the call argument, including function aliases and functions stored in objects/arrays; arguments expanded by a spread point to that spread expression;
 - a return-contract mismatch points to the `return` statement;
 - attachment, placement, selection, `CC`, `IF`, and complete chained `when(...).then(...).else(...)` failures point to their source operation;
 - ownership and color failures add earlier declarations, borrows, moves, producer creation, or attachment sites as related spans.
 
-Unexpected JavaScript exceptions outside an instrumented DSL operation may still lack a source span. This is distinct from an executed DSL validation failure, whose runtime bridge always carries the original half-open source range.
+Call provenance is associated with the executed function identity, not its textual name. Optional calls, native callback invocation (for example `array.map(fn)` invoking `fn`), and other calls without a matching instrumented entry retain the parameter declaration as fallback. A JavaScript exception inside an instrumented call receives that call's span unless a more precise inner DSL diagnostic already exists; exceptions outside instrumented operations may still lack a source span.
 
 ## Common compiler diagnostics
 

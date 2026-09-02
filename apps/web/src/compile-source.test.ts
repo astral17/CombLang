@@ -4,6 +4,19 @@ import { loadPrototypeDatabase, syntheticPrototypeDatabase } from '@comblang/pro
 import { compileSource } from './compile-source.js';
 
 describe('browser source compilation', () => {
+  test('retains the argument span for a function stored in an object', () => {
+    const argument = 'values[0]';
+    const text = `function Read(input: Readonly<Network>): Network { return input + 0; }
+const helpers = { read: Read };
+const values = [5];
+helpers.read(${argument});`;
+    const result = compileSource({ path: 'main.factorio.ts', text });
+    expect(result.plan).toBeUndefined();
+    const diagnostic = result.compilerDiagnostics.find(({ code }) => code === 'RT2015');
+    expect(diagnostic?.span).toBeDefined();
+    expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(argument);
+  });
+
   test('accepts an explicitly injected prototype environment', async () => {
     const { prototypes } = await loadPrototypeDatabase(syntheticPrototypeDatabase());
     const result = compileSource(

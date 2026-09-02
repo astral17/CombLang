@@ -36,7 +36,7 @@ const call = maybe?.to(value);`,
     });
     const code = transformElaborationModule(source).code;
 
-    expect(code).toContain('maybe?.[key()]');
+    expect(code).toContain('maybe?.[__dsl.invoke(key, []');
     expect(code).toContain('maybe?.to(value)');
     expect(code).not.toContain('__dsl.element');
     expect(code).not.toContain('__dsl.attachTo');
@@ -193,11 +193,11 @@ getValues()[0] += 4;`,
     const program = transformElaborationModule(source);
 
     expect(program.code).toContain('__dsl.addAssign(_target_1.value, 3');
-    expect(program.code).toContain('))(getState())');
+    expect(program.code).toContain('))(__dsl.invoke(getState, []');
     expect(program.code).toContain('__dsl.addAssign(__dsl.element(_target_2, _key_1');
-    expect(program.code).toContain('))(getValues(), 0)');
-    expect(program.code.match(/getState\(\)/g)).toHaveLength(1);
-    expect(program.code.match(/getValues\(\)/g)).toHaveLength(1);
+    expect(program.code).toContain('))(__dsl.invoke(getValues, []');
+    expect(program.code.match(/__dsl\.invoke\(getState,/g)).toHaveLength(1);
+    expect(program.code.match(/__dsl\.invoke\(getValues,/g)).toHaveLength(1);
   });
 
   test('routes one-argument .take calls through ownership-aware runtime dispatch', () => {
@@ -310,7 +310,8 @@ Configure(values[0]);`,
     });
     const code = transformElaborationModule(source).code;
 
-    expect(code).toContain('Configure(__dsl.producerHandle(__dsl.element(values, 0');
+    expect(code).toContain('__dsl.invoke(Configure, [{ value: __dsl.element(values, 0');
+    expect(code).toContain('__dsl.parameterSource(0,');
     expect(code).toContain('"ArithmeticCombinator", "value"');
   });
 

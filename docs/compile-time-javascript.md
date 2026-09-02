@@ -20,6 +20,8 @@ The generated JavaScript calls the elaboration runtime through a compiler-select
 
 The v1 language reserves all free DSL identifiers. User variables, parameters, destructuring bindings, functions, classes, and enums cannot be named `Signal`, `Network`, `CC`, `IF`, `to`, `when`, `pair`, `Each`/`EACH`, `Anything`/`Any`/`ANYTHING`/`ANY`, or `Everything`/`All`/`EVERYTHING`/`ALL`; such a binding reports `CL1045`. Property names and methods are not free identifiers, so ordinary `object.to(...)`, `object.as(...)`, `object.at(...)`, and `object.take(...)` remain valid. A future lexical symbol-resolution phase may relax this policy.
 
+User function signatures are resolved by lexical symbol identity rather than name matching; a shadowing local binding never inherits an outer function's contract. Reassigned function bindings are left to executed validation. Non-optional calls carry argument provenance through aliases, object/array members, and spreads. Ordinary method receivers, getter-before-argument evaluation, spread iteration order, and direct `eval` scope are retained; this tracing does not consume the circuit-recording DSL-call budget. Optional calls, native callbacks, `super`, and private-method calls retain native invocation and may use the parameter declaration as diagnostic fallback.
+
 ## Accepted with limited DSL integration
 
 - callbacks such as `.map(...)` execute normally, but their iterations do not currently add a distinct provenance frame; use an explicit loop when per-iteration diagnostic identity matters;
