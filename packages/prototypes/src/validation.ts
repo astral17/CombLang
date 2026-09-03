@@ -204,7 +204,11 @@ function parseFluids(value: unknown): readonly FluidPrototype[] {
   return Object.freeze([...fluids].sort((left, right) => left.key.localeCompare(right.key)));
 }
 
-function parseComponent(value: unknown, path: string): RecipeComponent {
+function parseComponent(
+  value: unknown,
+  path: string,
+  role: 'ingredient' | 'product',
+): RecipeComponent {
   const input = object(value, path);
   const prototype = string(input.prototype, `${path}.prototype`);
   if (!prototype.startsWith('item:') && !prototype.startsWith('fluid:')) {
@@ -242,6 +246,64 @@ function parseComponent(value: unknown, path: string): RecipeComponent {
   if (probability !== undefined && (probability < 0 || probability > 1)) {
     invalid('PT1001', `${path}.probability`, 'expected a value from 0 through 1.');
   }
+  const independentProbability = optionalFinite(
+    input.independentProbability,
+    `${path}.independentProbability`,
+  );
+  if (
+    independentProbability !== undefined &&
+    (independentProbability < 0 || independentProbability > 1)
+  ) {
+    invalid('PT1001', `${path}.independentProbability`, 'expected a value from 0 through 1.');
+  }
+  let sharedProbability: RecipeComponent['sharedProbability'];
+  if (input.sharedProbability !== undefined) {
+    const shared = object(input.sharedProbability, `${path}.sharedProbability`);
+    const min = finite(shared.min, `${path}.sharedProbability.min`);
+    const max = finite(shared.max, `${path}.sharedProbability.max`);
+    if (min < 0 || max > 1 || min > max) {
+      invalid('PT1001', `${path}.sharedProbability`, 'expected 0 <= min <= max <= 1.');
+    }
+    sharedProbability = Object.freeze({ min, max });
+  }
+  const ignoredByStats = optionalFinite(input.ignoredByStats, `${path}.ignoredByStats`);
+  const ignoredByProductivity = optionalFinite(
+    input.ignoredByProductivity,
+    `${path}.ignoredByProductivity`,
+  );
+  for (const [field, count] of [
+    ['ignoredByStats', ignoredByStats],
+    ['ignoredByProductivity', ignoredByProductivity],
+  ] as const) {
+    if (
+      count !== undefined &&
+      (count < 0 || (prototype.startsWith('item:') && (!Number.isInteger(count) || count > 65535)))
+    ) {
+      invalid('PT1001', `${path}.${field}`, 'expected a non-negative amount (uint16 for items).');
+    }
+  }
+  if (
+    role === 'ingredient' &&
+    (independentProbability !== undefined ||
+      sharedProbability !== undefined ||
+      ignoredByProductivity !== undefined)
+  ) {
+    invalid(
+      'PT1004',
+      path,
+      'product probability and productivity fields are not valid on ingredients.',
+    );
+  }
+  if (
+    probability !== undefined &&
+    (independentProbability !== undefined || sharedProbability !== undefined)
+  ) {
+    invalid(
+      'PT1004',
+      path,
+      'legacy probability cannot be combined with independentProbability or sharedProbability.',
+    );
+  }
   const temperature = optionalFinite(input.temperature, `${path}.temperature`);
   const temperatureMin = optionalFinite(input.temperatureMin, `${path}.temperatureMin`);
   const temperatureMax = optionalFinite(input.temperatureMax, `${path}.temperatureMax`);
@@ -268,6 +330,10 @@ function parseComponent(value: unknown, path: string): RecipeComponent {
     ...(amountMax === undefined ? {} : { amountMax }),
     ...(extraCountFraction === undefined ? {} : { extraCountFraction }),
     ...(probability === undefined ? {} : { probability }),
+    ...(independentProbability === undefined ? {} : { independentProbability }),
+    ...(sharedProbability === undefined ? {} : { sharedProbability }),
+    ...(ignoredByStats === undefined ? {} : { ignoredByStats }),
+    ...(ignoredByProductivity === undefined ? {} : { ignoredByProductivity }),
     ...(temperature === undefined ? {} : { temperature }),
     ...(temperatureMin === undefined ? {} : { temperatureMin }),
     ...(temperatureMax === undefined ? {} : { temperatureMax }),
@@ -280,7 +346,7 @@ function parseRecipes(value: unknown): readonly RecipePrototype[] {
     const input = object(entry, path);
     const name = string(input.name, `${path}.name`);
     const products = array(input.products, `${path}.products`).map((component, componentIndex) =>
-      parseComponent(component, `${path}.products[${componentIndex}]`),
+      parseComponent(component, `${path}.products[${componentIndex}]`, 'product'),
     );
     if (products.length === 0) invalid('PT1001', `${path}.products`, 'must not be empty.');
     const mainProduct = optionalString(input.mainProduct, `${path}.mainProduct`);
@@ -299,7 +365,7 @@ function parseRecipes(value: unknown): readonly RecipePrototype[] {
       energy: positive(input.energy, `${path}.energy`),
       ingredients: Object.freeze(
         array(input.ingredients, `${path}.ingredients`).map((component, componentIndex) =>
-          parseComponent(component, `${path}.ingredients[${componentIndex}]`),
+          parseComponent(component, `${path}.ingredients[${componentIndex}]`, 'ingredient'),
         ),
       ),
       products: Object.freeze(products),

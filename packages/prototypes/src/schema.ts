@@ -60,6 +60,11 @@ export interface RecipeComponent {
   readonly amountMax?: number;
   readonly extraCountFraction?: number;
   readonly probability?: number;
+  /** Independent product roll; distinct from the shared roll interval. */
+  readonly independentProbability?: number;
+  readonly sharedProbability?: { readonly min: number; readonly max: number };
+  readonly ignoredByStats?: number;
+  readonly ignoredByProductivity?: number;
   readonly temperature?: number;
   readonly temperatureMin?: number;
   readonly temperatureMax?: number;

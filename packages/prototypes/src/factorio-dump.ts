@@ -88,12 +88,9 @@ function componentList(value: unknown, path: string): readonly JsonObject[] {
 
 const unsupportedComponentFields = Object.freeze([
   'percent_spoiled',
-  'ignored_by_productivity',
-  'ignored_by_stats',
   'fluidbox_index',
   'fluidbox_multiplier',
-  'independent_probability',
-  'shared_probability',
+  'optional_fluidbox_indexes',
 ] as const);
 
 function recipeComponent(
@@ -116,6 +113,26 @@ function recipeComponent(
     `${path}.extra_count_fraction`,
   );
   const probability = optionalFinite(value.probability, `${path}.probability`);
+  const independentProbability = optionalFinite(
+    value.independent_probability,
+    `${path}.independent_probability`,
+  );
+  const shared =
+    value.shared_probability === undefined
+      ? undefined
+      : object(value.shared_probability, `${path}.shared_probability`);
+  const sharedProbability =
+    shared === undefined
+      ? undefined
+      : {
+          min: finite(shared.min, `${path}.shared_probability.min`),
+          max: finite(shared.max, `${path}.shared_probability.max`),
+        };
+  const ignoredByStats = optionalFinite(value.ignored_by_stats, `${path}.ignored_by_stats`);
+  const ignoredByProductivity = optionalFinite(
+    value.ignored_by_productivity,
+    `${path}.ignored_by_productivity`,
+  );
   const temperature = optionalFinite(value.temperature, `${path}.temperature`);
   const temperatureMin = optionalFinite(value.minimum_temperature, `${path}.minimum_temperature`);
   const temperatureMax = optionalFinite(value.maximum_temperature, `${path}.maximum_temperature`);
@@ -126,6 +143,10 @@ function recipeComponent(
     ...(amountMax === undefined ? {} : { amountMax }),
     ...(extraCountFraction === undefined ? {} : { extraCountFraction }),
     ...(probability === undefined ? {} : { probability }),
+    ...(independentProbability === undefined ? {} : { independentProbability }),
+    ...(sharedProbability === undefined ? {} : { sharedProbability }),
+    ...(ignoredByStats === undefined ? {} : { ignoredByStats }),
+    ...(ignoredByProductivity === undefined ? {} : { ignoredByProductivity }),
     ...(temperature === undefined ? {} : { temperature }),
     ...(temperatureMin === undefined ? {} : { temperatureMin }),
     ...(temperatureMax === undefined ? {} : { temperatureMax }),
@@ -308,7 +329,7 @@ export function normalizeFactorioDataDump(
 
   const environment: PrototypeEnvironment = {
     ...metadata,
-    generatorVersion: 'comblang-factorio-data-dump-v1',
+    generatorVersion: 'comblang-factorio-data-dump-v1.1',
   };
   const candidate = {
     schemaVersion: 1,

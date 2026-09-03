@@ -37,7 +37,8 @@ Schema version 1 includes only facts required by the next acceptance programs:
   mod names and versions, and startup-settings identity;
 - items and fluids: canonical key and item stack size;
 - recipes: key, one or more categories, ingredients, products, energy, exact
-  fluid temperature, and the 2.x integer-plus-fraction result count form;
+  fluid temperature, the 2.x integer-plus-fraction result count form, independent
+  and shared product probability metadata, and statistics/productivity exclusions;
 - entities: key, type, footprint, crafting categories, and capability-oriented
   circuit flags;
 - qualities: canonical key and stable ordering information;
@@ -108,12 +109,50 @@ preserves multiple categories, exact fluid temperature, and
 resolved bounding boxes. Empty engine sentinel/parameter recipes are skipped
 with `PD2001` warnings.
 
-The supplied real dump smoke test produced a valid 669 KB normalized database
-with 342 items, 651 non-sentinel recipes, and 744 entity prototypes. It also
-proved that some 2.x component fields remain outside the intentionally narrow
-v1 subset (`independent_probability`, `shared_probability`, statistics,
-productivity, spoilage, and fluidbox metadata); the converter reports each
-lossy field family instead of silently claiming exact coverage.
+The original supplied-dump smoke test produced a valid 669 KB normalized database
+with 342 items, 651 non-sentinel recipes, and 744 entity prototypes. The generator
+`comblang-factorio-data-dump-v1.1` additionally retains 100 independent probabilities,
+23 shared ranges, 268 statistics exclusions and 7 productivity exclusions in that
+dump. The smoke run used explicitly unverified environment metadata: it proves
+data ingestion, not the dump's game/mod version or native crafting behavior.
+
+Spoilage and fluidbox metadata remain outside the intentionally narrow v1 subset.
+The converter reports tracked unsupported fields, including optional fluidbox
+indexes, but this is not an exhaustive native RecipePrototype implementation.
+
+### Product probability and excluded amounts
+
+The local Factorio prototype API snapshot 2.1.16 describes `ProductPrototypeBase`,
+`SharedProbabilityDefinition`, and the item/fluid ingredient/product definitions.
+The normalized mapping is:
+
+| Dump field                | Normalized field                  | Meaning                                                                      |
+| ------------------------- | --------------------------------- | ---------------------------------------------------------------------------- |
+| `independent_probability` | `independentProbability`          | Per-product independent roll threshold in `[0, 1]`                           |
+| `shared_probability`      | `sharedProbability: { min, max }` | Interval for the single roll shared by a product set; `0 <= min <= max <= 1` |
+| `ignored_by_stats`        | `ignoredByStats`                  | Ingredient/product amount excluded from consumption/production statistics    |
+| `ignored_by_productivity` | `ignoredByProductivity`           | Product amount excluded from productivity bonus crafts                       |
+
+Both independent and shared probability tests must pass. Shared intervals are not
+flattened into an expected count or one independent probability: overlapping and
+disjoint intervals encode correlated/exclusive outcomes between products. The
+empty interval `min === max` is legal. These are immutable compilation-time facts;
+the circuit simulator does not implement crafting RNG or productivity simulation.
+
+Explicit zero and omitted fields remain distinct. In particular the native
+`ignored_by_productivity` default refers to `ignored_by_stats`; absent metadata is
+not replaced with zero by the loader. Excluded counts may exceed the crafted amount.
+Item exclusions use non-negative uint16 counts; fluid exclusions allow non-negative
+finite amounts. Independent/shared probabilities and productivity exclusions are
+product-only; statistics exclusions also belong on ingredients.
+
+Legacy normalized `probability` remains supported, but mixing it with the new
+independent/shared probability representation is rejected as an ambiguous normalized
+schema input. Older v1 data without the new optional fields remains loadable.
+The fields participate in the database identity, including explicit default-valued
+fields. Regenerating a database with the new generator may therefore require an
+explicit project pin update. Older loaders that do not know these fields are not
+equivalent readers for new datasets.
 
 The raw entity records expose connector geometry and wire distance, but not the
 normalized behavior-level flags in `EntityCircuitCapabilities`. The converter

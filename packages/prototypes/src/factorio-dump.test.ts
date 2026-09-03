@@ -91,11 +91,64 @@ function dumpFixture(): unknown {
 }
 
 describe('Factorio data-raw-dump normalizer', () => {
+  test('retains correlated product ranges and explicit statistics/productivity amounts', async () => {
+    const dump = dumpFixture() as {
+      recipe: Record<string, { ingredients: unknown; results: unknown }>;
+    };
+    dump.recipe['iron-plate']!.ingredients = [
+      { type: 'item', name: 'grenade', amount: 1, ignored_by_stats: 0 },
+    ];
+    dump.recipe['iron-plate']!.results = [
+      {
+        type: 'item',
+        name: 'iron-plate',
+        amount: 1,
+        independent_probability: 0.5,
+        shared_probability: { min: 0, max: 0.2 },
+        ignored_by_stats: 0,
+        ignored_by_productivity: 3,
+      },
+      { type: 'item', name: 'grenade', amount: 1, shared_probability: { min: 0.2, max: 1 } },
+    ];
+    const normalized = normalizeFactorioDataDump(dump, metadata);
+    const { prototypes } = await loadPrototypeDatabase(
+      JSON.parse(JSON.stringify(normalized.database)),
+    );
+    const recipe = prototypes.recipe['iron-plate']!;
+    expect(recipe.ingredients[0]).toMatchObject({ ignoredByStats: 0 });
+    expect(recipe.products).toEqual([
+      {
+        prototype: 'item:iron-plate',
+        amount: 1,
+        independentProbability: 0.5,
+        sharedProbability: { min: 0, max: 0.2 },
+        ignoredByStats: 0,
+        ignoredByProductivity: 3,
+      },
+      { prototype: 'item:grenade', amount: 1, sharedProbability: { min: 0.2, max: 1 } },
+    ]);
+    expect(Object.isFrozen(recipe.products[0]!.sharedProbability)).toBe(true);
+    expect(normalized.warnings.some(({ path }) => /probability|ignored_by/.test(path))).toBe(false);
+  });
+
+  test('rejects malformed raw shared probability with its dump path', () => {
+    const dump = dumpFixture() as { recipe: Record<string, { results: unknown }> };
+    dump.recipe['iron-plate']!.results = [
+      { type: 'item', name: 'iron-plate', amount: 1, shared_probability: { min: 0 } },
+    ];
+    expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
+      expect.objectContaining({
+        code: 'PD1001',
+        path: 'recipe.iron-plate.results[0].shared_probability.max',
+      }),
+    );
+  });
+
   test('normalizes defaults, item subtypes, categories, temperature, and entities', async () => {
     const normalized = normalizeFactorioDataDump(dumpFixture(), metadata);
     const { database, prototypes } = await loadPrototypeDatabase(normalized.database);
 
-    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1');
+    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.1');
     expect(prototypes.item.grenade?.stackSize).toBe(100);
     expect(prototypes.recipe['iron-plate']).toMatchObject({
       categories: ['crafting'],
