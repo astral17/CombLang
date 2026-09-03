@@ -549,6 +549,31 @@ const source = CC(prototypes.item['iron-plate'].stackSize * PLATE);`,
     );
   });
 
+  test('keeps the source location when a partial prototype database has no circuit facts for an entity', async () => {
+    const full = (await loadPrototypeDatabase(syntheticPrototypeDatabase())).database;
+    const { prototypes } = await loadPrototypeDatabase({
+      ...full,
+      capabilities: { ...full.capabilities, entityCircuitCapabilities: false },
+      entities: full.entities.map(({ circuit: _circuit, ...entity }) => entity),
+    });
+    const call = 'prototypes.entityCircuitCapabilities("chemical-plant")';
+    const parsed = parseFile({
+      path: 'partial-circuit.factorio.ts',
+      text: `const unused = 1;\nconst circuit = ${call};`,
+    });
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed), { prototypes });
+      expect.fail('Expected missing circuit data to fail.');
+    } catch (error) {
+      expect(error).toMatchObject({
+        message: expect.stringContaining('entity:chemical-plant'),
+        span: expect.any(Object),
+      });
+      const failure = error as { span: { start: number; end: number } };
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(call);
+    }
+  });
+
   test('seals the runtime against delayed Promise mutations', async () => {
     const globalKey = '__comblangLateDslMutationTest';
     const parsed = parseFile({

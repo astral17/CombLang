@@ -467,8 +467,10 @@ const circuitCapabilityNames = [
   'outputSignals',
 ] as const satisfies readonly (keyof EntityCircuitCapabilities)[];
 
-function parseCircuit(value: unknown, path: string): EntityCircuitCapabilities | undefined {
-  if (value === undefined) return undefined;
+export function validateEntityCircuitCapabilities(
+  value: unknown,
+  path = 'circuit',
+): EntityCircuitCapabilities {
   const input = object(value, path);
   return Object.freeze(
     Object.fromEntries(
@@ -490,12 +492,25 @@ function parseCrafting(value: unknown, path: string): EntityCraftingCapabilities
   });
 }
 
-function parseEntities(value: unknown): readonly EntityPrototype[] {
+function parseEntities(
+  value: unknown,
+  completeCircuitCoverage: boolean,
+): readonly EntityPrototype[] {
   const entities = array(value, 'entities').map((entry, index): EntityPrototype => {
     const path = `entities[${index}]`;
     const input = object(entry, path);
     const name = string(input.name, `${path}.name`);
-    const circuit = parseCircuit(input.circuit, `${path}.circuit`);
+    if (completeCircuitCoverage && input.circuit === undefined) {
+      invalid(
+        'PT1004',
+        `${path}.circuit`,
+        'complete circuit coverage requires an explicit record for every entity (including all-false records).',
+      );
+    }
+    const circuit =
+      input.circuit === undefined
+        ? undefined
+        : validateEntityCircuitCapabilities(input.circuit, `${path}.circuit`);
     const crafting = parseCrafting(input.crafting, `${path}.crafting`);
     return Object.freeze({
       key: canonicalKey('entity', name, input.key, `${path}.key`) as EntityPrototype['key'],
@@ -657,14 +672,15 @@ export function validatePrototypeDatabase(value: unknown): PrototypeDatabaseV1 {
     );
   }
   const recipes = parseRecipes(input.recipes);
+  const capabilities = parseCapabilities(input.capabilities);
   const database: PrototypeDatabaseV1 = Object.freeze({
     schemaVersion: prototypeSchemaVersion,
     environment: parseEnvironment(input.environment),
-    capabilities: parseCapabilities(input.capabilities),
+    capabilities,
     items: parseItems(input.items),
     fluids: parseFluids(input.fluids),
     recipes,
-    entities: parseEntities(input.entities),
+    entities: parseEntities(input.entities, capabilities.entityCircuitCapabilities),
     qualities: parseQualities(input.qualities),
     recipeCategories: parseNamedPrototypes<RecipeCategoryPrototype>(
       input.recipeCategories,
@@ -685,6 +701,15 @@ export function validatePrototypeDatabase(value: unknown): PrototypeDatabaseV1 {
     invalid('PT1004', 'items', 'itemStackSizes capability requires a stackSize for every item.');
   }
   validateReferences(database);
+  if (database.capabilities.entityCircuitCapabilities) {
+    if (!database.capabilities.entities) {
+      invalid(
+        'PT1004',
+        'capabilities.entityCircuitCapabilities',
+        'complete circuit coverage requires entities coverage.',
+      );
+    }
+  }
   return database;
 }
 

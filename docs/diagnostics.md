@@ -186,6 +186,24 @@ fields or skipped engine sentinels, while `PD2002` reports capability data that
 the native dump cannot prove. Conversion warnings are explicit coverage notices;
 they do not make the normalized v1 subset invalid.
 
+Complete circuit coverage requires explicit `circuit` records for every entity
+and enabled entity coverage (`PT1004`). An omitted record is unknown, not an
+implicit all-false record; known records remain queryable with partial coverage.
+
+Circuit supplements use `CircuitSupplementError` with structural paths:
+
+| Code     | Meaning                                                                                         |
+| -------- | ----------------------------------------------------------------------------------------------- |
+| `PC1000` | unsupported supplement schema version                                                           |
+| `PC1001` | malformed supplement, identity shape, entity record, or boolean flag                            |
+| `PC1002` | supplement base identity does not match the selected normalized database                        |
+| `PC1003` | missing entity coverage, unknown/duplicate entity, type mismatch, or conflicting existing facts |
+
+`prototypes supplement --json` returns structured errors and exit code 2 on
+validation failure, without writing the output file. Successful output reports
+the new identity and partial/complete circuit coverage. Neither a valid supplement
+nor complete structural coverage establishes that native game behavior was tested.
+
 ## CLI inputs and prototype selection
 
 `check` and `test` return exit code `2` for input/loading errors. In `--json`

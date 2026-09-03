@@ -105,18 +105,6 @@ function unavailable(capability: keyof PrototypeDatabaseCapabilities): never {
   throw new Error(`Prototype database does not provide ${capability} data.`);
 }
 
-const noCircuitCapabilities: EntityCircuitCapabilities = Object.freeze({
-  read: false,
-  enableDisable: false,
-  readContents: false,
-  setFilters: false,
-  setRequests: false,
-  setRecipe: false,
-  readRecipe: false,
-  readFinishedCraft: false,
-  outputSignals: false,
-});
-
 function createPrototypeProvider(
   database: PrototypeDatabaseV1,
   identity: string,
@@ -262,12 +250,15 @@ function createPrototypeProvider(
       return value.stackSize;
     },
     entityCircuitCapabilities(entityName: string) {
-      if (!database.capabilities.entityCircuitCapabilities) {
-        unavailable('entityCircuitCapabilities');
-      }
+      if (!database.capabilities.entities) unavailable('entities');
       const value = entities.get(entityName);
       if (value === undefined) throw new Error(`Unknown entity prototype: ${entityName}.`);
-      return value.circuit ?? noCircuitCapabilities;
+      if (value.circuit === undefined) {
+        throw new Error(
+          `Prototype database does not provide entityCircuitCapabilities data for ${value.key}.`,
+        );
+      }
+      return value.circuit;
     },
   });
 }

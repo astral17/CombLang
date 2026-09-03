@@ -169,7 +169,7 @@ describe('Factorio data-raw-dump normalizer', () => {
     });
     expect(prototypes.canCraft('assembler', 'heated-water')).toBe(true);
     expect(() => prototypes.entityCircuitCapabilities('assembler')).toThrow(
-      'Prototype database does not provide entityCircuitCapabilities data.',
+      'Prototype database does not provide entityCircuitCapabilities data for entity:assembler.',
     );
     expect(normalized.warnings).toEqual(
       expect.arrayContaining([

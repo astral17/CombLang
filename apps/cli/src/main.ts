@@ -14,6 +14,11 @@ import type {
 } from '@comblang/compiler/direct-plan';
 import { parseProject, validateDslSemantics } from '@comblang/language';
 import {
+  applyEntityCircuitSupplement,
+  CircuitSupplementError,
+  FactorioDumpError,
+  loadPrototypeDatabase,
+  loadPrototypeDatabaseJson,
   normalizeFactorioDataDump,
   PrototypeValidationError,
   type FactorioDumpMetadata,
@@ -43,6 +48,7 @@ Usage:
   factorio-dsl check [--json] [--prototypes <database.json>] [--prototype-identity <id>] <file...>
   factorio-dsl test [--json] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts> <circuit.test.js>
   factorio-dsl prototypes normalize <data-raw-dump.json> <metadata.json> <output.json>
+  factorio-dsl prototypes supplement [--json] <database.json> <circuit.json> <output.json>
 
 Checks circuits, executes browser/Node-neutral JavaScript test files, or normalizes a native Factorio prototype dump.`;
 
@@ -295,6 +301,48 @@ async function normalizePrototypes(fileNames: readonly string[]): Promise<number
   return 0;
 }
 
+async function supplementPrototypes(fileNames: readonly string[], json: boolean): Promise<number> {
+  if (fileNames.length !== 4) {
+    console.error(usage);
+    return 2;
+  }
+  const [, databaseName, supplementName, outputName] = fileNames as readonly [
+    string,
+    string,
+    string,
+    string,
+  ];
+  const [databaseSource, supplementSource] = await Promise.all([
+    readFile(resolve(databaseName), 'utf8'),
+    readFile(resolve(supplementName), 'utf8'),
+  ]);
+  const base = await loadPrototypeDatabaseJson(databaseSource);
+  let supplement: unknown;
+  try {
+    supplement = JSON.parse(supplementSource) as unknown;
+  } catch {
+    throw new CircuitSupplementError('PC1001', '<json>', 'invalid supplement JSON.');
+  }
+  const database = await applyEntityCircuitSupplement(base.database, supplement);
+  const { prototypes } = await loadPrototypeDatabase(database);
+  await writeFile(resolve(outputName), `${JSON.stringify(database, null, 2)}\n`, 'utf8');
+  const report = {
+    baseIdentity: base.prototypes.identity,
+    identity: prototypes.identity,
+    circuitCoverage: {
+      known: database.entities.filter(({ circuit }) => circuit !== undefined).length,
+      total: database.entities.length,
+      complete: database.capabilities.entityCircuitCapabilities,
+    },
+  };
+  if (json) console.log(JSON.stringify(report, null, 2));
+  else
+    console.log(
+      `Circuit coverage: ${report.circuitCoverage.known}/${report.circuitCoverage.total} entity prototype(s).\nPrototype environment: ${report.identity}`,
+    );
+  return 0;
+}
+
 export async function run(
   args: readonly string[],
   environment: CliCompilationEnvironment = {},
@@ -314,8 +362,12 @@ export async function run(
     .includes('--json');
   let prototypePath: string | undefined;
   try {
-    if (command === 'prototypes')
-      return await normalizePrototypes(rest.filter((argument) => argument !== '--json'));
+    if (command === 'prototypes') {
+      const files = rest.filter((argument) => argument !== '--json');
+      return files[0] === 'supplement'
+        ? await supplementPrototypes(files, json)
+        : await normalizePrototypes(files);
+    }
     const parsedOptions = parseCompilationOptions(rest);
     json = parsedOptions.json;
     const options = await resolveProjectOptions(parsedOptions, command);
@@ -340,8 +392,7 @@ export async function run(
       : await testCircuit(options.files, json, selected);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const action =
-      command === 'prototypes' ? 'normalize prototype data' : `${command} source files`;
+    const action = command === 'prototypes' ? 'process prototype data' : `${command} source files`;
     if (command !== 'prototypes') {
       const diagnostic = {
         code:
@@ -359,7 +410,25 @@ export async function run(
         console.error(
           `Unable to ${action}: ${diagnostic.code}: ${diagnostic.file === undefined ? '' : `${diagnostic.file}: `}${message}`,
         );
-    } else console.error(`Unable to ${action}: ${message}`);
+    } else {
+      const diagnostic = {
+        code:
+          error instanceof CircuitSupplementError ||
+          error instanceof PrototypeValidationError ||
+          error instanceof FactorioDumpError
+            ? error.code
+            : 'CLI1004',
+        severity: 'error',
+        message,
+        ...(error instanceof CircuitSupplementError ||
+        error instanceof PrototypeValidationError ||
+        error instanceof FactorioDumpError
+          ? { path: error.path }
+          : {}),
+      };
+      if (json) console.log(JSON.stringify({ diagnostics: [diagnostic] }, null, 2));
+      else console.error(`Unable to ${action}: ${diagnostic.code}: ${message}`);
+    }
     return 2;
   }
 }

@@ -36,6 +36,7 @@ export interface PrototypeDatabaseCapabilities {
   readonly fluids: boolean;
   readonly recipes: boolean;
   readonly entities: boolean;
+  /** Complete circuit coverage; false still permits explicit per-entity facts. */
   readonly entityCircuitCapabilities: boolean;
   readonly qualities: boolean;
   readonly recipeCategories: boolean;
@@ -117,6 +118,7 @@ export interface EntityPrototype {
   readonly type: string;
   readonly tileWidth: number;
   readonly tileHeight: number;
+  /** Omission means unknown, never an implicit all-false capability record. */
   readonly circuit?: EntityCircuitCapabilities;
   readonly crafting?: EntityCraftingCapabilities;
 }

@@ -80,6 +80,7 @@ The current repository implements the Phase 3 source compiler, the complete Phas
     - [x] Smoke-test the external dump without making repository code or tests depend on `../Analysis`.
     - [x] Preserve independent and shared product probabilities plus statistics/productivity exclusions as distinct validated facts, including identity/JSON/provider coverage and a full external-dump smoke check.
     - [x] Preserve item ingredient/product spoilage and fluidbox routing metadata with role/type/range validation, immutable ordered indexes, identity coverage, and a full external-dump smoke check.
+    - [x] Distinguish unknown circuit capabilities from explicit negative facts; load identity-bound per-entity circuit supplements through CLI/library, reject stale or conflicting assertions, and track partial versus complete coverage.
     - [ ] Derive or probe exact circuit capabilities; then lock base, Space Age, and modded-override conformance fixtures. Recipe quality transformations remain outside the current metadata subset and produce tracked loss warnings.
 - [ ] Phase 6 — typed Factorio objects: shared circuit inputs, native single-comparison `enable`, Roboport, Lamp, Constant, logistics entities, belts, displays, and train stops.
 - [ ] Phase 7 — exact constructors and native-config stress: Arithmetic, full Decider normal/else output lists, duplicate outputs, `Everything`, Selector, raw entities, LUTs, and large generated configurations.

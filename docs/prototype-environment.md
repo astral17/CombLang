@@ -38,7 +38,8 @@ Schema version 1 includes only facts required by the next acceptance programs:
 - items and fluids: canonical key and item stack size;
 - recipes: key, one or more categories, ingredients, products, energy, exact
   fluid temperature, the 2.x integer-plus-fraction result count form, independent
-  and shared product probability metadata, and statistics/productivity exclusions;
+  and shared product probability metadata, statistics/productivity exclusions,
+  item spoilage/freshness, and fluidbox routing metadata;
 - entities: key, type, footprint, crafting categories, and capability-oriented
   circuit flags;
 - qualities: canonical key and stable ordering information;
@@ -222,6 +223,87 @@ at least one mod that modifies a vanilla recipe or entity. The architecture does
 not depend on one extraction implementation: a future Factorio dump/API change
 may replace the converter or supplemental probe without changing
 `PrototypeProvider` consumers.
+
+### Partial circuit coverage and supplements
+
+Circuit coverage is distinct from an entity's supported features:
+
+- `entity.circuit === undefined` means unknown/unprobed, not all-false.
+- An explicit `circuit` record contains all nine boolean fields. An all-false
+  record asserts that none of these features is supported.
+- `capabilities.entityCircuitCapabilities` means **complete** coverage. When true,
+  every entity must have an explicit record, and `capabilities.entities` must also
+  be true. Inconsistent declarations fail validation with `PT1004`.
+- When coverage is partial, `prototypes.entityCircuitCapabilities(nameOrKey)` can
+  still return known records. It throws a distinct error for an unknown prototype
+  or missing circuit facts. A missing-data error from DSL source retains its call
+  location. Direct `prototypes.entity[name].circuit` access remains optional.
+
+This tightens the early v1 loader: a database that declared complete coverage but
+omitted records previously received implicit all-false values. Such a database must
+now mark coverage partial or supply explicit, verified records; it must not add
+all-false records merely to bypass validation.
+
+`applyEntityCircuitSupplement(database, supplement)` is the browser/Node-neutral
+merge boundary. The CLI equivalent writes a new normalized database usable by the
+existing CLI project and browser profile loaders:
+
+```powershell
+npm run cli -- prototypes supplement --json prototypes.json circuit-supplement.json enriched-prototypes.json
+```
+
+Supplement schema 1 has this shape (illustrative synthetic entity, **not native
+Factorio capability evidence**):
+
+```json
+{
+  "schemaVersion": 1,
+  "baseIdentity": "<exact comblang-prototypes-v1-sha256 identity of prototypes.json>",
+  "entities": [
+    {
+      "key": "entity:synthetic-container",
+      "type": "container",
+      "circuit": {
+        "read": true,
+        "enableDisable": false,
+        "readContents": true,
+        "setFilters": false,
+        "setRequests": false,
+        "setRecipe": false,
+        "readRecipe": false,
+        "readFinishedCraft": false,
+        "outputSignals": true
+      }
+    }
+  ]
+}
+```
+
+Obtain `baseIdentity` from `loadPrototypeDatabase(...).prototypes.identity` or the
+`prototypeEnvironment.identity` in a CLI `check --json --prototypes ...` report.
+The supplement requires a non-empty entity list. Each key must already exist,
+the type must match, and all flags must be booleans. Duplicate entities, stale
+base identities and conflicting existing records are rejected; there is no
+implicit overwrite. The library returns a validated frozen copy and leaves input
+objects unchanged. Matching existing records are accepted.
+
+CLI JSON reports the base and resulting identities plus `{ known, total, complete }`
+circuit coverage. Adding facts changes the resulting identity. Subsequent
+supplements must target that new identity (or combine assertions into one supplement
+against the original base). Full coverage is derived from explicit records; it
+is not an input claim in the supplement. Recipe/item data and environment metadata
+are untouched. Validation happens before the CLI opens the output for writing.
+
+The identity check prevents accidental cross-database mixing; it does not certify
+the truth of manually supplied assertions. No native circuit probe or verified
+capability table ships yet. The local 2.1.16 runtime API provides
+`LuaEntity.get_control_behavior()` / `get_or_create_control_behavior()` and distinct
+control-behavior classes, but `LuaEntityPrototype` does not directly expose the
+nine normalized booleans. A future fixture/probe must test the corresponding native
+behavior on actual entities, including type-specific restrictions and modded
+overrides. A missing property or failed entity creation must remain unknown,
+not become a negative capability result. Native probes should run in a disposable
+test save, not mutate the user's working save.
 
 ## Loading and identity
 

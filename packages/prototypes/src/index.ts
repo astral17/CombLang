@@ -1,4 +1,5 @@
 export * from './fixtures.js';
+export * from './circuit-supplement.js';
 export * from './factorio-dump.js';
 export * from './identity.js';
 export * from './provider.js';
