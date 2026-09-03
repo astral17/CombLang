@@ -75,6 +75,13 @@ interface PendingDebugInstance {
   path?: readonly string[];
 }
 
+interface PendingNetworkAlias {
+  readonly name: string;
+  readonly source: SourceSpan;
+  readonly instancePath: readonly string[];
+  readonly read: () => unknown;
+}
+
 export interface ElaborationExecutionOptions {
   readonly dslCallBudget?: number;
   /** Explicit immutable prototype environment exposed to source as `prototypes`. */
@@ -108,6 +115,7 @@ class ElaborationRecorder {
   readonly #fileId: SourceFileId;
   readonly #networks: DirectElaborationPlan['networks'][number][] = [];
   readonly #networkTransfers: NonNullable<DirectElaborationPlan['networkTransfers']>[number][] = [];
+  readonly #networkAliases = new Map<string, PendingNetworkAlias>();
   readonly #networkPairs: NonNullable<DirectElaborationPlan['networkPairs']>[number][] = [];
   readonly #capabilityUses: NonNullable<DirectElaborationPlan['capabilityUses']>[number][] = [];
   readonly #debugInstances: NonNullable<DirectElaborationPlan['debugInstances']>[number][] = [];
@@ -383,8 +391,17 @@ class ElaborationRecorder {
       name: string | undefined,
       fixedColor: 'red' | 'green' | undefined,
       rawSpan: RawSpan,
+      readBinding?: () => unknown,
     ): NetworkValue => {
-      return this.#network(name ?? `$network:${++this.#anonymousOrdinal}`, rawSpan, fixedColor);
+      const value = this.#network(
+        name ?? `$network:${++this.#anonymousOrdinal}`,
+        rawSpan,
+        fixedColor,
+      );
+      if (name !== undefined && readBinding !== undefined) {
+        this.#captureNetworkAlias(name, readBinding, rawSpan);
+      }
+      return value;
     },
     pair: (...args: unknown[]): PairValue => {
       this.#recordDslCall();
@@ -702,14 +719,23 @@ class ElaborationRecorder {
       name: string,
       fixedColor: 'red' | 'green' | undefined,
       rawSpan: RawSpan,
+      readBinding?: () => unknown,
     ): unknown => {
+      let result: unknown;
       if (this.#isNetwork(producer) && this.#networkState(producer).returnBindingAvailable) {
-        return this.#bindReturnedNetwork(producer, name, fixedColor, rawSpan);
+        result = this.#bindReturnedNetwork(producer, name, fixedColor, rawSpan);
+      } else if (!this.#isProducer(producer)) {
+        if (this.#isNetwork(producer) && fixedColor !== undefined) {
+          this.#requireNetworkColor(producer, 'readonly', fixedColor, rawSpan);
+        }
+        result = producer;
+      } else {
+        const network = this.#network(name, rawSpan, fixedColor);
+        this.#attach(network, producer, rawSpan);
+        result = network;
       }
-      if (!this.#isProducer(producer)) return producer;
-      const network = this.#network(name, rawSpan, fixedColor);
-      this.#attach(network, producer, rawSpan);
-      return network;
+      if (readBinding !== undefined) this.#captureNetworkAlias(name, readBinding, rawSpan);
+      return result;
     },
     materializeArray: (
       value: unknown,
@@ -1145,10 +1171,38 @@ class ElaborationRecorder {
   plan(): DirectElaborationPlan {
     this.#finalizeUnusedProducers();
     this.#sealed = true;
+    const declarations = new Map(this.#networks.map((network) => [network.name, network]));
     return {
       format: 'comblang-direct-plan',
       version: 2,
       networks: Object.freeze([...this.#networks]),
+      networkAliases: Object.freeze(
+        [...this.#networkAliases.values()].flatMap(({ read, ...alias }) => {
+          const value = read();
+          if (!this.#isNetwork(value)) return [];
+          const state = this.#networkState(value);
+          // Borrowed local views expire with their call frame. Physical declarations
+          // remain in the index independently of their original source handles.
+          if (state.borrow !== undefined) return [];
+          const declaration = declarations.get(value.name);
+          if (
+            declaration !== undefined &&
+            JSON.stringify(declaration.instancePath) === JSON.stringify(alias.instancePath) &&
+            alias.source.start <= declaration.source.start &&
+            alias.source.end >= declaration.source.end
+          )
+            return [];
+          return [
+            Object.freeze({
+              ...alias,
+              network: value.name,
+              moved:
+                value.generation !== state.ownership.generation ||
+                state.ownership.consumedAt !== undefined,
+            }),
+          ];
+        }),
+      ),
       networkTransfers: Object.freeze([...this.#networkTransfers]),
       networkPairs: Object.freeze([...this.#networkPairs]),
       capabilityUses: Object.freeze([...this.#capabilityUses]),
@@ -1162,9 +1216,12 @@ class ElaborationRecorder {
     const wrapped = Object.entries(this.api).map(([name, operation]) => [
       name,
       (...args: unknown[]) => {
+        const rawSpan =
+          (name === 'network' || name === 'materialize') && typeof args.at(-1) === 'function'
+            ? args.at(-2)
+            : args.at(-1);
         try {
           if (this.#sealed) {
-            const rawSpan = args.at(-1);
             if (isRawSpan(rawSpan)) {
               throw new ElaborationExecutionError(
                 'The elaboration runtime is sealed; delayed asynchronous DSL calls cannot mutate a completed plan.',
@@ -1186,7 +1243,6 @@ class ElaborationRecorder {
           ) {
             throw error;
           }
-          const rawSpan = args.at(-1);
           if (error instanceof Error && isRawSpan(rawSpan)) {
             throw new ElaborationExecutionError(
               error.message,
@@ -1345,6 +1401,17 @@ class ElaborationRecorder {
       },
       { ownership },
     );
+  }
+
+  #captureNetworkAlias(name: string, read: () => unknown, rawSpan: RawSpan): void {
+    const instancePath = this.#path();
+    const key = JSON.stringify([instancePath, name, rawSpan.start]);
+    this.#networkAliases.set(key, {
+      name,
+      read,
+      source: this.#span(rawSpan),
+      instancePath,
+    });
   }
 
   #bindingNetwork(descriptor: BindingDescriptor, rawSpan: RawSpan): NetworkValue {

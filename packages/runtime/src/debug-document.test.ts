@@ -51,6 +51,13 @@ const second = Stage(input);`;
     ]);
     expect(producers[0]!.config).not.toBe(graph.producers[1]!.config);
     expect(document.scopes[0]!.networks[0]).not.toBe(execution.debug.root.network('input'));
+    const caller = document.scopes[0]!.networks.find(({ name }) => name === 'first')!;
+    expect(caller.id).toBe(producers[0]!.outputs[0]);
+    expect(text.slice(caller.source!.start, caller.source!.end)).toBe('first = Stage(input)');
+    expect(inspectDebugNetwork(document, caller.id).bindings.map(({ name }) => name)).toEqual([
+      'first',
+      'output',
+    ]);
   });
 
   test('keeps all moved aliases and connected producer roles without first-match guessing', () => {

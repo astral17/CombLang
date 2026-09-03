@@ -241,6 +241,40 @@ export class DebugIndex {
         }),
       );
     }
+    const physicalEntries = new Set(order.flatMap((scope) => scope.networks));
+    for (const alias of plan.networkAliases ?? []) {
+      const scope = ensure(alias.instancePath);
+      const existingIndex = scope.networks.findIndex(
+        (entry) =>
+          physicalEntries.has(entry) &&
+          !entry.internal &&
+          entry.name === alias.name &&
+          entry.source?.fileId === alias.source.fileId &&
+          entry.source.start >= alias.source.start &&
+          entry.source.end <= alias.source.end,
+      );
+      if (existingIndex >= 0) {
+        const existing = scope.networks[existingIndex]!;
+        if (existing.planName === alias.network) continue;
+        scope.networks[existingIndex] = Object.freeze({
+          ...existing,
+          name: `$initial:${existing.name}`,
+          internal: true,
+        });
+      }
+      scope.networks.push(
+        Object.freeze({
+          kind: 'network',
+          name: alias.name,
+          planName: alias.network,
+          id: networkId(alias.network),
+          source: alias.source,
+          instancePath: Object.freeze([...alias.instancePath]),
+          internal: false,
+          moved: alias.moved,
+        }),
+      );
+    }
 
     for (const [index, descriptor] of plan.producers.entries()) {
       const scope = ensure(descriptor.instancePath);

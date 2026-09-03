@@ -90,6 +90,10 @@ fails, and `2` for usage or file-loading errors.
 The browser workbench adds the live simulation proof and blueprint preview, but
 is not required for compiler/runtime validation or test execution.
 
+Runnable three-test examples are provided for a
+[feedback MemoCell and a synthetic external object](phase-5-acceptance.md).
+They need no downloaded prototype database or running Factorio instance.
+
 To normalize Factorio's native prototype dump without starting the game again:
 
 ```sh

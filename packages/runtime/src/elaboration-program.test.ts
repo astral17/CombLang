@@ -570,6 +570,33 @@ globalThis.${globalKey} = Promise.resolve().then(() => input + 1);`,
     }
   });
 
+  test('assignment provenance does not turn late ordinary JavaScript into a DSL mutation', async () => {
+    const globalKey = '__comblangLateOrdinaryAssignmentTest';
+    const parsed = parseFile({
+      path: 'late-ordinary.factorio.ts',
+      text: `let value = 1;
+globalThis.${globalKey} = Promise.resolve().then(() => value = 2);`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    try {
+      await expect((globalThis as unknown as Record<string, unknown>)[globalKey]).resolves.toBe(2);
+      expect(plan.networkAliases).toEqual([]);
+      expect(plan.networks).toEqual([]);
+    } finally {
+      delete (globalThis as unknown as Record<string, unknown>)[globalKey];
+    }
+  });
+
+  test('a contextual color on an existing Network alias constrains the physical bus', () => {
+    const parsed = parseFile({
+      path: 'colored-alias.factorio.ts',
+      text: `const original = new Network<R>(); const alias: Network<G> = original;`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+      expect.objectContaining({ code: 'RT2018', span: expect.any(Object) }),
+    );
+  });
+
   test('validates the versioned hygienic runtime bridge metadata', () => {
     const program = transformElaborationModule(
       parseFile({ path: 'runtime-envelope.factorio.ts', text: 'const input = new Network();' }),

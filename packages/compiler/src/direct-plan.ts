@@ -69,6 +69,15 @@ export interface DirectPlanNetwork {
   readonly instancePath: readonly string[];
 }
 
+/** Final executed source binding for an existing physical Network; creates no hardware. */
+export interface DirectPlanNetworkAlias {
+  readonly name: string;
+  readonly network: string;
+  readonly source: SourceSpan;
+  readonly instancePath: readonly string[];
+  readonly moved: boolean;
+}
+
 /** A zero-tick physical union. `source` is consumed and `destination` survives. */
 export interface DirectPlanNetworkTransfer {
   readonly destination: string;
@@ -173,6 +182,7 @@ export interface DirectElaborationPlan {
   readonly format: 'comblang-direct-plan';
   readonly version: 2;
   readonly networks: readonly DirectPlanNetwork[];
+  readonly networkAliases?: readonly DirectPlanNetworkAlias[];
   readonly networkTransfers?: readonly DirectPlanNetworkTransfer[];
   readonly networkPairs?: readonly DirectPlanNetworkPair[];
   readonly capabilityUses?: readonly DirectPlanCapabilityUse[];

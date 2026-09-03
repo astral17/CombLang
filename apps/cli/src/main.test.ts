@@ -1,6 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import {
@@ -439,6 +440,34 @@ describe('factorio-dsl prototypes normalize', () => {
 });
 
 describe('factorio-dsl test', () => {
+  test.each(['memo', 'object'])(
+    'runs the checked-in %s acceptance testbench through CLI JSON',
+    async (name) => {
+      const base = new URL(`../../../examples/testbench-${name}/`, import.meta.url);
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      expect(
+        await run([
+          'test',
+          '--json',
+          fileURLToPath(new URL('main.factorio.ts', base)),
+          fileURLToPath(new URL('circuit.test.js', base)),
+        ]),
+      ).toBe(0);
+      const result = JSON.parse(String(log.mock.calls[0]?.[0]));
+      expect(
+        result.diagnostics.filter(({ severity }: { severity: string }) => severity === 'error'),
+      ).toEqual([]);
+      expect(result.tests).toMatchObject({ passed: 3, failed: 0 });
+      for (const entry of result.tests.results) {
+        expect(entry.trace).toMatchObject({
+          format: 'comblang-trace',
+          endTick: expect.any(Number),
+        });
+        expect(entry.debug).toMatchObject({ format: 'comblang-debug', version: 1 });
+      }
+    },
+  );
+
   test('returns shared structured results and trace documents as JSON', async () => {
     const [sourcePath, testPath] = await circuitTestFiles(
       `const A = Signal("virtual", "signal-A");

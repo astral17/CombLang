@@ -9,6 +9,32 @@ import { RuntimeDiagnosticError } from './elaboration.js';
 import { executeElaborationProgram } from './elaboration-program.js';
 
 describe('direct plan execution', () => {
+  test('rejects malformed and ambiguous root Network alias descriptors', () => {
+    const parsed = parseFile({
+      path: 'alias-schema.factorio.ts',
+      text: 'const first = new Network(); const second = new Network(); const alias = first;',
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const malformed = {
+      ...plan,
+      networkAliases: [{ ...plan.networkAliases![0]!, network: 'missing' }],
+    };
+    expect(tryElaborateDirectPlan(malformed).diagnostics).toMatchObject([
+      { code: 'RT1001', message: 'Invalid Network alias descriptor in direct plan.' },
+    ]);
+    const ambiguous = {
+      ...plan,
+      networkAliases: [
+        plan.networkAliases![0]!,
+        { ...plan.networkAliases![0]!, network: 'second' },
+      ],
+    };
+    const execution = elaborateDirectPlan(ambiguous);
+    expect(() => execution.network('alias')).toThrowError(
+      expect.objectContaining({ code: 'DBG1002', scopePath: [] }),
+    );
+  });
+
   test('rejects the pre-discriminant direct-plan schema', () => {
     const parsed = parseFile({ path: 'schema.factorio.ts', text: 'const input = new Network();' });
     const plan = executeElaborationProgram(transformElaborationModule(parsed));

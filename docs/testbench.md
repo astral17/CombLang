@@ -4,8 +4,8 @@ Phase 5 introduces a browser/Node-neutral `TestSession` around an already
 elaborated circuit. Creating or using a test session does not execute the source
 program again and does not change EG/NCIR topology.
 
-The first testbench slice provides persistent external drives, one-boundary
-pulses, clearing, clock advancement, and snapshot reads:
+The testbench provides persistent external drives, one-boundary pulses,
+clearing, clock advancement, and snapshot reads:
 
 ```ts
 const test = circuit.createTestSession();
@@ -41,6 +41,53 @@ Network handles are resolved by the elaboration session that created the
 circuit. A handle from another runtime is rejected instead of being matched by
 its textual ID. `read()` returns a copy, so test code cannot mutate a committed
 snapshot.
+
+## Executable files and phase boundaries
+
+A runnable testbench consists of two files:
+
+- `main.factorio.ts` creates the circuit using the executed source DSL;
+- `circuit.test.js` registers synchronous `test(name, callback)` bodies using
+  ordinary JavaScript and the supplied `Signal` helper.
+
+The current test file is **not** passed through the DSL operator transform.
+Use `session.expectSignal(output, A)`, not `output[A]` JavaScript indexing;
+use `[[A, 5]]` for drive/mock values, not source-only `5 * A`. Imports,
+TypeScript annotations, and asynchronous tests are not supported by this
+temporary function-body execution surface. Top-level test-file code runs once
+to register callbacks; each callback receives a fresh circuit/session.
+
+Compilation executes the source JavaScript once to produce a direct plan. The
+test runner builds that plan into fresh EG/NCIR instances, but does not rerun
+source functions or alter its topology. Ordinary source validation/throws happen
+during elaboration and cannot assert future simulated ticks. Test assertions
+inspect committed snapshots after elaboration.
+
+The test callback receives these convenience methods and complete APIs:
+
+| Surface                      | Purpose                                                                                                |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `network(name)`              | Resolve a root Network alias or a recorded physical Network name.                                      |
+| `drive`, `pulse`, `clear`    | External stimulus using public Network handles and signal/value entries.                               |
+| `tick(count?)`, `run(count)` | Advance a positive number of synchronous boundaries.                                                   |
+| `expect`, `expectSignal`     | Assert the current bus or signal of a public Network handle.                                           |
+| `session`                    | Full API including exact debug Network targets, `at`, `settle`, `trace`, `mock`, and `model`.          |
+| `execution`                  | Exact debug scopes, physical structure, and captured test-only DUT instances when present in the plan. |
+
+The existing-Network return `const output = MemoCell(input)` retains `output`
+as a queryable alias: `network('output')` works without a second materialization.
+The callee's precise entry remains available through
+`execution.debug.root.child('function MemoCell').network('out')` with the full
+`session` API. Both point at the same physical Network. Aliases preserve source
+spans, exact scope ambiguity and moved-handle rejection; see the
+[debug index](debug-index.md) for final-binding behavior and inspection limits.
+
+These tests establish CombLang's implemented simulator contract. They are not
+Factorio conformance evidence: uncertain native semantics still need versioned
+game exports/fixtures. The synthetic object adapter is also not a typed entity,
+inventory, or logistics simulation; those state models belong to Phase 6.
+See [Phase 5 acceptance](phase-5-acceptance.md) for commands, complete examples,
+coverage and the completed MVP boundary.
 
 For an executed source plan, prefer `execution.createTestSession()`. Its targets
 may be either public handles returned by `execution.network(name)` or internal
@@ -324,8 +371,9 @@ contract and Phase 6 boundary.
 Persistent manual output is available through
 `mock(object, connector?).output(values)`. Omitting the connector requires an
 object with exactly one connector. Values are copied immediately; another
-`output` replaces the previous override, while `clear()` restores the copied
-adapter default or silence. Manual output uses the connector's declared output
+`output` replaces the previous override, while `clear()` restores the resolved
+instance/class/global fallback (strict Unknown when no default was provided).
+Manual output uses the connector's declared output
 Networks, participates in ordinary aggregation, may be changed from `at(...)`,
 and remains visible on the connector input snapshot when wiring feeds the
 object's output back into its input.

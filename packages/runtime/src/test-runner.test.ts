@@ -19,6 +19,22 @@ afterEach(() => {
 });
 
 describe('direct plan test runner lifecycle', () => {
+  test('labels a traced returned Network with its caller binding', () => {
+    const parsed = parseFile({
+      path: 'trace-alias.factorio.ts',
+      text: `function Cell(): Network { const out = new Network(); out += CC(); return out; }
+const output = Cell();`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const result = runDirectPlanTests(
+      plan,
+      `test('alias', ({ network, session }) => { session.trace(network('output')); });`,
+    ).results[0]!;
+    const target = result.trace!.targets[0]!;
+    if (target.kind !== 'network') throw new Error('Expected Network trace target.');
+    expect(result.traceNetworkNames?.[target.networkId]).toBe('output');
+  });
+
   test('retains replayable quiet tails for passing and failing test bodies', () => {
     const parsed = parseFile({
       path: 'trace-horizon.factorio.ts',

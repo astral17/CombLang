@@ -9,6 +9,143 @@ import type { NetworkHandle } from './elaboration.js';
 import { executeElaborationProgram } from './elaboration-program.js';
 
 describe('executed debug index', () => {
+  it('retains caller aliases for existing function returns without creating hardware', () => {
+    const parsed = parseFile({
+      path: 'debug-return-alias.factorio.ts',
+      text: `function Cell(): Network {
+  const out = new Network();
+  out += CC();
+  return out;
+}
+const output = Cell();
+const secondOutput = Cell();`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const execution = elaborateDirectPlan(plan);
+    const firstOut = execution.debug.root.child('function Cell').network('out');
+    const secondOut = execution.debug.root.child('function Cell #2').network('out');
+
+    expect(plan.networkAliases).toMatchObject([
+      { name: 'output', network: 'out', instancePath: [], moved: false },
+      { name: 'secondOutput', network: '$instance:2:out', instancePath: [], moved: false },
+    ]);
+    expect(execution.network('output').id).toBe(firstOut.id);
+    expect(execution.network('secondOutput').id).toBe(secondOut.id);
+    expect(execution.debug.root.network('output')).toMatchObject({
+      planName: 'out',
+      id: firstOut.id,
+      moved: false,
+      internal: false,
+    });
+    expect(execution.circuit.graph.networks).toHaveLength(2);
+    expect(execution.circuit.graph.producers).toHaveLength(2);
+  });
+
+  it('keeps final assignment aliases and invalidates aliases of consumed ownership', () => {
+    const rebound = elaborateDirectPlan(
+      executeElaborationProgram(
+        transformElaborationModule(
+          parseFile({
+            path: 'debug-reassignment.factorio.ts',
+            text: `const original = new Network();
+const replacement = new Network();
+let selected = original;
+const retained = selected;
+selected = replacement;`,
+          }),
+        ),
+      ),
+    );
+    expect(rebound.network('selected').id).toBe(rebound.network('replacement').id);
+    expect(rebound.network('retained').id).toBe(rebound.network('original').id);
+    expect(rebound.debug.root.network('selected').planName).toBe('replacement');
+
+    const moved = elaborateDirectPlan(
+      executeElaborationProgram(
+        transformElaborationModule(
+          parseFile({
+            path: 'debug-moved-alias.factorio.ts',
+            text: `const source = new Network();
+const alias = source;
+const destination = new Network();
+destination.take(source);`,
+          }),
+        ),
+      ),
+    );
+    expect(moved.debug.root.network('alias')).toMatchObject({ planName: 'source', moved: true });
+    expect(() => moved.network('alias')).toThrowError(
+      expect.objectContaining({
+        diagnostic: expect.objectContaining({ code: 'RT2012' }),
+      }),
+    );
+    expect(() =>
+      moved.createTestSession().readValue(moved.debug.root.network('alias')),
+    ).toThrowError(
+      expect.objectContaining({ diagnostic: expect.objectContaining({ code: 'RT2012' }) }),
+    );
+  });
+
+  it('reads final lexical bindings after loop and closure assignments', () => {
+    const parsed = parseFile({
+      path: 'debug-lexical-alias.factorio.ts',
+      text: `const first = new Network();
+const second = new Network();
+let selected = first;
+let original = new Network();
+for (let i = 0; i < 2; i++) {
+  selected = second;
+}
+function replace() { original = second; }
+replace();`,
+    });
+    const execution = elaborateDirectPlan(
+      executeElaborationProgram(transformElaborationModule(parsed)),
+    );
+    expect(execution.network('selected').id).toBe(execution.network('second').id);
+    expect(execution.network('original').id).toBe(execution.network('second').id);
+    expect(execution.debug.root.network('selected').instancePath).toEqual([]);
+    expect(execution.debug.root.network('original').planName).toBe('second');
+    expect(execution.circuit.graph.networks).toHaveLength(3);
+  });
+
+  it('keeps readonly returns and same-named caller bindings queryable', () => {
+    const parsed = parseFile({
+      path: 'debug-readonly-return.factorio.ts',
+      text: `function Cell(): Readonly<Network> {
+  const out = new Network();
+  return out;
+}
+const out = Cell();`,
+    });
+    const execution = elaborateDirectPlan(
+      executeElaborationProgram(transformElaborationModule(parsed)),
+    );
+    const caller = execution.debug.root.network('out');
+    expect(caller.id).toBe(execution.debug.root.child('function Cell').network('out').id);
+    expect(caller.moved).toBe(false);
+    expect(execution.network('out').id).toBe(caller.id);
+  });
+
+  it('preserves ambiguity between separate lexical declarations in the same debug scope', () => {
+    const parsed = parseFile({
+      path: 'debug-shadowed-alias.factorio.ts',
+      text: `const first = new Network();
+const second = new Network();
+{ const selected = first; }
+{ const selected = second; }`,
+    });
+    const execution = elaborateDirectPlan(
+      executeElaborationProgram(transformElaborationModule(parsed)),
+    );
+    expect(() => execution.debug.root.network('selected')).toThrowError(
+      expect.objectContaining({ code: 'DBG1002', scopePath: [] }),
+    );
+    expect(() => execution.network('selected')).toThrowError(
+      expect.objectContaining({ code: 'DBG1002', scopePath: [] }),
+    );
+  });
+
   it('indexes physical Networks and Producers by exact function and loop scope', () => {
     const parsed = parseFile({
       path: 'debug-index.factorio.ts',

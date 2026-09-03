@@ -179,7 +179,16 @@ export function runDirectPlanTests(
     const session = execution.createTestSession();
     const debug = createDebugDocument(execution.debug, execution.circuit.graph);
     const traceNetworkNames = Object.freeze(
-      Object.fromEntries(execution.circuit.ir.networks.map(({ id, name }) => [id, name ?? id])),
+      Object.fromEntries([
+        ...execution.circuit.ir.networks.map(({ id, name }) => [id, name ?? id] as const),
+        ...execution.debug.scopes
+          .toReversed()
+          .flatMap((scope) =>
+            scope.networks
+              .filter(({ internal, moved }) => !internal && !moved)
+              .map(({ id, name }) => [id, name] as const),
+          ),
+      ]),
     );
     try {
       const api: DirectPlanTestApi = {

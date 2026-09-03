@@ -43,6 +43,27 @@ was consumed by a zero-tick ownership transfer. A moved declaration and its
 destination can consequently have distinct debug entries that intentionally
 share one physical `NetworkId`.
 
+The index also records logical Network aliases for initialized scalar variables.
+For `const output = MemoCell(input)`, `execution.network('output')` and
+`execution.debug.root.network('output')` resolve the same physical Network as
+the callee's `out`. Neither an extra Network nor a Producer is generated. Caller
+and callee entries keep their own source spans and scope paths.
+
+These aliases snapshot the final binding at the end of synchronous elaboration,
+including reassignment from loops or closures. They do not track later JavaScript
+microtasks. A replaced physical declaration stays inspectable as an internal
+`$initial:name` entry; the public name resolves to the final Network. Stale
+ownership aliases remain marked moved and cannot be used as test targets.
+Readonly returns can still be external test targets, just like physical declarations.
+
+This is not a general JavaScript object inspector: arbitrary container properties,
+destructuring aliases of existing Networks, and variables declared without an
+initializer do not acquire new logical query entries. Physical declarations remain
+in the index even if the source subsequently overwrites a variable with a non-Network
+value; an ordinary alias ending in a non-Network value is omitted. Existing physical
+destructuring outputs are still indexed. These inspection limits do not restrict
+source-level aliasing or circuit connections.
+
 Producer entries retain their optional explicit binding name, source span,
 physical ID, exact-scope ordinal, kind-specific ordinal, and immutable
 direct-plan descriptor. The descriptor is the current inspection surface for
@@ -68,9 +89,9 @@ nested and recursive calls remain navigable without depending on allocated
 graph IDs. Named `for` iterations retain their formatted iteration value, while
 anonymous loop iterations retain their occurrence number.
 
-Ambiguity is still possible when the source binds the same Producer name more
-than once in one exact dynamic scope. Such a query reports every physical
-ordinal instead of guessing.
+Ambiguity is still possible when the source binds the same Producer or Network
+name more than once in one exact dynamic scope, including separate bare blocks
+that share one debug path. Queries report every match instead of guessing.
 
 ## Portable inspection and browser navigation
 

@@ -28,7 +28,7 @@ The current repository implements the Phase 3 source compiler, the complete Phas
 - [x] Phase 2 — direct elaboration runtime: EG/NCIR, session-bound handles, attachments, provenance, color solving, and the MemoCell integration slice.
 - [x] Phase 3 — executed source compiler: conservative semantic checks, DSL-sensitive JavaScript transformation, runtime elaboration, provenance, color solving, CLI validation, and the browser workbench.
 - [x] Phase 4 — ownership, multi-network syntax, Producer identity, semantic/runtime boundary hardening, opaque session values, and complete CLI/browser/EG/NCIR acceptance coverage.
-- [ ] Phase 5 — deterministic testbench, external-world adapters, Unknown propagation, traces, and debug hierarchy
+- [x] Phase 5 — deterministic testbench, external-world adapters, Unknown propagation, traces, and debug hierarchy
   - [x] Define a browser/Node-neutral `TestSession` over an already elaborated circuit; test operations must never mutate EG/NCIR topology or re-execute source elaboration.
   - [x] Freeze the synchronous test clock: every participant reads snapshot `T`, all combinators and reactive models evaluate independently, and their writes commit together to `T+1` regardless of traversal order.
     - [x] Prevent scheduled callbacks from advancing time reentrantly or scheduling work into the boundary already being evaluated; callbacks may still schedule later boundaries.
@@ -61,8 +61,9 @@ The current repository implements the Phase 3 source compiler, the complete Phas
     - [x] Shared delta-trace replay with explicit final tick, Known/Unknown and quality preservation, validated history, and lazy selected-target tick ranges; legacy v1 traces retain an explicitly inferred horizon.
     - [x] Browse a selected test's shared trace in a separate read-only overview/detail table with bounded tick windows, quality-aware columns, Unknown origin inspection, execution-local Network names, and mobile layout.
     - [x] Add shared per-test debug snapshots and exact failure scopes, with browser navigation from recorded Network/signal targets to all source aliases and connected physical Producers, configuration/placement inspection, and source/test editor selection.
-  - [ ] Add focused kernel/lattice/mock/model/query tests plus end-to-end feedback, pulse, settle, Unknown-chain, hierarchy, structural, CLI, and browser cases; use a MemoCell testbench and a test-only object adapter as Phase 5 acceptance programs.
-  - [ ] Document the executable testbench language/API and its separation from compile-time assertions, Factorio conformance fixtures, and future Phase 6 typed-object state adapters.
+  - [x] Add focused kernel/lattice/mock/model/query tests plus end-to-end feedback, pulse, settle, Unknown-chain, hierarchy, structural, CLI, and browser-adapter cases; checked-in MemoCell and synthetic-object testbenches run through both shared runners and CLI JSON without topology changes.
+  - [x] Document the executable testbench language/API and its separation from compile-time assertions, Factorio conformance fixtures, and future Phase 6 typed-object state adapters; publish runnable acceptance programs and the coverage matrix.
+  - [x] Preserve caller bindings for already-existing Networks returned by functions in the debug/query result (`const output = MemoCell(input)` supports `network('output')`); retain physical identity, source provenance, scope ambiguity, final initialized scalar bindings, and moved-alias rejection. Covered by passing acceptance and runtime regressions.
 - [ ] Phase 5.5 — external prototype environment foundation
   - [x] Add a versioned normalized Prototype DB, structural/referential/index validator, immutable LuaPrototypes-shaped `prototypes.*` tables plus derived collections/query helpers, deterministic environment identity, browser/Node JSON boundary, and synthetic base/modded fixtures in a dedicated package.
   - [ ] Inject the provider explicitly into compiler consumers; keep prototype facts out of the simulator and avoid a global mutable registry.
@@ -85,7 +86,7 @@ The current repository implements the Phase 3 source compiler, the complete Phas
 - [ ] Phase 10 — physical placement, wire reach verification, relays, and blueprint export.
 - [ ] Phase 11 — language-service and execution-environment polish: operator-domain hovers, completions, code actions, semantic tokens, exact native views, composition-safe textarea highlighting/completion and mobile symbol tools, optional reproducible-build policy, and a fully hardened module sandbox.
 
-Later phases cover testbenches, typed Factorio objects, exact constructors, the verified blueprint codec and exchange strings, schematic editing, physical placement, multi-file language services, reproducible builds, and a hardened sandbox.
+Later phases cover prototype profiles, typed Factorio objects, exact constructors, the verified blueprint codec and exchange strings, schematic editing, physical placement, multi-file language services, reproducible builds, and a hardened sandbox.
 
 ## Documentation
 
@@ -95,6 +96,8 @@ Later phases cover testbenches, typed Factorio objects, exact constructors, the 
 - [Native objects, Deciders, and parameters](docs/native-objects-deciders-and-parameters.md) — planned Phase 6–8 semantic domains and conformance requirements.
 - [Prototype environment](docs/prototype-environment.md) — the Phase 5.5 normalized modded-data provider, Factorio exporter, loading, and environment-identity boundary.
 - [Runtime debug index](docs/debug-index.md) — exact lexical scopes, physical Network/Producer mappings, deterministic queries, and current ambiguity boundary.
+- [Executable testbench](docs/testbench.md) — the current JavaScript test API, clock, assertions, traces, and browser/CLI behavior.
+- [Phase 5 acceptance](docs/phase-5-acceptance.md) — runnable MemoCell/object examples, layered coverage, and the completed MVP boundary.
 - [Generic object test adapters](docs/object-test-adapters.md) — stable object identity, connector snapshots, default output injection, and the mock/model policy boundary.
 - [Producer and Entity materialization policy](docs/producer-materialization-policy.md) — the Phase 4.5 benchmark decision for inferred Networks, explicit combinator handles, and future typed-object identity.
 - [Diagnostics](docs/diagnostics.md) — compiler/runtime code families and the most common actionable errors.

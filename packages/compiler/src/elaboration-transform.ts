@@ -297,6 +297,15 @@ export function transformElaborationModule(
         ...(syntax.color === undefined ? {} : { color: syntax.color }),
       };
     };
+    const bindingReader = (name: string): ts.Expression =>
+      factory.createArrowFunction(
+        undefined,
+        undefined,
+        [],
+        undefined,
+        factory.createToken(ts.SyntaxKind.EqualsGreaterThanToken),
+        factory.createIdentifier(name),
+      );
     const networkCall = (node: ts.NewExpression, name?: string): ts.Expression => {
       const type = parseDslTypeText(
         `Network${node.typeArguments?.[0] === undefined ? '' : `<${node.typeArguments[0].getText(file.ast)}>`}`,
@@ -306,6 +315,7 @@ export function transformElaborationModule(
         name === undefined ? factory.createVoidZero() : factory.createStringLiteral(name),
         color === undefined ? factory.createVoidZero() : factory.createStringLiteral(color),
         spanLiteral(factory, node),
+        ...(name === undefined ? [] : [bindingReader(name)]),
       ]);
     };
     const colorForType = (node: ts.TypeNode | undefined): ts.Expression => {
@@ -848,6 +858,7 @@ export function transformElaborationModule(
             factory.createStringLiteral(node.name.text),
             colorForType(node.type),
             spanLiteral(factory, node),
+            bindingReader(node.name.text),
           ]);
         }
         return factory.updateVariableDeclaration(

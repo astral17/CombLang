@@ -252,6 +252,23 @@ function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
       duplicate.source,
     );
   }
+  const aliases = plan.networkAliases ?? [];
+  for (const alias of aliases) {
+    if (
+      typeof alias.name !== 'string' ||
+      alias.name.length === 0 ||
+      !declarations.has(alias.network) ||
+      !Array.isArray(alias.instancePath) ||
+      alias.instancePath.some((segment) => typeof segment !== 'string' || segment.length === 0) ||
+      typeof alias.moved !== 'boolean'
+    ) {
+      throw runtimeFailure(
+        'RT1001',
+        'Invalid Network alias descriptor in direct plan.',
+        alias.source,
+      );
+    }
+  }
 
   const capabilityUses = Object.freeze([...(plan.capabilityUses ?? [])]);
   for (const use of capabilityUses) {
@@ -363,6 +380,9 @@ function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
   }
   for (const declaration of plan.networks)
     networks.set(declaration.name, handlesByRoot.get(find(declaration.name))!);
+  const rootAliases = new Set(
+    aliases.filter((alias) => alias.instancePath.length === 0).map((alias) => alias.name),
+  );
   for (const descriptor of plan.networkPairs ?? []) {
     if (!Array.isArray(descriptor.networks) || descriptor.networks.length !== 2) {
       throw runtimeFailure(
@@ -579,7 +599,16 @@ function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
       return new DebugStructureExpectation(scope, circuit.graph);
     },
     network(name: string) {
-      const movedAt = consumed.get(name);
+      const alias = rootAliases.has(name) ? debug.root.network(name) : undefined;
+      if (alias?.moved) {
+        throw new RuntimeDiagnosticError({
+          code: 'RT2012',
+          severity: 'error',
+          message: `Cannot use moved Network alias: ${name}.`,
+          span: alias.source,
+        });
+      }
+      const movedAt = alias === undefined ? consumed.get(name) : undefined;
       if (movedAt !== undefined) {
         throw new RuntimeDiagnosticError({
           code: 'RT2012',
@@ -589,7 +618,7 @@ function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
           related: [{ message: 'Network declared here.', span: declarations.get(name)!.source }],
         });
       }
-      const network = networks.get(name);
+      const network = alias === undefined ? networks.get(name) : networks.get(alias.planName);
       if (network === undefined) throw runtimeFailure('RT1005', `Unknown Network: ${name}.`);
       return network;
     },
