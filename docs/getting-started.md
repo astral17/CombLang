@@ -1,6 +1,6 @@
 # Getting started
 
-CombLang currently implements the Phase 3 source compiler and most of the Phase 4 ownership/multi-network runtime of a TypeScript-shaped structural HDL for Factorio 2.1 circuit networks. The browser workbench can parse, lower, color, simulate, and generate an early uncompressed blueprint JSON preview for the supported source subset locally. Exchange-string encoding and the verified Phase 8 blueprint codec are not implemented yet.
+CombLang currently implements the source compiler, ownership/multi-network runtime and Phase 5 MVP testbench of a TypeScript-shaped structural HDL for Factorio 2.1 circuit networks. Phase 5.5 adds explicit prototype environments. The browser workbench can parse, lower, color, simulate, and generate an early uncompressed blueprint JSON preview for the supported source subset locally. Exchange-string encoding and the verified Phase 8 blueprint codec are not implemented yet.
 
 The executable examples include [`examples/scale/main.factorio.ts`](../examples/scale/main.factorio.ts) for ordinary composition, [`examples/take/main.factorio.ts`](../examples/take/main.factorio.ts) for zero-tick network union, [`examples/borrow/main.factorio.ts`](../examples/borrow/main.factorio.ts) for non-owning function capabilities, [`examples/move/main.factorio.ts`](../examples/move/main.factorio.ts) for explicit ownership transfer across a call, [`examples/move-slots/main.factorio.ts`](../examples/move-slots/main.factorio.ts) for replacing moved variable/array/object owners, and [`examples/pair/main.factorio.ts`](../examples/pair/main.factorio.ts) for reading both circuit-wire colors through one immutable input view.
 
@@ -103,5 +103,18 @@ npm run cli -- prototypes normalize data-raw-dump.json metadata.json prototypes.
 The dump omits environment identity data, so the separate metadata file is
 mandatory. Its exact format and the currently reported lossy 2.x fields are
 documented in [Prototype environment](prototype-environment.md).
+
+Use the resulting normalized database during CLI compilation or testing:
+
+```sh
+npm run cli -- check --prototypes prototypes.json --json main.factorio.ts
+npm run cli -- test --prototypes prototypes.json --json main.factorio.ts circuit.test.js
+```
+
+JSON includes the selected `prototypeEnvironment.identity` and capability coverage.
+Add `--prototype-identity "<reported identity>"` to reject a different database.
+Missing, invalid or mismatched profiles stop with exit code `2` before source
+execution; they never fall back to another profile. Browser file/cache selection
+and a bundled first-run profile are not implemented yet.
 
 Continue with the [current language reference](language-reference.md) for the exact supported subset.

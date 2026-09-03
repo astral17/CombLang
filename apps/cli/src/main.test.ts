@@ -41,6 +41,145 @@ afterEach(async () => {
   );
 });
 
+describe('CLI prototype profiles', () => {
+  async function profileFile(text = JSON.stringify(syntheticPrototypeDatabase())) {
+    const directory = await mkdtemp(join(tmpdir(), 'comblang-prototypes-'));
+    temporaryDirectories.push(directory);
+    const path = join(directory, 'profile with spaces.json');
+    await writeFile(path, text, 'utf8');
+    return path;
+  }
+
+  test('loads a validated database and reports its identity for check and test', async () => {
+    const profile = await profileFile();
+    const { prototypes } = await loadPrototypeDatabase(syntheticPrototypeDatabase());
+    const [source, tests] = await circuitTestFiles(
+      `const PLATE = Signal(prototypes.item['iron-plate'].name);
+const output = CC(prototypes.item['iron-plate'].stackSize * PLATE);`,
+      `test('stack size from profile', ({ network, tick, expectSignal }) => {
+  tick();
+  expectSignal(network('output'), Signal('iron-plate')).toBe(100);
+});`,
+    );
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const options = [
+      '--json',
+      '--prototypes',
+      profile,
+      '--prototype-identity',
+      prototypes.identity,
+    ];
+    expect(await run(['check', source, ...options])).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      diagnostics: [],
+      producerCount: 1,
+      prototypeEnvironment: {
+        identity: prototypes.identity,
+        factorioVersion: '2.1.16',
+        capabilities: prototypes.capabilities,
+      },
+    });
+    log.mockClear();
+    expect(await run(['test', ...options, source, tests])).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      diagnostics: [],
+      tests: { passed: 1, failed: 0 },
+      prototypeEnvironment: { identity: prototypes.identity },
+    });
+    log.mockClear();
+    expect(await run(['check', '--json', source])).toBe(1);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'EX1004' })],
+    });
+  });
+
+  test('accepts distinct modified profiles without sharing global state', async () => {
+    const original = validatePrototypeDatabase(syntheticPrototypeDatabase());
+    const modified = {
+      ...original,
+      items: original.items.map((item) => ({ ...item, stackSize: 250 })),
+    };
+    const [basePath, moddedPath] = await Promise.all([
+      profileFile(JSON.stringify(original)),
+      profileFile(JSON.stringify(modified)),
+    ]);
+    const source = await sourceFile(
+      'const output = CC(prototypes.item["iron-plate"].stackSize * Signal("iron-plate"));',
+    );
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    expect(await run(['check', '--json', '--prototypes', basePath, source])).toBe(0);
+    const modifiedSource =
+      await sourceFile(`if (prototypes.item['iron-plate'].stackSize !== 250) throw new Error('wrong profile');
+const output = CC(prototypes.item['iron-plate'].stackSize * Signal('iron-plate'));`);
+    expect(await run(['check', '--json', '--prototypes', moddedPath, modifiedSource])).toBe(0);
+    const results = log.mock.calls.map(([value]) => JSON.parse(String(value)));
+    expect(results[0].prototypeEnvironment.identity).not.toBe(
+      results[1].prototypeEnvironment.identity,
+    );
+  });
+
+  test.each([
+    { text: '{', code: 'PT1006', path: '<json>' },
+    { text: '{"schemaVersion":99}', code: 'PT1000', path: 'schemaVersion' },
+  ])(
+    'reports invalid profile $code as structured JSON before reading source',
+    async ({ text, code, path }) => {
+      const profile = await profileFile(text);
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      expect(await run(['check', '--json', '--prototypes', profile, 'does-not-exist.ts'])).toBe(2);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+        diagnostics: [{ code, path }],
+      });
+      expect(error).not.toHaveBeenCalled();
+    },
+  );
+
+  test('rejects missing files, mismatched pins, missing pinned providers and conflicting inputs', async () => {
+    const profile = await profileFile();
+    const { prototypes } = await loadPrototypeDatabase(syntheticPrototypeDatabase());
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const cases = [
+      { args: ['--prototypes', `${profile}.missing`], code: 'CLI1002' },
+      { args: ['--prototype-identity', prototypes.identity], code: 'CLI1003' },
+      { args: ['--prototypes', profile, '--prototype-identity', 'wrong'], code: 'CLI1003' },
+      { args: ['--prototypes', profile], code: 'CLI1001', environment: { prototypes } },
+    ];
+    for (const entry of cases) {
+      log.mockClear();
+      expect(
+        await run(['check', '--json', ...entry.args, 'does-not-exist.ts'], entry.environment),
+      ).toBe(2);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+        diagnostics: [{ code: entry.code }],
+      });
+    }
+  });
+
+  test('shows the selected profile in human output and validates injected pins', async () => {
+    const source = await sourceFile('const output = CC();');
+    const { prototypes } = await loadPrototypeDatabase(syntheticPrototypeDatabase());
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    expect(
+      await run(['check', '--prototype-identity', prototypes.identity, source], { prototypes }),
+    ).toBe(0);
+    expect(log.mock.calls[0]?.[0]).toContain(prototypes.identity);
+  });
+
+  test('keeps usage and source I/O errors machine-readable in JSON mode', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    for (const [args, code] of [
+      [['check', '--json', '--prototypes'], 'CLI1001'],
+      [['test', '--json', 'only-source.ts'], 'CLI1001'],
+      [['check', '--json', 'missing-source-file.ts'], 'CLI1004'],
+    ] as const) {
+      log.mockClear();
+      expect(await run(args)).toBe(2);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({ diagnostics: [{ code }] });
+    }
+  });
+});
+
 describe('factorio-dsl check', () => {
   test('prints the call location for an executed spread placement error', async () => {
     const path = await sourceFile(`const coordinates = [1, 2, 4, 8];

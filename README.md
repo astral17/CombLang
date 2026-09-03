@@ -68,8 +68,11 @@ The current repository implements the Phase 3 source compiler, the complete Phas
   - [x] Add a versioned normalized Prototype DB, structural/referential/index validator, immutable LuaPrototypes-shaped `prototypes.*` tables plus derived collections/query helpers, deterministic environment identity, browser/Node JSON boundary, and synthetic base/modded fixtures in a dedicated package.
   - [ ] Inject the provider explicitly into compiler consumers; keep prototype facts out of the simulator and avoid a global mutable registry.
     - [x] Reserve source `prototypes`, route it through the hygienic elaboration bridge, and thread an optional provider through runtime, browser compiler, and CLI library entry points with source-linked missing-environment diagnostics.
-    - [ ] Construct/select the provider inside CLI and browser Worker profile loaders; never structured-clone provider methods across the Worker boundary.
+    - [x] Construct/select the provider in CLI `check`/`test` via `--prototypes`, validate optional `--prototype-identity` pins before source execution, and report the selected identity and coverage in JSON.
+    - [x] Construct/select the provider inside the browser compiler Worker from cloneable normalized JSON, return verified environment metadata, and reuse it by identity without structured-cloning provider methods.
   - [ ] Load validated databases from CLI project options and browser-local files/cache, with an explicit built-in vanilla/Space Age first-run profile and no silent fallback for pinned projects.
+    - [x] Load an explicit CLI database file with structured validation/I/O failures and no implicit fallback; isolate providers between invocations.
+    - [ ] Add persisted project profiles, browser-local file/cache selection, and the generated first-run database.
   - [ ] Build an offline normalizer for native `factorio.exe --dump-data` output, supplementing it with a narrow Lua `prototypes` probe only for missing derived facts; verify base, Space Age, and modded-override fixtures.
     - [x] Normalize resolved item subtypes, fluids, multi-category recipes and 2.x count/temperature defaults, qualities, virtual signals, recipe categories, and bounding-box entity footprints; expose it through `factorio-dsl prototypes normalize` with explicit environment metadata and loss warnings.
     - [x] Smoke-test the external dump without making repository code or tests depend on `../Analysis`.

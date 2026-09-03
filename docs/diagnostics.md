@@ -172,3 +172,28 @@ Native dump conversion uses `PD1001` for a malformed or internally inconsistent
 fields or skipped engine sentinels, while `PD2002` reports capability data that
 the native dump cannot prove. Conversion warnings are explicit coverage notices;
 they do not make the normalized v1 subset invalid.
+
+## CLI inputs and prototype selection
+
+`check` and `test` return exit code `2` for input/loading errors. In `--json`
+mode they emit one JSON document containing `diagnostics`, not an unstructured
+stderr-only failure. These diagnostics have no source-code span because source
+execution has not started. Prototype validation retains `PT1000`–`PT1006` with
+its structural `path` and database `file`.
+
+| Code      | Meaning                                                                                                  |
+| --------- | -------------------------------------------------------------------------------------------------------- |
+| `CLI1001` | invalid/missing/duplicate option, wrong file count, or conflicting file and injected prototype providers |
+| `CLI1002` | selected prototype database cannot be read                                                               |
+| `CLI1003` | pinned identity has no provider or differs from the loaded database                                      |
+| `CLI1004` | other command input/I/O failure, such as an unreadable source/test file                                  |
+
+An invalid profile never falls back to another database. Without a selected
+profile or pin, source access to `prototypes` still produces the source-linked
+`EX1004` compilation error (exit code `1`).
+
+The browser compiler Worker preserves `PT1000`–`PT1006` for invalid normalized
+JSON. `WP1001` reports an expected/actual identity mismatch, `WP1002` means an
+identity is not present in the current Worker's cache (usually after a restart),
+and `WP1003` is an unexpected Worker-side profile-loading failure. All three block
+source execution and never select a fallback profile.

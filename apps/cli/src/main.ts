@@ -15,6 +15,7 @@ import type {
 import { parseProject, validateDslSemantics } from '@comblang/language';
 import {
   normalizeFactorioDataDump,
+  PrototypeValidationError,
   type FactorioDumpMetadata,
   type PrototypeProvider,
 } from '@comblang/prototypes';
@@ -27,11 +28,17 @@ import {
 } from '@comblang/runtime';
 import { offsetToPosition, type Diagnostic } from '@comblang/shared';
 
+import {
+  CliInputError,
+  parseCompilationOptions,
+  selectPrototypeProvider,
+} from './prototype-options.js';
+
 const usage = `factorio-dsl
 
 Usage:
-  factorio-dsl check [--json] <file...>
-  factorio-dsl test [--json] <source.factorio.ts> <circuit.test.js>
+  factorio-dsl check [--json] [--prototypes <database.json>] [--prototype-identity <id>] <file...>
+  factorio-dsl test [--json] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts> <circuit.test.js>
   factorio-dsl prototypes normalize <data-raw-dump.json> <metadata.json> <output.json>
 
 Checks circuits, executes browser/Node-neutral JavaScript test files, or normalizes a native Factorio prototype dump.`;
@@ -43,6 +50,19 @@ interface LoadedSource {
 
 export interface CliCompilationEnvironment {
   readonly prototypes?: PrototypeProvider;
+}
+
+function environmentReport(environment: CliCompilationEnvironment) {
+  const provider = environment.prototypes;
+  return provider === undefined
+    ? {}
+    : {
+        prototypeEnvironment: {
+          identity: provider.identity,
+          ...provider.environment,
+          capabilities: provider.capabilities,
+        },
+      };
 }
 
 function formatDiagnostic(
@@ -112,7 +132,14 @@ async function check(
   if (json) {
     console.log(
       JSON.stringify(
-        { diagnostics, producerCount, capabilityUses, networkTransfers, networkPairs },
+        {
+          diagnostics,
+          producerCount,
+          capabilityUses,
+          networkTransfers,
+          networkPairs,
+          ...environmentReport(environment),
+        },
         null,
         2,
       ),
@@ -197,7 +224,15 @@ async function testCircuit(
 
   if (json) {
     console.log(
-      JSON.stringify({ diagnostics, ...(tests === undefined ? {} : { tests }) }, null, 2),
+      JSON.stringify(
+        {
+          diagnostics,
+          ...(tests === undefined ? {} : { tests }),
+          ...environmentReport(environment),
+        },
+        null,
+        2,
+      ),
     );
   } else {
     const files = new Map([[file?.id as string, source]]);
@@ -271,18 +306,56 @@ export async function run(
     return 2;
   }
 
-  const json = rest.includes('--json');
+  let json = rest
+    .slice(0, rest.includes('--') ? rest.indexOf('--') : rest.length)
+    .includes('--json');
+  let prototypePath: string | undefined;
   try {
-    const files = rest.filter((argument) => argument !== '--json');
-    if (command === 'prototypes') return await normalizePrototypes(files);
+    if (command === 'prototypes')
+      return await normalizePrototypes(rest.filter((argument) => argument !== '--json'));
+    const options = parseCompilationOptions(rest);
+    json = options.json;
+    prototypePath = options.prototypePath;
+    if (options.files.length === 0 || (command === 'test' && options.files.length !== 2)) {
+      throw new CliInputError(
+        'CLI1001',
+        command === 'test'
+          ? 'test requires one source file and one test file.'
+          : 'check requires at least one source file.',
+      );
+    }
+    const prototypes = await selectPrototypeProvider(options, environment.prototypes);
+    const selected = prototypes === undefined ? {} : { prototypes };
+    if (!json && prototypes !== undefined) {
+      console.log(
+        `Prototype environment: ${prototypes.identity} (Factorio ${prototypes.environment.factorioVersion}).`,
+      );
+    }
     return command === 'check'
-      ? await check(files, json, environment)
-      : await testCircuit(files, json, environment);
+      ? await check(options.files, json, selected)
+      : await testCircuit(options.files, json, selected);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const action =
       command === 'prototypes' ? 'normalize prototype data' : `${command} source files`;
-    console.error(`Unable to ${action}: ${message}`);
+    if (command !== 'prototypes') {
+      const diagnostic = {
+        code:
+          error instanceof CliInputError || error instanceof PrototypeValidationError
+            ? error.code
+            : 'CLI1004',
+        severity: 'error',
+        message,
+        ...(error instanceof PrototypeValidationError
+          ? { path: error.path, file: prototypePath }
+          : {}),
+      };
+      if (json) console.log(JSON.stringify({ diagnostics: [diagnostic] }, null, 2));
+      else
+        console.error(
+          `Unable to ${action}: ${diagnostic.code}: ${diagnostic.file === undefined ? '' : `${diagnostic.file}: `}${message}`,
+        );
+    } else console.error(`Unable to ${action}: ${message}`);
     return 2;
   }
 }

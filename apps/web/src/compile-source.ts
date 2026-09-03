@@ -31,17 +31,21 @@ export interface SourceCompilationEnvironment {
 export function compileSource(
   file: ParseWorkerRequest['file'],
   environment: SourceCompilationEnvironment = {},
+  preflightDiagnostics: readonly Diagnostic[] = [],
 ): CompiledSourceResult {
   const parsed = parseFile(file);
   let plan: DirectElaborationPlan | undefined;
   let elaborationJavaScript: string | undefined;
   const semanticDiagnostics = validateDslSemantics(parsed);
-  let compilerDiagnostics: readonly Diagnostic[] = semanticDiagnostics;
+  let compilerDiagnostics: readonly Diagnostic[] = [
+    ...preflightDiagnostics,
+    ...semanticDiagnostics,
+  ];
   if (parsed.diagnostics.length === 0) {
     try {
       const program = transformElaborationModule(parsed);
       elaborationJavaScript = program.code;
-      if (!semanticDiagnostics.some(({ severity }) => severity === 'error')) {
+      if (!compilerDiagnostics.some(({ severity }) => severity === 'error')) {
         plan = executeElaborationProgram(program, environment);
         const runtimeDiagnostics = tryElaborateDirectPlan(plan).diagnostics;
         compilerDiagnostics = [

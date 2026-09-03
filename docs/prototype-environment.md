@@ -21,8 +21,9 @@ Phase 5.5 provides `packages/prototypes` with these responsibilities:
 - tiny synthetic fixtures and a generated first-run vanilla/Space Age profile.
 
 The implemented foundation now also includes an offline native-dump normalizer
-and CLI command. CLI/browser profile selection, conformance completion, and the
-generated first-run database remain subsequent Phase 5.5 slices.
+and explicit CLI database selection with optional identity pins. Persisted project
+profiles, browser profile selection, conformance completion, and the generated
+first-run database remain subsequent Phase 5.5 slices.
 
 The compiler, language service, typed-object schemas, layout, and blueprint
 backend receive a provider through an explicit compilation environment. They do
@@ -138,12 +139,57 @@ may replace the converter or supplemental probe without changing
 
 ## Loading and identity
 
-CLI and browser loading should validate before constructing a provider. The CLI
-will accept an explicit prototype database path and later a project profile. The
-browser will accept a local file, cache validated databases in IndexedDB, and
-show the active environment. A project pinned to one environment identity must
-not silently compile against the built-in fallback when that database is
-missing.
+The CLI validates normalized JSON before constructing a provider. Both commands
+accept an explicit database path, resolved relative to the working directory:
+
+```sh
+npm run cli -- check --prototypes prototypes.json --json main.factorio.ts
+npm run cli -- test --prototypes prototypes.json --json main.factorio.ts circuit.test.js
+```
+
+The normalizer's output can be used directly. JSON results include
+`prototypeEnvironment` with the selected `identity`, Factorio/mod metadata and
+capability coverage. Human-readable output prints the identity and Factorio version.
+Read the reported identity first, then optionally require it on subsequent runs:
+
+```sh
+npm run cli -- check --prototypes prototypes.json --prototype-identity "<reported identity>" main.factorio.ts
+```
+
+`<reported identity>` is a placeholder for the full `comblang-prototypes-v1-sha256:…`
+value, not a profile name. A missing database, validation failure or identity
+mismatch stops before source execution with exit code `2`; no fallback is selected,
+even if the source does not use `prototypes`. With `--json`, loading/usage errors
+are emitted as one JSON document containing `diagnostics`. Database validation
+retains its `PT1000`–`PT1006` code, structural `path`, and supplied `file` path.
+Source/test failures still use exit code `1`.
+
+Flags can precede or follow filenames. Duplicate value options and unknown flags
+are rejected; `--` ends option parsing for literal filenames. Quote paths containing
+spaces. One selected provider is used for all source files in that invocation, not
+saved globally. The programmatic `run(args, { prototypes })` seam remains supported,
+including an identity pin; combining an injected provider and `--prototypes` is an
+error rather than an implicit precedence rule.
+
+Without either source of prototype data, ordinary circuits still compile and
+accessing `prototypes` produces `EX1004`. No built-in database is installed yet.
+Persisted CLI project profiles and browser-local file loading/IndexedDB caching
+remain pending. A project pinned to one identity must not silently compile against
+a built-in fallback when that database is missing.
+
+The browser compiler Worker protocol accepts either normalized JSON plus an
+optional expected identity, or an identity already confirmed by that Worker.
+Parsing, validation, hashing and provider construction happen inside the Worker;
+only cloneable JSON enters it and only cloneable environment metadata, diagnostics,
+and the direct plan leave it. Provider methods are never structured-cloned.
+
+Successfully loaded environments are cached by identity for that Worker lifetime,
+so ordinary recompilation does not repeatedly parse and hash the database. Selection
+is still explicit on every compile request: omitting the profile compiles without
+one, while an unknown cached identity returns `WP1002` and asks the caller to send
+the JSON again. Thus a Worker restart cannot silently lose a pin or substitute a
+profile. The pending UI/profile store will retain the JSON in browser-local storage
+and resend it after startup or a Worker timeout.
 
 The v1 environment identity is SHA-256 over canonical normalized JSON and is
 prefixed `comblang-prototypes-v1-sha256:`. It includes schema and generator
@@ -201,9 +247,10 @@ const fullStack = CC(prototypes.item['iron-plate'].stackSize * PLATE);
 
 Using `prototypes` without an injected environment reports source-linked
 `EX1004`. The runtime executor, browser-local `compileSource` boundary, and CLI
-`run` boundary accept the provider explicitly. The CLI flag/project profile and
-browser Worker-side database construction belong to the next loading slice;
-providers with methods are never posted across a Worker boundary.
+`run` boundary accept the provider explicitly. CLI flags construct it inside the
+Node process, while the browser compiler Worker constructs and caches its own
+provider from JSON. Persisted project profiles and the browser file/cache UI remain
+pending; providers with methods are never posted across a Worker boundary.
 
 ## Phase boundary
 
