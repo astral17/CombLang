@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "source": "main.factorio.ts",
+  "tests": "circuit.test.js",
+  "prototypes": {
+    "path": "prototypes.synthetic.json",
+    "identity": "comblang-prototypes-v1-sha256:4b5d16b4b93dbb086b53c4da8eab6aadaad5ff5f63bae7de48212ab3c25fdd47"
+  }
+}

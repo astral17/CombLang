@@ -21,10 +21,10 @@ Phase 5.5 provides `packages/prototypes` with these responsibilities:
 - tiny synthetic fixtures and a generated first-run vanilla/Space Age profile.
 
 The implemented foundation now also includes an offline native-dump normalizer
-and explicit CLI database selection with optional identity pins. Persisted project
-profiles, conformance completion, and the generated
-first-run database remain subsequent Phase 5.5 slices. Browser-local file selection
-and identity-keyed IndexedDB persistence are now implemented.
+and explicit CLI database selection with optional identity pins. Versioned CLI
+project profiles, browser-local file selection and identity-keyed IndexedDB
+persistence are implemented. Conformance completion and the generated first-run
+database remain subsequent Phase 5.5 slices.
 
 The compiler, language service, typed-object schemas, layout, and blueprint
 backend receive a provider through an explicit compilation environment. They do
@@ -174,7 +174,7 @@ error rather than an implicit precedence rule.
 
 Without either source of prototype data, ordinary circuits still compile and
 accessing `prototypes` produces `EX1004`. No built-in database is installed yet.
-Persisted CLI project profiles remain pending. In the browser, use **Load normalized
+In the browser, use **Load normalized
 JSON** above the source editor. It does not modify source or test drafts. After
 validation, the database is saved in IndexedDB under its identity and the active
 identity is saved in tab-local session storage. Reloading the tab restores the
@@ -261,16 +261,60 @@ Using `prototypes` without an injected environment reports source-linked
 `EX1004`. The runtime executor, browser-local `compileSource` boundary, and CLI
 `run` boundary accept the provider explicitly. CLI flags construct it inside the
 Node process, while the browser compiler Worker constructs and caches its own
-provider from JSON. Persisted CLI project profiles remain pending; providers with
-methods are never posted across a Worker boundary.
+provider from JSON. CLI project files persist the paths and optional identity pin;
+providers with methods are never posted across a Worker boundary.
+
+## CLI project files
+
+Use `--project <file>` to select a versioned, data-only project configuration:
+
+```json
+{
+  "schemaVersion": 1,
+  "source": "main.factorio.ts",
+  "tests": "circuit.test.js",
+  "prototypes": {
+    "path": "data/prototypes.json",
+    "identity": "<reported identity>"
+  }
+}
+```
+
+Replace `<reported identity>` with the full identity emitted by a successful
+`check --prototypes ... --json` run, or omit `identity` to accept the database's
+current contents. `schemaVersion`, `source` and `prototypes.path` are required;
+`tests` and `prototypes.identity` are optional. Unknown fields, empty strings and
+unsupported versions are errors. This v1 configuration supplies one default source
+and one optional test file; it is not yet a multi-module build manifest.
+
+```sh
+npm run cli -- check --project comblang.json
+npm run cli -- test --project comblang.json --json
+```
+
+All configured paths are resolved relative to the configuration file, never to
+the shell's working directory. Explicit positional filenames replace the configured
+source/test filenames and retain their usual working-directory-relative meaning.
+This lets the same profile check several independent files. `test` still requires
+exactly two resolved filenames; without explicit filenames it requires `tests`.
+
+There is no automatic parent-directory search, executable config, or import/eval
+step. A project cannot be combined with `--prototypes` or an injected provider.
+`--prototype-identity` may pin an otherwise unpinned project or repeat the existing
+pin, but a conflicting pin fails with `CLI1003`. Changing a pinned environment
+requires explicitly editing the project file. Invalid or unreadable project files
+report `CLI1005`; all loading/selection errors stop before source/test execution.
+
+The checked-in [prototype-stack project](../examples/prototype-stack/comblang.json)
+provides a fully pinned synthetic example without downloads.
 
 ## Phase boundary
 
 Phase 5 testbench work does not depend on prototype data. The schema, provider,
 identity, validator, JSON boundary, and synthetic fixtures now establish the
 core Phase 5.5 seam. The explicit runtime, browser-library, and CLI-library
-injection seam is now established. Persisted profile loading, dump/conformance
-fixtures, and the built-in vanilla/Space Age snapshot remain before Phase 6
+injection seam and persisted CLI/browser profile loading are now established.
+Dump/conformance fixtures and the built-in vanilla/Space Age snapshot remain before Phase 6
 typed objects introduce entity- and recipe-specific configuration. Phase 8 then
 extends concrete configuration values with blueprint parameters without
 changing the provider boundary.

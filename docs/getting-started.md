@@ -124,4 +124,15 @@ For an offline synthetic smoke test, use
 [`examples/prototype-stack`](../examples/prototype-stack/README.md). Its tiny profile
 is test data, not a vanilla/Space Age database or Factorio conformance evidence.
 
+The example also contains a pinned `comblang.json` project, so the same check can
+be run without repeating source, test and database paths:
+
+```sh
+npm run cli -- test --project examples/prototype-stack/comblang.json
+```
+
+`--project` is explicit; no configuration is discovered automatically. Configured
+paths are relative to that JSON file. See [CLI project files](prototype-environment.md#cli-project-files)
+for the schema and pin/override rules.
+
 Continue with the [current language reference](language-reference.md) for the exact supported subset.

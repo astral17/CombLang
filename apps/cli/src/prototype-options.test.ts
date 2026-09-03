@@ -26,6 +26,8 @@ describe('compilation options', () => {
 
   test.each([
     ['--prototypes'],
+    ['--project'],
+    ['--project', 'a', '--project', 'b'],
     ['--prototype-identity'],
     ['--prototypes', '--json'],
     ['--prototypes', ''],

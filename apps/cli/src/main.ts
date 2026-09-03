@@ -27,6 +27,7 @@ import {
   tryElaborateDirectPlan,
 } from '@comblang/runtime';
 import { offsetToPosition, type Diagnostic } from '@comblang/shared';
+import { resolveProjectOptions } from './project-profile.js';
 
 import {
   CliInputError,
@@ -37,6 +38,8 @@ import {
 const usage = `factorio-dsl
 
 Usage:
+  factorio-dsl check [--json] --project <comblang.json> [file...]
+  factorio-dsl test [--json] --project <comblang.json> [source.factorio.ts circuit.test.js]
   factorio-dsl check [--json] [--prototypes <database.json>] [--prototype-identity <id>] <file...>
   factorio-dsl test [--json] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts> <circuit.test.js>
   factorio-dsl prototypes normalize <data-raw-dump.json> <metadata.json> <output.json>
@@ -313,8 +316,9 @@ export async function run(
   try {
     if (command === 'prototypes')
       return await normalizePrototypes(rest.filter((argument) => argument !== '--json'));
-    const options = parseCompilationOptions(rest);
-    json = options.json;
+    const parsedOptions = parseCompilationOptions(rest);
+    json = parsedOptions.json;
+    const options = await resolveProjectOptions(parsedOptions, command);
     prototypePath = options.prototypePath;
     if (options.files.length === 0 || (command === 'test' && options.files.length !== 2)) {
       throw new CliInputError(

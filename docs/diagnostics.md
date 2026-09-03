@@ -187,6 +187,7 @@ its structural `path` and database `file`.
 | `CLI1002` | selected prototype database cannot be read                                                               |
 | `CLI1003` | pinned identity has no provider or differs from the loaded database                                      |
 | `CLI1004` | other command input/I/O failure, such as an unreadable source/test file                                  |
+| `CLI1005` | unreadable/malformed project JSON, unsupported project schema, or invalid/unknown configuration field    |
 
 An invalid profile never falls back to another database. Without a selected
 profile or pin, source access to `prototypes` still produces the source-linked

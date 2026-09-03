@@ -18,6 +18,7 @@ export interface CompilationOptions {
   readonly json: boolean;
   readonly prototypePath?: string;
   readonly prototypeIdentity?: string;
+  readonly projectPath?: string;
 }
 
 /** Options may precede or follow files; `--` ends option parsing. */
@@ -33,7 +34,11 @@ export function parseCompilationOptions(args: readonly string[]): CompilationOpt
     }
     if (argument === '--json') {
       json = true;
-    } else if (argument === '--prototypes' || argument === '--prototype-identity') {
+    } else if (
+      argument === '--prototypes' ||
+      argument === '--prototype-identity' ||
+      argument === '--project'
+    ) {
       if (values.has(argument))
         throw new CliInputError('CLI1001', `Duplicate option: ${argument}.`);
       const value = args[++i];
@@ -49,11 +54,13 @@ export function parseCompilationOptions(args: readonly string[]): CompilationOpt
   }
   const prototypePath = values.get('--prototypes');
   const prototypeIdentity = values.get('--prototype-identity');
+  const projectPath = values.get('--project');
   return {
     files,
     json,
     ...(prototypePath === undefined ? {} : { prototypePath }),
     ...(prototypeIdentity === undefined ? {} : { prototypeIdentity }),
+    ...(projectPath === undefined ? {} : { projectPath }),
   };
 }
 
