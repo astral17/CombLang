@@ -9,6 +9,7 @@ import {
   type PrototypeDatabaseCapabilities,
   type PrototypeDatabaseV1,
   type PrototypeEnvironment,
+  type PrototypeStartupSetting,
   type PrototypeIndexes,
   type PrototypeKey,
   type QualityPrototype,
@@ -114,6 +115,46 @@ function unique(values: readonly string[], path: string): void {
   }
 }
 
+/** Copies captured setting values without filling defaults or equating color representations. */
+export function validatePrototypeStartupSettings(
+  value: unknown,
+  path = 'environment.startupSettings',
+): readonly PrototypeStartupSetting[] {
+  const settings = array(value, path).map((raw, index): PrototypeStartupSetting => {
+    const entryPath = `${path}[${index}]`;
+    const entry = object(raw, entryPath);
+    const name = string(entry.name, `${entryPath}.name`);
+    let setting: PrototypeStartupSetting['value'];
+    if (typeof entry.value === 'boolean' || typeof entry.value === 'string') setting = entry.value;
+    else if (typeof entry.value === 'number') setting = finite(entry.value, `${entryPath}.value`);
+    else if (Array.isArray(entry.value)) {
+      if (entry.value.length !== 3 && entry.value.length !== 4)
+        invalid('PT1001', `${entryPath}.value`, 'expected 3 or 4 color channels.');
+      setting = Object.freeze(
+        entry.value.map((channel, i) => finite(channel, `${entryPath}.value[${i}]`)),
+      );
+    } else {
+      const color = object(entry.value, `${entryPath}.value`);
+      if (Object.keys(color).some((key) => !['r', 'g', 'b', 'a'].includes(key)))
+        invalid('PT1001', `${entryPath}.value`, 'expected a color object.');
+      setting = Object.freeze(
+        Object.fromEntries(
+          Object.entries(color).map(([key, value]) => [
+            key,
+            finite(value, `${entryPath}.value.${key}`),
+          ]),
+        ),
+      );
+    }
+    return Object.freeze({ name, value: setting });
+  });
+  unique(
+    settings.map(({ name }) => name),
+    path,
+  );
+  return Object.freeze(settings);
+}
+
 function parseEnvironment(value: unknown): PrototypeEnvironment {
   const input = object(value, 'environment');
   const expansions = array(input.expansions, 'environment.expansions').map((entry, index) =>
@@ -136,6 +177,14 @@ function parseEnvironment(value: unknown): PrototypeEnvironment {
     'environment.startupSettingsIdentity',
   );
   const generatedAt = optionalString(input.generatedAt, 'environment.generatedAt');
+  const startupSettings =
+    input.startupSettings === undefined
+      ? undefined
+      : Object.freeze(
+          [...validatePrototypeStartupSettings(input.startupSettings)].sort((a, b) =>
+            a.name.localeCompare(b.name),
+          ),
+        );
   return Object.freeze({
     factorioVersion: string(input.factorioVersion, 'environment.factorioVersion'),
     expansions: Object.freeze([...expansions].sort()),
@@ -147,6 +196,7 @@ function parseEnvironment(value: unknown): PrototypeEnvironment {
     ),
     generatorVersion: string(input.generatorVersion, 'environment.generatorVersion'),
     ...(startupSettingsIdentity === undefined ? {} : { startupSettingsIdentity }),
+    ...(startupSettings === undefined ? {} : { startupSettings }),
     ...(generatedAt === undefined ? {} : { generatedAt }),
   });
 }

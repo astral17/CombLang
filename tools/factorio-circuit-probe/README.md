@@ -43,6 +43,20 @@ validated observations, not a normalized Prototype DB or circuit supplement.
 Malformed/truncated samples fail with `PO1001`, their JSONL line, and field path;
 the reader does not silently skip them. Blank lines and CRLF are accepted.
 
+To compare captured provenance with a selected normalized database:
+
+```powershell
+npm run cli -- prototypes compare-observations --json prototypes.json path/to/circuit-observations.jsonl
+```
+
+This checks game version, the entire mod set (including the collector), startup
+setting values and entity key/type. The database must have explicit
+`environment.startupSettings` values and entity coverage for a match; missing
+values yield `unverified`, not a match. An identity label alone is insufficient.
+The CLI returns 0 for match, 1 for mismatch/unverified, and 2 for malformed input.
+It reports original JSONL lines and never modifies the capture or database.
+Matching declared provenance does not certify native circuit behavior.
+
 Captures include:
 
 - exact active mod names/versions, including this collector;

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { afterEach, expect, test, vi } from 'vitest';
 import sample from '../../../fixtures/prototype-observations/synthetic.json';
 import { run } from './main.js';
+import { syntheticPrototypeDatabase, validatePrototypeDatabase } from '@comblang/prototypes';
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -51,3 +52,41 @@ test('CLI emits structured line-specific failures for truncated captures', async
     diagnostics: [{ code: 'PO1001', line: 2, path: '<json>' }],
   });
 });
+
+test.each(['match', 'mismatch', 'unverified'] as const)(
+  'CLI compares observation provenance with %s exit semantics and preserves inputs',
+  async (status) => {
+    const full = validatePrototypeDatabase(syntheticPrototypeDatabase());
+    const database = {
+      ...full,
+      environment: {
+        ...full.environment,
+        mods: sample.environment.mods,
+        ...(status === 'unverified' ? {} : { startupSettings: [] }),
+      },
+      entities: [
+        {
+          ...full.entities[0],
+          key: sample.entity.key,
+          name: 'synthetic-assembler',
+          ...(status === 'mismatch' ? { type: 'lamp' } : {}),
+        },
+      ],
+    };
+    const baseText = JSON.stringify(database);
+    const basePath = await inputFile(baseText);
+    const observationText = `\n${JSON.stringify(sample)}\n`;
+    const path = await inputFile(observationText);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    expect(await run(['prototypes', 'compare-observations', '--json', basePath, path])).toBe(
+      status === 'match' ? 0 : 1,
+    );
+    expect(JSON.parse(String(log.mock.calls[0]![0]))).toMatchObject({
+      mode: 'environment-comparison-only',
+      status,
+      samples: [{ line: 2, status }],
+    });
+    expect(await readFile(basePath, 'utf8')).toBe(baseText);
+    expect(await readFile(path, 'utf8')).toBe(observationText);
+  },
+);

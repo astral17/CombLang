@@ -26,9 +26,21 @@ export interface PrototypeEnvironment {
   readonly expansions: readonly string[];
   readonly mods: readonly PrototypeMod[];
   readonly startupSettingsIdentity?: string;
+  /** Explicit captured values; omission means unknown, [] means no startup settings. */
+  readonly startupSettings?: readonly PrototypeStartupSetting[];
   readonly generatorVersion: string;
   /** Informational provenance only; excluded from deterministic content identity. */
   readonly generatedAt?: string;
+}
+
+export interface PrototypeStartupSetting {
+  readonly name: string;
+  readonly value:
+    | boolean
+    | number
+    | string
+    | Readonly<{ r?: number; g?: number; b?: number; a?: number }>
+    | readonly number[];
 }
 
 export interface PrototypeDatabaseCapabilities {

@@ -34,7 +34,7 @@ to consume already-lowered circuit devices and buses rather than prototype data.
 Schema version 1 includes only facts required by the next acceptance programs:
 
 - environment: schema/generator version, Factorio version, expansions, ordered
-  mod names and versions, and startup-settings identity;
+  mod names and versions, startup-settings identity, and optional captured setting values;
 - items and fluids: canonical key and item stack size;
 - recipes: key, one or more categories, ingredients, products, energy, exact
   fluid temperature, the 2.x integer-plus-fraction result count form, independent
@@ -98,9 +98,18 @@ Factorio version, active mod versions, expansions, or startup-settings state:
     { "name": "base", "version": "2.1.16" },
     { "name": "space-age", "version": "2.1.16" }
   ],
-  "startupSettingsIdentity": "project-specific-hash-or-label"
+  "startupSettingsIdentity": "project-specific-hash-or-label",
+  "startupSettings": []
 }
 ```
+
+`startupSettings` is an optional array of `{ name, value }` entries from the same
+dump environment. Use `[]` only when it really has no startup settings; omit the
+field when values are unknown. Booleans, finite numbers, strings (including empty
+strings), and color objects/3-or-4-channel arrays are retained. Generator
+`comblang-factorio-data-dump-v1.3` preserves this explicit snapshot. The old
+`startupSettingsIdentity` remains a caller-supplied label/hash, not automatically
+verified against the values. Supplying a label does not replace a captured snapshot.
 
 The converter reads every item subtype carrying the resolved `stack_size`, not
 only the literal `item` table. It applies the raw RecipePrototype defaults
@@ -333,11 +342,50 @@ without converting them to JavaScript numbers. It rejects malformed/truncated
 JSONL with line and field diagnostics. This schema is deliberately separate from
 `EntityCircuitSupplement`; no automatic observation-to-capability conversion exists.
 
-Collector API/static package checks and synthetic JSONL tests are implemented.
-Native collector execution, behavior-level assertions, matching dump/settings
-verification and base/Space Age/modded conformance remain pending. Enabling the
+Collector API/static package checks, synthetic JSONL tests and offline comparison
+of declared environment values are implemented. Native collector execution,
+behavior-level assertions and base/Space Age/modded conformance remain pending. Enabling the
 collector changes the active mod set; that fact is retained rather than silently
 removed when comparing evidence to a normalized environment.
+
+### Comparing observation provenance to a database
+
+```powershell
+npm run cli -- prototypes compare-observations --json prototypes.json path/to/circuit-observations.jsonl
+```
+
+The library equivalent is `compareCircuitObservationEnvironment(database, jsonl)`.
+The report includes the validated database identity, per-sample original JSONL
+line/label/entity, issues with field paths, and one of these statuses:
+
+- `match`: Factorio version, complete active mod name/version set, captured startup
+  setting name/value set and the observed entity key/type agree with the database.
+- `mismatch`: at least one compared fact differs. Missing/extra mods and settings
+  count as differences. The collector mod is not automatically excluded.
+- `unverified`: no compared fact differs, but the database lacks startup setting
+  values or declared entity coverage. A legacy settings identity label cannot
+  turn this into a match.
+
+Overall mismatch takes precedence over unverified, which takes precedence over
+match; samples are never discarded. CLI exits 0 for match, 1 for mismatch or
+unverified, and 2 for malformed input/I/O/usage errors. The command is read-only.
+The ordinary `observations` command still only validates/prints raw snapshots.
+
+Startup setting entries are sorted by name in normalized databases and copied/
+frozen with their values; explicit empty snapshots differ from omission in the
+database identity. Comparison ignores entry order and color-object property order,
+but preserves exact representations: false is not zero, omitted color channels
+are not inserted, and tuple/byte/normalized color representations are not silently
+equated. Regeneration with the new generator or adding a snapshot changes identity
+and may require a deliberate project-pin update. Existing v1 databases without
+snapshots keep loading and retain their identity, but cannot fully verify settings.
+
+`mode: "environment-comparison-only"` is not native behavior certification or
+proof that a raw dump was generated from the declared metadata. The observation
+format has no separate expansion-label list or raw-dump content hash, so those
+are not compared. Actual enabled expansion mods are included in the exact mod-set
+comparison. Getter outcomes do not affect provenance matching or produce circuit
+capability flags. Native case verification still requires reviewed game evidence.
 
 ## Loading and identity
 

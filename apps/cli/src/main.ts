@@ -18,6 +18,7 @@ import {
   CircuitSupplementError,
   CircuitObservationError,
   parseCircuitObservationsJsonl,
+  compareCircuitObservationEnvironment,
   FactorioDumpError,
   loadPrototypeDatabase,
   loadPrototypeDatabaseJson,
@@ -52,6 +53,7 @@ Usage:
   factorio-dsl prototypes normalize <data-raw-dump.json> <metadata.json> <output.json>
   factorio-dsl prototypes supplement [--json] <database.json> <circuit.json> <output.json>
   factorio-dsl prototypes observations [--json] <circuit-observations.jsonl>
+  factorio-dsl prototypes compare-observations [--json] <database.json> <circuit-observations.jsonl>
 
 Checks circuits, executes browser/Node-neutral JavaScript test files, and processes prototype dumps, circuit supplements, or raw observations.`;
 
@@ -372,6 +374,31 @@ async function inspectCircuitObservations(
   return 0;
 }
 
+async function compareObservations(fileNames: readonly string[], json: boolean): Promise<number> {
+  if (fileNames.length !== 3) {
+    console.error(usage);
+    return 2;
+  }
+  const [baseSource, observations] = await Promise.all([
+    readFile(resolve(fileNames[1]!), 'utf8'),
+    readFile(resolve(fileNames[2]!), 'utf8'),
+  ]);
+  const { database } = await loadPrototypeDatabaseJson(baseSource);
+  const report = await compareCircuitObservationEnvironment(database, observations);
+  if (json) console.log(JSON.stringify(report, null, 2));
+  else {
+    console.log(`Observation environment: ${report.status}. Native behavior is not verified.`);
+    for (const sample of report.samples) {
+      console.log(
+        `line ${sample.line} ${sample.entityKey} ${JSON.stringify(sample.label)}: ${sample.status}`,
+      );
+      for (const issue of sample.issues)
+        console.log(`  ${issue.kind} ${issue.path}: ${issue.message}`);
+    }
+  }
+  return report.status === 'match' ? 0 : 1;
+}
+
 export async function run(
   args: readonly string[],
   environment: CliCompilationEnvironment = {},
@@ -394,6 +421,7 @@ export async function run(
     if (command === 'prototypes') {
       const files = rest.filter((argument) => argument !== '--json');
       if (files[0] === 'observations') return await inspectCircuitObservations(files, json);
+      if (files[0] === 'compare-observations') return await compareObservations(files, json);
       return files[0] === 'supplement'
         ? await supplementPrototypes(files, json)
         : await normalizePrototypes(files);

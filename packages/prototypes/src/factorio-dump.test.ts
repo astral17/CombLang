@@ -91,6 +91,18 @@ function dumpFixture(): unknown {
 }
 
 describe('Factorio data-raw-dump normalizer', () => {
+  test('retains explicit startup setting metadata without replacing a legacy identity label', () => {
+    const startupSettings = [
+      { name: 'mode', value: false },
+      { name: 'count', value: 0 },
+    ];
+    const result = normalizeFactorioDataDump(dumpFixture(), { ...metadata, startupSettings });
+    expect(result.database.environment.startupSettings).toEqual([...startupSettings].reverse());
+    expect(result.database.environment.startupSettingsIdentity).toBe(
+      metadata.startupSettingsIdentity,
+    );
+    expect(Object.isFrozen(result.database.environment.startupSettings)).toBe(true);
+  });
   test('retains correlated product ranges and explicit statistics/productivity amounts', async () => {
     const dump = dumpFixture() as {
       recipe: Record<string, { ingredients: unknown; results: unknown }>;
@@ -148,7 +160,7 @@ describe('Factorio data-raw-dump normalizer', () => {
     const normalized = normalizeFactorioDataDump(dumpFixture(), metadata);
     const { database, prototypes } = await loadPrototypeDatabase(normalized.database);
 
-    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.2');
+    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.3');
     expect(prototypes.item.grenade?.stackSize).toBe(100);
     expect(prototypes.recipe['iron-plate']).toMatchObject({
       categories: ['crafting'],

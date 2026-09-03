@@ -1,3 +1,6 @@
+import type { PrototypeStartupSetting } from './schema.js';
+import { PrototypeValidationError, validatePrototypeStartupSettings } from './validation.js';
+
 /** Raw instance observations must never be treated as prototype capability assertions. */
 export type CircuitFieldObservation =
   | { readonly name: string; readonly status: 'value'; readonly value: boolean | number | string }
@@ -19,15 +22,7 @@ export interface CircuitObservation {
   readonly environment: {
     readonly factorioVersion: string;
     readonly mods: readonly { readonly name: string; readonly version: string }[];
-    readonly startupSettings: readonly {
-      readonly name: string;
-      readonly value:
-        | boolean
-        | number
-        | string
-        | Readonly<{ r?: number; g?: number; b?: number; a?: number }>
-        | readonly number[];
-    }[];
+    readonly startupSettings: readonly PrototypeStartupSetting[];
   };
   readonly entity: {
     readonly key: `entity:${string}`;
@@ -119,37 +114,16 @@ function parseObservation(value: unknown, line: number): CircuitObservation {
     invalid('environment.mods', 'base mod must match factorioVersion.');
   if (mods.find(({ name }) => name === 'comblang-circuit-probe')?.version !== probeVersion)
     invalid('environment.mods', 'collector mod must match probeVersion.');
-  const startupSettings = named(
-    array(environment.startupSettings, 'environment.startupSettings').map((value, index) => {
-      const path = `environment.startupSettings[${index}]`;
-      const entry = object(value, path);
-      let setting: CircuitObservation['environment']['startupSettings'][number]['value'];
-      if (typeof entry.value === 'boolean' || typeof entry.value === 'string')
-        setting = entry.value;
-      else if (typeof entry.value === 'number') setting = finite(entry.value, `${path}.value`);
-      else if (Array.isArray(entry.value)) {
-        if (entry.value.length !== 3 && entry.value.length !== 4)
-          invalid(`${path}.value`, 'expected 3 or 4 color channels.');
-        setting = Object.freeze(
-          entry.value.map((channel, index) => finite(channel, `${path}.value[${index}]`)),
-        );
-      } else {
-        const color = object(entry.value, `${path}.value`);
-        if (Object.keys(color).some((key) => !['r', 'g', 'b', 'a'].includes(key)))
-          invalid(`${path}.value`, 'expected a color object.');
-        setting = Object.freeze(
-          Object.fromEntries(
-            Object.entries(color).map(([key, value]) => [
-              key,
-              finite(value, `${path}.value.${key}`),
-            ]),
-          ),
-        );
-      }
-      return Object.freeze({ name: string(entry.name, `${path}.name`), value: setting });
-    }),
-    'environment.startupSettings',
-  );
+  let startupSettings: readonly PrototypeStartupSetting[];
+  try {
+    startupSettings = validatePrototypeStartupSettings(
+      array(environment.startupSettings, 'environment.startupSettings'),
+    );
+  } catch (error) {
+    if (error instanceof PrototypeValidationError)
+      invalid(error.path, error.message.slice(error.path.length + 2));
+    throw error;
+  }
   const entity = object(input.entity, 'entity');
   const key = string(entity.key, 'entity.key');
   if (!key.startsWith('entity:') || key.length === 7)
@@ -231,8 +205,10 @@ function parseObservation(value: unknown, line: number): CircuitObservation {
 }
 
 /** Validates appended samples independently; never merges mixed environments or infers capabilities. */
-export function parseCircuitObservationsJsonl(source: string): readonly CircuitObservation[] {
-  const results: CircuitObservation[] = [];
+export function parseCircuitObservationRecordsJsonl(
+  source: string,
+): readonly { readonly line: number; readonly observation: CircuitObservation }[] {
+  const results: { readonly line: number; readonly observation: CircuitObservation }[] = [];
   for (const [index, line] of source
     .replace(/^\uFEFF/, '')
     .split(/\r?\n/)
@@ -244,9 +220,17 @@ export function parseCircuitObservationsJsonl(source: string): readonly CircuitO
     } catch {
       throw new CircuitObservationError(index + 1, '<json>', 'invalid observation JSON.');
     }
-    results.push(parseObservation(value, index + 1));
+    results.push(
+      Object.freeze({ line: index + 1, observation: parseObservation(value, index + 1) }),
+    );
   }
   if (results.length === 0)
     throw new CircuitObservationError(1, '<jsonl>', 'expected at least one observation.');
   return Object.freeze(results);
+}
+
+export function parseCircuitObservationsJsonl(source: string): readonly CircuitObservation[] {
+  return Object.freeze(
+    parseCircuitObservationRecordsJsonl(source).map(({ observation }) => observation),
+  );
 }

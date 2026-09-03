@@ -3,6 +3,7 @@ import type {
   PrototypeDatabaseV1,
   PrototypeEnvironment,
   PrototypeMod,
+  PrototypeStartupSetting,
   RecipeComponent,
   RecipePrototype,
 } from './schema.js';
@@ -15,6 +16,7 @@ export interface FactorioDumpMetadata {
   readonly expansions: readonly string[];
   readonly mods: readonly PrototypeMod[];
   readonly startupSettingsIdentity?: string;
+  readonly startupSettings?: readonly PrototypeStartupSetting[];
   readonly generatedAt?: string;
 }
 
@@ -365,7 +367,7 @@ export function normalizeFactorioDataDump(
 
   const environment: PrototypeEnvironment = {
     ...metadata,
-    generatorVersion: 'comblang-factorio-data-dump-v1.2',
+    generatorVersion: 'comblang-factorio-data-dump-v1.3',
   };
   const candidate = {
     schemaVersion: 1,
