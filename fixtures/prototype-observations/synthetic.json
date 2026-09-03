@@ -1,0 +1,32 @@
+{
+  "schemaVersion": 1,
+  "kind": "comblang-circuit-observation",
+  "probeVersion": "0.1.0",
+  "label": "synthetic-format-only",
+  "tick": "123",
+  "playerIndex": 1,
+  "environment": {
+    "factorioVersion": "2.1.16",
+    "mods": [
+      { "name": "base", "version": "2.1.16" },
+      { "name": "comblang-circuit-probe", "version": "0.1.0" }
+    ],
+    "startupSettings": {}
+  },
+  "entity": {
+    "key": "entity:synthetic-assembler",
+    "type": "assembling-machine",
+    "unitNumber": "9007199254740993",
+    "surface": "synthetic-test-surface",
+    "position": { "x": 1.5, "y": -2 }
+  },
+  "behavior": {
+    "status": "present",
+    "fields": [
+      { "name": "object_name", "status": "value", "value": "LuaAssemblingMachineControlBehavior" },
+      { "name": "circuit_set_recipe", "status": "value", "value": false },
+      { "name": "optional_sample", "status": "absent" },
+      { "name": "unsupported_sample", "status": "error", "message": "Synthetic field read failure" }
+    ]
+  }
+}

@@ -21,3 +21,16 @@ The runtime API fixes the exact configuration shapes and defaults, but does not 
 - quality-sensitive signal identity.
 
 Tests in `packages/simulator` are deterministic executable specifications. Cases listed above remain provisional until paired with captured Factorio 2.1 fixtures.
+
+## Prototype circuit observations
+
+The [read-only collector](../../tools/factorio-circuit-probe/README.md) provides
+explicit selected-entity snapshots for Phase 5.5 investigation. Native execution
+of that collector is not yet verified. Its synthetic parser fixture lives separately
+in `fixtures/prototype-observations` and must not be treated as game evidence.
+
+For each future native case retain the exact mod/startup-settings environment,
+raw dump metadata, case setup or blueprint, labeled before/after observations and
+the actual wire behavior expected/observed. Readable fields or enabled settings
+alone do not establish prototype capabilities. Keep base, Space Age and modded
+override cases separate until their environments and results have been checked.

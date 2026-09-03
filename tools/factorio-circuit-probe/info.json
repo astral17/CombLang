@@ -1,0 +1,9 @@
+{
+  "name": "comblang-circuit-probe",
+  "version": "0.1.0",
+  "title": "CombLang circuit observation probe",
+  "author": "CombLang contributors",
+  "factorio_version": "2.1",
+  "dependencies": ["base >= 2.1.16"],
+  "description": "Explicit read-only snapshots of selected entities for CombLang conformance investigation. Does not infer capabilities."
+}

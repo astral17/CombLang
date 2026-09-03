@@ -295,8 +295,10 @@ is not an input claim in the supplement. Recipe/item data and environment metada
 are untouched. Validation happens before the CLI opens the output for writing.
 
 The identity check prevents accidental cross-database mixing; it does not certify
-the truth of manually supplied assertions. No native circuit probe or verified
-capability table ships yet. The local 2.1.16 runtime API provides
+the truth of manually supplied assertions. A read-only observation collector now
+ships under `tools/factorio-circuit-probe`, but it has not yet been executed in
+Factorio and is not a capability inference probe or verified table. The local
+2.1.16 runtime API provides
 `LuaEntity.get_control_behavior()` / `get_or_create_control_behavior()` and distinct
 control-behavior classes, but `LuaEntityPrototype` does not directly expose the
 nine normalized booleans. A future fixture/probe must test the corresponding native
@@ -304,6 +306,38 @@ behavior on actual entities, including type-specific restrictions and modded
 overrides. A missing property or failed entity creation must remain unknown,
 not become a negative capability result. Native probes should run in a disposable
 test save, not mutate the user's working save.
+
+### Collecting raw native observations
+
+The [collector instructions](../tools/factorio-circuit-probe/README.md) describe
+installation into a disposable test environment and the explicit player command
+`/comblang-probe [case label]`. It reads only the selected existing entity, never
+creates a missing control behavior, and appends to
+`script-output/comblang/circuit-observations.jsonl` for the invoking player.
+
+```powershell
+npm run cli -- prototypes observations --json path/to/circuit-observations.jsonl
+```
+
+The library entry point is `parseCircuitObservationsJsonl(source)`. It returns
+immutable instance snapshots with mod versions (including the collector), startup
+settings, entity identity/position, and individual getter outcomes. JSON output
+uses `mode: "observations-only"` and contains no derived capability coverage.
+Records from different environments or repeated samples are preserved independently.
+
+A getter's false value, nil result, exception, or unexpected value type remain
+distinct states. A successful getter does not prove native setter/wire behavior;
+absence does not prove lack of support. The reader accepts Factorio's empty-table
+sentinel where a list may be empty and keeps decimal tick/unit-number strings
+without converting them to JavaScript numbers. It rejects malformed/truncated
+JSONL with line and field diagnostics. This schema is deliberately separate from
+`EntityCircuitSupplement`; no automatic observation-to-capability conversion exists.
+
+Collector API/static package checks and synthetic JSONL tests are implemented.
+Native collector execution, behavior-level assertions, matching dump/settings
+verification and base/Space Age/modded conformance remain pending. Enabling the
+collector changes the active mod set; that fact is retained rather than silently
+removed when comparing evidence to a normalized environment.
 
 ## Loading and identity
 

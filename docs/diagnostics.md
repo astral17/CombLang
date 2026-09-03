@@ -204,6 +204,14 @@ validation failure, without writing the output file. Successful output reports
 the new identity and partial/complete circuit coverage. Neither a valid supplement
 nor complete structural coverage establishes that native game behavior was tested.
 
+Raw circuit observation JSONL uses `CircuitObservationError` / `PO1001` for
+malformed JSON, unsupported observation schema/kind, invalid fields, inconsistent
+mod-version metadata, duplicate named entries or contradictory observation states.
+Errors include a one-based JSONL `line` and structural `path`. Blank lines are
+allowed, but empty captures and truncated records fail. `prototypes observations
+--json` returns these diagnostics with exit code 2. Getter failures stored inside
+otherwise valid observations are data, not parse errors or negative capabilities.
+
 ## CLI inputs and prototype selection
 
 `check` and `test` return exit code `2` for input/loading errors. In `--json`

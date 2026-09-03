@@ -16,6 +16,8 @@ import { parseProject, validateDslSemantics } from '@comblang/language';
 import {
   applyEntityCircuitSupplement,
   CircuitSupplementError,
+  CircuitObservationError,
+  parseCircuitObservationsJsonl,
   FactorioDumpError,
   loadPrototypeDatabase,
   loadPrototypeDatabaseJson,
@@ -49,8 +51,9 @@ Usage:
   factorio-dsl test [--json] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts> <circuit.test.js>
   factorio-dsl prototypes normalize <data-raw-dump.json> <metadata.json> <output.json>
   factorio-dsl prototypes supplement [--json] <database.json> <circuit.json> <output.json>
+  factorio-dsl prototypes observations [--json] <circuit-observations.jsonl>
 
-Checks circuits, executes browser/Node-neutral JavaScript test files, or normalizes a native Factorio prototype dump.`;
+Checks circuits, executes browser/Node-neutral JavaScript test files, and processes prototype dumps, circuit supplements, or raw observations.`;
 
 interface LoadedSource {
   readonly path: string;
@@ -343,6 +346,32 @@ async function supplementPrototypes(fileNames: readonly string[], json: boolean)
   return 0;
 }
 
+async function inspectCircuitObservations(
+  fileNames: readonly string[],
+  json: boolean,
+): Promise<number> {
+  if (fileNames.length !== 2) {
+    console.error(usage);
+    return 2;
+  }
+  const observations = parseCircuitObservationsJsonl(
+    await readFile(resolve(fileNames[1]!), 'utf8'),
+  );
+  if (json) console.log(JSON.stringify({ mode: 'observations-only', observations }, null, 2));
+  else {
+    console.log(
+      `${observations.length} observation(s); no prototype capability assertions inferred.`,
+    );
+    for (const sample of observations) {
+      const fields = sample.behavior.status === 'present' ? sample.behavior.fields : [];
+      console.log(
+        `${JSON.stringify(sample.label)} ${sample.entity.key} tick ${sample.tick}: behavior ${sample.behavior.status}; ${fields.filter(({ status }) => status === 'value').length} value(s), ${fields.filter(({ status }) => status === 'absent').length} absent, ${fields.filter(({ status }) => status === 'error' || status === 'unexpected-type').length} read failure(s).`,
+      );
+    }
+  }
+  return 0;
+}
+
 export async function run(
   args: readonly string[],
   environment: CliCompilationEnvironment = {},
@@ -364,6 +393,7 @@ export async function run(
   try {
     if (command === 'prototypes') {
       const files = rest.filter((argument) => argument !== '--json');
+      if (files[0] === 'observations') return await inspectCircuitObservations(files, json);
       return files[0] === 'supplement'
         ? await supplementPrototypes(files, json)
         : await normalizePrototypes(files);
@@ -414,6 +444,7 @@ export async function run(
       const diagnostic = {
         code:
           error instanceof CircuitSupplementError ||
+          error instanceof CircuitObservationError ||
           error instanceof PrototypeValidationError ||
           error instanceof FactorioDumpError
             ? error.code
@@ -421,10 +452,12 @@ export async function run(
         severity: 'error',
         message,
         ...(error instanceof CircuitSupplementError ||
+        error instanceof CircuitObservationError ||
         error instanceof PrototypeValidationError ||
         error instanceof FactorioDumpError
           ? { path: error.path }
           : {}),
+        ...(error instanceof CircuitObservationError ? { line: error.line } : {}),
       };
       if (json) console.log(JSON.stringify({ diagnostics: [diagnostic] }, null, 2));
       else console.error(`Unable to ${action}: ${diagnostic.code}: ${message}`);
