@@ -65,6 +65,17 @@ export interface RecipeComponent {
   readonly sharedProbability?: { readonly min: number; readonly max: number };
   readonly ignoredByStats?: number;
   readonly ignoredByProductivity?: number;
+  /** Item product spoil fraction, in [0, 1). */
+  readonly percentSpoiled?: number;
+  readonly alwaysFresh?: boolean;
+  readonly resetFreshnessOnCraft?: boolean;
+  /** Item ingredient influence on product spoilage, in [0, 1]. */
+  readonly spoilWeight?: number;
+  /** Fluid ingredient/product routing; zero is the native default sentinel. */
+  readonly fluidboxIndex?: number;
+  readonly fluidboxMultiplier?: number;
+  /** Only effective when fluidboxIndex is explicitly defined. */
+  readonly optionalFluidboxIndexes?: readonly number[];
   readonly temperature?: number;
   readonly temperatureMin?: number;
   readonly temperatureMax?: number;

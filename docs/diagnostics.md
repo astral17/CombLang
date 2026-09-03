@@ -172,6 +172,14 @@ ranges or excluded amounts, and `PT1004` for product-only metadata on ingredient
 or mixed legacy/new probability forms. Missing fields are not silently filled with
 numeric defaults; explicit zeros remain present in the normalized identity.
 
+Spoilage and fluidbox fields also use `PT1001` for malformed values or bounds
+(`percentSpoiled` in `[0, 1)`, `spoilWeight` in `[0, 1]`, uint32 routing indexes,
+integer multipliers in `1..255`, and actual booleans for freshness flags).
+`PT1004` identifies fields used on the wrong item/fluid or ingredient/product
+kind. These errors carry the field path, including the element index for malformed
+`optionalFluidboxIndexes` entries. An optional index list without a base index is
+preserved as inactive metadata, not rejected; it must not be applied by consumers.
+
 Native dump conversion uses `PD1001` for a malformed or internally inconsistent
 `data-raw-dump` shape. `PD2001` reports intentionally unrepresented raw recipe
 fields or skipped engine sentinels, while `PD2002` reports capability data that

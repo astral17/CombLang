@@ -87,11 +87,24 @@ function componentList(value: unknown, path: string): readonly JsonObject[] {
 }
 
 const unsupportedComponentFields = Object.freeze([
-  'percent_spoiled',
-  'fluidbox_index',
-  'fluidbox_multiplier',
-  'optional_fluidbox_indexes',
+  'affected_by_quality',
+  'quality_change',
+  'quality_min',
+  'quality_max',
 ] as const);
+
+function optionalBoolean(value: unknown, path: string): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'boolean') throw new FactorioDumpError(path, 'expected a boolean.');
+  return value;
+}
+
+function optionalNumbers(value: unknown, path: string): readonly number[] | undefined {
+  if (value === undefined) return undefined;
+  if (Array.isArray(value)) return value.map((entry, index) => finite(entry, `${path}[${index}]`));
+  if (typeof value === 'object' && value !== null && Object.keys(value).length === 0) return [];
+  throw new FactorioDumpError(path, 'expected an array or the empty-object sentinel.');
+}
 
 function recipeComponent(
   value: JsonObject,
@@ -133,6 +146,22 @@ function recipeComponent(
     value.ignored_by_productivity,
     `${path}.ignored_by_productivity`,
   );
+  const percentSpoiled = optionalFinite(value.percent_spoiled, `${path}.percent_spoiled`);
+  const spoilWeight = optionalFinite(value.spoil_weight, `${path}.spoil_weight`);
+  const alwaysFresh = optionalBoolean(value.always_fresh, `${path}.always_fresh`);
+  const resetFreshnessOnCraft = optionalBoolean(
+    value.reset_freshness_on_craft,
+    `${path}.reset_freshness_on_craft`,
+  );
+  const fluidboxIndex = optionalFinite(value.fluidbox_index, `${path}.fluidbox_index`);
+  const fluidboxMultiplier = optionalFinite(
+    value.fluidbox_multiplier,
+    `${path}.fluidbox_multiplier`,
+  );
+  const optionalFluidboxIndexes = optionalNumbers(
+    value.optional_fluidbox_indexes,
+    `${path}.optional_fluidbox_indexes`,
+  );
   const temperature = optionalFinite(value.temperature, `${path}.temperature`);
   const temperatureMin = optionalFinite(value.minimum_temperature, `${path}.minimum_temperature`);
   const temperatureMax = optionalFinite(value.maximum_temperature, `${path}.maximum_temperature`);
@@ -147,6 +176,13 @@ function recipeComponent(
     ...(sharedProbability === undefined ? {} : { sharedProbability }),
     ...(ignoredByStats === undefined ? {} : { ignoredByStats }),
     ...(ignoredByProductivity === undefined ? {} : { ignoredByProductivity }),
+    ...(percentSpoiled === undefined ? {} : { percentSpoiled }),
+    ...(spoilWeight === undefined ? {} : { spoilWeight }),
+    ...(alwaysFresh === undefined ? {} : { alwaysFresh }),
+    ...(resetFreshnessOnCraft === undefined ? {} : { resetFreshnessOnCraft }),
+    ...(fluidboxIndex === undefined ? {} : { fluidboxIndex }),
+    ...(fluidboxMultiplier === undefined ? {} : { fluidboxMultiplier }),
+    ...(optionalFluidboxIndexes === undefined ? {} : { optionalFluidboxIndexes }),
     ...(temperature === undefined ? {} : { temperature }),
     ...(temperatureMin === undefined ? {} : { temperatureMin }),
     ...(temperatureMax === undefined ? {} : { temperatureMax }),
@@ -329,7 +365,7 @@ export function normalizeFactorioDataDump(
 
   const environment: PrototypeEnvironment = {
     ...metadata,
-    generatorVersion: 'comblang-factorio-data-dump-v1.1',
+    generatorVersion: 'comblang-factorio-data-dump-v1.2',
   };
   const candidate = {
     schemaVersion: 1,

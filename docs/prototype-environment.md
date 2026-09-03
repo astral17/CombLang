@@ -116,9 +116,14 @@ with 342 items, 651 non-sentinel recipes, and 744 entity prototypes. The generat
 dump. The smoke run used explicitly unverified environment metadata: it proves
 data ingestion, not the dump's game/mod version or native crafting behavior.
 
-Spoilage and fluidbox metadata remain outside the intentionally narrow v1 subset.
-The converter reports tracked unsupported fields, including optional fluidbox
-indexes, but this is not an exhaustive native RecipePrototype implementation.
+Generator `comblang-factorio-data-dump-v1.2` additionally preserves the dump's one
+explicit spoil percentage, five reset-freshness flags, three fluidbox indexes and
+nine fluidbox multipliers. That dump has no explicit spoil weights, always-fresh
+flags or optional fluidbox index lists; synthetic tests cover those fields instead.
+The converter still reports tracked unsupported recipe quality fields
+(`affected_by_quality`, `quality_change`, `quality_min`, `quality_max`). This is not
+an exhaustive native RecipePrototype implementation, and lack of loss warnings
+does not establish complete recipe behavior coverage.
 
 ### Product probability and excluded amounts
 
@@ -153,6 +158,47 @@ The fields participate in the database identity, including explicit default-valu
 fields. Regenerating a database with the new generator may therefore require an
 explicit project pin update. Older loaders that do not know these fields are not
 equivalent readers for new datasets.
+
+### Spoilage and fluidbox metadata
+
+The same local 2.1.16 API snapshot defines these optional ingredient/product fields:
+
+| Dump field                  | Normalized field          | Valid domain                                             |
+| --------------------------- | ------------------------- | -------------------------------------------------------- |
+| `percent_spoiled`           | `percentSpoiled`          | Item product fraction, `0 <= value < 1`                  |
+| `always_fresh`              | `alwaysFresh`             | Item product boolean                                     |
+| `reset_freshness_on_craft`  | `resetFreshnessOnCraft`   | Item product boolean                                     |
+| `spoil_weight`              | `spoilWeight`             | Item ingredient weight, `0 <= value <= 1`                |
+| `fluidbox_index`            | `fluidboxIndex`           | Fluid ingredient/product uint32 index                    |
+| `fluidbox_multiplier`       | `fluidboxMultiplier`      | Fluid ingredient/product integer, `1..255`               |
+| `optional_fluidbox_indexes` | `optionalFluidboxIndexes` | Fluid ingredient/product ordered array of uint32 indexes |
+
+`alwaysFresh` produces fresh output using `percentSpoiled` even with spoiled
+ingredients. `resetFreshnessOnCraft` produces fresh output when crafting succeeds
+without spoiling. `spoilWeight` controls an ingredient's influence on the product's
+spoil fraction. Their native defaults are respectively false, false, and 1;
+`percentSpoiled` defaults to 0. These defaults are documented, not inserted into
+the database. This metadata does not add spoilage or crafting simulation.
+
+Fluidbox indexes address input and output boxes separately and are 1-based, with
+the native default value 0 also accepted. The multiplier controls crafting-machine
+fluidbox volumes; its native default is 3. Optional indexes describe additional
+boxes: missing boxes do not make the recipe uncraftable. The native API loads this
+list only when `fluidbox_index` is defined. The normalized database preserves an
+explicit list even if the base index is absent, as inactive declarative metadata;
+consumers must not apply it without `fluidboxIndex`. It never invents the base index.
+Index lists retain order and duplicates, are copied/frozen on load, and participate
+in the identity. An empty raw Lua-table sentinel `{}` becomes `[]` at conversion;
+normalized JSON itself requires an array.
+
+All seven fields remain optional in schema v1. Explicit zero, false and empty lists
+remain distinguishable from omission through JSON serialization, provider access
+and identity calculation. New generators may require an explicit identity-pin
+update; existing data without these fields still loads unchanged. Item-only fields
+on fluids, fluid-only fields on items and incorrect ingredient/product roles are
+validation errors, not silently discarded facts.
+
+### Remaining conformance boundary
 
 The raw entity records expose connector geometry and wire distance, but not the
 normalized behavior-level flags in `EntityCircuitCapabilities`. The converter

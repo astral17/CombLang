@@ -304,6 +304,53 @@ function parseComponent(
       'legacy probability cannot be combined with independentProbability or sharedProbability.',
     );
   }
+  const percentSpoiled = optionalFinite(input.percentSpoiled, `${path}.percentSpoiled`);
+  const spoilWeight = optionalFinite(input.spoilWeight, `${path}.spoilWeight`);
+  const alwaysFresh = optionalBoolean(input.alwaysFresh, `${path}.alwaysFresh`);
+  const resetFreshnessOnCraft = optionalBoolean(
+    input.resetFreshnessOnCraft,
+    `${path}.resetFreshnessOnCraft`,
+  );
+  if (percentSpoiled !== undefined && (percentSpoiled < 0 || percentSpoiled >= 1)) {
+    invalid('PT1001', `${path}.percentSpoiled`, 'expected 0 <= percentSpoiled < 1.');
+  }
+  if (spoilWeight !== undefined && (spoilWeight < 0 || spoilWeight > 1)) {
+    invalid('PT1001', `${path}.spoilWeight`, 'expected 0 <= spoilWeight <= 1.');
+  }
+  for (const [field, value, requiredRole] of [
+    ['percentSpoiled', percentSpoiled, 'product'],
+    ['alwaysFresh', alwaysFresh, 'product'],
+    ['resetFreshnessOnCraft', resetFreshnessOnCraft, 'product'],
+    ['spoilWeight', spoilWeight, 'ingredient'],
+  ] as const) {
+    if (value !== undefined && (!prototype.startsWith('item:') || role !== requiredRole)) {
+      invalid('PT1004', `${path}.${field}`, `valid only on item ${requiredRole}s.`);
+    }
+  }
+  const fluidboxIndex = optionalFinite(input.fluidboxIndex, `${path}.fluidboxIndex`);
+  const fluidboxMultiplier = optionalFinite(input.fluidboxMultiplier, `${path}.fluidboxMultiplier`);
+  const optionalFluidboxIndexes =
+    input.optionalFluidboxIndexes === undefined
+      ? undefined
+      : Object.freeze(
+          array(input.optionalFluidboxIndexes, `${path}.optionalFluidboxIndexes`).map(
+            (value, index) =>
+              boundedInteger(value, `${path}.optionalFluidboxIndexes[${index}]`, 0, 4294967295),
+          ),
+        );
+  if (fluidboxIndex !== undefined)
+    boundedInteger(fluidboxIndex, `${path}.fluidboxIndex`, 0, 4294967295);
+  if (fluidboxMultiplier !== undefined)
+    boundedInteger(fluidboxMultiplier, `${path}.fluidboxMultiplier`, 1, 255);
+  for (const [field, value] of [
+    ['fluidboxIndex', fluidboxIndex],
+    ['fluidboxMultiplier', fluidboxMultiplier],
+    ['optionalFluidboxIndexes', optionalFluidboxIndexes],
+  ] as const) {
+    if (value !== undefined && !prototype.startsWith('fluid:')) {
+      invalid('PT1004', `${path}.${field}`, 'valid only on fluid ingredients/products.');
+    }
+  }
   const temperature = optionalFinite(input.temperature, `${path}.temperature`);
   const temperatureMin = optionalFinite(input.temperatureMin, `${path}.temperatureMin`);
   const temperatureMax = optionalFinite(input.temperatureMax, `${path}.temperatureMax`);
@@ -334,10 +381,25 @@ function parseComponent(
     ...(sharedProbability === undefined ? {} : { sharedProbability }),
     ...(ignoredByStats === undefined ? {} : { ignoredByStats }),
     ...(ignoredByProductivity === undefined ? {} : { ignoredByProductivity }),
+    ...(percentSpoiled === undefined ? {} : { percentSpoiled }),
+    ...(spoilWeight === undefined ? {} : { spoilWeight }),
+    ...(alwaysFresh === undefined ? {} : { alwaysFresh }),
+    ...(resetFreshnessOnCraft === undefined ? {} : { resetFreshnessOnCraft }),
+    ...(fluidboxIndex === undefined ? {} : { fluidboxIndex }),
+    ...(fluidboxMultiplier === undefined ? {} : { fluidboxMultiplier }),
+    ...(optionalFluidboxIndexes === undefined ? {} : { optionalFluidboxIndexes }),
     ...(temperature === undefined ? {} : { temperature }),
     ...(temperatureMin === undefined ? {} : { temperatureMin }),
     ...(temperatureMax === undefined ? {} : { temperatureMax }),
   });
+}
+
+function boundedInteger(value: unknown, path: string, min: number, max: number): number {
+  const result = finite(value, path);
+  if (!Number.isInteger(result) || result < min || result > max) {
+    invalid('PT1001', path, `expected an integer from ${min} through ${max}.`);
+  }
+  return result;
 }
 
 function parseRecipes(value: unknown): readonly RecipePrototype[] {

@@ -148,7 +148,7 @@ describe('Factorio data-raw-dump normalizer', () => {
     const normalized = normalizeFactorioDataDump(dumpFixture(), metadata);
     const { database, prototypes } = await loadPrototypeDatabase(normalized.database);
 
-    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.1');
+    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.2');
     expect(prototypes.item.grenade?.stackSize).toBe(100);
     expect(prototypes.recipe['iron-plate']).toMatchObject({
       categories: ['crafting'],
@@ -212,5 +212,98 @@ describe('Factorio data-raw-dump normalizer', () => {
     expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
       expect.objectContaining({ code: 'PD1001', path: 'item.iron-plate' }),
     );
+  });
+
+  test('round-trips item spoilage and fluid routing through JSON and the provider', async () => {
+    const dump = dumpFixture() as {
+      recipe: Record<string, { ingredients: unknown; results: unknown }>;
+    };
+    dump.recipe['iron-plate']!.ingredients = [
+      { type: 'item', name: 'grenade', amount: 1, spoil_weight: 0 },
+    ];
+    dump.recipe['iron-plate']!.results = [
+      {
+        type: 'item',
+        name: 'iron-plate',
+        amount: 1,
+        percent_spoiled: 0.5,
+        always_fresh: false,
+        reset_freshness_on_craft: true,
+      },
+    ];
+    dump.recipe['heated-water']!.ingredients = [
+      {
+        type: 'fluid',
+        name: 'water',
+        amount: 10,
+        fluidbox_index: 0,
+        fluidbox_multiplier: 1,
+        optional_fluidbox_indexes: [3, 2],
+      },
+    ];
+    dump.recipe['heated-water']!.results = [
+      {
+        type: 'fluid',
+        name: 'water',
+        amount: 10,
+        fluidbox_index: 1,
+        fluidbox_multiplier: 255,
+        optional_fluidbox_indexes: {},
+      },
+    ];
+    const normalized = normalizeFactorioDataDump(dump, metadata);
+    const { prototypes } = await loadPrototypeDatabase(
+      JSON.parse(JSON.stringify(normalized.database)),
+    );
+    expect(prototypes.recipe['iron-plate']!.ingredients[0]).toMatchObject({ spoilWeight: 0 });
+    expect(prototypes.recipe['iron-plate']!.products[0]).toMatchObject({
+      percentSpoiled: 0.5,
+      alwaysFresh: false,
+      resetFreshnessOnCraft: true,
+    });
+    expect(prototypes.recipe['heated-water']!.ingredients[0]).toMatchObject({
+      fluidboxIndex: 0,
+      fluidboxMultiplier: 1,
+      optionalFluidboxIndexes: [3, 2],
+    });
+    expect(prototypes.recipe['heated-water']!.products[0]).toMatchObject({
+      fluidboxIndex: 1,
+      fluidboxMultiplier: 255,
+      optionalFluidboxIndexes: [],
+    });
+    expect(normalized.warnings.some(({ path }) => /spoil|fresh|fluidbox/.test(path))).toBe(false);
+  });
+
+  test.each([
+    ['always_fresh', 1, 'always_fresh'],
+    ['optional_fluidbox_indexes', { first: 1 }, 'optional_fluidbox_indexes'],
+    ['optional_fluidbox_indexes', ['2'], 'optional_fluidbox_indexes[0]'],
+  ])('reports malformed raw %s with its dump path', (field, value, suffix) => {
+    const dump = dumpFixture() as { recipe: Record<string, { results: unknown }> };
+    dump.recipe['heated-water']!.results = [
+      { type: 'fluid', name: 'water', amount: 10, [field as string]: value },
+    ];
+    expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
+      expect.objectContaining({ code: 'PD1001', path: `recipe.heated-water.results[0].${suffix}` }),
+    );
+  });
+
+  test('continues reporting tracked quality metadata outside the normalized subset', () => {
+    const dump = dumpFixture() as { recipe: Record<string, { results: unknown }> };
+    dump.recipe['iron-plate']!.results = [
+      {
+        type: 'item',
+        name: 'iron-plate',
+        amount: 1,
+        affected_by_quality: false,
+        quality_change: 1,
+      },
+    ];
+    const { warnings } = normalizeFactorioDataDump(dump, metadata);
+    for (const field of ['affected_by_quality', 'quality_change']) {
+      expect(warnings).toContainEqual(
+        expect.objectContaining({ code: 'PD2001', path: expect.stringContaining(field) }),
+      );
+    }
   });
 });
