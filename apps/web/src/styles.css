@@ -104,6 +104,85 @@ code {
     Consolas,
     monospace;
 }
+.prototype-profile {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 14px;
+  padding: 12px 15px;
+  border: 1px solid #2b3931;
+  border-radius: 9px;
+  background: #101612;
+}
+.prototype-profile > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.prototype-profile strong {
+  font-size: 0.78rem;
+}
+.prototype-profile output {
+  overflow: hidden;
+  color: #7e8d84;
+  font:
+    0.68rem ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.prototype-profile output[data-state='valid'] {
+  color: #8dbea1;
+}
+.prototype-profile output[data-state='invalid'] {
+  color: #d9958c;
+}
+.prototype-profile-actions {
+  display: flex;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+.prototype-profile button,
+.file-button {
+  padding: 7px 10px;
+  border: 1px solid #35463c;
+  border-radius: 5px;
+  background: #19241d;
+  color: #cfdbd2;
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+}
+.prototype-profile button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.file-button:focus-within {
+  outline: 2px solid #97c7ac;
+  outline-offset: 2px;
+}
+.file-button {
+  position: relative;
+  overflow: hidden;
+}
+.file-button input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+@media (max-width: 640px) {
+  .prototype-profile {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .prototype-profile-actions {
+    flex-wrap: wrap;
+  }
+}
 .proof-copy > p:not(.section-kicker) {
   max-width: 570px;
   color: #93a299;

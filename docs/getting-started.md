@@ -114,7 +114,14 @@ npm run cli -- test --prototypes prototypes.json --json main.factorio.ts circuit
 JSON includes the selected `prototypeEnvironment.identity` and capability coverage.
 Add `--prototype-identity "<reported identity>"` to reject a different database.
 Missing, invalid or mismatched profiles stop with exit code `2` before source
-execution; they never fall back to another profile. Browser file/cache selection
-and a bundled first-run profile are not implemented yet.
+execution; they never fall back to another profile. Browser file selection is
+available in the **Prototype environment** bar above Source; the bundled first-run
+profile remains pending. Select a normalized JSON file there; valid data
+is cached in IndexedDB and restored on tab reload with its identity pin. **Disable**
+clears only this tab's selection, without changing code or tests.
+
+For an offline synthetic smoke test, use
+[`examples/prototype-stack`](../examples/prototype-stack/README.md). Its tiny profile
+is test data, not a vanilla/Space Age database or Factorio conformance evidence.
 
 Continue with the [current language reference](language-reference.md) for the exact supported subset.

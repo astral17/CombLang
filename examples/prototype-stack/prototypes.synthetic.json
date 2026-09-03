@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "environment": {
+    "factorioVersion": "2.1.16",
+    "generatorVersion": "synthetic-example-v1",
+    "expansions": [],
+    "mods": [{ "name": "base", "version": "2.1.16" }]
+  },
+  "capabilities": {
+    "itemStackSizes": true,
+    "fluids": false,
+    "recipes": false,
+    "entities": false,
+    "entityCircuitCapabilities": false,
+    "qualities": false,
+    "recipeCategories": false,
+    "virtualSignals": false
+  },
+  "items": [{ "key": "item:iron-plate", "name": "iron-plate", "stackSize": 100 }],
+  "fluids": [],
+  "recipes": [],
+  "entities": [],
+  "qualities": [],
+  "recipeCategories": [],
+  "virtualSignals": [],
+  "indexes": { "recipesByProduct": {} }
+}

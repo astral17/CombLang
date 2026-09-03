@@ -22,8 +22,9 @@ Phase 5.5 provides `packages/prototypes` with these responsibilities:
 
 The implemented foundation now also includes an offline native-dump normalizer
 and explicit CLI database selection with optional identity pins. Persisted project
-profiles, browser profile selection, conformance completion, and the generated
-first-run database remain subsequent Phase 5.5 slices.
+profiles, conformance completion, and the generated
+first-run database remain subsequent Phase 5.5 slices. Browser-local file selection
+and identity-keyed IndexedDB persistence are now implemented.
 
 The compiler, language service, typed-object schemas, layout, and blueprint
 backend receive a provider through an explicit compilation environment. They do
@@ -173,9 +174,19 @@ error rather than an implicit precedence rule.
 
 Without either source of prototype data, ordinary circuits still compile and
 accessing `prototypes` produces `EX1004`. No built-in database is installed yet.
-Persisted CLI project profiles and browser-local file loading/IndexedDB caching
-remain pending. A project pinned to one identity must not silently compile against
-a built-in fallback when that database is missing.
+Persisted CLI project profiles remain pending. In the browser, use **Load normalized
+JSON** above the source editor. It does not modify source or test drafts. After
+validation, the database is saved in IndexedDB under its identity and the active
+identity is saved in tab-local session storage. Reloading the tab restores the
+database and checks that pin again before source execution. Separate tabs may
+select different environments without overwriting each other's selection.
+
+**Disable** clears the current tab's selection; it does not delete a database that
+another tab may be using. Cached databases can also be removed through browser site
+storage controls. Storage/quota failure is reported as **not saved**; compilation
+can still use the selected in-memory profile. A selected database missing from
+IndexedDB blocks compilation until the user loads a file or explicitly disables
+the selection. It never silently substitutes a built-in fallback.
 
 The browser compiler Worker protocol accepts either normalized JSON plus an
 optional expected identity, or an identity already confirmed by that Worker.
@@ -188,8 +199,9 @@ so ordinary recompilation does not repeatedly parse and hash the database. Selec
 is still explicit on every compile request: omitting the profile compiles without
 one, while an unknown cached identity returns `WP1002` and asks the caller to send
 the JSON again. Thus a Worker restart cannot silently lose a pin or substitute a
-profile. The pending UI/profile store will retain the JSON in browser-local storage
-and resend it after startup or a Worker timeout.
+profile. The UI retains the JSON in memory after loading and resends it with the
+previous identity pin after a Worker restart. Initial JSON loading and compilation
+share a 5000 ms Worker timeout; identity-only recompilation keeps the 1000 ms budget.
 
 The v1 environment identity is SHA-256 over canonical normalized JSON and is
 prefixed `comblang-prototypes-v1-sha256:`. It includes schema and generator
@@ -249,8 +261,8 @@ Using `prototypes` without an injected environment reports source-linked
 `EX1004`. The runtime executor, browser-local `compileSource` boundary, and CLI
 `run` boundary accept the provider explicitly. CLI flags construct it inside the
 Node process, while the browser compiler Worker constructs and caches its own
-provider from JSON. Persisted project profiles and the browser file/cache UI remain
-pending; providers with methods are never posted across a Worker boundary.
+provider from JSON. Persisted CLI project profiles remain pending; providers with
+methods are never posted across a Worker boundary.
 
 ## Phase boundary
 

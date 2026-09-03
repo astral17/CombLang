@@ -5,6 +5,10 @@ import { offsetToPosition, sourceFileId, sourceSpan, type Diagnostic } from '@co
 import { blueprintJsonForPlan } from './blueprint-demo.js';
 import { createSourceEditor, type SourceEditorKind } from './code-editor.js';
 import { registerOfflineSupport, warmOfflineCache } from './offline.js';
+import {
+  browserPrototypeProfileStore,
+  type StoredPrototypeProfile,
+} from './prototype-profile-store.js';
 import { loadSourceDraft, saveSourceDraft, type SourceDraftStorage } from './source-draft.js';
 import { formatSourceDiagnostic, sourcePreviewDiagnostic } from './source-diagnostics.js';
 import { sourceNavigationRange, testFailureRange } from './source-navigation.js';
@@ -137,6 +141,10 @@ const testTracePanel = new TestTracePanel(requiredElement<HTMLElement>('#test-tr
   if (range !== undefined) sourceEditor.revealRange(range.start, range.end);
 });
 const addTest = requiredElement<HTMLButtonElement>('#add-test');
+const prototypeProfileFile = requiredElement<HTMLInputElement>('#prototype-profile-file');
+const prototypeProfileClear = requiredElement<HTMLButtonElement>('#prototype-profile-clear');
+const prototypeProfileStatus = requiredElement<HTMLOutputElement>('#prototype-profile-status');
+const PROFILE_SELECTION_KEY = 'comblang.prototype-selection.v1';
 let parserWorker: Worker | undefined;
 let workerTimeout: ReturnType<typeof setTimeout> | undefined;
 let activeWorkerRevision: number | undefined;
@@ -155,6 +163,11 @@ let testWorkerTimeout: ReturnType<typeof setTimeout> | undefined;
 let testRenderTimer: ReturnType<typeof setTimeout> | undefined;
 let testRevision = 0;
 let addedTestNumber = 1;
+let activePrototypeProfile: StoredPrototypeProfile | undefined;
+let workerPrototypeIdentity: string | undefined;
+let profileSelectionRevision = 0;
+let profileReady = false;
+let profileRestoreError: string | undefined;
 let sourceEditor = createSourceEditor(sourceHost, initialSource, scheduleRender);
 let testEditor = createSourceEditor(
   testHost,
@@ -934,11 +947,33 @@ function scheduleTestRender(): void {
 }
 
 function render(): void {
+  if (!profileReady) return;
+  if (profileRestoreError !== undefined) {
+    status.textContent = 'Profile unavailable';
+    status.dataset.state = 'invalid';
+    renderProofError(profileRestoreError);
+    renderTestsBlocked('Load or disable the unavailable prototype profile.');
+    return;
+  }
   currentRevision += 1;
   const request: CompilerWorkerRequest = {
     kind: 'parse',
     revision: currentRevision,
     file: { path: 'main.factorio.ts', text: sourceEditor.getValue() },
+    ...(activePrototypeProfile === undefined
+      ? {}
+      : {
+          prototypeProfile:
+            workerPrototypeIdentity !== undefined &&
+            workerPrototypeIdentity === activePrototypeProfile.identity
+              ? { identity: workerPrototypeIdentity }
+              : {
+                  source: activePrototypeProfile.source,
+                  ...(activePrototypeProfile.identity === undefined
+                    ? {}
+                    : { expectedIdentity: activePrototypeProfile.identity }),
+                },
+        }),
   };
   status.textContent = 'Parsing…';
   status.dataset.state = 'pending';
@@ -981,6 +1016,43 @@ function handleWorkerMessage(event: MessageEvent<CompilerWorkerResponse>, worker
   if (event.data.revision !== currentRevision) return;
 
   const parsed = event.data.result;
+  if (event.data.prototypeEnvironment !== undefined && activePrototypeProfile !== undefined) {
+    workerPrototypeIdentity = event.data.prototypeEnvironment.identity;
+    const needsSave = activePrototypeProfile.identity === undefined;
+    activePrototypeProfile = {
+      ...activePrototypeProfile,
+      identity: event.data.prototypeEnvironment.identity,
+    };
+    prototypeProfileStatus.textContent = `${activePrototypeProfile.name} · Factorio ${event.data.prototypeEnvironment.factorioVersion} · ${event.data.prototypeEnvironment.identity}`;
+    prototypeProfileStatus.dataset.state = 'valid';
+    prototypeProfileClear.disabled = false;
+    if (needsSave) {
+      const selected = activePrototypeProfile;
+      const selectionRevision = profileSelectionRevision;
+      void browserPrototypeProfileStore(event.data.prototypeEnvironment.identity)
+        .save(selected)
+        .then((saved) => {
+          if (selectionRevision !== profileSelectionRevision) return;
+          try {
+            if (!saved || draftStorage === undefined) throw new Error('Storage unavailable');
+            draftStorage.setItem(PROFILE_SELECTION_KEY, selected.identity!);
+          } catch {
+            prototypeProfileStatus.textContent += ' · not saved: browser storage unavailable';
+          }
+        });
+    }
+  } else if (activePrototypeProfile !== undefined) {
+    workerPrototypeIdentity = undefined;
+    const profileError = parsed.compilerDiagnostics.find(
+      ({ code }) => code.startsWith('PT') || code.startsWith('WP'),
+    );
+    prototypeProfileStatus.textContent =
+      profileError === undefined
+        ? `${activePrototypeProfile.name} · loading…`
+        : `${activePrototypeProfile.name} · ${profileError.code}: ${profileError.message}`;
+    prototypeProfileStatus.dataset.state = profileError === undefined ? 'pending' : 'invalid';
+    prototypeProfileClear.disabled = false;
+  }
   const diagnostics = parsed.diagnostics.map((diagnostic) => {
     const position =
       diagnostic.span === undefined
@@ -1077,6 +1149,7 @@ function handleWorkerError(event: ErrorEvent, worker: Worker): void {
   activeWorkerRevision = undefined;
   worker.terminate();
   parserWorker = undefined;
+  workerPrototypeIdentity = undefined;
   if (failedRevision === currentRevision) {
     status.textContent = 'Worker failed';
     status.dataset.state = 'invalid';
@@ -1094,6 +1167,7 @@ function startCompilerWorker(request: CompilerWorkerRequest): void {
 
 function ensureCompilerWorker(): Worker {
   if (parserWorker !== undefined) return parserWorker;
+  workerPrototypeIdentity = undefined;
   const worker = new Worker(new URL('./parser.worker.ts', import.meta.url), { type: 'module' });
   parserWorker = worker;
   worker.addEventListener('message', (event: MessageEvent<CompilerWorkerResponse>) =>
@@ -1105,28 +1179,129 @@ function ensureCompilerWorker(): Worker {
 
 function pumpCompilerWorker(): void {
   if (activeWorkerRevision !== undefined || queuedCompilerRequest === undefined) return;
-  const request = queuedCompilerRequest;
+  let request = queuedCompilerRequest;
   queuedCompilerRequest = undefined;
   const worker = ensureCompilerWorker();
+  if (
+    request.prototypeProfile !== undefined &&
+    'identity' in request.prototypeProfile &&
+    request.prototypeProfile.identity !== workerPrototypeIdentity &&
+    activePrototypeProfile?.identity === request.prototypeProfile.identity
+  ) {
+    request = {
+      ...request,
+      prototypeProfile: {
+        source: activePrototypeProfile.source,
+        expectedIdentity: request.prototypeProfile.identity,
+      },
+    };
+  }
   activeWorkerRevision = request.revision;
   worker.postMessage(request);
+  const timeoutMs =
+    request.prototypeProfile !== undefined && 'source' in request.prototypeProfile ? 5000 : 1000;
   workerTimeout = setTimeout(() => {
     if (parserWorker !== worker || activeWorkerRevision !== request.revision) return;
     worker.terminate();
     parserWorker = undefined;
+    workerPrototypeIdentity = undefined;
     activeWorkerRevision = undefined;
     workerTimeout = undefined;
     if (request.revision === currentRevision) {
       status.textContent = 'Elaboration timed out';
       status.dataset.state = 'invalid';
-      renderProofError('Compile-time execution exceeded the 1000 ms worker budget.');
+      renderProofError(`Compilation/profile loading exceeded the ${timeoutMs} ms worker budget.`);
       renderTestsBlocked('Circuit elaboration timed out, so tests were not run.');
-      result.textContent =
-        'EX1002 error: Compile-time execution exceeded the 1000 ms worker budget.';
+      result.textContent = `EX1002 error: Compilation/profile loading exceeded the ${timeoutMs} ms worker budget.`;
     }
     pumpCompilerWorker();
-  }, 1000);
+  }, timeoutMs);
 }
 
 registerOfflineSupport();
-render();
+
+prototypeProfileFile.addEventListener('change', () => {
+  const file = prototypeProfileFile.files?.[0];
+  if (file === undefined) return;
+  const selectionRevision = ++profileSelectionRevision;
+  activePrototypeProfile = undefined;
+  workerPrototypeIdentity = undefined;
+  profileReady = false;
+  prototypeProfileStatus.textContent = `${file.name} · reading…`;
+  prototypeProfileClear.disabled = false;
+  scheduleRender();
+  try {
+    draftStorage?.setItem(PROFILE_SELECTION_KEY, '');
+  } catch {
+    /* current session still works */
+  }
+  void file
+    .text()
+    .then((source) => {
+      if (selectionRevision !== profileSelectionRevision) return;
+      profileReady = true;
+      profileRestoreError = undefined;
+      activePrototypeProfile = { name: file.name, source };
+      workerPrototypeIdentity = undefined;
+      prototypeProfileStatus.textContent = `${file.name} · validating…`;
+      prototypeProfileStatus.dataset.state = 'pending';
+      prototypeProfileClear.disabled = false;
+      prototypeProfileFile.value = '';
+      scheduleRender();
+    })
+    .catch((error: unknown) => {
+      if (selectionRevision !== profileSelectionRevision) return;
+      profileReady = true;
+      activePrototypeProfile = undefined;
+      profileRestoreError = `Cannot read profile: ${error instanceof Error ? error.message : String(error)}`;
+      prototypeProfileStatus.textContent = profileRestoreError;
+      prototypeProfileStatus.dataset.state = 'invalid';
+      prototypeProfileClear.disabled = false;
+      scheduleRender();
+    });
+});
+
+prototypeProfileClear.addEventListener('click', () => {
+  profileSelectionRevision += 1;
+  profileReady = true;
+  profileRestoreError = undefined;
+  activePrototypeProfile = undefined;
+  workerPrototypeIdentity = undefined;
+  prototypeProfileStatus.textContent = 'None · ordinary circuits remain available';
+  prototypeProfileStatus.dataset.state = 'none';
+  prototypeProfileClear.disabled = true;
+  try {
+    draftStorage?.setItem(PROFILE_SELECTION_KEY, '');
+  } catch {
+    prototypeProfileStatus.textContent += ' · could not save selection';
+  }
+  scheduleRender();
+});
+
+async function restorePrototypeProfile(): Promise<void> {
+  const selectionRevision = profileSelectionRevision;
+  try {
+    const identity = draftStorage?.getItem(PROFILE_SELECTION_KEY);
+    if (identity) {
+      const profile = await browserPrototypeProfileStore(identity).load();
+      if (selectionRevision !== profileSelectionRevision) return;
+      if (profile === undefined)
+        throw new Error('The selected prototype database is missing from browser storage.');
+      activePrototypeProfile = { ...profile, identity };
+      prototypeProfileStatus.textContent = `${profile.name} · restoring…`;
+      prototypeProfileStatus.dataset.state = 'pending';
+      prototypeProfileClear.disabled = false;
+    }
+  } catch (error) {
+    if (selectionRevision !== profileSelectionRevision) return;
+    profileRestoreError =
+      error instanceof Error ? error.message : 'Prototype profile restoration failed.';
+    prototypeProfileStatus.textContent = profileRestoreError;
+    prototypeProfileStatus.dataset.state = 'invalid';
+    prototypeProfileClear.disabled = false;
+  }
+  if (selectionRevision !== profileSelectionRevision) return;
+  profileReady = true;
+  render();
+}
+void restorePrototypeProfile();
