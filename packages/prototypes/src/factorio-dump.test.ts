@@ -91,6 +91,36 @@ function dumpFixture(): unknown {
 }
 
 describe('Factorio data-raw-dump normalizer', () => {
+  test('maps raw quality chains and validates bounds through their next edges', () => {
+    const dump = dumpFixture() as {
+      quality: Record<string, unknown>;
+      recipe: Record<string, { results: unknown }>;
+    };
+    dump.quality.normal = { type: 'quality', name: 'normal', level: 0, next: 'rare' };
+    dump.quality.rare = { type: 'quality', name: 'rare', level: 2 };
+    dump.recipe['iron-plate']!.results = [
+      { type: 'item', name: 'iron-plate', amount: 1, quality_min: 'normal', quality_max: 'rare' },
+    ];
+    const result = normalizeFactorioDataDump(dump, metadata);
+    expect(result.database.qualities).toEqual([
+      { key: 'quality:normal', name: 'normal', level: 0, next: 'quality:rare' },
+      { key: 'quality:rare', name: 'rare', level: 2, next: null },
+    ]);
+  });
+
+  test.each([
+    ['quality_min', 1],
+    ['quality_max', ''],
+    ['affected_by_quality', 0],
+  ])('rejects malformed raw %s with a dump path', (field, value) => {
+    const dump = dumpFixture() as { recipe: Record<string, { results: unknown }> };
+    dump.recipe['iron-plate']!.results = [
+      { type: 'item', name: 'iron-plate', amount: 1, [field as string]: value },
+    ];
+    expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
+      expect.objectContaining({ code: 'PD1001', path: `recipe.iron-plate.results[0].${field}` }),
+    );
+  });
   test('retains explicit startup setting metadata without replacing a legacy identity label', () => {
     const startupSettings = [
       { name: 'mode', value: false },
@@ -160,7 +190,7 @@ describe('Factorio data-raw-dump normalizer', () => {
     const normalized = normalizeFactorioDataDump(dumpFixture(), metadata);
     const { database, prototypes } = await loadPrototypeDatabase(normalized.database);
 
-    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.3');
+    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.4');
     expect(prototypes.item.grenade?.stackSize).toBe(100);
     expect(prototypes.recipe['iron-plate']).toMatchObject({
       categories: ['crafting'],
@@ -300,8 +330,20 @@ describe('Factorio data-raw-dump normalizer', () => {
     );
   });
 
-  test('continues reporting tracked quality metadata outside the normalized subset', () => {
-    const dump = dumpFixture() as { recipe: Record<string, { results: unknown }> };
+  test('retains item quality transforms and explicit chain terminals without loss warnings', async () => {
+    const dump = dumpFixture() as {
+      recipe: Record<string, { results: unknown; ingredients: unknown }>;
+    };
+    dump.recipe['iron-plate']!.ingredients = [
+      {
+        type: 'item',
+        name: 'grenade',
+        amount: 1,
+        quality_change: -1,
+        quality_min: 'normal',
+        quality_max: 'normal',
+      },
+    ];
     dump.recipe['iron-plate']!.results = [
       {
         type: 'item',
@@ -309,13 +351,26 @@ describe('Factorio data-raw-dump normalizer', () => {
         amount: 1,
         affected_by_quality: false,
         quality_change: 1,
+        quality_min: 'normal',
+        quality_max: 'normal',
       },
     ];
-    const { warnings } = normalizeFactorioDataDump(dump, metadata);
+    const { warnings, database } = normalizeFactorioDataDump(dump, metadata);
+    const { prototypes } = await loadPrototypeDatabase(JSON.parse(JSON.stringify(database)));
+    expect(prototypes.recipe['iron-plate']!.products[0]).toMatchObject({
+      affectedByQuality: false,
+      qualityChange: 1,
+      qualityMin: 'quality:normal',
+      qualityMax: 'quality:normal',
+    });
+    expect(prototypes.recipe['iron-plate']!.ingredients[0]).toMatchObject({
+      qualityChange: -1,
+      qualityMin: 'quality:normal',
+      qualityMax: 'quality:normal',
+    });
+    expect(prototypes.quality.normal!.next).toBeNull();
     for (const field of ['affected_by_quality', 'quality_change']) {
-      expect(warnings).toContainEqual(
-        expect.objectContaining({ code: 'PD2001', path: expect.stringContaining(field) }),
-      );
+      expect(warnings.some(({ path }) => path.includes(field))).toBe(false);
     }
   });
 });

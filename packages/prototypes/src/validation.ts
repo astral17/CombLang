@@ -13,6 +13,7 @@ import {
   type PrototypeIndexes,
   type PrototypeKey,
   type QualityPrototype,
+  type QualityPrototypeKey,
   type RecipeCategoryPrototype,
   type RecipeComponent,
   type RecipePrototype,
@@ -254,6 +255,13 @@ function parseFluids(value: unknown): readonly FluidPrototype[] {
   return Object.freeze([...fluids].sort((left, right) => left.key.localeCompare(right.key)));
 }
 
+function qualityKey(value: unknown, path: string): QualityPrototypeKey {
+  const key = string(value, path);
+  if (!key.startsWith('quality:') || key.length === 8)
+    invalid('PT1002', path, 'expected a quality: prototype key.');
+  return key as QualityPrototypeKey;
+}
+
 function parseComponent(
   value: unknown,
   path: string,
@@ -401,6 +409,34 @@ function parseComponent(
       invalid('PT1004', `${path}.${field}`, 'valid only on fluid ingredients/products.');
     }
   }
+  const affectedByQuality = optionalBoolean(input.affectedByQuality, `${path}.affectedByQuality`);
+  const qualityChange =
+    input.qualityChange === undefined
+      ? undefined
+      : boundedInteger(input.qualityChange, `${path}.qualityChange`, -128, 127);
+  const qualityMin =
+    input.qualityMin === undefined ? undefined : qualityKey(input.qualityMin, `${path}.qualityMin`);
+  const qualityMax =
+    input.qualityMax === undefined ? undefined : qualityKey(input.qualityMax, `${path}.qualityMax`);
+  for (const [field, value] of [
+    ['affectedByQuality', affectedByQuality],
+    ['qualityChange', qualityChange],
+    ['qualityMin', qualityMin],
+    ['qualityMax', qualityMax],
+  ] as const) {
+    if (
+      value !== undefined &&
+      (!prototype.startsWith('item:') || (field === 'affectedByQuality' && role !== 'product'))
+    ) {
+      invalid(
+        'PT1004',
+        `${path}.${field}`,
+        field === 'affectedByQuality'
+          ? 'valid only on item products.'
+          : 'valid only on item ingredients/products.',
+      );
+    }
+  }
   const temperature = optionalFinite(input.temperature, `${path}.temperature`);
   const temperatureMin = optionalFinite(input.temperatureMin, `${path}.temperatureMin`);
   const temperatureMax = optionalFinite(input.temperatureMax, `${path}.temperatureMax`);
@@ -431,6 +467,10 @@ function parseComponent(
     ...(sharedProbability === undefined ? {} : { sharedProbability }),
     ...(ignoredByStats === undefined ? {} : { ignoredByStats }),
     ...(ignoredByProductivity === undefined ? {} : { ignoredByProductivity }),
+    ...(affectedByQuality === undefined ? {} : { affectedByQuality }),
+    ...(qualityChange === undefined ? {} : { qualityChange }),
+    ...(qualityMin === undefined ? {} : { qualityMin }),
+    ...(qualityMax === undefined ? {} : { qualityMax }),
     ...(percentSpoiled === undefined ? {} : { percentSpoiled }),
     ...(spoilWeight === undefined ? {} : { spoilWeight }),
     ...(alwaysFresh === undefined ? {} : { alwaysFresh }),
@@ -592,6 +632,9 @@ function parseQualities(value: unknown): readonly QualityPrototype[] {
       key: canonicalKey('quality', name, input.key, `${path}.key`) as QualityPrototype['key'],
       name,
       level,
+      ...(input.next === undefined
+        ? {}
+        : { next: input.next === null ? null : qualityKey(input.next, `${path}.next`) }),
     });
   });
   unique(
@@ -661,6 +704,59 @@ function parseIndexes(value: unknown, recipes: readonly RecipePrototype[]): Prot
     invalid('PT1005', 'indexes.recipesByProduct', 'does not match normalized recipe products.');
   }
   return expected;
+}
+
+function validateQualityChains(database: PrototypeDatabaseV1): void {
+  const qualities = new Map(database.qualities.map((quality) => [quality.key, quality]));
+  for (const quality of database.qualities) {
+    if (quality.next != null && database.capabilities.qualities && !qualities.has(quality.next)) {
+      invalid('PT1004', `qualities.${quality.name}.next`, `unknown quality ${quality.next}.`);
+    }
+  }
+  const done = new Set<QualityPrototypeKey>();
+  for (const quality of database.qualities) {
+    const path = new Set<QualityPrototypeKey>();
+    let current: QualityPrototypeKey | null | undefined = quality.key;
+    while (current != null && !done.has(current)) {
+      if (path.has(current))
+        invalid(
+          'PT1004',
+          `qualities.${qualities.get(current)!.name}.next`,
+          'quality chain contains a cycle.',
+        );
+      path.add(current);
+      const node = qualities.get(current);
+      if (node === undefined) break;
+      current = node.next;
+    }
+    for (const key of path) done.add(key);
+  }
+  for (const recipe of database.recipes) {
+    for (const [role, components] of [
+      ['ingredients', recipe.ingredients],
+      ['products', recipe.products],
+    ] as const) {
+      for (const [index, component] of components.entries()) {
+        const path = `recipes.${recipe.name}.${role}[${index}]`;
+        for (const field of ['qualityMin', 'qualityMax'] as const) {
+          const key = component[field];
+          if (key !== undefined && database.capabilities.qualities && !qualities.has(key))
+            invalid('PT1004', `${path}.${field}`, `unknown quality ${key}.`);
+        }
+        if (component.qualityMin === undefined || component.qualityMax === undefined) continue;
+        let current: QualityPrototypeKey | null | undefined = component.qualityMin;
+        while (current != null && current !== component.qualityMax)
+          current = qualities.get(current)?.next;
+        // An omitted link is unknown, not a proven terminal. Never infer chains from level.
+        if (current === null)
+          invalid(
+            'PT1004',
+            `${path}.qualityMax`,
+            'qualityMax must be reachable from qualityMin in the same quality chain.',
+          );
+      }
+    }
+  }
 }
 
 function validateReferences(database: PrototypeDatabaseV1): void {
@@ -750,6 +846,7 @@ export function validatePrototypeDatabase(value: unknown): PrototypeDatabaseV1 {
   ) {
     invalid('PT1004', 'items', 'itemStackSizes capability requires a stackSize for every item.');
   }
+  validateQualityChains(database);
   validateReferences(database);
   if (database.capabilities.entityCircuitCapabilities) {
     if (!database.capabilities.entities) {

@@ -130,10 +130,12 @@ Generator `comblang-factorio-data-dump-v1.2` additionally preserves the dump's o
 explicit spoil percentage, five reset-freshness flags, three fluidbox indexes and
 nine fluidbox multipliers. That dump has no explicit spoil weights, always-fresh
 flags or optional fluidbox index lists; synthetic tests cover those fields instead.
-The converter still reports tracked unsupported recipe quality fields
-(`affected_by_quality`, `quality_change`, `quality_min`, `quality_max`). This is not
-an exhaustive native RecipePrototype implementation, and lack of loss warnings
-does not establish complete recipe behavior coverage.
+Generator `comblang-factorio-data-dump-v1.4` also retains item recipe quality
+metadata and quality-chain links. The supplied dump has six quality records and
+four explicit `next` links, but no explicit recipe quality transformations; tests
+for those transformations use synthetic inputs. This is not an exhaustive native
+RecipePrototype implementation. Remaining `PD2001` warnings concern skipped empty
+recipes; lack of loss warnings does not establish complete recipe behavior coverage.
 
 ### Product probability and excluded amounts
 
@@ -207,6 +209,44 @@ and identity calculation. New generators may require an explicit identity-pin
 update; existing data without these fields still loads unchanged. Item-only fields
 on fluids, fluid-only fields on items and incorrect ingredient/product roles are
 validation errors, not silently discarded facts.
+
+### Recipe quality transformations and chains
+
+The local 2.1.16 prototype API defines these item-only fields:
+
+| Dump field            | Normalized field    | Applies to                                          |
+| --------------------- | ------------------- | --------------------------------------------------- |
+| `affected_by_quality` | `affectedByQuality` | Item products; boolean                              |
+| `quality_change`      | `qualityChange`     | Item ingredients/products; int8 (`-128..127`)       |
+| `quality_min`         | `qualityMin`        | Item ingredients/products; canonical `quality:` key |
+| `quality_max`         | `qualityMax`        | Item ingredients/products; canonical `quality:` key |
+
+The quality-roll flag has native default true. False ignores the product quality
+roll, but does **not** mean that the product is always normal quality: recipe
+quality still matters. The shift defaults to zero and is relative to recipe
+quality. Ingredient shifts with identical min/max bounds are ignored by the native
+engine. The database preserves an explicitly declared shift rather than silently
+rewriting it; no crafting/quality-roll simulation is added.
+
+Missing bounds are not filled. Native defaults choose the end/start of the chain
+of the provided opposite bound. References are checked when quality coverage is
+available. Product/ingredient roles, item-only use, booleans, shifts and key shapes
+are validated regardless of reference coverage.
+
+`prototypes.quality[name].next` contains a canonical quality key, `null` for a
+known chain end, or is omitted for unknown linkage in older databases. The native
+dump normalizer emits explicit ends for omitted raw `next` fields. Explicit dangling
+links are rejected when quality coverage is declared, and known cycles are rejected.
+With both bounds present, `qualityMax` must be reachable by following `next` from
+`qualityMin`; reaching an explicit end first is an error. If the path becomes
+unknown, the loader leaves that relationship unverified rather than guessing.
+`level` is not used to invent chains or validate chain membership/order.
+
+These remain optional schema-v1 fields. Explicit false/zero/bounds/link/end facts
+participate in identity and survive JSON/provider round trips. Existing snapshots
+without these fields still load unchanged. Regenerating with v1.4 changes identity
+and may require an explicit project pin update. Full native recipe conformance is
+still separate from successful structural validation.
 
 ### Remaining conformance boundary
 

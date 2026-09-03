@@ -78,6 +78,10 @@ export interface RecipeComponent {
   readonly sharedProbability?: { readonly min: number; readonly max: number };
   readonly ignoredByStats?: number;
   readonly ignoredByProductivity?: number;
+  readonly affectedByQuality?: boolean;
+  readonly qualityChange?: number;
+  readonly qualityMin?: QualityPrototypeKey;
+  readonly qualityMax?: QualityPrototypeKey;
   /** Item product spoil fraction, in [0, 1). */
   readonly percentSpoiled?: number;
   readonly alwaysFresh?: boolean;
@@ -139,6 +143,8 @@ export interface QualityPrototype {
   readonly key: QualityPrototypeKey;
   readonly name: string;
   readonly level: number;
+  /** Missing means unknown in older datasets; null explicitly terminates the chain. */
+  readonly next?: QualityPrototypeKey | null;
 }
 
 export interface RecipeCategoryPrototype {

@@ -88,13 +88,6 @@ function componentList(value: unknown, path: string): readonly JsonObject[] {
   throw new FactorioDumpError(path, 'expected an array or the empty-object sentinel.');
 }
 
-const unsupportedComponentFields = Object.freeze([
-  'affected_by_quality',
-  'quality_change',
-  'quality_min',
-  'quality_max',
-] as const);
-
 function optionalBoolean(value: unknown, path: string): boolean | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== 'boolean') throw new FactorioDumpError(path, 'expected a boolean.');
@@ -108,17 +101,10 @@ function optionalNumbers(value: unknown, path: string): readonly number[] | unde
   throw new FactorioDumpError(path, 'expected an array or the empty-object sentinel.');
 }
 
-function recipeComponent(
-  value: JsonObject,
-  path: string,
-  ignoredFields: Map<string, number>,
-): RecipeComponent {
+function recipeComponent(value: JsonObject, path: string): RecipeComponent {
   const type = nonEmptyString(value.type, `${path}.type`);
   if (type !== 'item' && type !== 'fluid') {
     throw new FactorioDumpError(`${path}.type`, 'expected item or fluid.');
-  }
-  for (const field of unsupportedComponentFields) {
-    if (value[field] !== undefined) ignoredFields.set(field, (ignoredFields.get(field) ?? 0) + 1);
   }
   const amount = optionalFinite(value.amount, `${path}.amount`);
   const amountMin = optionalFinite(value.amount_min, `${path}.amount_min`);
@@ -164,6 +150,19 @@ function recipeComponent(
     value.optional_fluidbox_indexes,
     `${path}.optional_fluidbox_indexes`,
   );
+  const affectedByQuality = optionalBoolean(
+    value.affected_by_quality,
+    `${path}.affected_by_quality`,
+  );
+  const qualityChange = optionalFinite(value.quality_change, `${path}.quality_change`);
+  const qualityMin =
+    value.quality_min === undefined
+      ? undefined
+      : (`quality:${nonEmptyString(value.quality_min, `${path}.quality_min`)}` as const);
+  const qualityMax =
+    value.quality_max === undefined
+      ? undefined
+      : (`quality:${nonEmptyString(value.quality_max, `${path}.quality_max`)}` as const);
   const temperature = optionalFinite(value.temperature, `${path}.temperature`);
   const temperatureMin = optionalFinite(value.minimum_temperature, `${path}.minimum_temperature`);
   const temperatureMax = optionalFinite(value.maximum_temperature, `${path}.maximum_temperature`);
@@ -178,6 +177,10 @@ function recipeComponent(
     ...(sharedProbability === undefined ? {} : { sharedProbability }),
     ...(ignoredByStats === undefined ? {} : { ignoredByStats }),
     ...(ignoredByProductivity === undefined ? {} : { ignoredByProductivity }),
+    ...(affectedByQuality === undefined ? {} : { affectedByQuality }),
+    ...(qualityChange === undefined ? {} : { qualityChange }),
+    ...(qualityMin === undefined ? {} : { qualityMin }),
+    ...(qualityMax === undefined ? {} : { qualityMax }),
     ...(percentSpoiled === undefined ? {} : { percentSpoiled }),
     ...(spoilWeight === undefined ? {} : { spoilWeight }),
     ...(alwaysFresh === undefined ? {} : { alwaysFresh }),
@@ -215,7 +218,6 @@ export function normalizeFactorioDataDump(
   metadata: FactorioDumpMetadata,
 ): FactorioDumpNormalization {
   const dump = object(value, '<dump>');
-  const ignoredFields = new Map<string, number>();
   const warnings: FactorioDumpWarning[] = [];
 
   const items = Object.entries(dump).flatMap(([table, rawTable]) => {
@@ -262,6 +264,10 @@ export function normalizeFactorioDataDump(
       key: `quality:${name}` as const,
       name,
       level: finite(record.level, `quality.${name}.level`),
+      next:
+        record.next === undefined
+          ? null
+          : (`quality:${nonEmptyString(record.next, `quality.${name}.next`)}` as const),
     };
   });
 
@@ -269,8 +275,7 @@ export function normalizeFactorioDataDump(
   for (const record of records(dump, 'recipe')) {
     const name = record.name as string;
     const products = componentList(record.results, `recipe.${name}.results`).map(
-      (component, index) =>
-        recipeComponent(component, `recipe.${name}.results[${index}]`, ignoredFields),
+      (component, index) => recipeComponent(component, `recipe.${name}.results[${index}]`),
     );
     if (products.length === 0) {
       warnings.push({
@@ -292,8 +297,7 @@ export function normalizeFactorioDataDump(
       nonEmptyString(category, `recipe.${name}.categories[${index}]`),
     );
     const ingredients = componentList(record.ingredients, `recipe.${name}.ingredients`).map(
-      (component, index) =>
-        recipeComponent(component, `recipe.${name}.ingredients[${index}]`, ignoredFields),
+      (component, index) => recipeComponent(component, `recipe.${name}.ingredients[${index}]`),
     );
     const mainProductName =
       typeof record.main_product === 'string' && record.main_product.length > 0
@@ -349,15 +353,6 @@ export function normalizeFactorioDataDump(
     }
   }
 
-  for (const [field, count] of [...ignoredFields].sort(([left], [right]) =>
-    left.localeCompare(right),
-  )) {
-    warnings.push({
-      code: 'PD2001',
-      path: `recipe.*.${field}`,
-      message: `The v1 recipe subset does not retain ${field} (${count} occurrence${count === 1 ? '' : 's'}).`,
-    });
-  }
   warnings.push({
     code: 'PD2002',
     path: 'entities.*.circuit',
@@ -367,7 +362,7 @@ export function normalizeFactorioDataDump(
 
   const environment: PrototypeEnvironment = {
     ...metadata,
-    generatorVersion: 'comblang-factorio-data-dump-v1.3',
+    generatorVersion: 'comblang-factorio-data-dump-v1.4',
   };
   const candidate = {
     schemaVersion: 1,

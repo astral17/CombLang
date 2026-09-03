@@ -181,10 +181,17 @@ kind. These errors carry the field path, including the element index for malform
 preserved as inactive metadata, not rejected; it must not be applied by consumers.
 
 Native dump conversion uses `PD1001` for a malformed or internally inconsistent
-`data-raw-dump` shape. `PD2001` reports intentionally unrepresented raw recipe
-fields or skipped engine sentinels, while `PD2002` reports capability data that
+`data-raw-dump` shape. `PD2001` reports skipped empty recipes/engine sentinels,
+while `PD2002` reports capability data that
 the native dump cannot prove. Conversion warnings are explicit coverage notices;
 they do not make the normalized v1 subset invalid.
+
+Recipe quality transforms use `PT1001` for invalid booleans/int8 shifts, `PT1002`
+for malformed canonical quality keys, and `PT1004` for wrong component roles/types,
+unknown references under declared quality coverage, cyclic quality chains or bounds
+that cannot be reached before an explicit chain end. Missing legacy `next` links
+mean unknown; the loader does not infer order from numeric quality levels or claim
+those bounds were fully verified. Raw malformed fields retain `PD1001` dump paths.
 
 Complete circuit coverage requires explicit `circuit` records for every entity
 and enabled entity coverage (`PT1004`). An omitted record is unknown, not an
