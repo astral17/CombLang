@@ -92,6 +92,7 @@ Call provenance is associated with the executed function identity, not its textu
 | `CL1045` | user binding shadows a reserved free DSL identifier                       | rename the variable, parameter, function, class, or enum                                |
 | `CL1046` | one returned Network is destructured as producer fan-out                  | return an explicit container or retain a Producer return type                           |
 | `CL1047` | definite missing or non-Network argument for a known Network parameter    | pass a Network or a producer expression that can be materialized as one                 |
+| `CL1048` | implicit enum value follows a non-constant initializer                    | give that enum member an explicit numeric initializer                                   |
 | `CL2001` | producer has no user destination                                          | attach it, or keep the warning if intentional                                           |
 | `CL2002` | parameter implicitly borrows a Network for reading                        | use explicit `Readonly<Network>`, `Ref<Network>`, or `Move<Network>` to document intent |
 | `EX1001` | transformed elaboration program threw                                     | inspect the execution message and supported executed subset                             |

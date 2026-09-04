@@ -21,6 +21,29 @@ for (let i = 0; i < 10; i++) {
 }`;
 
 describe('executed elaboration program', () => {
+  test('executes DSL parameter and destructuring defaults through the runtime bridge', () => {
+    const parsed = parseFile({
+      path: 'binding-defaults.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+function Build(input = CC(2 * A)) { return input + 1; }
+let defaultCalls = 0;
+function next() { defaultCalls += 1; return 2; }
+function Ordinary(first = next(), second = first + 3) { return second; }
+if (Ordinary() !== 5 || defaultCalls !== 1) throw new Error('changed default evaluation');
+const [first = CC(3 * A)] = [];
+const { second = CC(4 * A) } = {};
+const output = Build();
+const sink = new Network();
+sink += first + second;`,
+    });
+
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    expect(plan.producers).toHaveLength(5);
+    expect(plan.producers[2]?.instancePath).toEqual(['function Build']);
+    expect(() => elaborateDirectPlan(plan)).not.toThrow();
+  });
+
   test('returns cyclic Network containers while retaining shared container references', () => {
     const parsed = parseFile({
       path: 'return-shared-network.factorio.ts',

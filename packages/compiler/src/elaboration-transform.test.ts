@@ -406,4 +406,44 @@ record.constant = dynamicValue;
     expect(code.match(/__dsl\.returnNetwork/g)).toHaveLength(1);
     expect(code).toContain('return input;');
   });
+
+  test('transforms DSL expressions in parameter and destructuring defaults', () => {
+    const source = parseFile({
+      path: 'binding-defaults.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+function Build(input = CC(2 * A), [fallback = CC(3 * A)] = []) {
+  return input + fallback;
+}
+const [arrayValue = CC(4 * A)] = [];
+const { objectValue = CC(5 * A) } = {};
+const arrow = (value = CC(6 * A)) => value;
+const object = { method(value = CC(7 * A)) { return value; } };
+for (const [loopValue = CC(8 * A)] of [[]]) { loopValue + 0; }`,
+    });
+    const code = transformElaborationModule(source).code;
+
+    expect(code).not.toMatch(/\bCC\(/);
+    expect(code.match(/__dsl\.constant/g)).toHaveLength(7);
+    expect(code).toContain('input = __dsl.materialize(');
+    expect(code).toContain('fallback = __dsl.materialize(');
+    expect(code).toContain('arrayValue = __dsl.materialize(');
+    expect(code).toContain('objectValue = __dsl.materialize(');
+    expect(code).toContain('value = __dsl.materialize(');
+    expect(code).toContain('loopValue = __dsl.materialize(');
+  });
+
+  test('continues numeric enum values after constant expressions', () => {
+    const source = parseFile({
+      path: 'enum-values.factorio.ts',
+      text: `enum Direction { North = 1 << 2, East, South = -2, West, Again = North + East, After }`,
+    });
+    const code = transformElaborationModule(source).code;
+
+    expect(code).toContain('"North": 4');
+    expect(code).toContain('"East": 5');
+    expect(code).toContain('"South": -2');
+    expect(code).toContain('"West": -1');
+    expect(code).toContain('"Again": 9');
+    expect(code).toContain('"After": 10');
+  });
 });

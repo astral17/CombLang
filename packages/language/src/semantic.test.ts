@@ -586,6 +586,30 @@ const fallback: DeciderCombinator = when(input > 0).else(input);`,
     expect(validateDslSemantics(parsed)).toEqual([]);
   });
 
+  test('continues enum constants and rejects implicit values after dynamic initializers', () => {
+    const valid = parseFile({
+      path: 'constant-enum.ts',
+      text: `enum Direction { North = 1 << 2, East, South = Direction.North + 4, West }`,
+    });
+    const invalid = parseFile({
+      path: 'dynamic-enum.ts',
+      text: `function base() { return 4; }
+enum Dynamic { First = base(), Missing, Reset = 10, Next }`,
+    });
+
+    expect(validateDslSemantics(valid)).toEqual([]);
+    const diagnostics = validateDslSemantics(invalid);
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'CL1048',
+        message: expect.stringContaining('requires its own explicit value'),
+      }),
+    ]);
+    expect(invalid.text.slice(diagnostics[0]!.span!.start, diagnostics[0]!.span!.end)).toBe(
+      'Missing',
+    );
+  });
+
   test('tracks provable aliases and homogeneous Network containers', () => {
     const parsed = parseFile({
       path: 'aliases.ts',

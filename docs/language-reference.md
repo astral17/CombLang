@@ -435,6 +435,8 @@ Returning a producer lets the caller materialize or attach it contextually. Retu
 
 Each function declaration call receives an independent provenance scope, so generated Networks, producers, and attachments retain the dynamic function path. Async syntax is rejected before execution; imports and multi-module elaboration are not implemented yet.
 
+Default parameter and destructuring expressions are executed only when JavaScript selects the default, and DSL operations inside them use the normal runtime bridge. A simple binding such as `function Build(input = CC(...))` or `const [input = CC(...)] = []` materializes the producer as a named Network just like an ordinary inferred declaration. Earlier-parameter references and ordinary side-effect order are preserved. Producers created while evaluating a function default retain that invocation's dynamic function path before the function body begins.
+
 Static checks resolve user function declarations lexically, including nested declarations. A local binding with the same name does not inherit an outer function's annotations. If the function binding is reassigned, its call signature is treated as uncertain and checked from executed values instead. This uses TypeScript symbol binding only, not TypeScript assignability rules for DSL operators.
 
 Returning an array/plain object inspects its own data properties for Network ownership transfer without invoking getters or custom array iterators. Accessors remain lazy; sparse indices, symbol keys, property descriptors, null prototypes, and frozen/sealed/non-extensible state are preserved when a returned Network requires a new container view. Cycles and shared container references are retained. Ordinary branches without transferred Networks keep their original JavaScript identity, including purely ordinary cycles. A shared container is visited once; two distinct member slots holding the same Network (such as `[input, input]`) remain a double-move error.
@@ -462,6 +464,8 @@ for (let i = 0; i < 10; i++) {
 ```
 
 The JavaScript engine executes the loop. It produces one constant combinator and ten decider combinators; the compiler does not statically unroll or pattern-match ten copies. The same executable path is used with and without loops; the web compiler has no static-lowering fallback.
+
+TypeScript numeric enums are erased to frozen ordinary objects. Constant numeric expressions and earlier same-enum member references are folded before execution, so `enum Direction { North = 1 << 2, East }` yields `North = 4` and `East = 5`. If an explicit initializer is dynamic, any following member needs its own explicit initializer; `CL1048` rejects ambiguous auto-numbering instead of inventing a value.
 
 An executed circuit comparison produces a circuit `Condition`, not a JavaScript boolean. Using one directly as an `if`/ternary/`while`/`do…while`/`for` test is `RT2024`; this prevents the branded runtime object from silently acting as truthy. Circuit branching belongs in `IF(...)` or `when(...).then(...)`. Conditions still support `!`, while `!` applied to an ordinary value keeps native JavaScript truthiness.
 

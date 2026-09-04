@@ -5,6 +5,7 @@ import type { Diagnostic, SourceSpan } from '@comblang/shared';
 import { spanForNode, type ParsedSourceFile } from './parser.js';
 import { reservedDslValueNames } from './dsl-names.js';
 import { createFunctionResolver } from './function-resolution.js';
+import { evaluateNumericConstantExpression } from './numeric-constant.js';
 import {
   parseDslTypeAnnotation,
   networkTypeFromAnnotation,
@@ -626,6 +627,42 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
         'Async functions, arrows, and methods are not supported by synchronous compile-time elaboration.',
         asyncModifier,
       );
+    }
+    if (ts.isEnumDeclaration(node)) {
+      const memberValues = new Map<string, number>();
+      let nextNumericValue: number | undefined = 0;
+      for (const member of node.members) {
+        const name =
+          ts.isIdentifier(member.name) || ts.isStringLiteral(member.name)
+            ? member.name.text
+            : member.name.getText(file.ast);
+        if (member.initializer === undefined) {
+          if (nextNumericValue === undefined) {
+            report(
+              'CL1048',
+              'An enum member after a non-constant initializer requires its own explicit value.',
+              member,
+            );
+          } else {
+            memberValues.set(name, nextNumericValue);
+            nextNumericValue += 1;
+          }
+          continue;
+        }
+        const evaluated = evaluateNumericConstantExpression(member.initializer, (reference) => {
+          if (ts.isIdentifier(reference)) return memberValues.get(reference.text);
+          return ts.isIdentifier(reference.expression) &&
+            reference.expression.text === node.name.text
+            ? memberValues.get(reference.name.text)
+            : undefined;
+        });
+        if (evaluated === undefined || !Number.isFinite(evaluated)) {
+          nextNumericValue = undefined;
+        } else {
+          memberValues.set(name, evaluated);
+          nextNumericValue = evaluated + 1;
+        }
+      }
     }
     if (ts.isFunctionDeclaration(node)) {
       const scope = new Set<string>();

@@ -1,6 +1,7 @@
 import ts from 'typescript';
 
 import {
+  evaluateNumericConstantExpression,
   networkTypeFromAnnotation,
   parseDslTypeAnnotation,
   parseDslTypeText,
@@ -414,6 +415,105 @@ export function transformElaborationModule(
         spanLiteral(factory, node),
       ]);
     };
+    const transformBindingInitializer = (
+      initializer: ts.Expression,
+      name: ts.Identifier,
+      type: ts.TypeNode | undefined,
+      source: ts.Node,
+    ): ts.Expression => {
+      let transformed: ts.Expression;
+      const constructsNetwork =
+        ts.isNewExpression(initializer) &&
+        ts.isIdentifier(initializer.expression) &&
+        initializer.expression.text === 'Network';
+      if (constructsNetwork) {
+        transformed = networkCall(initializer as ts.NewExpression, name.text);
+      } else {
+        transformed =
+          (ts.isCallExpression(initializer)
+            ? testInstantiation(initializer, name.text)
+            : undefined) ?? (ts.visitNode(initializer, visit) as ts.Expression);
+      }
+      const producerType = producerHandleTypeName(file, type);
+      if (producerType !== undefined) {
+        return dslCall(factory, 'producerHandle', [
+          transformed,
+          factory.createStringLiteral(producerType),
+          factory.createStringLiteral(name.text),
+          spanLiteral(factory, source),
+        ]);
+      }
+      return constructsNetwork
+        ? transformed
+        : dslCall(factory, 'materialize', [
+            transformed,
+            factory.createStringLiteral(name.text),
+            colorForType(type),
+            spanLiteral(factory, source),
+            bindingReader(name.text),
+          ]);
+    };
+    const transformBindingName = (
+      name: ts.BindingName,
+      type: ts.TypeNode | undefined,
+    ): ts.BindingName => {
+      if (ts.isIdentifier(name)) return name;
+      const array = ts.isArrayBindingPattern(name);
+      const elements = name.elements.map((element, index) => {
+        if (ts.isOmittedExpression(element)) return element;
+        const property = array
+          ? undefined
+          : (element.propertyName?.getText(file.ast) ??
+            (ts.isIdentifier(element.name) ? element.name.text : undefined));
+        const elementType = array
+          ? tupleElementType(type, index)
+          : property === undefined
+            ? undefined
+            : objectPropertyType(type, property);
+        const bindingName = transformBindingName(element.name, elementType);
+        const initializer =
+          element.initializer === undefined
+            ? undefined
+            : ts.isIdentifier(element.name)
+              ? transformBindingInitializer(element.initializer, element.name, elementType, element)
+              : (ts.visitNode(element.initializer, visit) as ts.Expression);
+        return factory.updateBindingElement(
+          element,
+          element.dotDotDotToken,
+          element.propertyName === undefined
+            ? undefined
+            : (ts.visitNode(element.propertyName, visit) as ts.PropertyName),
+          bindingName,
+          initializer,
+        );
+      });
+      return array
+        ? factory.updateArrayBindingPattern(name, elements)
+        : factory.updateObjectBindingPattern(name, elements as readonly ts.BindingElement[]);
+    };
+    const transformParameter = (parameter: ts.ParameterDeclaration): ts.ParameterDeclaration => {
+      const bindingName = transformBindingName(parameter.name, parameter.type);
+      const initializer =
+        parameter.initializer === undefined
+          ? undefined
+          : ts.isIdentifier(parameter.name)
+            ? transformBindingInitializer(
+                parameter.initializer,
+                parameter.name,
+                parameter.type,
+                parameter,
+              )
+            : (ts.visitNode(parameter.initializer, visit) as ts.Expression);
+      return factory.updateParameterDeclaration(
+        parameter,
+        parameter.modifiers,
+        parameter.dotDotDotToken,
+        bindingName,
+        parameter.questionToken,
+        parameter.type,
+        initializer,
+      );
+    };
     const instrumentLoopBody = (
       statement: ts.Statement,
       name: string,
@@ -538,7 +638,15 @@ export function transformElaborationModule(
         );
       }
       if (ts.isEnumDeclaration(node)) {
-        let nextNumericValue = 0;
+        const memberValues = new Map<string, number>();
+        let nextNumericValue: number | undefined = 0;
+        const numericLiteral = (value: number): ts.Expression =>
+          value < 0 || Object.is(value, -0)
+            ? factory.createPrefixUnaryExpression(
+                ts.SyntaxKind.MinusToken,
+                factory.createNumericLiteral(Math.abs(value)),
+              )
+            : factory.createNumericLiteral(value);
         const properties = node.members.map((member) => {
           const name =
             ts.isIdentifier(member.name) || ts.isStringLiteral(member.name)
@@ -546,19 +654,29 @@ export function transformElaborationModule(
               : member.name.getText(file.ast);
           let value: ts.Expression;
           if (member.initializer === undefined) {
-            value = factory.createNumericLiteral(nextNumericValue);
+            if (nextNumericValue === undefined) {
+              throw new Error(
+                `Enum ${node.name.text}.${name} requires an explicit initializer because the previous value is not a supported numeric constant.`,
+              );
+            }
+            value = numericLiteral(nextNumericValue);
+            memberValues.set(name, nextNumericValue);
             nextNumericValue += 1;
           } else {
-            value = ts.visitNode(member.initializer, visit) as ts.Expression;
-            const literal = member.initializer;
-            if (ts.isNumericLiteral(literal)) {
-              nextNumericValue = Number(literal.text) + 1;
-            } else if (
-              ts.isPrefixUnaryExpression(literal) &&
-              literal.operator === ts.SyntaxKind.MinusToken &&
-              ts.isNumericLiteral(literal.operand)
-            ) {
-              nextNumericValue = -Number(literal.operand.text) + 1;
+            const evaluated = evaluateNumericConstantExpression(member.initializer, (reference) => {
+              if (ts.isIdentifier(reference)) return memberValues.get(reference.text);
+              return ts.isIdentifier(reference.expression) &&
+                reference.expression.text === node.name.text
+                ? memberValues.get(reference.name.text)
+                : undefined;
+            });
+            if (evaluated === undefined || !Number.isFinite(evaluated)) {
+              value = ts.visitNode(member.initializer, visit) as ts.Expression;
+              nextNumericValue = undefined;
+            } else {
+              value = numericLiteral(evaluated);
+              memberValues.set(name, evaluated);
+              nextNumericValue = evaluated + 1;
             }
           }
           return factory.createPropertyAssignment(factory.createStringLiteral(name), value);
@@ -585,6 +703,7 @@ export function transformElaborationModule(
           ),
         );
       }
+      if (ts.isParameter(node)) return transformParameter(node);
 
       if (ts.isExpressionStatement(node)) {
         return factory.updateExpressionStatement(
@@ -623,6 +742,7 @@ export function transformElaborationModule(
 
       if (ts.isFunctionDeclaration(node) && node.body !== undefined) {
         const name = node.name?.text ?? '<anonymous>';
+        const parameters = node.parameters.map(transformParameter);
         const parameterBindings = node.parameters.flatMap((parameter, index) => {
           if (!ts.isIdentifier(parameter.name)) return [];
           const source = dslCall(factory, 'parameterSource', [
@@ -731,7 +851,7 @@ export function transformElaborationModule(
           node.asteriskToken,
           node.name,
           node.typeParameters,
-          node.parameters,
+          parameters,
           node.type,
           body,
         );
@@ -847,10 +967,19 @@ export function transformElaborationModule(
       }
       if (
         ts.isVariableDeclaration(node) &&
-        (ts.isArrayBindingPattern(node.name) || ts.isObjectBindingPattern(node.name)) &&
-        node.initializer
+        (ts.isArrayBindingPattern(node.name) || ts.isObjectBindingPattern(node.name))
       ) {
         const array = ts.isArrayBindingPattern(node.name);
+        const bindingName = transformBindingName(node.name, node.type);
+        if (node.initializer === undefined) {
+          return factory.updateVariableDeclaration(
+            node,
+            bindingName,
+            undefined,
+            node.type,
+            undefined,
+          );
+        }
         const descriptors = node.name.elements.map((element, index) => {
           if (ts.isOmittedExpression(element)) return factory.createNull();
           const property = array
@@ -874,43 +1003,19 @@ export function transformElaborationModule(
         ]);
         return factory.updateVariableDeclaration(
           node,
-          node.name,
+          bindingName,
           undefined,
           undefined,
           initializer,
         );
       }
       if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
-        let initializer: ts.Expression;
-        if (
-          ts.isNewExpression(node.initializer) &&
-          ts.isIdentifier(node.initializer.expression) &&
-          node.initializer.expression.text === 'Network'
-        ) {
-          initializer = networkCall(node.initializer, node.name.text);
-        } else {
-          initializer =
-            (ts.isCallExpression(node.initializer)
-              ? testInstantiation(node.initializer, node.name.text)
-              : undefined) ?? (ts.visitNode(node.initializer, visit) as ts.Expression);
-        }
-        const producerType = producerHandleTypeName(file, node.type);
-        if (producerType !== undefined) {
-          initializer = dslCall(factory, 'producerHandle', [
-            initializer,
-            factory.createStringLiteral(producerType),
-            factory.createStringLiteral(node.name.text),
-            spanLiteral(factory, node),
-          ]);
-        } else if (!ts.isNewExpression(node.initializer)) {
-          initializer = dslCall(factory, 'materialize', [
-            initializer,
-            factory.createStringLiteral(node.name.text),
-            colorForType(node.type),
-            spanLiteral(factory, node),
-            bindingReader(node.name.text),
-          ]);
-        }
+        const initializer = transformBindingInitializer(
+          node.initializer,
+          node.name,
+          node.type,
+          node,
+        );
         return factory.updateVariableDeclaration(
           node,
           node.name,

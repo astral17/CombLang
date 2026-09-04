@@ -56,6 +56,7 @@ interface Invocation {
   readonly arguments: readonly CallArgument[];
   readonly source: RawSpan;
   entered: boolean;
+  segment?: string;
 }
 
 interface PreparedInvocation {
@@ -241,16 +242,18 @@ class ElaborationRecorder {
       const rawSpan = source ?? (callableOrSpan as RawSpan);
       const callable = source === undefined ? undefined : callableOrSpan;
       const pending = this.#pendingDebugInstance;
+      const invocation = this.#invocations.at(-1);
+      const matches =
+        invocation !== undefined && !invocation.entered && invocation.callable === callable;
       let segment: string;
-      if (pending === undefined) {
-        const key = JSON.stringify([...this.#instancePath, name]);
-        const occurrence = (this.#functionCallCounts.get(key) ?? 0) + 1;
-        this.#functionCallCounts.set(key, occurrence);
-        segment = `function ${name}${occurrence === 1 ? '' : ` #${occurrence}`}`;
-      } else {
+      if (pending !== undefined) {
         segment = pending.segment;
         pending.path = Object.freeze([...this.#instancePath, segment]);
         this.#pendingDebugInstance = undefined;
+      } else if (matches && invocation.segment !== undefined) {
+        segment = invocation.segment;
+      } else {
+        segment = this.#allocateFunctionSegment(name);
       }
       this.#instancePath.push(segment);
       const frame: FunctionOwnershipFrame = {
@@ -260,10 +263,10 @@ class ElaborationRecorder {
         moves: [],
       };
       this.#ownershipFrames.push(frame);
-      const invocation = this.#invocations.at(-1);
-      const matches =
-        invocation !== undefined && !invocation.entered && invocation.callable === callable;
-      if (matches) invocation.entered = true;
+      if (matches) {
+        invocation.entered = true;
+        invocation.segment ??= segment;
+      }
       this.#functionCalls.set(frame, { name, ...(matches ? { invocation } : {}) });
     },
     enterLoop: (name: string, value: unknown, _rawSpan: RawSpan): void => {
@@ -1729,7 +1732,23 @@ class ElaborationRecorder {
   }
 
   #path(): readonly string[] {
-    return Object.freeze([...this.#instancePath]);
+    const invocation = this.#invocations.at(-1);
+    if (
+      invocation === undefined ||
+      invocation.entered ||
+      typeof invocation.callable !== 'function'
+    ) {
+      return Object.freeze([...this.#instancePath]);
+    }
+    invocation.segment ??= this.#allocateFunctionSegment(invocation.callable.name || '<anonymous>');
+    return Object.freeze([...this.#instancePath, invocation.segment]);
+  }
+
+  #allocateFunctionSegment(name: string): string {
+    const key = JSON.stringify([...this.#instancePath, name]);
+    const occurrence = (this.#functionCallCounts.get(key) ?? 0) + 1;
+    this.#functionCallCounts.set(key, occurrence);
+    return `function ${name}${occurrence === 1 ? '' : ` #${occurrence}`}`;
   }
 
   #currentFunctionFrame(): FunctionOwnershipFrame | undefined {
