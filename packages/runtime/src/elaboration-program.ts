@@ -41,8 +41,9 @@ import {
 import { createElaborationOwnershipPolicy } from './elaboration-ownership.js';
 import { ProducerLifecycle } from './producer-lifecycle.js';
 import { validateProducerAttachment } from './producer-attachment-policy.js';
+import { bindProducerHandle } from './producer-handle-policy.js';
 import { bindProducerOutputSignal } from './producer-output-policy.js';
-import { inspectReturnValueGraph } from './return-value-graph.js';
+import { returnOwnedValue } from './return-owned-value-policy.js';
 
 interface RawSpan {
   readonly start: number;
@@ -1580,49 +1581,18 @@ class ElaborationRecorder {
   }
 
   #returnOwnedValue(value: unknown, rawSpan: RawSpan): unknown {
-    const graph = inspectReturnValueGraph(
-      value,
-      (item) =>
-        this.#isProducer(item) ||
-        this.#isNetwork(item) ||
-        this.#isPair(item) ||
-        this.#isPairSelection(item),
-    );
-    const networks: NetworkValue[] = [];
-    const owners = new Set<NetworkOwnershipState>();
+    const source = this.#span(rawSpan);
     const frame = this.#currentFunctionFrame();
-    for (const handle of graph.handles) {
-      if (this.#isPair(handle) || this.#isPairSelection(handle)) {
-        throw new ElaborationExecutionError(
-          'pair(a, b) is a read-only input view and cannot carry ownership across a return.',
-          this.#span(rawSpan),
-          'RT2020',
-          this.#isPair(handle)
-            ? [{ message: 'The pair view was created here.', span: handle.source }]
-            : undefined,
-        );
-      }
-      if (!this.#isNetwork(handle)) continue;
-      this.#ownership.assertReturnable(handle, this.#span(rawSpan), frame);
-      const owner = this.#networkState(handle).ownership;
-      if (owners.has(owner)) {
-        throw new ElaborationExecutionError(
-          `Cannot return Network ${handle.name} more than once; duplicated members are a double move.`,
-          this.#span(rawSpan),
-          'RT2012',
-          [{ message: 'Network declared here.', span: handle.declaration }],
-        );
-      }
-      owners.add(owner);
-      networks.push(handle);
-    }
-    // Charge the complete transfer before mutation, so a caught budget failure also
-    // cannot leave a partially transferred return value.
-    for (const _network of networks) this.#recordDslCall();
-    const replacements = new Map<object, unknown>();
-    for (const network of networks)
-      replacements.set(network, this.#returnOwnedNetwork(network, rawSpan, false));
-    return graph.replace(replacements);
+    return returnOwnedValue(value, source, {
+      isProducer: (item): item is ProducerValue => this.#isProducer(item),
+      isNetwork: (item): item is NetworkValue => this.#isNetwork(item),
+      isPair: (item): item is PairValue => this.#isPair(item),
+      isPairSelection: (item): item is PairSelectedValue => this.#isPairSelection(item),
+      assertReturnable: (network) => this.#ownership.assertReturnable(network, source, frame),
+      ownershipOf: (network) => this.#networkState(network).ownership,
+      chargeTransfer: () => this.#recordDslCall(),
+      returnNetwork: (network) => this.#returnOwnedNetwork(network, rawSpan, false),
+    });
   }
 
   #producerHandle(
@@ -1631,36 +1601,10 @@ class ElaborationRecorder {
     rawSpan: RawSpan,
     bindingName?: unknown,
   ): ProducerValue {
-    const expectedKinds = {
-      Producer: undefined,
-      DeciderCombinator: 'decider',
-      ArithmeticCombinator: 'arithmetic',
-      ConstantCombinator: 'constant',
-    } as const;
-    if (typeof expectedType !== 'string' || !(expectedType in expectedKinds)) {
-      throw new Error('Unknown Producer handle annotation.');
-    }
-    const expectedKind = expectedKinds[expectedType as keyof typeof expectedKinds];
-    if (
-      !this.#isProducer(value) ||
-      (expectedKind !== undefined && value.producer.kind !== expectedKind)
-    ) {
-      throw new ElaborationExecutionError(
-        `${expectedType} requires ${expectedKind === undefined ? 'a combinator producer' : `a ${expectedKind} combinator producer`}.`,
-        this.#span(rawSpan),
-        'RT2022',
-      );
-    }
-    if (bindingName !== undefined && typeof bindingName !== 'string') {
-      throw new Error('Producer binding name must be a string.');
-    }
-    return bindingName === undefined
-      ? value
-      : this.#runtimeValue({
-          kind: 'producer',
-          identity: value.identity,
-          producer: { ...value.producer, bindingName },
-        });
+    return bindProducerHandle(value, expectedType, bindingName, this.#span(rawSpan), {
+      isProducer: (candidate): candidate is ProducerValue => this.#isProducer(candidate),
+      brand: (producer) => this.#runtimeValue(producer),
+    });
   }
 
   #returnOwnedNetwork(value: NetworkValue, rawSpan: RawSpan, recordCall = true): NetworkValue {
