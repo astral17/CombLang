@@ -40,6 +40,7 @@ import {
 } from './elaboration-operators.js';
 import { createElaborationOwnershipPolicy } from './elaboration-ownership.js';
 import { ProducerLifecycle } from './producer-lifecycle.js';
+import { bindProducerOutputSignal } from './producer-output-policy.js';
 import { inspectReturnValueGraph } from './return-value-graph.js';
 
 interface RawSpan {
@@ -1558,7 +1559,9 @@ class ElaborationRecorder {
       );
     }
     for (const network of networks) this.#assertWritableNetwork(network, rawSpan, 'destination');
-    const boundValue = this.#bindOutputSignal(value, outputSignal, rawSpan);
+    const boundValue = bindProducerOutputSignal(value, outputSignal, source, (producer) =>
+      this.#runtimeValue(producer),
+    );
     const planIndex = this.#producers.length;
     this.#producers.push({
       ...boundValue.producer,
@@ -1991,106 +1994,6 @@ class ElaborationRecorder {
     } finally {
       seen.delete(value);
     }
-  }
-
-  #bindOutputSignal(
-    value: ProducerValue,
-    signal: SignalId | undefined,
-    rawSpan: RawSpan,
-  ): ProducerValue {
-    if (signal === undefined) return value;
-    let bound: ProducerValue;
-    if (value.producer.kind === 'constant') {
-      this.#outputBindingFailure(
-        'A constant combinator output cannot be rebound to another Signal.',
-        value,
-        rawSpan,
-      );
-    } else if (value.producer.kind === 'arithmetic') {
-      bound = this.#runtimeValue({
-        kind: 'producer',
-        identity: value.identity,
-        producer: { ...value.producer, output: { kind: 'signal', signal } },
-      });
-    } else {
-      if (value.producer.elseOutputs !== undefined) {
-        this.#outputBindingFailure(
-          'A decider with an else branch cannot be rebound to one destination Signal.',
-          value,
-          rawSpan,
-        );
-      }
-      if ((value.producer.outputs?.length ?? 1) !== 1) {
-        this.#outputBindingFailure(
-          'A multi-output decider cannot be rebound to one destination Signal.',
-          value,
-          rawSpan,
-        );
-      }
-      const output = value.producer.output;
-      if (output.kind === 'signal') {
-        if (!sameSignal(output.signal, signal)) {
-          this.#outputBindingFailure(
-            'Decider output Signal conflicts with its destination binding.',
-            value,
-            rawSpan,
-          );
-        }
-        bound = value;
-      } else if (output.kind === 'each') {
-        bound = this.#runtimeValue({
-          kind: 'producer',
-          identity: value.identity,
-          producer: {
-            ...value.producer,
-            output: {
-              kind: 'signal',
-              ...(output.refKind === 'single'
-                ? { refKind: 'single' as const, network: output.network }
-                : { refKind: 'pair' as const, networks: output.networks }),
-              signal,
-            },
-          },
-        });
-      } else if (output.kind === 'each-constant') {
-        bound = this.#runtimeValue({
-          kind: 'producer',
-          identity: value.identity,
-          producer: {
-            ...value.producer,
-            output: { kind: 'signal-constant', signal, value: output.value },
-          },
-        });
-      } else {
-        this.#outputBindingFailure(
-          'Wildcard decider output cannot be rebound to a concrete Signal.',
-          value,
-          rawSpan,
-        );
-      }
-    }
-    return bound;
-  }
-
-  #outputBindingFailure(message: string, value: ProducerValue, rawSpan: RawSpan): never {
-    const primary = this.#span(rawSpan);
-    const related = [
-      { message: 'Physical producer was created here.', span: value.producer.source },
-    ].filter(
-      (entry, index, entries) =>
-        entries.findIndex(
-          (candidate) =>
-            candidate.span.fileId === entry.span.fileId &&
-            candidate.span.start === entry.span.start &&
-            candidate.span.end === entry.span.end,
-        ) === index &&
-        !(
-          entry.span.fileId === primary.fileId &&
-          entry.span.start === primary.start &&
-          entry.span.end === primary.end
-        ),
-    );
-    throw new ElaborationExecutionError(message, primary, 'RT2023', related);
   }
 
   #isCircuitDslValue(value: unknown): value is DslValue {
