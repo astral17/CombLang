@@ -39,6 +39,7 @@ import {
   type ElaborationOperatorDispatchContext,
 } from './elaboration-operators.js';
 import { createElaborationOwnershipPolicy } from './elaboration-ownership.js';
+import { ProducerLifecycle } from './producer-lifecycle.js';
 import { inspectReturnValueGraph } from './return-value-graph.js';
 
 interface RawSpan {
@@ -123,15 +124,11 @@ class ElaborationRecorder {
   readonly #producers: DirectPlanProducer[] = [];
   readonly #diagnostics: Diagnostic[] = [];
   readonly #implicitBorrowWarnings = new Set<string>();
-  readonly #producerAttachments = new WeakMap<object, SourceSpan>();
-  readonly #debugProducerCaptures = new WeakMap<object, string[]>();
-  readonly #knownProducers = new Map<object, ProducerValue>();
+  readonly #producerLifecycle = new ProducerLifecycle();
   readonly #runtimeValues = new RuntimeValueRegistry();
   readonly #ownership = createElaborationOwnershipPolicy((network) => this.#networkState(network));
-  #unusedProducersFinalized = false;
   #sealed = false;
   #anonymousOrdinal = 0;
-  #debugProducerOrdinal = 0;
   readonly #networkNameCounts = new Map<string, number>();
   readonly #functionCallCounts = new Map<string, number>();
   readonly #debugInstanceCounts = new Map<string, number>();
@@ -1055,7 +1052,7 @@ class ElaborationRecorder {
       if (args.length !== 4 && args.length !== 5) {
         throw new Error('.at(x, y, direction?) requires two or three arguments.');
       }
-      if (this.#producerAttachments.has(producer.identity)) {
+      if (this.#producerLifecycle.attachmentSource(producer) !== undefined) {
         throw new Error('.at(...) must be applied before .to(...) or another attachment.');
       }
       if (
@@ -1268,7 +1265,7 @@ class ElaborationRecorder {
             );
           }
           const result = (operation as (...values: unknown[]) => unknown)(...args);
-          if (this.#isProducer(result)) this.#knownProducers.set(result.identity, result);
+          if (this.#isProducer(result)) this.#producerLifecycle.register(result);
           return result;
         } catch (error) {
           if (
@@ -1323,10 +1320,15 @@ class ElaborationRecorder {
       return { kind: 'network', network: value.name };
     }
     if (this.#isProducer(value)) {
-      const captureId = `producer:${++this.#debugProducerOrdinal}`;
-      const captures = this.#debugProducerCaptures.get(value.identity) ?? [];
-      captures.push(captureId);
-      this.#debugProducerCaptures.set(value.identity, captures);
+      const { captureId, attachedPlanIndex } = this.#producerLifecycle.capture(value);
+      if (attachedPlanIndex !== undefined) {
+        const producer = this.#producers[attachedPlanIndex];
+        if (producer === undefined) throw new Error('Captured Producer is missing from the plan.');
+        this.#producers[attachedPlanIndex] = {
+          ...producer,
+          debugCaptureIds: this.#producerLifecycle.captureIds(value)!,
+        };
+      }
       return { kind: 'producer', captureId };
     }
     if (value === undefined) return { kind: 'undefined' };
@@ -1381,18 +1383,13 @@ class ElaborationRecorder {
   }
 
   #finalizeUnusedProducers(): void {
-    if (this.#unusedProducersFinalized) return;
-    this.#unusedProducersFinalized = true;
-    for (const producer of this.#knownProducers.values()) {
-      if (!this.#producerAttachments.has(producer.identity)) {
-        this.#discardProducer(producer, producer.producer.source);
-      }
-    }
+    this.#producerLifecycle.finalizeUnused((producer, ordinal) =>
+      this.#discardProducer(producer, producer.producer.source, ordinal),
+    );
   }
 
-  #discardProducer(producer: ProducerValue, source: SourceSpan): void {
+  #discardProducer(producer: ProducerValue, source: SourceSpan, ordinal: number): void {
     this.#recordDslCall();
-    const ordinal = this.#diagnostics.filter(({ code }) => code === 'CL2001').length + 1;
     const rawSpan = { start: source.start, end: source.end };
     const sink = this.#network(`$unused:${ordinal}`, rawSpan);
     this.#attach(sink, producer, rawSpan);
@@ -1548,7 +1545,7 @@ class ElaborationRecorder {
         })),
       );
     }
-    const previousAttachment = this.#producerAttachments.get(value.identity);
+    const previousAttachment = this.#producerLifecycle.attachmentSource(value);
     if (previousAttachment !== undefined) {
       throw new ElaborationExecutionError(
         'One Producer handle cannot be attached more than once; use one two-destination attachment for physical fan-out.',
@@ -1562,18 +1559,19 @@ class ElaborationRecorder {
     }
     for (const network of networks) this.#assertWritableNetwork(network, rawSpan, 'destination');
     const boundValue = this.#bindOutputSignal(value, outputSignal, rawSpan);
+    const planIndex = this.#producers.length;
     this.#producers.push({
       ...boundValue.producer,
-      ...(this.#debugProducerCaptures.get(value.identity) === undefined
+      ...(this.#producerLifecycle.captureIds(value) === undefined
         ? {}
-        : { debugCaptureIds: this.#debugProducerCaptures.get(value.identity) }),
+        : { debugCaptureIds: this.#producerLifecycle.captureIds(value) }),
       destinations: networks.map((network) => ({
         network: network.name,
         source,
         instancePath: this.#path(),
       })),
     } as unknown as DirectPlanProducer);
-    this.#producerAttachments.set(value.identity, source);
+    this.#producerLifecycle.markAttached(boundValue, source, planIndex);
     return boundValue;
   }
 

@@ -394,4 +394,28 @@ for (let i = 0; i < 2; i++) {
       expect.objectContaining({ code: 'DBG1002' }),
     );
   });
+
+  it('captures a Producer that was attached before its DUT return value is inspected', () => {
+    const parsed = parseFile({
+      path: 'captured-attached-producer.factorio.ts',
+      text: `function AddAttached(input: Readonly<Network>): ArithmeticCombinator {
+  const producer: ArithmeticCombinator = input + 1;
+  const output = new Network();
+  output += producer;
+  return producer;
+}
+const input = new Network();
+const dut = t.instantiate(AddAttached, input);`,
+    });
+
+    const plan = executeElaborationProgram(
+      transformElaborationModule(parsed, { testContextName: 't' }),
+    );
+    const execution = elaborateDirectPlan(plan);
+    const captured = execution.instance('dut').value as { readonly id: string };
+
+    expect(captured.id).toBe(execution.circuit.graph.producers[0]?.id);
+    expect(plan.producers[0]?.debugCaptureIds).toHaveLength(1);
+    expect(plan.diagnostics).not.toContainEqual(expect.objectContaining({ code: 'CL2001' }));
+  });
 });

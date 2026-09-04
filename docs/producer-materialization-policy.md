@@ -104,3 +104,7 @@ The declaration keeps the Entity handle even though the object consumes circuit 
 6. Explicit combinator annotations continue to preserve affine Producer identity and the single-attachment rule.
 
 The executable runtime benchmark fixes the first four programs today. RequesterChest and Assembler become executable acceptance cases when their typed schemas and the Phase 5 testbench exist.
+
+## Current lifecycle boundary
+
+`ProducerLifecycle` is the executed recorder's identity authority for transient combinators. Registration may observe several wrapper values with the same opaque identity, but attachment state, debug captures, and unused finalization remain shared. It records the direct-plan index at attachment so a later `t.instantiate(...)` capture can amend the existing descriptor rather than clone the entity or leave a dangling capture ID. Attachment cardinality, destination capability, and output-signal compatibility remain recorder policies because they depend on concrete Network values and source operations.
