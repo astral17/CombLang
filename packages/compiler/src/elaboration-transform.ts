@@ -630,6 +630,26 @@ export function transformElaborationModule(
             ];
           }
           const descriptor = borrowDescriptorForType(parameter.type);
+          const networkType = networkTypeFromAnnotation(parameter.type, file.ast);
+          if (parameter.type === undefined || networkType?.capability === 'owned') {
+            return [
+              factory.createExpressionStatement(
+                factory.createAssignment(
+                  parameter.name,
+                  dslCall(factory, 'implicitNetworkParameter', [
+                    parameter.name,
+                    factory.createStringLiteral(parameter.name.text),
+                    networkType?.color === undefined
+                      ? factory.createVoidZero()
+                      : factory.createStringLiteral(networkType.color),
+                    spanLiteral(factory, parameter),
+                    source,
+                    networkType === undefined ? factory.createFalse() : factory.createTrue(),
+                  ]),
+                ),
+              ),
+            ];
+          }
           if (descriptor === undefined) return [];
           return [
             factory.createExpressionStatement(

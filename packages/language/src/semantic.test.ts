@@ -616,7 +616,7 @@ ordinary.take();`,
     expect(validateDslSemantics(parsed)).toEqual([]);
   });
 
-  test('requires an explicit capability for Network parameters', () => {
+  test('allows implicit Network reads but forbids returning borrowed ownership', () => {
     const parsed = parseFile({
       path: 'bare-parameter.ts',
       text: `function Implicit(input: Network): Network { return input; }
@@ -624,8 +624,26 @@ function Explicit(input: Move<Network>): Network { return input; }`,
     });
 
     expect(validateDslSemantics(parsed)).toEqual([
-      expect.objectContaining({ code: 'CL1041', message: expect.stringContaining('no implicit') }),
+      expect.objectContaining({
+        code: 'CL1040',
+        message: expect.stringContaining('cannot escape'),
+      }),
     ]);
+  });
+
+  test('checks bare Network writes but leaves untyped parameters to executed dispatch', () => {
+    const parsed = parseFile({
+      path: 'implicit-parameter.ts',
+      text: `
+function Read(input: Network) { return input * 2; }
+function Write(input: Network) { input += CC(); }
+function Generic(input) { input += 2; return input; }
+Generic(5);
+`,
+    });
+    const diagnostics = validateDslSemantics(parsed);
+    expect(diagnostics).toEqual([expect.objectContaining({ code: 'CL1038' })]);
+    expect(parsed.text.slice(diagnostics[0]!.span!.start, diagnostics[0]!.span!.end)).toBe('input');
   });
 
   test('rejects definite pair ownership and destination misuse', () => {

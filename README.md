@@ -95,7 +95,7 @@ The current repository implements the Phase 3 source compiler, the complete Phas
   - [ ] Define common identity/configuration/placement and explicit connector selection before individual constructors; keep circuit, native, and future logistic configuration separate.
   - [ ] Connect the same Entity identity to test mocks/adapters without introducing full factory simulation.
   - [ ] Define shared CC signal-value inputs (typed counts, tuples, arrays, maps, computed-key objects), ordinary JS key semantics, duplicate handling, and ordering before adding overloads.
-  - [ ] Resolve the bare `Network` parameter borrow/mutability policy before changing current ownership diagnostics; never infer consuming `Move`.
+  - [x] Allow simple function parameters `input: Network` and untyped `input` with an initial implicit read-only borrow for direct Network values and one declaration warning per compilation. Ordinary untyped JS values remain unchanged; writes require `Ref` and consumption requires `Move`. Automatic writable inference and broader binding-pattern integration remain deferred.
 - [ ] Phase 7 — exact constructors and native-config stress: Arithmetic, full Decider normal/else output lists, duplicate outputs, `Everything`, Selector, raw entities, LUTs, and large generated configurations.
   - [x] Validate the currently implemented `Each`/`Everything` output compatibility against the final post-execution Decider descriptor, including dynamically generated rows and conditions.
   - [ ] Verify Each-to-concrete copy-count behavior, constant-row interaction, duplicate multiplicity, conditional subsets, and `pair(red, green)` selections against exported Factorio fixtures; never lower these rows as a sum/reduce.

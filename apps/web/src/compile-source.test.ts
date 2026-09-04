@@ -4,6 +4,21 @@ import { loadPrototypeDatabase, syntheticPrototypeDatabase } from '@comblang/pro
 import { compileSource } from './compile-source.js';
 
 describe('browser source compilation', () => {
+  test('keeps implicit parameter warnings visible without blocking compilation', () => {
+    const text = `function Double(input) { return input * 2; }
+function Triple(input: Network) { return input * 3; }
+const input = CC(); const a = Double(input); const b = Double(input); const c = Triple(input);`;
+    const result = compileSource({ path: 'implicit.factorio.ts', text });
+    expect(result.plan?.producers).toHaveLength(4);
+    expect(result.compilerDiagnostics).toEqual([
+      expect.objectContaining({ code: 'CL2002', severity: 'warning' }),
+      expect.objectContaining({ code: 'CL2002', severity: 'warning' }),
+    ]);
+    expect(
+      result.compilerDiagnostics.map(({ span }) => text.slice(span!.start, span!.end)),
+    ).toEqual(['input', 'input: Network']);
+  });
+
   test('compiles spread placement and attachment through the shared runtime', () => {
     const result = compileSource({
       path: 'main.factorio.ts',

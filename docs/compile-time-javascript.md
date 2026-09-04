@@ -26,6 +26,16 @@ Method lookup happens once, before argument evaluation, including ordinary metho
 
 ## Accepted with limited DSL integration
 
+Function declarations accept both `function f(input)` and
+`function f(input: Network)`. A direct Network value becomes an implicit read-only
+borrow with one `CL2002` warning per executed parameter declaration, while an
+untyped ordinary value keeps JavaScript behavior. Typed Network parameters also
+materialize Producer arguments; generic untyped parameters keep Producer handles.
+Writes and consumption require explicit `Ref<Network>` and `Move<Network>`.
+This does not infer contracts for arrows, methods, rest-array contents, or
+destructuring patterns. See [implicit parameters](ownership-and-multi-network.md)
+for lifetime, color, and warning rules.
+
 - callbacks such as `.map(...)` execute normally, but their iterations do not currently add a distinct provenance frame; use an explicit loop when per-iteration diagnostic identity matters;
 - ambient time and randomness are currently allowed, so builds need not be reproducible.
 

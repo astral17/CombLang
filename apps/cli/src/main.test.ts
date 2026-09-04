@@ -42,6 +42,22 @@ afterEach(async () => {
 });
 
 describe('CLI prototype profiles', () => {
+  test('accepts implicit Network parameters and reports declaration warnings with exit zero', async () => {
+    const text = `function Double(input) { return input * 2; }
+function Triple(input: Network) { return input * 3; }
+const input = CC(); const a = Double(input); const b = Double(input); const c = Triple(input);`;
+    const path = await sourceFile(text);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    expect(await run(['check', '--json', path])).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      producerCount: 4,
+      diagnostics: [
+        { code: 'CL2002', severity: 'warning' },
+        { code: 'CL2002', severity: 'warning' },
+      ],
+    });
+  });
+
   async function profileFile(text = JSON.stringify(syntheticPrototypeDatabase())) {
     const directory = await mkdtemp(join(tmpdir(), 'comblang-prototypes-'));
     temporaryDirectories.push(directory);

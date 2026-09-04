@@ -121,6 +121,7 @@ class ElaborationRecorder {
   readonly #debugInstances: NonNullable<DirectElaborationPlan['debugInstances']>[number][] = [];
   readonly #producers: DirectPlanProducer[] = [];
   readonly #diagnostics: Diagnostic[] = [];
+  readonly #implicitBorrowWarnings = new Set<string>();
   readonly #producerAttachments = new WeakMap<object, SourceSpan>();
   readonly #debugProducerCaptures = new WeakMap<object, string[]>();
   readonly #knownProducers = new Map<object, ProducerValue>();
@@ -442,6 +443,36 @@ class ElaborationRecorder {
         instancePath: this.#path(),
       });
       return pair;
+    },
+    implicitNetworkParameter: (
+      value: unknown,
+      parameter: string,
+      fixedColor: 'red' | 'green' | undefined,
+      declarationSpan: RawSpan,
+      argumentSpan: RawSpan,
+      requiresNetwork: boolean,
+    ): unknown => {
+      // Untyped functions remain ordinary JavaScript for non-Network values.
+      // In particular, do not turn generic Producer arguments into Networks.
+      if (!requiresNetwork && !this.#isNetwork(value)) return value;
+      const borrowed = this.api.borrowParameter(
+        value,
+        'readonly',
+        parameter,
+        fixedColor,
+        argumentSpan,
+      );
+      const key = `${declarationSpan.start}:${declarationSpan.end}`;
+      if (!this.#implicitBorrowWarnings.has(key)) {
+        this.#implicitBorrowWarnings.add(key);
+        this.#diagnostics.push({
+          code: 'CL2002',
+          severity: 'warning',
+          message: `Parameter ${parameter} implicitly borrows a Network for reading. Use Readonly<Network> to make this explicit, Ref<Network> for writes, or Move<Network> for ownership transfer.`,
+          span: this.#span(declarationSpan),
+        });
+      }
+      return borrowed;
     },
     borrowParameter: (
       value: unknown,

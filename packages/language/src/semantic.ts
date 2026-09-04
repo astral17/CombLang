@@ -592,14 +592,10 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
           scope.add(parameter.name.text);
           const capability =
             networkTypeFromAnnotation(parameter.type, file.ast)?.capability ?? 'owned';
-          capabilityScope.set(parameter.name.text, capability);
-          if (capability === 'owned') {
-            report(
-              'CL1041',
-              'A bare Network parameter has no implicit ownership mode; use Readonly<Network>, Ref<Network>, or Move<Network>.',
-              parameter,
-            );
-          }
+          capabilityScope.set(
+            parameter.name.text,
+            capability === 'owned' ? 'readonly' : capability,
+          );
         }
         if (ts.isIdentifier(parameter.name) && isNetworkArrayType(parameter.type)) {
           arrayScope.add(parameter.name.text);

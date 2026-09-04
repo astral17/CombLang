@@ -1,6 +1,6 @@
 # Current language reference
 
-This document describes the syntax implemented by the completed Phase 3 compiler and the current Phase 4 ownership/multi-network runtime. It is intentionally narrower than the eventual language.
+This document describes the implemented source compiler, ownership/multi-network runtime, and prototype-provider access. The Phase 5 testbench has its own reference; Phase 5.5 prototype extraction and native conformance remain incomplete. The language is intentionally narrower than its eventual scope.
 
 Phase 3 elaborates one self-contained source file synchronously. Static or dynamic imports, exports, `import.meta`, `async` functions/arrows/methods, `await`, and `for await…of` report `CL1036` before execution. The executable envelope independently blocks async syntax if semantic preflight is bypassed, so a delayed microtask cannot mutate an already finalized circuit plan. Multi-file linking belongs to a later compiler phase. This boundary is separate from the fully hardened sandbox deferred to Phase 11.
 
@@ -24,7 +24,8 @@ into the compilation environment. For example,
 `prototypes.virtual_signal['signal-A']` return normalized immutable prototype
 records. `prototypes` cannot be shadowed by a user declaration. A source file
 that reads it without an active Prototype DB receives `EX1004`; current
-standalone CLI/browser profile selection is not implemented yet.
+CLI project profiles and `--prototypes`, plus browser-local JSON selection, provide
+that environment. A bundled first-run database is not implemented yet.
 
 The source value returned by `Signal(...)` is a nominal handle registered to the current elaboration session. A plain JavaScript object with `type` and `name` fields remains an ordinary object and is not accepted as a Signal operand or Network selection. Once a valid handle enters a direct plan, its identity is serialized as the structural `{ type, name, quality? }` Signal ID used by IR, simulation, and blueprint JSON. Name-only `network["chest"]` remains an explicit shorthand and does not require constructing a handle first.
 
@@ -380,7 +381,38 @@ const advanced = Advance(seed);
 
 Entering `Advance` transfers ownership and immediately invalidates every caller-side alias and old array/object slot that contains `seed`; using one reports `RT2012`. The `Move` view may be read, written, or consumed with `.take(...)`. Returning it transfers a fresh owned view to the caller. Owned Networks nested in arrays and plain objects are transferred recursively, while attempting to return the same owner twice, such as `[input, input]`, is rejected as a duplicate move.
 
-Ownership is affine rather than mandatory-use: a function may consume or drop a `Move` parameter without returning it. The old caller views do not become valid again; trying to use dropped ownership reports `RT2019`. A function also cannot return a caller-owned Network that it never accepted through `Move`; that would be an implicit steal and reports `RT2019`. A bare `Network` parameter is deliberately invalid (`CL1041`) because it would not state whether the call borrows or consumes the value. Use `Readonly<Network>`, `Ref<Network>`, or `Move<Network>` explicitly.
+Ownership is affine rather than mandatory-use: a function may consume or drop a `Move` parameter without returning it. The old caller views do not become valid again; trying to use dropped ownership reports `RT2019`. A function also cannot return a caller-owned Network that it never accepted through `Move`; that would be an implicit steal and reports `RT2019`.
+
+Simple parameters in function declarations may omit the capability or the type:
+
+```ts
+function Double(input) {
+  return input * 2;
+}
+function Triple(input: Network): Network {
+  return input * 3;
+}
+
+const input = CC(5 * Signal('virtual', 'signal-A'));
+const doubled = Double(input);
+const tripled = Triple(input);
+const ordinaryNumber = Double(4); // ordinary JavaScript: 8
+```
+
+Both forms borrow an actual Network for reading, without consuming it. They emit
+warning `CL2002` once per parameter declaration per compilation, only when that
+parameter actually borrows a Network. Explicit `Readonly<Network>` suppresses the
+warning; writes still require `Ref<Network>`, and consuming ownership requires
+`Move<Network>`. Implicit borrows expire on return/throw and cannot escape through
+return values or captured aliases. The initial default is read-only, not automatic
+writable inference.
+
+`input: Network<G>` also constrains the underlying color. A typed Network
+parameter materializes a Producer argument; an untyped parameter preserves a
+Producer as a handle and leaves ordinary numbers, arrays, and objects unchanged.
+This is direct-value dispatch, not recursive conversion of container contents or
+inference for arrows, methods, or destructuring patterns. Bare `Network` in a
+local declaration or return annotation still means an owned Network.
 
 Variables, destructuring bindings, arrays, objects, and closures may hold aliases of one Network. They share the same ownership state and generation. Passing `array[i]` or `record.current` to `Move<Network>` invalidates the old slot value and every other old alias; assign the returned owner back with `array[i] = Transform(array[i])` or `record.current = Transform(record.current)`. A closure that retains a `Readonly`/`Ref` view past the call boundary receives `RT2017` when it later tries to use that expired borrow.
 
@@ -456,6 +488,7 @@ The current language does not require generation to be reproducible. Code may de
 
 - `CL1xxx` — source lowering and semantic errors
 - `CL2001` — non-fatal unused-producer warning
+- `CL2002` — non-fatal implicit read-only Network parameter warning
 - `EX1xxx` — transformed JavaScript execution errors and availability limits
 - `RT1xxx` — direct-plan descriptor/schema failures
 - `RT2xxx` — runtime ownership, topology, and color failures

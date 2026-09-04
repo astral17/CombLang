@@ -66,7 +66,39 @@ A read-only parameter may feed arithmetic, conditions, selections, and typed Fac
 
 Container returns are checked as a graph before transferring any owner. A rejected member does not partially invalidate earlier members. Cycles and shared containers are preserved (the same container is inspected once), along with sparse indices, own-property descriptors, and frozen/sealed/non-extensible state. Containers that do not lead to transferred Networks retain their identity. Getters are not invoked, and Maps/class instances are not traversed; this boundary does not roll back effects from evaluating the return expression.
 
-Bare `Network` parameters are forbidden because an implicit mode would hide whether the call borrows or consumes ownership. Bare `Network` remains valid for local bindings and return annotations.
+Simple identifier parameters in function declarations now also support an implicit
+read-only borrow:
+
+```ts
+function Double(input) {
+  return input * 2;
+}
+function Triple(input: Network): Network {
+  return input * 3;
+}
+```
+
+`input: Network` requires a Network (or materializable Producer) and borrows it as
+`Readonly<Network>`; `Network<R>`/`Network<G>` preserve their color requirements.
+Without an annotation, only an actual direct Network argument becomes a borrow.
+Numbers, strings, null/undefined, arrays, ordinary objects, and unmaterialized
+Producer handles retain their executed JavaScript categories and identities.
+There is no recursive coercion of Networks stored inside containers, and no new
+parameter inference for arrows, methods, or destructuring patterns in this slice.
+
+The runtime emits `CL2002` once per parameter declaration per compilation when
+that parameter first successfully borrows a Network. Ordinary calls and uncalled
+declarations do not emit it. The warning points to the parameter declaration;
+runtime argument failures still point to the argument where available. Explicit
+`Readonly`, `Ref`, and `Move` parameters do not emit this warning.
+
+The initial implicit policy is deliberately read-only, not inferred writable
+borrowing. Use `Ref<Network>` to attach outputs and `Move<Network>` to consume or
+return the caller's ownership. Borrow expiry, overlap checks, and escape checks
+are the same as for explicit `Readonly`; callers regain access on return or throw.
+Returning the argument itself (including inside a container) does not implicitly
+transfer ownership. Bare `Network` still means owned for local bindings and
+return annotations; this default applies only at the parameter boundary.
 
 Borrowed values must not outlive their owner. The checker should reject a definite borrow escape. If ordinary JavaScript control flow or a dynamically selected container element prevents proof, the runtime must validate the actual handle state instead of the checker guessing.
 

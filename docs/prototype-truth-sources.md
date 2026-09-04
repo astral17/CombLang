@@ -111,10 +111,12 @@ The following language/runtime work is tracked separately from prototype data:
   fail at its first executed operation with source provenance, before subsequent
   JavaScript runs. The current final batch solver does not meet this requirement;
   it should ultimately only orient/materialize already-consistent components.
-- Bare `Network` parameters may become non-consuming borrows with one declaration
-  warning; the mutability rule is **not decided**. Always-readonly borrowing and
-  body-inferred writable borrowing are different contracts. Keep current behavior
-  until this is agreed; explicit `Move` must remain the only consuming boundary.
+- Implemented initial policy: simple bare `Network` parameters and direct Networks
+  passed to untyped function-declaration parameters receive non-consuming read-only
+  borrows, with one declaration warning per compilation. Ordinary generic values
+  remain unchanged. Automatic writable inference is not implemented; writes require
+  explicit `Ref`, and `Move` remains the only consuming parameter boundary. See
+  [ownership rules](ownership-and-multi-network.md) for the supported scope.
 - Implemented: poison a TestSession after a failed scheduled callback/boundary. Callbacks can
   already have mutated drives, mocks, and schedules before throwing. Do not permit
   retrying that partially applied boundary as if it were atomic. Reads of the last
