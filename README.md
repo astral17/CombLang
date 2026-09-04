@@ -131,6 +131,7 @@ Later phases cover prototype profiles, typed Factorio objects, exact constructor
 - [Blueprint JSON preview](docs/blueprint-json.md) — generated structure, wiring model, and current limitations.
 - [Architecture notes](docs/architecture.md) — package boundaries, lowering decisions, runtime invariants, and implementation status.
 - [Direct plan schema](docs/direct-plan-schema.md) — stable elaboration transport, versioning, validation ownership, and dependency direction.
+- [Elaboration transform](docs/elaboration-transform.md) — source prepass, hygienic runtime bridge, lexical Producer slots, and AST rewrite boundary.
 - [Compile-time JavaScript](docs/compile-time-javascript.md) — supported metaprogramming subset and explicit compatibility limits.
 - [Security model](docs/security-model.md) — current trusted-source assumption and Worker/CLI isolation limits.
 

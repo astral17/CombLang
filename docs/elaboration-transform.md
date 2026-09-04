@@ -1,0 +1,28 @@
+# Elaboration transform
+
+CombLang keeps ordinary JavaScript control flow and rewrites only DSL-sensitive TypeScript syntax into calls on a hygienic runtime parameter. The transform has two explicit stages:
+
+1. `analyzeElaborationTransform(file)` performs a read-only source prepass.
+2. `transformElaborationModule(file)` consumes those facts while visiting and rewriting AST nodes.
+
+The resulting module is ordinary JavaScript parameterized by the executed recorder. It does not contain a second interpreter for loops, functions, arrays, objects, or property access.
+
+## Analysis contract
+
+The prepass owns facts that require whole-file or lexical lookup:
+
+- every source identifier, used to choose `__dsl`, `__dsl_1`, and so on without capturing user code;
+- unsupported async syntax, including async modifiers, `await`, and `for await...of`;
+- definitely declared Signal and Network bindings;
+- destructured bindings whose initializer is known to contain a Network;
+- typed Producer slots and their lexical scope, declaration position, array element type, or flat object property type.
+
+`producerTypeForAssignment(target, assignment)` resolves the nearest declaration that is both visible at the assignment and declared before it. An outer Producer annotation must not leak through a same-named block/function/loop/catch binding. Property and element assignments are classified only when their declared container type proves a concrete Producer category.
+
+The prepass intentionally records positive facts, not a general TypeScript type system. Ambiguous values remain ordinary JavaScript until an executed DSL boundary can classify them.
+
+## Rewrite contract
+
+The AST visitor owns local syntax transformations and evaluation order. It consumes the prepass instead of rebuilding name/scope heuristics inside individual node branches. Runtime calls retain source spans, and transform-generated temporaries use the hygienic runtime parameter selected before rewriting.
+
+Unsupported async syntax is retained in the output metadata and rejected by the execution boundary. The transform does not partially execute or silently erase it.
