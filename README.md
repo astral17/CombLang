@@ -75,8 +75,8 @@ The current repository implements the Phase 3 source compiler, the complete Phas
     - [x] Add browser-local JSON selection, identity-keyed IndexedDB persistence, tab-local active selection, reload restoration, explicit disable, and pinned rehydration after Worker restart.
     - [x] Add explicit versioned CLI project profiles with project-relative source/test/database paths, optional identity pins, and conflict/missing-profile diagnostics before source execution.
     - [ ] Generate and validate the built-in vanilla/Space Age first-run database.
-  - [ ] Build an offline normalizer for native `factorio.exe --dump-data` output, supplementing it with a narrow Lua `prototypes` probe only for missing derived facts; verify base, Space Age, and modded-override fixtures.
-    - [x] Normalize resolved item subtypes, fluids, multi-category recipes and 2.x count/temperature defaults, qualities, virtual signals, recipe categories, and bounding-box entity footprints; expose it through `factorio-dsl prototypes normalize` with explicit environment metadata and loss warnings.
+  - [ ] Establish authoritative runtime structural export alongside the offline raw `factorio.exe --dump-data` normalizer; verify base, Space Age, and modded-override fixtures.
+    - [x] Implement the initial raw normalizer for item subtypes, fluids, multi-category recipes, count/temperature metadata, qualities, virtual signals, recipe categories, and bounding boxes through `factorio-dsl prototypes normalize`. This transitional mapping is not verified runtime truth; footprint correction remains below.
     - [x] Smoke-test the external dump without making repository code or tests depend on `../Analysis`.
     - [x] Preserve independent and shared product probabilities plus statistics/productivity exclusions as distinct validated facts, including identity/JSON/provider coverage and a full external-dump smoke check.
     - [x] Preserve item ingredient/product spoilage and fluidbox routing metadata with role/type/range validation, immutable ordered indexes, identity coverage, and a full external-dump smoke check.
@@ -84,8 +84,18 @@ The current repository implements the Phase 3 source compiler, the complete Phas
     - [x] Add an explicit read-only Factorio observation mod, immutable JSONL reader and CLI inspection; retain mod/settings provenance and false/absent/error distinctions without generating capability assertions. Native execution of the collector is still pending.
     - [x] Compare observation provenance against a selected database through CLI/library: exact game/mod/setting values and entity key/type, original JSONL lines, and separate match/mismatch/unverified results. Preserve optional startup setting snapshots in database identity without trusting legacy labels as evidence.
     - [x] Preserve item recipe quality transformations and explicit quality-chain links, with type/range/reference/cycle checks and chain-based bounds validation; keep unknown legacy links distinct from explicit chain ends.
+    - [x] Record the raw/runtime/behavior authority split and September 4 audit triage; correct locale-dependent identity ordering, retain empty-output recipes, reject malformed raw recipe flags/main products, and rename the coarse crafting helper to `isBasicCraftingCompatible`.
+    - [ ] Export read-only runtime `prototypes` structural facts with exact environment provenance; retain raw-only metadata separately.
+    - [ ] Replace selection-box-derived footprints with runtime tile dimensions (or explicit raw tiles/documented collision defaults), including zero-sized and asymmetric cases.
+    - [ ] Separate ingredient/product and item/fluid validation at the correct source boundary; cover zero fluid amounts, duplicate ingredients, numeric bounds, temperature rules, and real crafting constraints with unknown/evidence-aware results.
     - [ ] Derive or probe exact circuit capabilities; then lock base, Space Age, and modded-override conformance fixtures.
-- [ ] Phase 6 — typed Factorio objects: shared circuit inputs, native single-comparison `enable`, Roboport, Lamp, Constant, logistics entities, belts, displays, and train stops.
+  - [ ] Poison TestSession after a failed partially applied boundary; block mutation/retry while retaining last committed snapshot reads.
+  - [ ] Move color consistency checks into executed elaboration operations, preserving first-conflict spans and preventing later source execution after a contradiction.
+- [ ] Phase 6 — universal persistent Factorio Entity handles with a generic modded fallback and typed facades: shared circuit inputs, native single-comparison `enable`, Roboport, Lamp, Constant, logistics entities, belts, displays, and train stops.
+  - [ ] Define common identity/configuration/placement and explicit connector selection before individual constructors; keep circuit, native, and future logistic configuration separate.
+  - [ ] Connect the same Entity identity to test mocks/adapters without introducing full factory simulation.
+  - [ ] Define shared CC signal-value inputs (typed counts, tuples, arrays, maps, computed-key objects), ordinary JS key semantics, duplicate handling, and ordering before adding overloads.
+  - [ ] Resolve the bare `Network` parameter borrow/mutability policy before changing current ownership diagnostics; never infer consuming `Move`.
 - [ ] Phase 7 — exact constructors and native-config stress: Arithmetic, full Decider normal/else output lists, duplicate outputs, `Everything`, Selector, raw entities, LUTs, and large generated configurations.
   - [x] Validate the currently implemented `Each`/`Everything` output compatibility against the final post-execution Decider descriptor, including dynamically generated rows and conditions.
   - [ ] Verify Each-to-concrete copy-count behavior, constant-row interaction, duplicate multiplicity, conditional subsets, and `pair(red, green)` selections against exported Factorio fixtures; never lower these rows as a sum/reduce.
@@ -106,6 +116,7 @@ Later phases cover prototype profiles, typed Factorio objects, exact constructor
 - [Phase 4 ownership design](docs/ownership-and-multi-network.md) — completed affine ownership, borrows, consuming transfer, read-only `pair`, and its acceptance matrix.
 - [Native objects, Deciders, and parameters](docs/native-objects-deciders-and-parameters.md) — planned Phase 6–8 semantic domains and conformance requirements.
 - [Prototype environment](docs/prototype-environment.md) — the Phase 5.5 normalized modded-data provider, Factorio exporter, loading, and environment-identity boundary.
+- [Prototype truth sources and audit follow-up](docs/prototype-truth-sources.md) — raw/runtime/behavior authority, identity migration, and pending September 4 recommendations.
 - [Runtime debug index](docs/debug-index.md) — exact lexical scopes, physical Network/Producer mappings, deterministic queries, and current ambiguity boundary.
 - [Executable testbench](docs/testbench.md) — the current JavaScript test API, clock, assertions, traces, and browser/CLI behavior.
 - [Phase 5 acceptance](docs/phase-5-acceptance.md) — runnable MemoCell/object examples, layered coverage, and the completed MVP boundary.

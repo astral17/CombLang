@@ -21,6 +21,8 @@ import {
   type VirtualSignalPrototype,
 } from './schema.js';
 
+import { compareCanonicalString } from './canonical.js';
+
 export class PrototypeValidationError extends Error {
   readonly code: string;
   readonly path: string;
@@ -183,7 +185,7 @@ function parseEnvironment(value: unknown): PrototypeEnvironment {
       ? undefined
       : Object.freeze(
           [...validatePrototypeStartupSettings(input.startupSettings)].sort((a, b) =>
-            a.name.localeCompare(b.name),
+            compareCanonicalString(a.name, b.name),
           ),
         );
   return Object.freeze({
@@ -192,7 +194,8 @@ function parseEnvironment(value: unknown): PrototypeEnvironment {
     mods: Object.freeze(
       [...mods].sort(
         (left, right) =>
-          left.name.localeCompare(right.name) || left.version.localeCompare(right.version),
+          compareCanonicalString(left.name, right.name) ||
+          compareCanonicalString(left.version, right.version),
       ),
     ),
     generatorVersion: string(input.generatorVersion, 'environment.generatorVersion'),
@@ -235,7 +238,9 @@ function parseItems(value: unknown): readonly ItemPrototype[] {
     items.map(({ key }) => key),
     'items',
   );
-  return Object.freeze([...items].sort((left, right) => left.key.localeCompare(right.key)));
+  return Object.freeze(
+    [...items].sort((left, right) => compareCanonicalString(left.key, right.key)),
+  );
 }
 
 function parseFluids(value: unknown): readonly FluidPrototype[] {
@@ -252,7 +257,9 @@ function parseFluids(value: unknown): readonly FluidPrototype[] {
     fluids.map(({ key }) => key),
     'fluids',
   );
-  return Object.freeze([...fluids].sort((left, right) => left.key.localeCompare(right.key)));
+  return Object.freeze(
+    [...fluids].sort((left, right) => compareCanonicalString(left.key, right.key)),
+  );
 }
 
 function qualityKey(value: unknown, path: string): QualityPrototypeKey {
@@ -500,7 +507,6 @@ function parseRecipes(value: unknown): readonly RecipePrototype[] {
     const products = array(input.products, `${path}.products`).map((component, componentIndex) =>
       parseComponent(component, `${path}.products[${componentIndex}]`, 'product'),
     );
-    if (products.length === 0) invalid('PT1001', `${path}.products`, 'must not be empty.');
     const mainProduct = optionalString(input.mainProduct, `${path}.mainProduct`);
     const categories = array(input.categories, `${path}.categories`).map(
       (category, categoryIndex) => string(category, `${path}.categories[${categoryIndex}]`),
@@ -529,7 +535,9 @@ function parseRecipes(value: unknown): readonly RecipePrototype[] {
     recipes.map(({ key }) => key),
     'recipes',
   );
-  return Object.freeze([...recipes].sort((left, right) => left.key.localeCompare(right.key)));
+  return Object.freeze(
+    [...recipes].sort((left, right) => compareCanonicalString(left.key, right.key)),
+  );
 }
 
 function optionalFlags(
@@ -616,7 +624,9 @@ function parseEntities(
     entities.map(({ key }) => key),
     'entities',
   );
-  return Object.freeze([...entities].sort((left, right) => left.key.localeCompare(right.key)));
+  return Object.freeze(
+    [...entities].sort((left, right) => compareCanonicalString(left.key, right.key)),
+  );
 }
 
 function parseQualities(value: unknown): readonly QualityPrototype[] {
@@ -643,7 +653,7 @@ function parseQualities(value: unknown): readonly QualityPrototype[] {
   );
   return Object.freeze(
     [...qualities].sort(
-      (left, right) => left.level - right.level || left.key.localeCompare(right.key),
+      (left, right) => left.level - right.level || compareCanonicalString(left.key, right.key),
     ),
   );
 }
@@ -666,7 +676,9 @@ function parseNamedPrototypes<T extends { readonly key: string; readonly name: s
     prototypes.map(({ key }) => key),
     path,
   );
-  return Object.freeze([...prototypes].sort((left, right) => left.key.localeCompare(right.key)));
+  return Object.freeze(
+    [...prototypes].sort((left, right) => compareCanonicalString(left.key, right.key)),
+  );
 }
 
 export function buildPrototypeIndexes(recipes: readonly RecipePrototype[]): PrototypeIndexes {
@@ -680,7 +692,7 @@ export function buildPrototypeIndexes(recipes: readonly RecipePrototype[]): Prot
   }
   const recipesByProduct = Object.fromEntries(
     [...mutable]
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => compareCanonicalString(left, right))
       .map(([key, recipesForProduct]) => [key, Object.freeze([...recipesForProduct].sort())]),
   ) as Record<ProductPrototypeKey, readonly RecipePrototypeKey[]>;
   return Object.freeze({ recipesByProduct: Object.freeze(recipesByProduct) });
@@ -691,7 +703,7 @@ function parseIndexes(value: unknown, recipes: readonly RecipePrototype[]): Prot
   const raw = object(input.recipesByProduct, 'indexes.recipesByProduct');
   const actual = Object.fromEntries(
     Object.entries(raw)
-      .sort(([left], [right]) => left.localeCompare(right))
+      .sort(([left], [right]) => compareCanonicalString(left, right))
       .map(([product, recipeKeys]) => [
         product,
         [...array(recipeKeys, `indexes.recipesByProduct.${product}`)]

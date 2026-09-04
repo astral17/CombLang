@@ -181,8 +181,10 @@ kind. These errors carry the field path, including the element index for malform
 preserved as inactive metadata, not rejected; it must not be applied by consumers.
 
 Native dump conversion uses `PD1001` for a malformed or internally inconsistent
-`data-raw-dump` shape. `PD2001` reports skipped empty recipes/engine sentinels,
-while `PD2002` reports capability data that
+`data-raw-dump` shape, including malformed recipe flags and invalid or ambiguous
+main-product names. `PD2001` is retired: empty-output recipes and engine sentinels
+are retained by generator v1.5 rather than skipped.
+`PD2002` reports capability data that
 the native dump cannot prove. Conversion warnings are explicit coverage notices;
 they do not make the normalized v1 subset invalid.
 

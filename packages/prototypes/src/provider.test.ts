@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 import { syntheticPrototypeDatabase } from './fixtures.js';
 import { loadPrototypeDatabase } from './provider.js';
@@ -34,6 +34,87 @@ function mutableFixture(): MutableDatabase {
 }
 
 describe('PrototypeDatabase v1', () => {
+  test('canonicalizes identity and collections without locale-sensitive collation', async () => {
+    const raw = mutableFixture();
+    const names = ['z', 'a_b', 'a0', 'a-b', 'a', 'A'];
+    raw.items = names
+      .map((name) => ({ key: `item:${name}`, name, stackSize: 1 }))
+      .concat(raw.items);
+    const reversed = structuredClone(raw);
+    reversed.items.reverse();
+    reversed.environment.mods.reverse();
+    const collation = vi.spyOn(String.prototype, 'localeCompare').mockImplementation(() => {
+      throw new Error('Canonical data must not depend on locale collation.');
+    });
+    try {
+      const first = await loadPrototypeDatabase(raw);
+      const second = await loadPrototypeDatabase(reversed);
+      expect(first.prototypes.identity).toBe(second.prototypes.identity);
+      const expected = ['A', 'a', 'a-b', 'a0', 'a_b', 'z'];
+      expect(
+        first.database.items.filter(({ name }) => names.includes(name)).map(({ name }) => name),
+      ).toEqual(expected);
+      expect(Object.keys(first.prototypes.item).filter((name) => names.includes(name))).toEqual(
+        expected,
+      );
+      expect((await loadPrototypeDatabase(mutableFixture())).prototypes.identity).toBe(
+        'comblang-prototypes-v1-sha256:995933ebfa6a616450f87947e57fe09d956a156ef156455c69080456997d6131',
+      );
+    } finally {
+      collation.mockRestore();
+    }
+  });
+
+  test('keeps empty-output recipes out of product indexes without dropping the recipe', async () => {
+    const raw = mutableFixture();
+    raw.recipes.push({
+      key: 'recipe:disposal',
+      name: 'disposal',
+      categories: ['crafting'],
+      energy: 1,
+      ingredients: [{ prototype: 'item:iron-plate', amount: 1 }],
+      products: [],
+    });
+    const { database, prototypes } = await loadPrototypeDatabase(JSON.parse(JSON.stringify(raw)));
+    expect(prototypes.recipe.disposal?.products).toEqual([]);
+    expect(Object.values(database.indexes.recipesByProduct).flat()).not.toContain(
+      'recipe:disposal',
+    );
+    expect(prototypes.isBasicCraftingCompatible('assembling-machine-3', 'disposal')).toBe(true);
+    raw.recipes.at(-1)!.mainProduct = 'item:iron-plate';
+    expect(() => validatePrototypeDatabase(raw)).toThrowError(
+      expect.objectContaining({ code: 'PT1004' }),
+    );
+  });
+
+  test('does not turn missing crafting facts into a negative compatibility result', async () => {
+    const raw = mutableFixture();
+    delete raw.entities[0]!.crafting;
+    const { prototypes } = await loadPrototypeDatabase(raw);
+    expect(() =>
+      prototypes.isBasicCraftingCompatible('assembling-machine-3', 'iron-gear-wheel'),
+    ).toThrow('does not provide crafting data');
+    expect(() => prototypes.isBasicCraftingCompatible('missing', 'iron-gear-wheel')).toThrow(
+      'Unknown entity prototype',
+    );
+    expect(() => prototypes.isBasicCraftingCompatible('chemical-plant', 'missing')).toThrow(
+      'Unknown recipe prototype',
+    );
+    raw.entities[0]!.crafting = { categories: [], supportsFluids: false };
+    expect(
+      (await loadPrototypeDatabase(raw)).prototypes.isBasicCraftingCompatible(
+        'assembling-machine-3',
+        'iron-gear-wheel',
+      ),
+    ).toBe(false);
+    raw.capabilities.recipes = false;
+    expect(() => validatePrototypeDatabase(raw)).not.toThrow();
+    const unavailable = (await loadPrototypeDatabase(raw)).prototypes;
+    expect(() => unavailable.isBasicCraftingCompatible('chemical-plant', 'water-cycle')).toThrow(
+      'does not provide recipes data',
+    );
+  });
+
   test('normalizes, freezes, indexes, and queries a synthetic environment', async () => {
     const raw = mutableFixture();
     raw.environment.expansions.reverse();
@@ -75,10 +156,12 @@ describe('PrototypeDatabase v1', () => {
       'iron-gear-wheel',
       'modded-gear-wheel',
     ]);
-    expect(prototypes.canCraft('assembling-machine-3', 'iron-gear-wheel')).toBe(true);
-    expect(prototypes.canCraft('assembling-machine-3', 'water-cycle')).toBe(false);
-    expect(prototypes.canCraft('chemical-plant', 'water-cycle')).toBe(true);
-    expect(prototypes.canCraft('chemical-plant', 'iron-gear-wheel')).toBe(true);
+    expect(prototypes.isBasicCraftingCompatible('assembling-machine-3', 'iron-gear-wheel')).toBe(
+      true,
+    );
+    expect(prototypes.isBasicCraftingCompatible('assembling-machine-3', 'water-cycle')).toBe(false);
+    expect(prototypes.isBasicCraftingCompatible('chemical-plant', 'water-cycle')).toBe(true);
+    expect(prototypes.isBasicCraftingCompatible('chemical-plant', 'iron-gear-wheel')).toBe(true);
     expect(prototypes.getRecipe('water-cycle')?.products[0]?.temperature).toBe(25);
     expect(prototypes.entityCircuitCapabilities('assembling-machine-3').setRecipe).toBe(true);
 

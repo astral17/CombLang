@@ -1,4 +1,5 @@
 import { parseCircuitObservationRecordsJsonl } from './circuit-observations.js';
+import { compareCanonicalString } from './canonical.js';
 import { prototypeDatabaseIdentity } from './identity.js';
 import { validatePrototypeDatabase } from './validation.js';
 
@@ -33,7 +34,7 @@ function valueKey(value: unknown): string {
   // Settings are scalars, tuples or flat color objects. Object property order is immaterial.
   return JSON.stringify(
     value !== null && typeof value === 'object' && !Array.isArray(value)
-      ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => a.localeCompare(b)))
+      ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => compareCanonicalString(a, b)))
       : value,
   );
 }

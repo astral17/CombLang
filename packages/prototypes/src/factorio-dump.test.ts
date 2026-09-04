@@ -91,6 +91,68 @@ function dumpFixture(): unknown {
 }
 
 describe('Factorio data-raw-dump normalizer', () => {
+  test.each(['enabled', 'allow_productivity', 'hidden', 'main_product'])(
+    'rejects malformed raw %s instead of silently replacing it',
+    (field) => {
+      const dump = dumpFixture() as { recipe: Record<string, Record<string, unknown>> };
+      dump.recipe['iron-plate']![field] = 1;
+      expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
+        expect.objectContaining({ code: 'PD1001', path: `recipe.iron-plate.${field}` }),
+      );
+    },
+  );
+
+  test('requires an unambiguous existing main product but allows repeated rows in one namespace', () => {
+    const dump = dumpFixture() as {
+      recipe: Record<string, Record<string, unknown>>;
+      fluid: Record<string, unknown>;
+    };
+    const recipe = dump.recipe['iron-plate']!;
+    recipe.main_product = 'missing';
+    const invalid = () =>
+      expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
+        expect.objectContaining({ code: 'PD1001', path: 'recipe.iron-plate.main_product' }),
+      );
+    invalid();
+    recipe.main_product = 'iron-plate';
+    recipe.results = [
+      { type: 'item', name: 'iron-plate', amount: 1 },
+      { type: 'item', name: 'iron-plate', amount: 2 },
+    ];
+    expect(
+      normalizeFactorioDataDump(dump, metadata).database.recipes.find(
+        ({ name }) => name === 'iron-plate',
+      )?.mainProduct,
+    ).toBe('item:iron-plate');
+    dump.fluid['iron-plate'] = { type: 'fluid', name: 'iron-plate' };
+    (recipe.results as unknown[]).push({ type: 'fluid', name: 'iron-plate', amount: 1 });
+    invalid();
+    recipe.main_product = '';
+    expect(
+      normalizeFactorioDataDump(dump, metadata).database.recipes.find(
+        ({ name }) => name === 'iron-plate',
+      )?.mainProduct,
+    ).toBeUndefined();
+  });
+
+  test.each([[], {}])(
+    'retains empty-output recipes, including recipes that consume ingredients (%j)',
+    async (results) => {
+      const dump = dumpFixture() as { recipe: Record<string, Record<string, unknown>> };
+      dump.recipe['iron-plate']!.results = results;
+      const normalized = normalizeFactorioDataDump(dump, metadata);
+      const { prototypes } = await loadPrototypeDatabase(
+        JSON.parse(JSON.stringify(normalized.database)),
+      );
+      expect(prototypes.recipe['iron-plate']).toMatchObject({
+        ingredients: [{ prototype: 'item:grenade', amount: 1 }],
+        products: [],
+      });
+      expect(prototypes.recipesProducing('item:iron-plate')).toEqual([]);
+      expect(normalized.warnings.some(({ path }) => path.startsWith('recipe.'))).toBe(false);
+    },
+  );
+
   test('maps raw quality chains and validates bounds through their next edges', () => {
     const dump = dumpFixture() as {
       quality: Record<string, unknown>;
@@ -190,7 +252,7 @@ describe('Factorio data-raw-dump normalizer', () => {
     const normalized = normalizeFactorioDataDump(dumpFixture(), metadata);
     const { database, prototypes } = await loadPrototypeDatabase(normalized.database);
 
-    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.4');
+    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.5');
     expect(prototypes.item.grenade?.stackSize).toBe(100);
     expect(prototypes.recipe['iron-plate']).toMatchObject({
       categories: ['crafting'],
@@ -209,16 +271,16 @@ describe('Factorio data-raw-dump normalizer', () => {
       tileHeight: 3,
       crafting: { categories: ['crafting', 'crafting-with-fluid'], supportsFluids: true },
     });
-    expect(prototypes.canCraft('assembler', 'heated-water')).toBe(true);
+    expect(prototypes.isBasicCraftingCompatible('assembler', 'heated-water')).toBe(true);
     expect(() => prototypes.entityCircuitCapabilities('assembler')).toThrow(
       'Prototype database does not provide entityCircuitCapabilities data for entity:assembler.',
     );
     expect(normalized.warnings).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ code: 'PD2001', path: 'recipe.recipe-unknown' }),
         expect.objectContaining({ code: 'PD2002', path: 'entities.*.circuit' }),
       ]),
     );
+    expect(prototypes.recipe['recipe-unknown']?.products).toEqual([]);
   });
 
   test('preserves zero-base probabilistic extra counts used by recycling recipes', () => {

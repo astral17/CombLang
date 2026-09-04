@@ -277,14 +277,6 @@ export function normalizeFactorioDataDump(
     const products = componentList(record.results, `recipe.${name}.results`).map(
       (component, index) => recipeComponent(component, `recipe.${name}.results[${index}]`),
     );
-    if (products.length === 0) {
-      warnings.push({
-        code: 'PD2001',
-        path: `recipe.${name}`,
-        message: 'Skipped a recipe with no products (normally an engine sentinel).',
-      });
-      continue;
-    }
     const rawCategories =
       record.categories === undefined
         ? record.category === undefined
@@ -299,16 +291,30 @@ export function normalizeFactorioDataDump(
     const ingredients = componentList(record.ingredients, `recipe.${name}.ingredients`).map(
       (component, index) => recipeComponent(component, `recipe.${name}.ingredients[${index}]`),
     );
-    const mainProductName =
-      typeof record.main_product === 'string' && record.main_product.length > 0
-        ? record.main_product
-        : undefined;
-    const mainProduct =
+    if (record.main_product !== undefined && typeof record.main_product !== 'string') {
+      throw new FactorioDumpError(`recipe.${name}.main_product`, 'expected a string.');
+    }
+    const mainProductName = record.main_product === '' ? undefined : record.main_product;
+    const candidates =
       mainProductName === undefined
-        ? undefined
-        : products.find(
-            ({ prototype }) => prototype.slice(prototype.indexOf(':') + 1) === mainProductName,
-          )?.prototype;
+        ? []
+        : [
+            ...new Set(
+              products
+                .filter(
+                  ({ prototype }) =>
+                    prototype.slice(prototype.indexOf(':') + 1) === mainProductName,
+                )
+                .map(({ prototype }) => prototype),
+            ),
+          ];
+    if (mainProductName !== undefined && candidates.length !== 1) {
+      throw new FactorioDumpError(
+        `recipe.${name}.main_product`,
+        'expected exactly one matching product namespace; use runtime typed main_product for ambiguous raw names.',
+      );
+    }
+    const mainProduct = candidates[0];
     recipes.push({
       key: `recipe:${name}`,
       name,
@@ -320,9 +326,10 @@ export function normalizeFactorioDataDump(
       ingredients,
       products,
       ...(mainProduct === undefined ? {} : { mainProduct }),
-      enabledByDefault: record.enabled === undefined ? true : record.enabled === true,
-      allowProductivity: record.allow_productivity === true,
-      hidden: record.hidden === true,
+      enabledByDefault: optionalBoolean(record.enabled, `recipe.${name}.enabled`) ?? true,
+      allowProductivity:
+        optionalBoolean(record.allow_productivity, `recipe.${name}.allow_productivity`) ?? false,
+      hidden: optionalBoolean(record.hidden, `recipe.${name}.hidden`) ?? false,
     });
   }
 
@@ -362,7 +369,7 @@ export function normalizeFactorioDataDump(
 
   const environment: PrototypeEnvironment = {
     ...metadata,
-    generatorVersion: 'comblang-factorio-data-dump-v1.4',
+    generatorVersion: 'comblang-factorio-data-dump-v1.5',
   };
   const candidate = {
     schemaVersion: 1,

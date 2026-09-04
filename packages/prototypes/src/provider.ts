@@ -1,4 +1,5 @@
 import { prototypeDatabaseIdentity } from './identity.js';
+import { compareCanonicalString } from './canonical.js';
 import type {
   EntityCircuitCapabilities,
   EntityPrototype,
@@ -57,7 +58,8 @@ export interface PrototypeProvider {
   getQuality(nameOrKey: string): QualityPrototype | undefined;
   getVirtualSignal(nameOrKey: string): VirtualSignalPrototype | undefined;
   recipesProducing(product: ProductPrototypeKey): readonly RecipePrototype[];
-  canCraft(entity: string, recipe: string): boolean;
+  /** Category/fluid prefilter only, never proof of native craftability. Missing facts throw. */
+  isBasicCraftingCompatible(entity: string, recipe: string): boolean;
   stackSize(item: string): number;
   entityCircuitCapabilities(entity: string): EntityCircuitCapabilities;
 }
@@ -95,7 +97,9 @@ function groupedTable<T>(
     groups.set(key, group);
   }
   const result = Object.create(null) as Record<string, readonly T[]>;
-  for (const [key, values] of [...groups].sort(([left], [right]) => left.localeCompare(right))) {
+  for (const [key, values] of [...groups].sort(([left], [right]) =>
+    compareCanonicalString(left, right),
+  )) {
     result[key] = Object.freeze([...values].sort(compare));
   }
   return Object.freeze(result);
@@ -161,7 +165,7 @@ function createPrototypeProvider(
   }
 
   const byKey = (left: { readonly key: string }, right: { readonly key: string }) =>
-    left.key.localeCompare(right.key);
+    compareCanonicalString(left.key, right.key);
   const collections: PrototypeCollections = Object.freeze({
     all: Object.freeze(all),
     recipesByProduct: Object.freeze(recipesByProduct),
@@ -220,17 +224,17 @@ function createPrototypeProvider(
       if (!database.capabilities.recipes) unavailable('recipes');
       return collections.recipesByProduct[product] ?? Object.freeze([]);
     },
-    canCraft(entityName: string, recipeName: string) {
+    isBasicCraftingCompatible(entityName: string, recipeName: string) {
       if (!database.capabilities.entities) unavailable('entities');
       if (!database.capabilities.recipes) unavailable('recipes');
       const entityValue = entities.get(entityName);
       const recipeValue = recipes.get(recipeName);
-      if (
-        entityValue === undefined ||
-        recipeValue === undefined ||
-        entityValue.crafting === undefined
-      )
-        return false;
+      if (entityValue === undefined) throw new Error(`Unknown entity prototype: ${entityName}.`);
+      if (recipeValue === undefined) throw new Error(`Unknown recipe prototype: ${recipeName}.`);
+      if (entityValue.crafting === undefined)
+        throw new Error(
+          `Prototype database does not provide crafting data for ${entityValue.key}.`,
+        );
       if (
         !recipeValue.categories.some((category) =>
           entityValue.crafting?.categories.includes(category),

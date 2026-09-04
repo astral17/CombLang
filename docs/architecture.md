@@ -1,20 +1,27 @@
 # Implementation boundaries
 
-This repository grew from the Phase 0 skeleton into the completed Phase 3 source compiler and the first Phase 4 ownership slice. Major folders are workspace packages, while finer-grained architecture folders (`language/parser`, `compiler/ir`, and so on) remain source modules inside those packages until scale justifies independent publishing.
+The source compiler, Phase 4 ownership model, and Phase 5 MVP testbench are implemented. Phase 5.5 is building the external prototype environment; native conformance and the first-run database remain incomplete. Major folders are workspace packages, while finer-grained architecture folders (`language/parser`, `compiler/ir`, and so on) remain source modules inside those packages until scale justifies independent publishing.
 
 Allowed dependency direction:
 
 ```text
-apps/web ──> language, compiler, simulator, layout, renderer
-apps/cli ──> language, compiler, simulator
-runtime ───> compiler, factorio, shared
-compiler ──> factorio, shared
+apps/web ──> language, compiler, runtime, prototypes, simulator, factorio, shared
+apps/cli ──> language, compiler, runtime, prototypes, shared
+runtime ───> compiler, factorio, prototypes, simulator, shared
+compiler ──> language, factorio, shared
+language ──> shared, TypeScript
 simulator ─> factorio, shared
-layout ────> compiler, shared
+layout ────> shared
 renderer ──> shared
+prototypes > standalone normalized data/provider boundary
 ```
 
 The compiler and simulator packages must remain free of DOM, Monaco, and framework dependencies. Renderer contracts are neutral data; browser rendering belongs in `apps/web`.
+
+Raw data-stage dumps, runtime structural prototypes, and verified native behavior
+are separate evidence layers. The current raw normalizer is transitional;
+[Prototype truth sources](prototype-truth-sources.md) records the extraction
+decision and remaining conformance work. Prototype facts stay out of the simulator.
 
 ## Current slice
 

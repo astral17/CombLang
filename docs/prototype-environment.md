@@ -26,6 +26,11 @@ project profiles, browser-local file selection and identity-keyed IndexedDB
 persistence are implemented. Conformance completion and the generated first-run
 database remain subsequent Phase 5.5 slices.
 
+The raw normalizer is transitional, not an authoritative runtime snapshot. See
+[Prototype truth sources and audit follow-up](prototype-truth-sources.md) for the
+raw/runtime/behavior split, known footprint and role-validation gaps, and the
+remaining native conformance gate.
+
 The compiler, language service, typed-object schemas, layout, and blueprint
 backend receive a provider through an explicit compilation environment. They do
 not reach into a giant JSON object or a global registry. The simulator continues
@@ -67,19 +72,21 @@ Validation errors carry stable `PT1000`–`PT1006` codes and a structural path.
 `loadPrototypeDatabase()` and `loadPrototypeDatabaseJson()` return the frozen
 database together with an immutable `prototypes` provider.
 
-Recipe products are one-to-many, and ingredients/products may be items or
+Recipe products are zero-to-many, and ingredients/products may be items or
 fluids. Entity data should expose capabilities needed by CombLang instead of
 copying unstable raw prototype table layouts. Icons and localization are
 separate optional assets, not part of the core identity.
 
 ## Factorio-side export
 
-The preferred first extraction path is Factorio's own command-line
+The currently implemented raw extraction path is Factorio's own command-line
 `factorio.exe --dump-data`. It loads the selected game/mod/startup-settings data
-stage and writes the resolved raw prototype dump under `script-output`. A
+stage and writes the raw prototype dump under `script-output`. A
 separate offline CombLang converter can then select and normalize the small v1
-schema instead of requiring an exporter mod or loading raw prototype JSON in
-the compiler.
+schema without loading raw prototype JSON in the compiler. This is data-stage
+resolution, not the runtime `LuaPrototypes` view. The planned runtime structural
+exporter will provide authoritative resolved facts; the dump remains useful for
+diagnostics and raw-only metadata.
 
 The command is:
 
@@ -111,16 +118,17 @@ strings), and color objects/3-or-4-channel arrays are retained. Generator
 `startupSettingsIdentity` remains a caller-supplied label/hash, not automatically
 verified against the values. Supplying a label does not replace a captured snapshot.
 
-The converter reads every item subtype carrying the resolved `stack_size`, not
+The converter reads every item subtype carrying raw `stack_size`, not
 only the literal `item` table. It applies the raw RecipePrototype defaults
 (`categories = ["crafting"]`, `energy_required = 0.5`, and enabled by default),
 preserves multiple categories, exact fluid temperature, and
-`amount + extra_count_fraction`, and derives entity tile dimensions from the
-resolved bounding boxes. Empty engine sentinel/parameter recipes are skipped
-with `PD2001` warnings.
+`amount + extra_count_fraction`. Its current selection-box-based entity dimensions
+are a known defect, not verified placement facts; see the extraction plan above.
+Empty-output recipes, including sentinel/parameter recipes, are retained. They
+do not contribute product-index entries.
 
-The original supplied-dump smoke test produced a valid 669 KB normalized database
-with 342 items, 651 non-sentinel recipes, and 744 entity prototypes. The generator
+The original supplied-dump smoke test produced a 669 KB normalized database
+with 342 items, 651 recipes after the old empty-output filtering, and 744 entity prototypes. The generator
 `comblang-factorio-data-dump-v1.1` additionally retains 100 independent probabilities,
 23 shared ranges, 268 statistics exclusions and 7 productivity exclusions in that
 dump. The smoke run used explicitly unverified environment metadata: it proves
@@ -134,8 +142,12 @@ Generator `comblang-factorio-data-dump-v1.4` also retains item recipe quality
 metadata and quality-chain links. The supplied dump has six quality records and
 four explicit `next` links, but no explicit recipe quality transformations; tests
 for those transformations use synthetic inputs. This is not an exhaustive native
-RecipePrototype implementation. Remaining `PD2001` warnings concern skipped empty
-recipes; lack of loss warnings does not establish complete recipe behavior coverage.
+RecipePrototype implementation. Generator `comblang-factorio-data-dump-v1.5`
+retains all 662 recipes in the same supplied dump, including 11 empty-output
+recipes; only the circuit-capability warning remains in that smoke run. Explicit
+malformed recipe booleans or invalid/ambiguous raw main-product names now fail
+with `PD1001` at their raw field path. Lack of loss warnings does not establish
+complete recipe behavior coverage.
 
 ### Product probability and excluded amounts
 
@@ -258,19 +270,18 @@ table must supply those facts. It never infers them merely from the presence of
 a connector.
 
 This path still requires conformance verification. In particular, fixtures
-must establish whether the dump contains every capability-oriented circuit and
-crafting fact CombLang needs, and whether modded overrides agree with the
-control-stage read-only `prototypes: LuaPrototypes` views. The bundled local
+must compare the raw data with the control-stage read-only
+`prototypes: LuaPrototypes` views. The bundled local
 Factorio 2.1.16 runtime API confirms that `LuaPrototypes` exposes dictionaries
 for items, fluids, recipes, entities, qualities, virtual signals, and other
-resolved prototypes. If `--dump-data` omits a required derived fact, a small
-Factorio-side Lua probe may supplement it; it should not become the public
-compiler contract or duplicate fields already available in the native dump.
+resolved prototypes. A runtime exporter is planned for structural facts even
+when similar fields exist in the dump: the two APIs need not have identical
+semantics. Neither extraction API becomes the public compiler contract.
 
 Extraction details still need conformance fixtures against base, Space Age, and
 at least one mod that modifies a vanilla recipe or entity. The architecture does
 not depend on one extraction implementation: a future Factorio dump/API change
-may replace the converter or supplemental probe without changing
+may replace an extraction implementation without changing
 `PrototypeProvider` consumers.
 
 ### Partial circuit coverage and supplements
@@ -500,6 +511,12 @@ capability coverage, normalized prototypes, and indexes. Informational
 identity boundary, not yet the optional reproducible-build policy from Phase
 11; a future schema version may select a different explicitly tagged algorithm.
 
+Canonical string ordering is locale-free UTF-16 code-unit order. The September 4
+collation fix can change identities even for unchanged JSON when its ordering
+differs under locale collation: reload and explicitly repin affected
+projects/supplements, or reselect browser JSON. Pins and cache entries that no
+longer match are not silently accepted; see the [migration note](prototype-truth-sources.md#identity-migration).
+
 After asynchronous loading, the primary synchronous surface deliberately feels
 like Factorio's Lua API. Singular snake_case tables are indexed by prototype
 name:
@@ -535,6 +552,12 @@ complete coverage for one prototype kind, its direct table is empty and a
 helper requiring that coverage reports the missing capability separately from
 an unknown key. No provider singleton exists, and the simulator has no
 dependency on this package.
+
+Use `prototypes.isBasicCraftingCompatible(entity, recipe)` only as a coarse
+category/fluid prefilter. It replaces the overpromising `canCraft` name (no alias).
+Unknown keys, absent crafting data, or missing coverage throw. A positive result
+does not prove native craftability: fluidboxes, temperatures, ingredient limits,
+surface conditions, and machine state are outside this helper.
 
 Source code receives the same provider through an explicit compilation
 environment and may inspect it using the reserved `prototypes` value. The
