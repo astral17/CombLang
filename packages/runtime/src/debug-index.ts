@@ -1,4 +1,7 @@
-import type { DirectElaborationPlan, DirectPlanProducer } from '@comblang/compiler/direct-plan';
+import type {
+  DirectElaborationPlan,
+  DirectPlanProducer,
+} from '@comblang/compiler/direct-plan-schema';
 import type { NetworkId, ProducerId, SourceSpan } from '@comblang/shared';
 
 import type { ElaboratedCircuit } from './elaboration.js';

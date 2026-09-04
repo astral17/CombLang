@@ -1,4 +1,7 @@
-import type { DirectPlanProducer, PlanDeciderCondition } from '@comblang/compiler';
+import type {
+  DirectPlanProducer,
+  PlanDeciderCondition,
+} from '@comblang/compiler/direct-plan-schema';
 import type { SignalId } from '@comblang/factorio';
 import type { SourceSpan } from '@comblang/shared';
 

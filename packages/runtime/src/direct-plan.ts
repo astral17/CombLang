@@ -5,7 +5,7 @@ import type {
   PlanArithmeticOperand,
   PlanDeciderCondition,
   PlanNetworkRef,
-} from '@comblang/compiler/direct-plan';
+} from '@comblang/compiler/direct-plan-schema';
 import type { Diagnostic, ProducerId, SourceSpan } from '@comblang/shared';
 import type { TestSession } from '@comblang/simulator';
 

@@ -1,10 +1,10 @@
 import type {
-  ArithmeticOperation,
   PlanArithmeticOperand,
   PlanComparator,
   PlanDeciderCondition,
   PlanNetworkRef,
-} from '@comblang/compiler';
+} from '@comblang/compiler/direct-plan-schema';
+import type { ArithmeticOperation } from '@comblang/compiler/ir';
 import { circuitConstant, type SignalId } from '@comblang/factorio';
 import type { SourceSpan } from '@comblang/shared';
 

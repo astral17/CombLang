@@ -1,4 +1,4 @@
-import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan';
+import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
 
 import type { WebTestRun } from './web-test-runner.js';
 

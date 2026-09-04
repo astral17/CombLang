@@ -2,7 +2,7 @@ import type {
   DirectElaborationPlan,
   PlanDeciderCondition,
   PlanNetworkRef,
-} from '@comblang/compiler/direct-plan';
+} from '@comblang/compiler/direct-plan-schema';
 import { signal, SparseBus, type SignalId } from '@comblang/factorio';
 import { elaborateDirectPlan } from '@comblang/runtime';
 import type { NetworkId } from '@comblang/shared';

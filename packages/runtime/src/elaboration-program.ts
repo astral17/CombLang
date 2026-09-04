@@ -1,13 +1,13 @@
 import { circuitConstant, sameSignal, Signal, type SignalId } from '@comblang/factorio';
+import type { ElaborationJavaScript } from '@comblang/compiler';
 import type {
   DirectElaborationPlan,
   DirectPlanDebugValue,
   DirectPlanProducer,
-  ElaborationJavaScript,
   PlanEntityPlacement,
   PlanArithmeticOperand,
   PlanDeciderCondition,
-} from '@comblang/compiler';
+} from '@comblang/compiler/direct-plan-schema';
 import type { PrototypeProvider } from '@comblang/prototypes';
 import type { Diagnostic, SourceFileId, SourceSpan } from '@comblang/shared';
 

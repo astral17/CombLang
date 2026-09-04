@@ -1,5 +1,5 @@
 import { transformElaborationModule } from '@comblang/compiler/elaboration-transform';
-import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan';
+import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
 import {
   classifyDslSemantics,
   parseFile,

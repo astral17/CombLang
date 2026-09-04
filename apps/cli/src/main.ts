@@ -11,7 +11,7 @@ import type {
   DirectPlanCapabilityUse,
   DirectPlanNetworkPair,
   DirectPlanNetworkTransfer,
-} from '@comblang/compiler/direct-plan';
+} from '@comblang/compiler/direct-plan-schema';
 import { parseProject, validateDslSemantics } from '@comblang/language';
 import {
   applyEntityCircuitSupplement,

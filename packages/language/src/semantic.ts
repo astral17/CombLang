@@ -226,16 +226,35 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
   // A reserved binding makes textual DSL resolution intentionally unambiguous: compilation stops
   // at the declarations instead of cascading into misleading diagnostics for their later uses.
   if (diagnostics.length > 0) return diagnostics;
-  const networkScopes: Set<string>[] = [new Set()];
-  const networkArrayScopes: Set<string>[] = [new Set()];
-  const capabilityScopes: Map<string, NetworkCapability>[] = [new Map()];
-  const bindingScopes: Set<string>[] = [new Set()];
   interface ProducerSlotType {
     readonly direct?: string;
     readonly element?: string;
     readonly properties?: ReadonlyMap<string, string>;
   }
-  const producerSlotScopes: Map<string, ProducerSlotType | undefined>[] = [new Map()];
+  interface SemanticScope {
+    readonly bindings: Set<string>;
+    readonly networks: Set<string>;
+    readonly networkArrays: Set<string>;
+    readonly capabilities: Map<string, NetworkCapability>;
+    readonly producerSlots: Map<string, ProducerSlotType | undefined>;
+  }
+  const createSemanticScope = (bindings: Set<string> = new Set()): SemanticScope => ({
+    bindings,
+    networks: new Set(),
+    networkArrays: new Set(),
+    capabilities: new Map(),
+    producerSlots: new Map(),
+  });
+  const semanticScopes: SemanticScope[] = [createSemanticScope()];
+  const currentSemanticScope = (): SemanticScope => semanticScopes.at(-1)!;
+  const withinSemanticScope = (scope: SemanticScope, action: () => void): void => {
+    semanticScopes.push(scope);
+    try {
+      action();
+    } finally {
+      semanticScopes.pop();
+    }
+  };
   const resolveFunction = createFunctionResolver(file);
   const networkFunctionReturn = (name: ts.Identifier): NetworkTypeSyntax | undefined =>
     networkTypeFromAnnotation(resolveFunction(name)?.type, file.ast);
@@ -325,36 +344,21 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       }
     }
   };
-  const lookupNetwork = (name: string): boolean => {
-    for (let index = networkScopes.length - 1; index >= 0; index -= 1) {
-      if (networkScopes[index]!.has(name)) return true;
-      if (bindingScopes[index]!.has(name)) return false;
-    }
-    return false;
-  };
-  const lookupNetworkArray = (name: string): boolean => {
-    for (let index = networkArrayScopes.length - 1; index >= 0; index -= 1) {
-      if (networkArrayScopes[index]!.has(name)) return true;
-      if (bindingScopes[index]!.has(name)) return false;
-    }
-    return false;
-  };
-  const lookupCapability = (name: string): NetworkCapability | undefined => {
-    for (let index = capabilityScopes.length - 1; index >= 0; index -= 1) {
-      const capability = capabilityScopes[index]!.get(name);
-      if (capability !== undefined) return capability;
-      if (bindingScopes[index]!.has(name)) return undefined;
+  const resolveSemanticScope = (name: string): SemanticScope | undefined => {
+    for (let index = semanticScopes.length - 1; index >= 0; index -= 1) {
+      const scope = semanticScopes[index]!;
+      if (scope.bindings.has(name)) return scope;
     }
     return undefined;
   };
-  const lookupProducerSlot = (name: string): ProducerSlotType | undefined => {
-    for (let index = producerSlotScopes.length - 1; index >= 0; index -= 1) {
-      const scope = producerSlotScopes[index]!;
-      if (scope.has(name)) return scope.get(name);
-      if (bindingScopes[index]!.has(name)) return undefined;
-    }
-    return undefined;
-  };
+  const lookupNetwork = (name: string): boolean =>
+    resolveSemanticScope(name)?.networks.has(name) === true;
+  const lookupNetworkArray = (name: string): boolean =>
+    resolveSemanticScope(name)?.networkArrays.has(name) === true;
+  const lookupCapability = (name: string): NetworkCapability | undefined =>
+    resolveSemanticScope(name)?.capabilities.get(name);
+  const lookupProducerSlot = (name: string): ProducerSlotType | undefined =>
+    resolveSemanticScope(name)?.producerSlots.get(name);
   const producerTypeForAssignment = (target: ts.Expression): string | undefined => {
     if (ts.isIdentifier(target)) return lookupProducerSlot(target.text)?.direct;
     if (!ts.isPropertyAccessExpression(target) && !ts.isElementAccessExpression(target)) {
@@ -665,43 +669,31 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       }
     }
     if (ts.isFunctionDeclaration(node)) {
-      const scope = new Set<string>();
-      const arrayScope = new Set<string>();
-      const capabilityScope = new Map<string, NetworkCapability>();
-      const producerSlotScope = new Map<string, ProducerSlotType | undefined>();
-      const bindingScope = new Set<string>();
+      const scope = createSemanticScope();
       for (const parameter of node.parameters) {
-        addBindingNames(parameter.name, bindingScope);
+        addBindingNames(parameter.name, scope.bindings);
         if (ts.isIdentifier(parameter.name)) {
-          producerSlotScope.set(
+          scope.producerSlots.set(
             parameter.name.text,
             producerSlotTypeFromAnnotation(parameter.type),
           );
         }
         if (ts.isIdentifier(parameter.name) && isNetworkType(parameter.type)) {
-          scope.add(parameter.name.text);
+          scope.networks.add(parameter.name.text);
           const capability =
             networkTypeFromAnnotation(parameter.type, file.ast)?.capability ?? 'owned';
-          capabilityScope.set(
+          scope.capabilities.set(
             parameter.name.text,
             capability === 'owned' ? 'readonly' : capability,
           );
         }
         if (ts.isIdentifier(parameter.name) && isNetworkArrayType(parameter.type)) {
-          arrayScope.add(parameter.name.text);
+          scope.networkArrays.add(parameter.name.text);
         }
       }
-      networkScopes.push(scope);
-      networkArrayScopes.push(arrayScope);
-      capabilityScopes.push(capabilityScope);
-      producerSlotScopes.push(producerSlotScope);
-      bindingScopes.push(bindingScope);
-      if (node.body !== undefined) visit(node.body);
-      networkScopes.pop();
-      networkArrayScopes.pop();
-      capabilityScopes.pop();
-      producerSlotScopes.pop();
-      bindingScopes.pop();
+      withinSemanticScope(scope, () => {
+        if (node.body !== undefined) visit(node.body);
+      });
       return;
     }
     if (
@@ -712,53 +704,25 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       ts.isSetAccessorDeclaration(node) ||
       ts.isConstructorDeclaration(node)
     ) {
-      const bindingScope = new Set<string>();
-      for (const parameter of node.parameters) addBindingNames(parameter.name, bindingScope);
-      networkScopes.push(new Set());
-      networkArrayScopes.push(new Set());
-      capabilityScopes.push(new Map());
-      producerSlotScopes.push(new Map());
-      bindingScopes.push(bindingScope);
-      if (node.body !== undefined) visit(node.body);
-      networkScopes.pop();
-      networkArrayScopes.pop();
-      capabilityScopes.pop();
-      producerSlotScopes.pop();
-      bindingScopes.pop();
+      const scope = createSemanticScope();
+      for (const parameter of node.parameters) addBindingNames(parameter.name, scope.bindings);
+      withinSemanticScope(scope, () => {
+        if (node.body !== undefined) visit(node.body);
+      });
       return;
     }
     if (ts.isCatchClause(node)) {
-      const bindingScope = new Set<string>();
+      const scope = createSemanticScope();
       if (node.variableDeclaration !== undefined) {
-        addBindingNames(node.variableDeclaration.name, bindingScope);
+        addBindingNames(node.variableDeclaration.name, scope.bindings);
       }
-      networkScopes.push(new Set());
-      networkArrayScopes.push(new Set());
-      capabilityScopes.push(new Map());
-      producerSlotScopes.push(new Map());
-      bindingScopes.push(bindingScope);
-      visit(node.block);
-      networkScopes.pop();
-      networkArrayScopes.pop();
-      capabilityScopes.pop();
-      producerSlotScopes.pop();
-      bindingScopes.pop();
+      withinSemanticScope(scope, () => visit(node.block));
       return;
     }
     if (ts.isBlock(node)) {
-      const bindingScope = new Set<string>();
-      collectDirectStatementBindings(node.statements, bindingScope);
-      networkScopes.push(new Set());
-      networkArrayScopes.push(new Set());
-      capabilityScopes.push(new Map());
-      producerSlotScopes.push(new Map());
-      bindingScopes.push(bindingScope);
-      node.forEachChild(visit);
-      networkScopes.pop();
-      networkArrayScopes.pop();
-      capabilityScopes.pop();
-      producerSlotScopes.pop();
-      bindingScopes.pop();
+      const scope = createSemanticScope();
+      collectDirectStatementBindings(node.statements, scope.bindings);
+      withinSemanticScope(scope, () => node.forEachChild(visit));
       return;
     }
     if (
@@ -769,37 +733,28 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       ts.isDoStatement(node) ||
       ts.isSwitchStatement(node)
     ) {
-      const bindingScope = new Set<string>();
+      const scope = createSemanticScope();
       if (
         (ts.isForStatement(node) || ts.isForInStatement(node) || ts.isForOfStatement(node)) &&
         node.initializer !== undefined &&
         ts.isVariableDeclarationList(node.initializer)
       ) {
         for (const declaration of node.initializer.declarations) {
-          addBindingNames(declaration.name, bindingScope);
+          addBindingNames(declaration.name, scope.bindings);
         }
       }
       if (ts.isSwitchStatement(node)) {
         for (const clause of node.caseBlock.clauses) {
-          collectDirectStatementBindings(clause.statements, bindingScope);
+          collectDirectStatementBindings(clause.statements, scope.bindings);
         }
       }
-      networkScopes.push(new Set());
-      networkArrayScopes.push(new Set());
-      capabilityScopes.push(new Map());
-      producerSlotScopes.push(new Map());
-      bindingScopes.push(bindingScope);
-      node.forEachChild(visit);
-      networkScopes.pop();
-      networkArrayScopes.pop();
-      capabilityScopes.pop();
-      producerSlotScopes.pop();
-      bindingScopes.pop();
+      withinSemanticScope(scope, () => node.forEachChild(visit));
       return;
     }
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
-      bindingScopes.at(-1)!.add(node.name.text);
-      producerSlotScopes.at(-1)!.set(node.name.text, producerSlotTypeFromAnnotation(node.type));
+      const scope = currentSemanticScope();
+      scope.bindings.add(node.name.text);
+      scope.producerSlots.set(node.name.text, producerSlotTypeFromAnnotation(node.type));
       const producerType = producerHandleTypeName(node.type);
       if (
         producerType !== undefined &&
@@ -830,23 +785,21 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
           !isProducerHandleType(node.type) &&
           (isNetworkExpression(node.initializer) || isProducerExpression(node.initializer)))
       ) {
-        networkScopes.at(-1)!.add(node.name.text);
-        capabilityScopes
-          .at(-1)!
-          .set(
-            node.name.text,
-            networkTypeFromAnnotation(node.type, file.ast)?.capability ??
-              (node.initializer === undefined
-                ? undefined
-                : capabilityOfNetworkExpression(node.initializer)) ??
-              'owned',
-          );
+        scope.networks.add(node.name.text);
+        scope.capabilities.set(
+          node.name.text,
+          networkTypeFromAnnotation(node.type, file.ast)?.capability ??
+            (node.initializer === undefined
+              ? undefined
+              : capabilityOfNetworkExpression(node.initializer)) ??
+            'owned',
+        );
       }
       if (
         isNetworkArrayType(node.type) ||
         (node.initializer !== undefined && isNetworkArrayExpression(node.initializer))
       ) {
-        networkArrayScopes.at(-1)!.add(node.name.text);
+        scope.networkArrays.add(node.name.text);
       }
     }
     if (
@@ -1254,7 +1207,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     node.forEachChild(visit);
   };
 
-  collectDirectStatementBindings(file.ast.statements, bindingScopes[0]!);
+  collectDirectStatementBindings(file.ast.statements, semanticScopes[0]!.bindings);
   file.ast.forEachChild(visit);
   return diagnostics;
 }

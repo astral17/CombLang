@@ -1,4 +1,4 @@
-import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan';
+import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
 import { signal, type SignalId, type SignalType } from '@comblang/factorio';
 import { offsetToPosition, sourceFileId, sourceSpan, type Diagnostic } from '@comblang/shared';
 

@@ -8,6 +8,7 @@
     "./blueprint-json": "./src/blueprint-json.ts",
     "./color-solver": "./src/color-solver.ts",
     "./direct-plan": "./src/direct-plan.ts",
+    "./direct-plan-schema": "./src/direct-plan-schema.ts",
     "./elaboration-transform": "./src/elaboration-transform.ts",
     "./ir": "./src/ir.ts"
   },

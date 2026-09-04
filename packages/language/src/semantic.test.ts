@@ -558,6 +558,8 @@ function numeric(input) { input += 1; }
 const arrow = (input) => { input += 1; };
 const object = { method(input) { input += 1; } };
 { let input = 1; input += 1; }
+for (let input = 0; input < 1; input++) { input += 1; }
+switch (0) { case 0: let input = 1; input += 1; break; }
 try {} catch (input) { input += 1; }
 input += 5;`,
     });
