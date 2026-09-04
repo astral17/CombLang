@@ -92,6 +92,15 @@ declarations do not emit it. The warning points to the parameter declaration;
 runtime argument failures still point to the argument where available. Explicit
 `Readonly`, `Ref`, and `Move` parameters do not emit this warning.
 
+The executed argument-category boundary is shared by all explicit capabilities.
+An existing Network keeps its physical ownership and active outer-borrow state;
+a Producer is materialized once as a named argument Network without adding an
+extra combinator. The resulting callee view records the actual argument-expression
+span, including dynamic indexing, aliases, and spread calls, so a later
+readability or capability failure is attributed to the call site rather than the
+function declaration. Non-Network values fail with `RT2015` before a view is
+created.
+
 The initial implicit policy is deliberately read-only, not inferred writable
 borrowing. Use `Ref<Network>` to attach outputs and `Move<Network>` to consume or
 return the caller's ownership. Borrow expiry, overlap checks, and escape checks

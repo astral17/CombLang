@@ -39,6 +39,7 @@ import {
   type ElaborationOperatorDispatchContext,
 } from './elaboration-operators.js';
 import { createElaborationOwnershipPolicy } from './elaboration-ownership.js';
+import { resolveNetworkArgument } from './network-argument-policy.js';
 import { ProducerLifecycle } from './producer-lifecycle.js';
 import { validateProducerAttachment } from './producer-attachment-policy.js';
 import { bindProducerHandle } from './producer-handle-policy.js';
@@ -668,27 +669,27 @@ class ElaborationRecorder {
       ) {
         throw new Error('Invalid Network call-argument descriptor.');
       }
-      let network: NetworkValue;
-      if (this.#isProducer(value)) {
-        network = this.#network(`$argument:${functionName}:${parameter}`, rawSpan, fixedColor);
-        this.#attach(network, value, rawSpan);
-      } else if (this.#isNetwork(value)) {
-        network = value;
-      } else {
-        throw new ElaborationExecutionError(
-          `${String(capability) === 'readonly' ? 'Readonly<Network>' : String(capability) === 'ref' ? 'Ref<Network>' : String(capability) === 'move' ? 'Move<Network>' : 'Network'} parameter ${parameter} received a non-Network value.`,
-          this.#span(rawSpan),
-          'RT2015',
-        );
-      }
-      this.#assertReadableNetwork(network, rawSpan, `argument ${parameter}`);
-      const state = this.#networkState(network);
-      return this.#networkValue(
-        { ...network },
+      return resolveNetworkArgument(
+        value,
         {
-          ownership: state.ownership,
-          ...(state.borrow === undefined ? {} : { borrow: state.borrow }),
-          callArgument: this.#span(rawSpan),
+          functionName,
+          parameter,
+          capability: capability as NetworkValue['capability'],
+          ...(fixedColor === undefined ? {} : { fixedColor }),
+          source: this.#span(rawSpan),
+        },
+        {
+          isProducer: (candidate): candidate is ProducerValue => this.#isProducer(candidate),
+          isNetwork: (candidate): candidate is NetworkValue => this.#isNetwork(candidate),
+          materializeProducer: (producer, name, color) => {
+            const network = this.#network(name, rawSpan, color);
+            this.#attach(network, producer, rawSpan);
+            return network;
+          },
+          assertReadable: (network, source, role) =>
+            this.#ownership.assertReadable(network, source, role),
+          stateFor: (network) => this.#networkState(network),
+          brandNetwork: (network, state) => this.#networkValue(network, state),
         },
       );
     },
