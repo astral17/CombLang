@@ -264,17 +264,33 @@ export function transformElaborationModule(
     const { factory } = context;
     const isNonReferenceIdentifier = (node: ts.Identifier): boolean => {
       const parent = node.parent;
+      for (
+        let ancestor: ts.Node | undefined = parent;
+        ancestor !== undefined;
+        ancestor = ancestor.parent
+      ) {
+        if (ts.isTypeNode(ancestor)) return true;
+        if (ts.isExpression(ancestor) || ts.isStatement(ancestor) || ts.isSourceFile(ancestor))
+          break;
+      }
       return (
         (ts.isPropertyAccessExpression(parent) && parent.name === node) ||
         (ts.isPropertyAssignment(parent) && parent.name === node) ||
+        ((ts.isPropertySignature(parent) || ts.isMethodSignature(parent)) &&
+          parent.name === node) ||
         (ts.isBindingElement(parent) && (parent.name === node || parent.propertyName === node)) ||
         ((ts.isVariableDeclaration(parent) || ts.isParameter(parent)) && parent.name === node) ||
         ((ts.isFunctionDeclaration(parent) ||
           ts.isFunctionExpression(parent) ||
           ts.isClassDeclaration(parent) ||
           ts.isClassExpression(parent) ||
+          ts.isInterfaceDeclaration(parent) ||
+          ts.isTypeAliasDeclaration(parent) ||
+          ts.isTypeParameterDeclaration(parent) ||
           ts.isMethodDeclaration(parent) ||
           ts.isPropertyDeclaration(parent) ||
+          ts.isGetAccessorDeclaration(parent) ||
+          ts.isSetAccessorDeclaration(parent) ||
           ts.isEnumDeclaration(parent) ||
           ts.isEnumMember(parent)) &&
           parent.name === node) ||
@@ -799,8 +815,22 @@ export function transformElaborationModule(
       }
 
       if (
+        ts.isShorthandPropertyAssignment(node) &&
+        wildcardDslNames[node.name.text as keyof typeof wildcardDslNames] !== undefined
+      ) {
+        return factory.createPropertyAssignment(
+          node.name,
+          dslCall(factory, 'wildcardToken', [
+            factory.createStringLiteral(
+              wildcardDslNames[node.name.text as keyof typeof wildcardDslNames],
+            ),
+          ]),
+        );
+      }
+      if (
         ts.isIdentifier(node) &&
-        wildcardDslNames[node.text as keyof typeof wildcardDslNames] !== undefined
+        wildcardDslNames[node.text as keyof typeof wildcardDslNames] !== undefined &&
+        !isNonReferenceIdentifier(node)
       ) {
         return dslCall(factory, 'wildcardToken', [
           factory.createStringLiteral(wildcardDslNames[node.text as keyof typeof wildcardDslNames]),

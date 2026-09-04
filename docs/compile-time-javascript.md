@@ -9,7 +9,7 @@ CombLang executes a synchronous TypeScript-shaped JavaScript subset during elabo
 - `for`, `for…of`, `for…in`, `while`, and `do…while`;
 - arrays, plain objects, property/element reads and writes, and flat destructuring;
 - ordinary numeric/string arithmetic and comparisons;
-- ordinary methods named `.as`, `.to`, `.at`, or `.take` when the executed receiver is not a DSL handle;
+- ordinary methods named `.as`, `.to`, `.at`, `.take`, `.then`, or `.else` when the executed receiver is not a DSL handle;
 - TypeScript annotations, capability types, and numeric enums erased before execution.
 
 Control-flow tests remain JavaScript tests; they do not describe circuit branches. A nominal circuit `Condition` such as `input > 0` is therefore rejected with `RT2024` when used directly by `if`, a conditional expression, `while`, `do…while`, or a `for` condition. Use `IF(input > 0, ...)` or `when(input > 0).then(...)` to create a decider. Ordinary values retain exact JavaScript truthiness, including unary `!` for numbers, strings, `null`, arrays, and objects.
@@ -18,7 +18,7 @@ Optional element and property-call chains remain native JavaScript and preserve 
 
 The generated JavaScript calls the elaboration runtime through a compiler-selected parameter name that does not occur anywhere in the source file. User bindings or references named `__dsl`, `__dsl_1`, and similar identifiers remain ordinary JavaScript and force a different bridge name; they neither shadow nor expose the runtime API.
 
-The v1 language reserves all free DSL identifiers. User variables, parameters, destructuring bindings, functions, classes, and enums cannot be named `Signal`, `Network`, `CC`, `IF`, `to`, `when`, `pair`, `Each`/`EACH`, `Anything`/`Any`/`ANYTHING`/`ANY`, or `Everything`/`All`/`EVERYTHING`/`ALL`; such a binding reports `CL1045`. Property names and methods are not free identifiers, so ordinary `object.to(...)`, `object.as(...)`, `object.at(...)`, and `object.take(...)` remain valid. A future lexical symbol-resolution phase may relax this policy.
+The v1 language reserves all free DSL identifiers. User variables, parameters, destructuring bindings, functions, classes, and enums cannot be named `Signal`, `Network`, `CC`, `IF`, `to`, `when`, `pair`, `Each`/`EACH`, `Anything`/`Any`/`ANYTHING`/`ANY`, or `Everything`/`All`/`EVERYTHING`/`ALL`; such a binding reports `CL1045`. Property names and methods are not free identifiers, so ordinary names such as `object.Each`, `{ All() {} }`, `object.to(...)`, and `object.then(...)` remain valid. In shorthand `{ Each }`, the property name stays ordinary while the value is the free DSL wildcard reference. A future lexical symbol-resolution phase may relax this policy.
 
 User function signatures are resolved by lexical symbol identity rather than name matching; a shadowing local binding never inherits an outer function's contract. Reassigned function bindings are left to executed validation. Non-optional calls carry argument provenance through aliases, object/array members, and spreads. Ordinary method receivers, getter-before-argument evaluation, spread iteration order, and direct `eval` scope are retained; this tracing does not consume the circuit-recording DSL-call budget. Optional calls, native callbacks, `super`, and private-method calls retain native invocation and may use the parameter declaration as diagnostic fallback.
 

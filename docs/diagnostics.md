@@ -51,7 +51,7 @@ Source attribution follows the boundary that can actually correct the error:
 - attachment, placement, selection, `CC`, `IF`, and complete chained `when(...).then(...).else(...)` failures point to their source operation;
 - ownership and color failures add earlier declarations, borrows, moves, producer creation, or attachment sites as related spans.
 
-Ordinary JavaScript methods named `to`, `take`, `at`, or `as` use the same argument provenance as other methods; these names alone do not select a DSL contract. A DSL method's invalid argument count after spread expansion points to the complete method call, rather than producing a speculative static arity error.
+Ordinary JavaScript methods named `to`, `take`, `at`, `as`, `then`, or `else` use the same argument provenance as other methods; these names alone do not select a DSL contract. Only a chain rooted at the reserved `when(...)` builder is statically known to produce a Decider. A DSL method's invalid argument count after spread expansion points to the complete method call, rather than producing a speculative static arity error.
 
 The browser's source-error panel includes the diagnostic code and available line/column. Exceptions raised while building the preview retain structured runtime spans and editor markers; unstructured preview failures use `WEB1001` without an invented source position. A preview-only failure is labelled separately from compilation failure and does not block circuit tests. Preview endpoints resolve pre-transfer names to the surviving physical Network after `.take(...)`; this does not make consumed source handles readable again.
 

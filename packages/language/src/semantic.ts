@@ -228,6 +228,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
   const networkScopes: Set<string>[] = [new Set()];
   const networkArrayScopes: Set<string>[] = [new Set()];
   const capabilityScopes: Map<string, NetworkCapability>[] = [new Map()];
+  const bindingScopes: Set<string>[] = [new Set()];
   interface ProducerSlotType {
     readonly direct?: string;
     readonly element?: string;
@@ -295,15 +296,45 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
         optional: parameter.questionToken !== undefined || parameter.initializer !== undefined,
       };
     });
+  const addBindingNames = (name: ts.BindingName, bindings: Set<string>): void => {
+    if (ts.isIdentifier(name)) {
+      bindings.add(name.text);
+      return;
+    }
+    for (const element of name.elements) {
+      if (!ts.isOmittedExpression(element)) addBindingNames(element.name, bindings);
+    }
+  };
+  const collectDirectStatementBindings = (
+    statements: readonly ts.Statement[],
+    bindings: Set<string>,
+  ): void => {
+    for (const statement of statements) {
+      if (ts.isVariableStatement(statement)) {
+        for (const declaration of statement.declarationList.declarations) {
+          addBindingNames(declaration.name, bindings);
+        }
+      } else if (
+        (ts.isFunctionDeclaration(statement) ||
+          ts.isClassDeclaration(statement) ||
+          ts.isEnumDeclaration(statement)) &&
+        statement.name !== undefined
+      ) {
+        bindings.add(statement.name.text);
+      }
+    }
+  };
   const lookupNetwork = (name: string): boolean => {
     for (let index = networkScopes.length - 1; index >= 0; index -= 1) {
       if (networkScopes[index]!.has(name)) return true;
+      if (bindingScopes[index]!.has(name)) return false;
     }
     return false;
   };
   const lookupNetworkArray = (name: string): boolean => {
     for (let index = networkArrayScopes.length - 1; index >= 0; index -= 1) {
       if (networkArrayScopes[index]!.has(name)) return true;
+      if (bindingScopes[index]!.has(name)) return false;
     }
     return false;
   };
@@ -311,6 +342,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     for (let index = capabilityScopes.length - 1; index >= 0; index -= 1) {
       const capability = capabilityScopes[index]!.get(name);
       if (capability !== undefined) return capability;
+      if (bindingScopes[index]!.has(name)) return undefined;
     }
     return undefined;
   };
@@ -318,6 +350,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     for (let index = producerSlotScopes.length - 1; index >= 0; index -= 1) {
       const scope = producerSlotScopes[index]!;
       if (scope.has(name)) return scope.get(name);
+      if (bindingScopes[index]!.has(name)) return undefined;
     }
     return undefined;
   };
@@ -396,6 +429,19 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     }
     return isNetworkExpression(node) ? 'owned' : undefined;
   };
+  const isWhenBuilderCall = (node: ts.CallExpression): boolean => {
+    if (ts.isIdentifier(node.expression)) {
+      return node.expression.text === 'when' && isDslBuiltin('when');
+    }
+    if (
+      ts.isPropertyAccessExpression(node.expression) &&
+      (node.expression.name.text === 'then' || node.expression.name.text === 'else') &&
+      ts.isCallExpression(node.expression.expression)
+    ) {
+      return isWhenBuilderCall(node.expression.expression);
+    }
+    return false;
+  };
   type ProducerCertainty = 'producer' | 'non-producer' | 'runtime';
   const producerCertainty = (node: ts.Expression): ProducerCertainty => {
     if (ts.isParenthesizedExpression(node)) return producerCertainty(node.expression);
@@ -430,7 +476,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       }
       if (ts.isPropertyAccessExpression(node.expression)) {
         const method = node.expression.name.text;
-        if (method === 'then') return 'producer';
+        if ((method === 'then' || method === 'else') && isWhenBuilderCall(node)) return 'producer';
         if (method === 'as' || method === 'at') {
           return producerCertainty(node.expression.expression);
         }
@@ -471,7 +517,12 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       return undefined;
     }
     if (ts.isPropertyAccessExpression(node.expression)) {
-      if (node.expression.name.text === 'then') return 'decider';
+      if (
+        (node.expression.name.text === 'then' || node.expression.name.text === 'else') &&
+        isWhenBuilderCall(node)
+      ) {
+        return 'decider';
+      }
       if (node.expression.name.text === 'as' || node.expression.name.text === 'at') {
         return producerKindOfExpression(node.expression.expression);
       }
@@ -581,7 +632,9 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       const arrayScope = new Set<string>();
       const capabilityScope = new Map<string, NetworkCapability>();
       const producerSlotScope = new Map<string, ProducerSlotType | undefined>();
+      const bindingScope = new Set<string>();
       for (const parameter of node.parameters) {
+        addBindingNames(parameter.name, bindingScope);
         if (ts.isIdentifier(parameter.name)) {
           producerSlotScope.set(
             parameter.name.text,
@@ -605,23 +658,70 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       networkArrayScopes.push(arrayScope);
       capabilityScopes.push(capabilityScope);
       producerSlotScopes.push(producerSlotScope);
+      bindingScopes.push(bindingScope);
       if (node.body !== undefined) visit(node.body);
       networkScopes.pop();
       networkArrayScopes.pop();
       capabilityScopes.pop();
       producerSlotScopes.pop();
+      bindingScopes.pop();
       return;
     }
-    if (ts.isBlock(node)) {
+    if (
+      ts.isFunctionExpression(node) ||
+      ts.isArrowFunction(node) ||
+      ts.isMethodDeclaration(node) ||
+      ts.isGetAccessorDeclaration(node) ||
+      ts.isSetAccessorDeclaration(node) ||
+      ts.isConstructorDeclaration(node)
+    ) {
+      const bindingScope = new Set<string>();
+      for (const parameter of node.parameters) addBindingNames(parameter.name, bindingScope);
       networkScopes.push(new Set());
       networkArrayScopes.push(new Set());
       capabilityScopes.push(new Map());
       producerSlotScopes.push(new Map());
+      bindingScopes.push(bindingScope);
+      if (node.body !== undefined) visit(node.body);
+      networkScopes.pop();
+      networkArrayScopes.pop();
+      capabilityScopes.pop();
+      producerSlotScopes.pop();
+      bindingScopes.pop();
+      return;
+    }
+    if (ts.isCatchClause(node)) {
+      const bindingScope = new Set<string>();
+      if (node.variableDeclaration !== undefined) {
+        addBindingNames(node.variableDeclaration.name, bindingScope);
+      }
+      networkScopes.push(new Set());
+      networkArrayScopes.push(new Set());
+      capabilityScopes.push(new Map());
+      producerSlotScopes.push(new Map());
+      bindingScopes.push(bindingScope);
+      visit(node.block);
+      networkScopes.pop();
+      networkArrayScopes.pop();
+      capabilityScopes.pop();
+      producerSlotScopes.pop();
+      bindingScopes.pop();
+      return;
+    }
+    if (ts.isBlock(node)) {
+      const bindingScope = new Set<string>();
+      collectDirectStatementBindings(node.statements, bindingScope);
+      networkScopes.push(new Set());
+      networkArrayScopes.push(new Set());
+      capabilityScopes.push(new Map());
+      producerSlotScopes.push(new Map());
+      bindingScopes.push(bindingScope);
       node.forEachChild(visit);
       networkScopes.pop();
       networkArrayScopes.pop();
       capabilityScopes.pop();
       producerSlotScopes.pop();
+      bindingScopes.pop();
       return;
     }
     if (
@@ -632,18 +732,36 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       ts.isDoStatement(node) ||
       ts.isSwitchStatement(node)
     ) {
+      const bindingScope = new Set<string>();
+      if (
+        (ts.isForStatement(node) || ts.isForInStatement(node) || ts.isForOfStatement(node)) &&
+        node.initializer !== undefined &&
+        ts.isVariableDeclarationList(node.initializer)
+      ) {
+        for (const declaration of node.initializer.declarations) {
+          addBindingNames(declaration.name, bindingScope);
+        }
+      }
+      if (ts.isSwitchStatement(node)) {
+        for (const clause of node.caseBlock.clauses) {
+          collectDirectStatementBindings(clause.statements, bindingScope);
+        }
+      }
       networkScopes.push(new Set());
       networkArrayScopes.push(new Set());
       capabilityScopes.push(new Map());
       producerSlotScopes.push(new Map());
+      bindingScopes.push(bindingScope);
       node.forEachChild(visit);
       networkScopes.pop();
       networkArrayScopes.pop();
       capabilityScopes.pop();
       producerSlotScopes.pop();
+      bindingScopes.pop();
       return;
     }
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name)) {
+      bindingScopes.at(-1)!.add(node.name.text);
       producerSlotScopes.at(-1)!.set(node.name.text, producerSlotTypeFromAnnotation(node.type));
       const producerType = producerHandleTypeName(node.type);
       if (
@@ -1099,6 +1217,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     node.forEachChild(visit);
   };
 
+  collectDirectStatementBindings(file.ast.statements, bindingScopes[0]!);
   file.ast.forEachChild(visit);
   return diagnostics;
 }

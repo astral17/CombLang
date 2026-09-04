@@ -28,6 +28,29 @@ const forwarded = { prototypes };`,
     expect(code).toContain('prototypes: __dsl.prototypeEnvironment(');
   });
 
+  test('keeps wildcard spellings in member names and transforms only value references', () => {
+    const source = parseFile({
+      path: 'wildcard-properties.factorio.ts',
+      text: `type Each = { Everything: number; All(): number };
+interface Anything { Each: number }
+function identity<Everything>(value: Everything): Everything { return value; }
+const named = { Each: 2, All() { return 3; } };
+class Holder { get Any() { return 4; } set Any(value) {} }
+const forwarded = { Each };
+const computed = { [Any]: 4 };
+const result = named.Each + named.All();`,
+    });
+    const code = transformElaborationModule(source).code;
+
+    expect(code).toContain('Each: 2');
+    expect(code).toContain('All()');
+    expect(code).toContain('named.Each');
+    expect(code).toContain('__dsl.prepareMember(named, "All"');
+    expect(code).toContain('Each: __dsl.wildcardToken("each")');
+    expect(code).toContain('[__dsl.wildcardToken("anything")]');
+    expect(code).not.toContain('__dsl.wildcardToken("everything"): number');
+  });
+
   test('leaves optional element and property-call chains native', () => {
     const source = parseFile({
       path: 'optional.ts',

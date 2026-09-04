@@ -550,6 +550,42 @@ loopNet += 5;`,
     ]);
   });
 
+  test('stops Network fact lookup at ordinary lexical shadows', () => {
+    const parsed = parseFile({
+      path: 'lexical-shadows.ts',
+      text: `const input = new Network();
+function numeric(input) { input += 1; }
+const arrow = (input) => { input += 1; };
+const object = { method(input) { input += 1; } };
+{ let input = 1; input += 1; }
+try {} catch (input) { input += 1; }
+input += 5;`,
+    });
+
+    const diagnostics = validateDslSemantics(parsed);
+    expect(diagnostics.map(({ code }) => code)).toEqual(['CL1034']);
+    expect(diagnostics.map(({ span }) => span && parsed.text.slice(span.start, span.end))).toEqual([
+      'input += 5',
+    ]);
+  });
+
+  test('classifies only when-builder then and else calls as decider producers', () => {
+    const parsed = parseFile({
+      path: 'then-members.ts',
+      text: `const box = {
+  then() { return 1; },
+  else() { return 2; },
+};
+const first: ConstantCombinator = box.then();
+const second: ConstantCombinator = box.else();
+const input = new Network();
+const gate: DeciderCombinator = when(input > 0).then(input);
+const fallback: DeciderCombinator = when(input > 0).else(input);`,
+    });
+
+    expect(validateDslSemantics(parsed)).toEqual([]);
+  });
+
   test('tracks provable aliases and homogeneous Network containers', () => {
     const parsed = parseFile({
       path: 'aliases.ts',
