@@ -1,5 +1,6 @@
 import type { SignalId } from '@comblang/factorio';
-import type { NetworkId, ProducerId } from '@comblang/shared';
+import type { NetworkId, ProducerId, SourceSpan } from '@comblang/shared';
+import { nativeDeciderConditionGroups } from './native-decider-conditions.js';
 
 import type {
   ArithmeticOperation,
@@ -29,7 +30,22 @@ export interface FactorioBlueprintJson {
 
 export interface BlueprintJsonOptions {
   readonly label?: string;
+  /** Export-time expansion guard, not a language/DSL operation limit. Default: 1024. */
+  readonly maxDeciderConditionRows?: number;
 }
+
+export class BlueprintJsonError extends Error {
+  readonly code = 'BP1001';
+  readonly span: SourceSpan | undefined;
+
+  constructor(message: string, span?: SourceSpan) {
+    super(message);
+    this.name = 'BlueprintJsonError';
+    this.span = span;
+  }
+}
+
+type NetworkSelection = (reference: LogicalNetworkRef) => { red: boolean; green: boolean };
 
 const FACTORIO_2_0_VERSION = 562_949_953_421_312;
 
@@ -72,44 +88,57 @@ function comparatorJson(comparator: '>' | '<' | '=' | '>=' | '<=' | '!='): strin
         : comparator;
 }
 
-function scalarFields(value: LogicalScalarOperand, side: 'first' | 'second') {
+function scalarFields(
+  value: LogicalScalarOperand,
+  side: 'first' | 'second',
+  selection: NetworkSelection,
+) {
   return value.kind === 'constant'
     ? { constant: value.value }
-    : { [`${side}_signal`]: signalJson(value.signal) };
+    : {
+        [`${side}_signal`]: signalJson(value.signal),
+        [`${side}_signal_networks`]: selection(value),
+      };
 }
 
 function conditionEntries(
   condition: LogicalDeciderCondition,
-  compareType: 'and' | 'or' = 'and',
+  selection: NetworkSelection,
+  maxRows: number,
 ): Record<string, unknown>[] {
-  if (condition.kind === 'and' || condition.kind === 'or') {
-    return condition.conditions.flatMap((child) => conditionEntries(child, condition.kind));
-  }
-  return [
-    {
+  return nativeDeciderConditionGroups(condition, maxRows).flatMap((group, groupIndex) =>
+    group.map((condition, index) => ({
       first_signal:
         condition.left.kind === 'signal'
           ? signalJson(condition.left.signal)
           : wildcardSignal(condition.left.value),
+      first_signal_networks: selection(condition.left),
       comparator: comparatorJson(condition.comparator),
-      ...scalarFields(condition.right, 'second'),
-      compare_type: compareType,
-    },
-  ];
+      ...scalarFields(condition.right, 'second', selection),
+      compare_type: groupIndex > 0 && index === 0 ? 'or' : 'and',
+    })),
+  );
 }
 
-function outputEntry(output: LogicalDeciderOutput): Record<string, unknown> {
+function outputEntry(
+  output: LogicalDeciderOutput,
+  selection: NetworkSelection,
+): Record<string, unknown> {
   return {
     signal:
       output.signal.kind === 'signal'
         ? signalJson(output.signal.signal)
         : wildcardSignal(output.signal.value),
     copy_count_from_input: output.mode === 'copy',
+    ...(output.input === undefined ? {} : { networks: selection(output.input) }),
     ...(output.mode === 'constant' ? { constant: output.value } : {}),
   };
 }
 
-function arithmeticEntity(producer: Extract<CircuitProducerNode, { kind: 'arithmetic' }>) {
+function arithmeticEntity(
+  producer: Extract<CircuitProducerNode, { kind: 'arithmetic' }>,
+  selection: NetworkSelection,
+) {
   const operandFields = (
     operand: typeof producer.config.left,
     side: 'first' | 'second',
@@ -119,6 +148,7 @@ function arithmeticEntity(producer: Extract<CircuitProducerNode, { kind: 'arithm
       : {
           [`${side}_signal`]:
             operand.kind === 'signal' ? signalJson(operand.signal) : wildcardSignal('each'),
+          [`${side}_signal_networks`]: selection(operand),
         };
   return {
     name: 'arithmetic-combinator',
@@ -157,16 +187,33 @@ function constantEntity(producer: Extract<CircuitProducerNode, { kind: 'constant
   };
 }
 
-function deciderEntity(producer: Extract<CircuitProducerNode, { kind: 'decider' }>) {
+function deciderEntity(
+  producer: Extract<CircuitProducerNode, { kind: 'decider' }>,
+  selection: NetworkSelection,
+  maxRows: number,
+) {
+  let conditions: Record<string, unknown>[];
+  try {
+    conditions = conditionEntries(producer.config.condition, selection, maxRows);
+  } catch (error) {
+    throw new BlueprintJsonError(
+      error instanceof Error ? error.message : 'Invalid Decider conditions.',
+      producer.provenance.source,
+    );
+  }
   return {
     name: 'decider-combinator',
     control_behavior: {
       decider_conditions: {
-        conditions: conditionEntries(producer.config.condition),
-        outputs: producer.config.outputs.map(outputEntry),
+        conditions,
+        outputs: producer.config.outputs.map((output) => outputEntry(output, selection)),
         ...(producer.config.elseOutputs === undefined
           ? {}
-          : { else_outputs: producer.config.elseOutputs.map(outputEntry) }),
+          : {
+              else_outputs: producer.config.elseOutputs.map((output) =>
+                outputEntry(output, selection),
+              ),
+            }),
       },
     },
   };
@@ -223,10 +270,26 @@ export function generateBlueprintJson(
   ir: NativeCircuitIr,
   options: BlueprintJsonOptions = {},
 ): FactorioBlueprintJson {
+  const maxRows = options.maxDeciderConditionRows ?? 1024;
+  if (!Number.isSafeInteger(maxRows) || maxRows < 1) {
+    throw new RangeError('maxDeciderConditionRows must be a positive safe integer.');
+  }
   const numbers = new Map<ProducerId, number>(
     ir.producers.map((producer, index) => [producer.id, index + 1]),
   );
   const colors = new Map(ir.networks.map((network) => [network.id, network.color]));
+  const selection: NetworkSelection = (reference) => {
+    const result = { red: false, green: false };
+    for (const network of reference.refKind === 'single'
+      ? [reference.network]
+      : reference.networks) {
+      const color = colors.get(network);
+      if (color === undefined)
+        throw new BlueprintJsonError(`No resolved color for Network ${network}.`);
+      result[color] = true;
+    }
+    return result;
+  };
   const endpoints = new Map<NetworkId, WireEndpoint[]>();
   const addEndpoint = (network: NetworkId, endpoint: WireEndpoint) => {
     const list = endpoints.get(network) ?? [];
@@ -268,10 +331,10 @@ export function generateBlueprintJson(
   const entities = ir.producers.map((producer, index) => ({
     entity_number: numbers.get(producer.id)!,
     ...(producer.kind === 'arithmetic'
-      ? arithmeticEntity(producer)
+      ? arithmeticEntity(producer, selection)
       : producer.kind === 'constant'
         ? constantEntity(producer)
-        : deciderEntity(producer)),
+        : deciderEntity(producer, selection, maxRows)),
     position:
       producer.placement === undefined
         ? { x: index * 2 + 0.5, y: 0.5 }

@@ -103,6 +103,7 @@ The current repository implements the Phase 3 source compiler, the complete Phas
   - [ ] Decide whether the provisional `input.into(A)` spelling is valid only in final Each-mode after conformance evidence; keep it Decider-output-specific and leave raw `input[A]` legal.
   - [ ] Add configurable diagnostic levels and visibility, stable semantic rule IDs, categories, per-rule overrides, generated-diagnostic grouping/deduplication, and bounded provenance details before enabling `decider.each-concrete-copy` as a note/hint.
 - [ ] Phase 8 — parameter-ready configuration IR, placement-time `BlueprintFormula`, dependent blueprint parameters, FCIR, and the Factorio 2.1 codec with fixture-backed semantic round trips.
+  - [x] Preserve per-operand/per-output red-green selection and nested AND/OR semantics in the early blueprint preview; cover truth tables and executed source export, with bounded condition expansion. Native round-trip fixtures remain pending.
   - [ ] Preserve associated source `//` comments as optional combinator descriptions through IR/export; define ambiguous comment attachment and explicit-description precedence, provide an export opt-out, and verify native round trips.
 - [ ] Phase 9 — interactive schematic UI with provenance cross-selection, grouping, layout, inspection, and timing views.
   - [ ] Navigate from rendered combinators to exact original source expressions, retaining call/loop instance context, revision, and tab/file identity.

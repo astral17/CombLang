@@ -37,12 +37,29 @@ The returned object has the normal top-level shape:
 - every constant producer becomes a Factorio 2.x section-based `constant-combinator`;
 - current resolved Signal IDs always have an internal type; export emits name and optional quality, keeps non-item types, and omits the default item type;
 - resolved red/green logical Networks select physical connector IDs;
+- arithmetic operands and Decider operands/normal/else copy outputs retain their
+  explicit red/green input selection, not just their wire connections;
 - `pair(a, b)` inputs connect both resolved colors to the matching input connectors without adding or merging entities;
 - endpoints belonging to one logical Network are connected as a deterministic wire chain;
 - producers with `.at(x, y, direction?)` use their explicit Factorio position and a direction resolved from a numeric constant or TypeScript enum value;
 - remaining entities are placed in one deterministic horizontal row.
 
 The generator emits plain JSON only. It does not prepend the exchange-string version byte, deflate, or base64-encode the result.
+
+Nested Decider conditions are lowered to OR-connected groups of AND comparisons.
+`compare_type` on each row describes its link to the preceding row; the first row
+of every subsequent group therefore uses `or`. Distribution is required for forms
+such as `(A || B) && (C || D)`. This may duplicate comparisons, but never producers,
+outputs, or ticks. The truth-table tests cover nested conjunctions/disjunctions;
+captured native import/export fixtures remain pending.
+
+To prevent exponential preview allocations, `maxDeciderConditionRows` defaults to
+1024 expanded rows per Decider. This is an **export-only allocation guard**, not a
+language execution limit or a claimed Factorio engine limit. API callers can
+explicitly raise it. Excessive expansion or an unrepresentable empty condition
+group throws `BlueprintJsonError` (`BP1001`) with the producer source span when
+available, rather than returning changed/truncated logic. A missing resolved
+operand color also fails instead of silently selecting an input color.
 
 ## Current limitations
 

@@ -101,6 +101,12 @@ Call provenance is associated with the executed function identity, not its textu
 
 ## Common runtime diagnostics
 
+Blueprint preview export uses `BP1001` for conditions that cannot be lowered within
+the configured `maxDeciderConditionRows` bound, empty condition groups, or missing
+resolved input colors. `BlueprintJsonError.span` retains Decider provenance when
+available. This is an export failure, not an error in source execution; see
+[Blueprint JSON preview](blueprint-json.md) for the expansion guard and override.
+
 | Code     | Meaning                                                                                                     |
 | -------- | ----------------------------------------------------------------------------------------------------------- |
 | `RT1001` | unsupported direct-plan format or version                                                                   |
