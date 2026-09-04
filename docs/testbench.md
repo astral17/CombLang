@@ -116,6 +116,16 @@ These callbacks run before participant evaluation and are therefore the proper
 place for external-world stimulus; the stricter model callback rules do not
 apply to them.
 
+An exception escaping a scheduled callback or participant evaluation permanently
+fails the session. The original thrown value is rethrown unchanged. Later mutation
+or advancement throws an error naming the failed boundary and retaining the
+original value as `cause`; this includes previously obtained mock/model controllers.
+Reads, assertions, traces, and model state retain the last committed boundary, and
+`finish()` remains allowed. Create a fresh session to continue: scheduled actions
+or external callback effects may already have occurred and are not rolled back.
+An assertion/argument error outside a boundary, or `settle` exhausting its bound
+after successful ticks, does not itself fail the session.
+
 `settle({ maxTicks })` advances until two consecutive complete simulation
 snapshots are equal. It throws when the bound is exhausted, including for an
 oscillating circuit. Settling deliberately observes the whole circuit for now;
@@ -382,9 +392,9 @@ Reactive connector behavior is available through
 `model(object, { initialState, step }, connector?)`. The runner calls
 `step({ input, state, tick })` once per connector and boundary. The transition
 reads committed snapshot/state `T`; returned `{ state, output? }` becomes
-visible only at `T+1`. State is copied and recursively frozen. A failed kernel
-boundary publishes neither its Network output nor its model state, so a retry
-starts from the same `T`.
+visible only at `T+1`. State is copied and recursively frozen. A failed participant
+boundary publishes neither its Network output nor its model state. Reads remain
+at `T`, but retrying or changing the failed session is forbidden.
 
 `step` is a synchronous transition function, not an imperative test callback.
 It may read its frozen input/state/tick and return next state/output, but it may

@@ -115,11 +115,13 @@ The following language/runtime work is tracked separately from prototype data:
   warning; the mutability rule is **not decided**. Always-readonly borrowing and
   body-inferred writable borrowing are different contracts. Keep current behavior
   until this is agreed; explicit `Move` must remain the only consuming boundary.
-- Poison a TestSession after a failed scheduled callback/boundary: callbacks can
+- Implemented: poison a TestSession after a failed scheduled callback/boundary. Callbacks can
   already have mutated drives, mocks, and schedules before throwing. Do not permit
-  retrying that partially applied boundary as if it were atomic. Preserve reads
-  of the last committed snapshot and block further mutation/advancement; test
-  scheduled callbacks and participant failures separately.
+  retrying that partially applied boundary as if it were atomic. Reads of the last
+  committed snapshot, traces, and model state remain available; all further
+  mutation/advancement is blocked. Scheduled callbacks and participant failures
+  have separate regression coverage. Out-of-boundary validation/assertion errors
+  and `settle` non-convergence do not poison the session.
 
 These items do not require replacing the ownership state machine. Full module
 sandbox hardening and optional reproducible-build policy remain low-priority

@@ -69,6 +69,12 @@ physical ID, exact-scope ordinal, kind-specific ordinal, and immutable
 direct-plan descriptor. The descriptor is the current inspection surface for
 configuration and explicit placement.
 
+Future rendered-schematic navigation will reuse these origins. Comment-to-description
+association and `.at` write-back additionally need revision-aware AST edit anchors;
+the current evaluated placement and physical IDs alone are insufficient. See
+[source-linked schematic editing](source-linked-schematic.md) for the planned
+contract and safeguards around generated instances and computed coordinates.
+
 Network entries are also first-class targets of
 `execution.createTestSession()`. This permits white-box reads, drives, traces,
 and assertions without generating a physical probe or exposing the binding to

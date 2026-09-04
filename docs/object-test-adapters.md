@@ -145,8 +145,11 @@ connector on each boundary, even when its output fans out to several Networks.
 It reads connector input, immutable state, and tick from committed snapshot
 `T`. Only after every synchronous participant succeeds are its returned state
 and output committed for `T+1`. If another device throws, the kernel snapshot
-and every model state remain at `T`; retrying evaluates the transition again
-from the same state.
+and every model transition state remain at `T`. The session is permanently
+failed: reads remain available, but retrying, replacing a provider, or using an
+existing mock/model controller to mutate it is forbidden. Create a fresh session
+instead. The original exception is preserved; later mutation errors name the
+failed boundary and retain that exception as their `cause`.
 
 `step` must be synchronous and functionally pure with respect to the external
 world. It cannot mutate `TestSession`, install or clear providers, register

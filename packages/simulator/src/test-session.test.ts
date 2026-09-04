@@ -172,6 +172,83 @@ describe('TestSession external drives', () => {
     expect(() => session.at(2, () => undefined)).toThrow('later than current tick 2');
   });
 
+  it('poisons a partially applied callback boundary and retains committed reads and traces', () => {
+    const session = new TestSession(new ValueSimulationKernel());
+    const failure = new Error('scheduled stimulus failed');
+    let calls = 0;
+    let skippedCalls = 0;
+    session
+      .trace(input)
+      .drive(input, [[signalA, 4]])
+      .tick();
+    const committed = session.snapshot;
+    const trace = session.traces.toJSON();
+    session.at(2, () => {
+      calls += 1;
+      session.drive(input, [[signalA, 99]]).pulse(output, [[signalB, 1]]);
+      session.at(3, () => {
+        skippedCalls += 1;
+      });
+      throw failure;
+    });
+    session.at(2, () => {
+      skippedCalls += 1;
+    });
+    expect(() => session.run(5)).toThrow(failure);
+    expect(session.snapshot).toBe(committed);
+    expect(session.currentTick).toBe(1);
+    session.expectSignal(input, signalA).toBe(4);
+    session.expect(output).toBeEmpty();
+    expect(session.traces.toJSON()).toEqual(trace);
+    for (const mutate of [
+      () => session.drive(input, []),
+      () => session.clear(input),
+      () => session.pulse(input, []),
+      () => session.at(3, () => undefined),
+      () => session.trace(output),
+      () => session.tick(),
+      () => session.run(1),
+      () => session.settle({ maxTicks: 1 }),
+    ]) {
+      expect(mutate).toThrowError(
+        expect.objectContaining({
+          message: expect.stringContaining('TestSession failed at boundary 2;'),
+          cause: failure,
+        }),
+      );
+    }
+    expect(calls).toBe(1);
+    expect(skippedCalls).toBe(0);
+    session.finish();
+    session.finish();
+    expect(session.read(input).get(signalA)).toBe(4);
+  });
+
+  it('retains a non-Error thrown value and seals even when the value is undefined', () => {
+    const session = new TestSession(new ValueSimulationKernel());
+    session.at(1, () => {
+      throw undefined;
+    });
+    let caught = false;
+    try {
+      session.tick();
+    } catch (error) {
+      caught = true;
+      expect(error).toBeUndefined();
+    }
+    expect(caught).toBe(true);
+    expect(() => session.tick()).toThrow('TestSession failed at boundary 1;');
+    expect(session.currentTick).toBe(0);
+  });
+
+  it('does not poison a session for validation or assertion failures outside a boundary', () => {
+    const session = new TestSession(new ValueSimulationKernel());
+    expect(() => session.tick(0)).toThrow('positive safe integer');
+    expect(() => session.expectSignal(input, signalA).toBe(1)).toThrow(TestAssertionError);
+    session.drive(input, [[signalA, 2]]).tick();
+    expect(session.read(input).get(signalA)).toBe(2);
+  });
+
   it('rejects reentrant time advancement from a scheduled callback', () => {
     for (const advance of [
       (session: TestSession) => session.tick(),
@@ -254,5 +331,7 @@ describe('TestSession external drives', () => {
     expect(() => oscillating.settle({ maxTicks: 4 })).toThrow(
       'Circuit did not settle within 4 ticks.',
     );
+    expect(oscillating.currentTick).toBe(4);
+    expect(oscillating.tick().tick).toBe(5);
   });
 });

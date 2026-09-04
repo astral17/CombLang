@@ -89,7 +89,7 @@ The current repository implements the Phase 3 source compiler, the complete Phas
     - [ ] Replace selection-box-derived footprints with runtime tile dimensions (or explicit raw tiles/documented collision defaults), including zero-sized and asymmetric cases.
     - [ ] Separate ingredient/product and item/fluid validation at the correct source boundary; cover zero fluid amounts, duplicate ingredients, numeric bounds, temperature rules, and real crafting constraints with unknown/evidence-aware results.
     - [ ] Derive or probe exact circuit capabilities; then lock base, Space Age, and modded-override conformance fixtures.
-  - [ ] Poison TestSession after a failed partially applied boundary; block mutation/retry while retaining last committed snapshot reads.
+  - [x] Poison TestSession after a failed partially applied boundary; block mutation/retry while retaining last committed snapshot reads, traces, and model state. Preserve the original exception; do not poison on ordinary out-of-boundary assertions or `settle` non-convergence.
   - [ ] Move color consistency checks into executed elaboration operations, preserving first-conflict spans and preventing later source execution after a contradiction.
 - [ ] Phase 6 — universal persistent Factorio Entity handles with a generic modded fallback and typed facades: shared circuit inputs, native single-comparison `enable`, Roboport, Lamp, Constant, logistics entities, belts, displays, and train stops.
   - [ ] Define common identity/configuration/placement and explicit connector selection before individual constructors; keep circuit, native, and future logistic configuration separate.
@@ -103,7 +103,10 @@ The current repository implements the Phase 3 source compiler, the complete Phas
   - [ ] Decide whether the provisional `input.into(A)` spelling is valid only in final Each-mode after conformance evidence; keep it Decider-output-specific and leave raw `input[A]` legal.
   - [ ] Add configurable diagnostic levels and visibility, stable semantic rule IDs, categories, per-rule overrides, generated-diagnostic grouping/deduplication, and bounded provenance details before enabling `decider.each-concrete-copy` as a note/hint.
 - [ ] Phase 8 — parameter-ready configuration IR, placement-time `BlueprintFormula`, dependent blueprint parameters, FCIR, and the Factorio 2.1 codec with fixture-backed semantic round trips.
+  - [ ] Preserve associated source `//` comments as optional combinator descriptions through IR/export; define ambiguous comment attachment and explicit-description precedence, provide an export opt-out, and verify native round trips.
 - [ ] Phase 9 — interactive schematic UI with provenance cross-selection, grouping, layout, inspection, and timing views.
+  - [ ] Navigate from rendered combinators to exact original source expressions, retaining call/loop instance context, revision, and tab/file identity.
+  - [ ] Offer undoable, revision-checked `.at` write-back from physical placement drags; initially allow only unique producer sites and literal coordinates. Keep schematic-only layout separate; require explicit decisions for variables, loops, helpers, and multi-instance origins.
 - [ ] Phase 10 — physical placement, wire reach verification, relays, and blueprint export.
 - [ ] Phase 11 — language-service and execution-environment polish: operator-domain hovers, completions, code actions, semantic tokens, exact native views, composition-safe textarea highlighting/completion and mobile symbol tools, optional reproducible-build policy, and a fully hardened module sandbox.
 
@@ -118,6 +121,7 @@ Later phases cover prototype profiles, typed Factorio objects, exact constructor
 - [Prototype environment](docs/prototype-environment.md) — the Phase 5.5 normalized modded-data provider, Factorio exporter, loading, and environment-identity boundary.
 - [Prototype truth sources and audit follow-up](docs/prototype-truth-sources.md) — raw/runtime/behavior authority, identity migration, and pending September 4 recommendations.
 - [Runtime debug index](docs/debug-index.md) — exact lexical scopes, physical Network/Producer mappings, deterministic queries, and current ambiguity boundary.
+- [Source-linked schematic editing](docs/source-linked-schematic.md) — planned comment descriptions, diagram-to-source navigation, and safe `.at` write-back.
 - [Executable testbench](docs/testbench.md) — the current JavaScript test API, clock, assertions, traces, and browser/CLI behavior.
 - [Phase 5 acceptance](docs/phase-5-acceptance.md) — runnable MemoCell/object examples, layered coverage, and the completed MVP boundary.
 - [Generic object test adapters](docs/object-test-adapters.md) — stable object identity, connector snapshots, default output injection, and the mock/model policy boundary.

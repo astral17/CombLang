@@ -251,7 +251,7 @@ describe('generic circuit object adapter', () => {
     ).toThrowError('only literals, arrays, and plain objects');
   });
 
-  it('commits model state only when the whole simulation boundary succeeds', () => {
+  it('preserves committed model state and permanently seals a failed participant boundary', () => {
     const firstOutput = network('network:atomic-first');
     const failingOutput = network('network:atomic-failing');
     const session = new TestSession(new ValueSimulationKernel());
@@ -275,22 +275,66 @@ describe('generic circuit object adapter', () => {
         return { state: state + 1, output: [[A, state + 1]] };
       },
     });
+    const mock = session.mock(failing);
     session.model(failing, {
       initialState: null,
-      step: () => {
+      step: ({ tick }) => {
+        if (tick === 0) return { state: null };
         throw new Error('external object failed');
       },
     });
 
+    session.trace(firstOutput, session.objectOutput(first)).tick();
+    const committed = session.snapshot;
+    const trace = session.traces.toJSON();
     expect(() => session.tick()).toThrowError('external object failed');
-    expect(session.currentTick).toBe(0);
-    expect(controller.state).toBe(0);
-
-    session.mock(failing).output([]);
-    session.tick();
-    expect(seenStates).toEqual([0, 0]);
+    expect(session.currentTick).toBe(1);
+    expect(session.snapshot).toBe(committed);
+    expect(session.traces.toJSON()).toEqual(trace);
+    for (const mutate of [
+      () => controller.clear(),
+      () => mock.output([]),
+      () => mock.clear(),
+      () => session.mock(first),
+      () => session.model(first, { initialState: 0, step: ({ state }) => ({ state }) }),
+      () =>
+        session.adaptObject(syntheticAdapter, {
+          id: 'late',
+          inputs: [],
+          output: firstOutput,
+          defaultValue: new SparseBus(),
+        }),
+      () => session.tick(),
+    ])
+      expect(mutate).toThrow('TestSession failed at boundary 2;');
+    expect(seenStates).toEqual([0, 1]);
     expect(controller.state).toBe(1);
     expect(session.read(firstOutput).get(A)).toBe(1);
+  });
+
+  it('cannot reuse mocks changed by a failed scheduled action', () => {
+    const output = network('network:scheduled-mock');
+    const session = new TestSession(new ValueSimulationKernel());
+    const object = session.adaptObject(syntheticAdapter, {
+      id: 'scheduled-mock',
+      inputs: [output],
+      output,
+      defaultValue: new SparseBus(),
+    });
+    const mock = session.mock(object).output([[A, 3]]);
+    session.trace(output, session.objectOutput(object)).tick();
+    const trace = session.traces.toJSON();
+    session.at(2, () => {
+      mock.output([[A, 9]]);
+      throw new Error('mock callback failed');
+    });
+    expect(() => session.tick()).toThrow('mock callback failed');
+    expect(session.read(output).get(A)).toBe(3);
+    const input = session.readObjectInput(object, 'circuit');
+    expect(input.kind === 'known' && input.bus.get(A)).toBe(3);
+    expect(session.traces.toJSON()).toEqual(trace);
+    expect(() => mock.clear()).toThrow('TestSession failed at boundary 2;');
+    expect(() => session.tick()).toThrow('TestSession failed at boundary 2;');
   });
 
   it('rejects model side-channel mutations independently of participant order', () => {

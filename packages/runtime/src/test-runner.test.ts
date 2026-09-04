@@ -19,6 +19,39 @@ afterEach(() => {
 });
 
 describe('direct plan test runner lifecycle', () => {
+  test('reports a failed scheduled boundary with its last committed trace and isolates the next test', () => {
+    const parsed = parseFile({
+      path: 'failed-boundary.factorio.ts',
+      text: 'const input = new Network();',
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const result = runDirectPlanTests(
+      plan,
+      `test('broken callback', ({ network, session }) => {
+  const input = network('input');
+  session.trace(input);
+  session.tick();
+  session.at(2, () => {
+    session.drive(input, [[Signal('virtual', 'signal-A'), 99]]);
+    throw new Error('scheduled failure');
+  });
+  session.tick(3);
+});
+test('fresh session', ({ network, session }) => {
+  session.tick();
+  session.expect(network('input')).toBeEmpty();
+});`,
+    );
+    expect(result).toMatchObject({
+      passed: 1,
+      failed: 1,
+      results: [{ status: 'failed', trace: { endTick: 1 } }, { status: 'passed' }],
+    });
+    const reader = new TraceReader(result.results[0]!.trace!);
+    expect(reader.endTick).toBe(1);
+    expect(result.results[0]!.trace!.events).toHaveLength(1);
+  });
+
   test('labels a traced returned Network with its caller binding', () => {
     const parsed = parseFile({
       path: 'trace-alias.factorio.ts',

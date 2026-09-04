@@ -195,6 +195,7 @@ export class TestSession<Target = NetworkId> {
   #advancing = false;
   #evaluatingParticipants = false;
   #finished = false;
+  #failedBoundary: { readonly tick: number; readonly cause: unknown } | undefined;
   #activeBoundary: number | undefined;
 
   constructor(kernel: ValueSimulationKernel, options?: TestSessionOptions<Target>) {
@@ -578,11 +579,11 @@ export class TestSession<Target = NetworkId> {
   #advanceOne(): ValueSimulationSnapshot {
     const nextTick = this.currentTick + 1;
     this.#activeBoundary = nextTick;
-    const callbacks = this.#scheduled.get(nextTick) ?? [];
-    this.#scheduled.delete(nextTick);
-    for (const callback of callbacks) callback();
     this.#pendingBoundaryCommits.length = 0;
     try {
+      const callbacks = this.#scheduled.get(nextTick) ?? [];
+      this.#scheduled.delete(nextTick);
+      for (const callback of callbacks) callback();
       this.#evaluatingParticipants = true;
       let snapshot: ValueSimulationSnapshot;
       try {
@@ -595,6 +596,11 @@ export class TestSession<Target = NetworkId> {
       this.#traceStore.record(snapshot);
       this.#activeBoundary = undefined;
       return snapshot;
+    } catch (cause) {
+      // Scheduled actions and user callbacks can have irreversible side effects.
+      // Preserve the original error, but never retry this partially applied boundary.
+      this.#failedBoundary = { tick: nextTick, cause };
+      throw cause;
     } finally {
       this.#pendingBoundaryCommits.length = 0;
     }
@@ -612,6 +618,12 @@ export class TestSession<Target = NetworkId> {
   #assertMutationAllowed(operation: string): void {
     if (this.#finished) {
       throw new Error(`TestSession is finished; ${operation} cannot mutate it.`);
+    }
+    if (this.#failedBoundary !== undefined) {
+      throw new Error(
+        `TestSession failed at boundary ${this.#failedBoundary.tick}; ${operation} cannot mutate it. Create a new session to continue.`,
+        { cause: this.#failedBoundary.cause },
+      );
     }
     if (this.#evaluatingParticipants) {
       throw new Error(
