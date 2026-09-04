@@ -26,6 +26,8 @@ interface DirectElaborationPlan {
 
 The runtime remains the authoritative validator: `tryElaborateDirectPlan()` returns structured diagnostics, while `elaborateDirectPlan()` throws the same diagnostic for exception-oriented callers. A TypeScript type assertion or deserialized JSON is not proof that a plan is valid.
 
+`validateDirectPlanEnvelope(value)` is the transport-facing first stage. It accepts `unknown`, checks the format/version envelope, Network declarations, duplicate names, optional descriptor collections, aliases, and capability metadata before a runtime graph is allocated. A successful result contains the narrowed plan and prepared declaration lookup. Topology, ownership, circuit configuration, and color checks still belong to elaboration because they require resolving relationships across descriptors.
+
 ## Descriptor groups
 
 - `networks` declares logical Network identities and optional fixed colors.

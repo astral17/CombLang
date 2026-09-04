@@ -15,6 +15,7 @@ import {
   type DebugNetworkEntry,
   type DebugScope,
 } from './debug-index.js';
+import { validateDirectPlanEnvelope } from './direct-plan-validation.js';
 import { DebugStructureExpectation } from './debug-structure.js';
 import {
   DslRuntime,
@@ -236,56 +237,12 @@ function lowerCondition(
 
 /** Executes compiler-owned descriptors only; it never evaluates source text. */
 function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
-  if (plan.format !== 'comblang-direct-plan' || plan.version !== 2) {
-    throw runtimeFailure('RT1001', 'Unsupported direct elaboration plan format.');
+  const validation = validateDirectPlanEnvelope(plan);
+  if (validation.value === undefined) {
+    throw new RuntimeDiagnosticError(validation.diagnostics[0]!);
   }
+  const { declarations, aliases, capabilityUses } = validation.value;
   const runtime = new DslRuntime();
-  const declarations = new Map(plan.networks.map((declaration) => [declaration.name, declaration]));
-  if (declarations.size !== plan.networks.length) {
-    const duplicate = plan.networks.find(
-      (declaration, index) =>
-        plan.networks.findIndex(({ name }) => name === declaration.name) !== index,
-    )!;
-    throw runtimeFailure(
-      'RT1002',
-      `Duplicate Network in direct plan: ${duplicate.name}.`,
-      duplicate.source,
-    );
-  }
-  const aliases = plan.networkAliases ?? [];
-  for (const alias of aliases) {
-    if (
-      typeof alias.name !== 'string' ||
-      alias.name.length === 0 ||
-      !declarations.has(alias.network) ||
-      !Array.isArray(alias.instancePath) ||
-      alias.instancePath.some((segment) => typeof segment !== 'string' || segment.length === 0) ||
-      typeof alias.moved !== 'boolean'
-    ) {
-      throw runtimeFailure(
-        'RT1001',
-        'Invalid Network alias descriptor in direct plan.',
-        alias.source,
-      );
-    }
-  }
-
-  const capabilityUses = Object.freeze([...(plan.capabilityUses ?? [])]);
-  for (const use of capabilityUses) {
-    if (
-      !declarations.has(use.network) ||
-      !['readonly', 'ref', 'move'].includes(use.capability) ||
-      typeof use.parameter !== 'string' ||
-      use.parameter.length === 0 ||
-      (use.fixedColor !== undefined && use.fixedColor !== 'red' && use.fixedColor !== 'green')
-    ) {
-      throw runtimeFailure(
-        'RT1001',
-        'Invalid capability descriptor in direct plan.',
-        use.provenance,
-      );
-    }
-  }
 
   const parent = new Map(plan.networks.map(({ name }) => [name, name]));
   const consumed = new Map<string, SourceSpan>();
