@@ -1,10 +1,5 @@
-import type {
-  CircuitProducerNode,
-  ElaborationGraph,
-  EntityPlacement,
-  LogicalDeciderCondition,
-  LogicalNetworkRef,
-} from '@comblang/compiler/ir';
+import type { CircuitProducerNode, ElaborationGraph, EntityPlacement } from '@comblang/compiler/ir';
+import { producerInputNetworkIds } from '@comblang/compiler/producer-network-references';
 import type { NetworkId, ProducerId } from '@comblang/shared';
 
 import type { DebugNetworkEntry, DebugProducerEntry, DebugScope } from './debug-index.js';
@@ -62,30 +57,7 @@ function partialMatch(actual: unknown, expected: unknown): boolean {
 
 /** Physical input dependencies, including pair inputs and both Decider branches. */
 export function producerInputNetworks(producer: CircuitProducerNode): ReadonlySet<NetworkId> {
-  const result = new Set<NetworkId>();
-  const addReference = (reference: LogicalNetworkRef): void => {
-    if (reference.refKind === 'single') result.add(reference.network);
-    else for (const network of reference.networks) result.add(network);
-  };
-  const visitCondition = (condition: LogicalDeciderCondition): void => {
-    if (condition.kind === 'and' || condition.kind === 'or') {
-      for (const child of condition.conditions) visitCondition(child);
-      return;
-    }
-    addReference(condition.left);
-    if (condition.right.kind === 'signal') addReference(condition.right);
-  };
-
-  if (producer.kind === 'arithmetic') {
-    if (producer.config.left.kind !== 'constant') addReference(producer.config.left);
-    if (producer.config.right.kind !== 'constant') addReference(producer.config.right);
-  } else if (producer.kind === 'decider') {
-    visitCondition(producer.config.condition);
-    for (const output of [...producer.config.outputs, ...(producer.config.elseOutputs ?? [])]) {
-      if (output.input !== undefined) addReference(output.input);
-    }
-  }
-  return result;
+  return new Set(producerInputNetworkIds(producer));
 }
 
 /** Tick-free structural assertions over one DebugScope and all of its descendants. */

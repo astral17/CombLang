@@ -1,9 +1,71 @@
 import { describe, expect, test } from 'vitest';
 import { loadPrototypeDatabase, syntheticPrototypeDatabase } from '@comblang/prototypes';
+import { sourceFileId, sourceSpan, type Diagnostic } from '@comblang/shared';
 
 import { compileSource } from './compile-source.js';
 
 describe('browser source compilation', () => {
+  test('retains an environment warning and its source information after successful lowering', () => {
+    const fileId = sourceFileId('warning.factorio.ts');
+    const warning: Diagnostic = {
+      code: 'AUDIT_WARNING',
+      severity: 'warning',
+      message: 'Keep this environment warning.',
+      span: sourceSpan(fileId, 0, 5),
+      related: [{ message: 'Environment selection.', span: sourceSpan(fileId, 6, 12) }],
+    };
+    const result = compileSource(
+      { path: 'warning.factorio.ts', text: 'const output = new Network();' },
+      {},
+      [warning],
+    );
+
+    expect(result.plan).toBeDefined();
+    expect(result.compilerDiagnostics).toEqual([warning]);
+    expect(result.pipelineDiagnostics).toEqual([warning]);
+  });
+
+  test('retains earlier warnings when source execution fails', () => {
+    const warning: Diagnostic = {
+      code: 'AUDIT_WARNING',
+      severity: 'warning',
+      message: 'Keep this warning after the throw.',
+    };
+    const result = compileSource(
+      { path: 'throw.factorio.ts', text: `throw new Error('execution failed');` },
+      {},
+      [warning],
+    );
+
+    expect(result.plan).toBeUndefined();
+    expect(result.compilerDiagnostics.map(({ code }) => code)).toEqual(['AUDIT_WARNING', 'EX1001']);
+    expect(result.pipelineDiagnostics).toEqual(result.compilerDiagnostics);
+  });
+
+  test('orders environment, parser, and semantic diagnostics without executing invalid source', () => {
+    const environmentError: Diagnostic = {
+      code: 'ENV_TEST',
+      severity: 'error',
+      message: 'Invalid test environment.',
+    };
+    const result = compileSource(
+      { path: 'invalid.factorio.ts', text: `const = ; throw new Error('must not execute');` },
+      {},
+      [environmentError],
+    );
+
+    expect(result.plan).toBeUndefined();
+    expect(result.pipelineDiagnostics[0]).toBe(environmentError);
+    expect(result.pipelineDiagnostics.slice(1, 1 + result.diagnostics.length)).toEqual(
+      result.diagnostics,
+    );
+    expect(result.pipelineDiagnostics).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ message: expect.stringContaining('must not execute') }),
+      ]),
+    );
+  });
+
   test('keeps implicit parameter warnings visible without blocking compilation', () => {
     const text = `function Double(input) { return input * 2; }
 function Triple(input: Network) { return input * 3; }

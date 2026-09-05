@@ -10,7 +10,8 @@
     "./direct-plan": "./src/direct-plan.ts",
     "./direct-plan-schema": "./src/direct-plan-schema.ts",
     "./elaboration-transform": "./src/elaboration-transform.ts",
-    "./ir": "./src/ir.ts"
+    "./ir": "./src/ir.ts",
+    "./producer-network-references": "./src/producer-network-references.ts"
   },
   "dependencies": {
     "@comblang/factorio": "0.0.0",

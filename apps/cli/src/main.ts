@@ -28,8 +28,7 @@ import {
   type PrototypeProvider,
 } from '@comblang/prototypes';
 import {
-  ElaborationExecutionError,
-  ElaborationOperationLimitError,
+  executionFailureDiagnostic,
   executeElaborationProgram,
   runDirectPlanTests,
   tryElaborateDirectPlan,
@@ -139,7 +138,7 @@ async function check(
       networkPairs.push(...(plan.networkPairs ?? []));
       diagnostics.push(...tryElaborateDirectPlan(plan).diagnostics);
     } catch (error) {
-      diagnostics.push(executionFailure(error));
+      diagnostics.push(executionFailureDiagnostic(error));
     }
   }
 
@@ -171,23 +170,6 @@ async function check(
   }
 
   return diagnostics.some((diagnostic) => diagnostic.severity === 'error') ? 1 : 0;
-}
-
-function executionFailure(error: unknown): Diagnostic {
-  return {
-    code:
-      error instanceof ElaborationOperationLimitError
-        ? 'EX1003'
-        : error instanceof ElaborationExecutionError
-          ? error.code
-          : 'EX1001',
-    severity: 'error',
-    message: error instanceof Error ? error.message : 'Elaboration execution failed.',
-    ...(error instanceof ElaborationExecutionError ? { span: error.span } : {}),
-    ...(error instanceof ElaborationExecutionError && error.related !== undefined
-      ? { related: error.related }
-      : {}),
-  };
 }
 
 async function testCircuit(
@@ -223,7 +205,7 @@ async function testCircuit(
           diagnostics.push(...tryElaborateDirectPlan(plan).diagnostics);
         }
       } catch (error) {
-        diagnostics.push(executionFailure(error));
+        diagnostics.push(executionFailureDiagnostic(error));
       }
     }
   }

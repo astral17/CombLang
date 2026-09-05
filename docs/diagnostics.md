@@ -17,6 +17,8 @@ CombLang diagnostics are structured values with a stable code, severity, message
 
 An error prevents a valid direct plan or elaborated circuit. A warning does not; its topology is still checked.
 
+The browser compilation result exposes `pipelineDiagnostics` as the authoritative ordered list: environment/profile diagnostics, parser diagnostics, semantic diagnostics, executed-plan diagnostics, then lowering diagnostics. Each stage appends without replacing earlier entries, including when transformation or source execution throws. Source spans and related information are preserved unchanged. CLI and browser normalize execution failures through the same runtime helper. The older `diagnostics` parse-only and `compilerDiagnostics` non-parser fields remain available for transport compatibility; UI consumers use the combined pipeline list and must not concatenate those compatibility views again.
+
 ## Planned configurable advisories
 
 The current transport uses stable display codes and the implemented

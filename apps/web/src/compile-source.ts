@@ -10,14 +10,16 @@ import {
 } from '@comblang/language';
 import type { PrototypeProvider } from '@comblang/prototypes';
 import {
-  ElaborationExecutionError,
-  ElaborationOperationLimitError,
+  executionFailureDiagnostic,
   executeElaborationProgram,
   tryElaborateDirectPlan,
 } from '@comblang/runtime';
 import type { Diagnostic } from '@comblang/shared';
 
 export interface CompiledSourceResult extends ParseWorkerResult {
+  /** Every compilation-stage diagnostic in stable execution order. */
+  readonly pipelineDiagnostics: readonly Diagnostic[];
+  /** Non-parser diagnostics retained for compatibility with ParseWorkerResult consumers. */
   readonly compilerDiagnostics: readonly Diagnostic[];
   readonly executionMode: 'executed-javascript';
   readonly elaborationJavaScript?: string;
@@ -37,10 +39,16 @@ export function compileSource(
   let plan: DirectElaborationPlan | undefined;
   let elaborationJavaScript: string | undefined;
   const semanticDiagnostics = validateDslSemantics(parsed);
-  let compilerDiagnostics: readonly Diagnostic[] = [
+  const compilerDiagnostics: Diagnostic[] = [...preflightDiagnostics, ...semanticDiagnostics];
+  const pipelineDiagnostics: Diagnostic[] = [
     ...preflightDiagnostics,
+    ...parsed.diagnostics,
     ...semanticDiagnostics,
   ];
+  const appendCompilerDiagnostics = (diagnostics: readonly Diagnostic[]): void => {
+    compilerDiagnostics.push(...diagnostics);
+    pipelineDiagnostics.push(...diagnostics);
+  };
   if (parsed.diagnostics.length === 0) {
     try {
       const program = transformElaborationModule(parsed);
@@ -48,31 +56,12 @@ export function compileSource(
       if (!compilerDiagnostics.some(({ severity }) => severity === 'error')) {
         plan = executeElaborationProgram(program, environment);
         const runtimeDiagnostics = tryElaborateDirectPlan(plan).diagnostics;
-        compilerDiagnostics = [
-          ...semanticDiagnostics,
-          ...(plan.diagnostics ?? []),
-          ...runtimeDiagnostics,
-        ];
+        appendCompilerDiagnostics(plan.diagnostics ?? []);
+        appendCompilerDiagnostics(runtimeDiagnostics);
       }
     } catch (error) {
       plan = undefined;
-      compilerDiagnostics = [
-        ...semanticDiagnostics,
-        {
-          code:
-            error instanceof ElaborationOperationLimitError
-              ? 'EX1003'
-              : error instanceof ElaborationExecutionError
-                ? error.code
-                : 'EX1001',
-          severity: 'error',
-          message: error instanceof Error ? error.message : 'Elaboration execution failed.',
-          ...(error instanceof ElaborationExecutionError ? { span: error.span } : {}),
-          ...(error instanceof ElaborationExecutionError && error.related !== undefined
-            ? { related: error.related }
-            : {}),
-        },
-      ];
+      appendCompilerDiagnostics([executionFailureDiagnostic(error)]);
     }
   }
 
@@ -81,6 +70,7 @@ export function compileSource(
     diagnostics: parsed.diagnostics,
     topLevel: summarizeTopLevel(parsed),
     semantics: classifyDslSemantics(parsed),
+    pipelineDiagnostics,
     compilerDiagnostics,
     executionMode: 'executed-javascript',
     ...(elaborationJavaScript === undefined ? {} : { elaborationJavaScript }),

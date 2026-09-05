@@ -230,6 +230,35 @@ describe('direct elaboration runtime', () => {
     });
   });
 
+  test('includes an else-only Decider input in connector color constraints', () => {
+    const runtime = new DslRuntime();
+    const condition = runtime.network({ name: 'condition', color: 'red' });
+    const elseInput = runtime.network({ name: 'elseInput', color: 'red' });
+    const output = runtime.network({ name: 'output' });
+    const decider = runtime.decider({
+      condition: {
+        kind: 'compare',
+        left: { kind: 'signal', signal: A, refKind: 'single', network: condition },
+        comparator: '>',
+        right: { kind: 'constant', value: 0 },
+      },
+      outputs: [],
+      elseOutputs: [
+        {
+          mode: 'copy',
+          signal: { kind: 'signal', signal: A },
+          input: { refKind: 'single', network: elseInput },
+        },
+      ],
+    });
+    runtime.attach(decider, output);
+
+    expect(captureRuntimeDiagnostic(() => runtime.elaborate()).diagnostic).toMatchObject({
+      code: 'RT2010',
+      severity: 'error',
+    });
+  });
+
   test('copies and freezes explicit provenance stacks', () => {
     const runtime = new DslRuntime();
     const instancePath = ['Outer:result'];

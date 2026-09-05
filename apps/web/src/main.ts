@@ -1053,7 +1053,7 @@ function handleWorkerMessage(event: MessageEvent<CompilerWorkerResponse>, worker
     prototypeProfileStatus.dataset.state = profileError === undefined ? 'pending' : 'invalid';
     prototypeProfileClear.disabled = false;
   }
-  const diagnostics = parsed.diagnostics.map((diagnostic) => {
+  const syntaxDiagnostics = parsed.diagnostics.map((diagnostic) => {
     const position =
       diagnostic.span === undefined
         ? undefined
@@ -1067,7 +1067,7 @@ function handleWorkerMessage(event: MessageEvent<CompilerWorkerResponse>, worker
     };
   });
 
-  const compilerDiagnostics = parsed.compilerDiagnostics.map((diagnostic) => {
+  const diagnostics = parsed.pipelineDiagnostics.map((diagnostic) => {
     const position =
       diagnostic.span === undefined
         ? undefined
@@ -1080,18 +1080,14 @@ function handleWorkerMessage(event: MessageEvent<CompilerWorkerResponse>, worker
       column: position === undefined ? undefined : position.column + 1,
     };
   });
-  sourceEditor.setDiagnostics([...parsed.diagnostics, ...parsed.compilerDiagnostics]);
+  sourceEditor.setDiagnostics(parsed.pipelineDiagnostics);
   const foldedOperations = parsed.semantics.filter(
     (summary) => summary.operatorDomain === 'compile-time',
   ).length;
   const sourceFunctions = parsed.semantics.filter((summary) => summary.kind === 'function').length;
-  const syntaxErrors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
-  const compilerErrors = compilerDiagnostics.filter(
-    (diagnostic) => diagnostic.severity === 'error',
-  );
-  const warnings = [...diagnostics, ...compilerDiagnostics].filter(
-    (diagnostic) => diagnostic.severity === 'warning',
-  );
+  const syntaxErrors = syntaxDiagnostics.filter((diagnostic) => diagnostic.severity === 'error');
+  const compilerErrors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
+  const warnings = diagnostics.filter((diagnostic) => diagnostic.severity === 'warning');
   const valid = syntaxErrors.length === 0 && compilerErrors.length === 0;
   status.textContent =
     syntaxErrors.length > 0
@@ -1103,9 +1099,7 @@ function handleWorkerMessage(event: MessageEvent<CompilerWorkerResponse>, worker
           : `executed JS · ${sourceFunctions} functions · ${parsed.plan?.producers.length ?? 0} producers · ${foldedOperations} folds ready`;
   status.dataset.state = valid ? (warnings.length > 0 ? 'warning' : 'valid') : 'invalid';
   if (!valid || parsed.plan === undefined) {
-    const firstError = [...parsed.diagnostics, ...parsed.compilerDiagnostics].find(
-      ({ severity }) => severity === 'error',
-    );
+    const firstError = parsed.pipelineDiagnostics.find(({ severity }) => severity === 'error');
     renderProofError(
       firstError === undefined
         ? 'The source produced no executable direct plan.'
@@ -1121,11 +1115,7 @@ function handleWorkerMessage(event: MessageEvent<CompilerWorkerResponse>, worker
       const diagnostic = sourcePreviewDiagnostic(error);
       status.textContent = diagnostic.code === 'WEB1001' ? 'preview error' : 'runtime diagnostic';
       status.dataset.state = 'invalid';
-      sourceEditor.setDiagnostics([
-        ...parsed.diagnostics,
-        ...parsed.compilerDiagnostics,
-        diagnostic,
-      ]);
+      sourceEditor.setDiagnostics([...parsed.pipelineDiagnostics, diagnostic]);
       renderProofError(formatSourceDiagnostic(diagnostic, sourceEditor.getValue()), parsed.plan);
       // Preview failures do not turn a successfully compiled circuit into invalid source.
       scheduleTestRender();
@@ -1133,7 +1123,7 @@ function handleWorkerMessage(event: MessageEvent<CompilerWorkerResponse>, worker
   }
   result.textContent =
     parsed.elaborationJavaScript ??
-    [...diagnostics, ...compilerDiagnostics]
+    diagnostics
       .map(
         (diagnostic) =>
           `${diagnostic.code} ${diagnostic.severity}${diagnostic.line === undefined ? '' : ` at ${diagnostic.line}:${diagnostic.column ?? 1}`}: ${diagnostic.message}`,

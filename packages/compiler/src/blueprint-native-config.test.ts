@@ -80,4 +80,55 @@ describe('native blueprint configuration lowering', () => {
       }),
     );
   });
+
+  test('includes else-only Decider inputs in native wiring', () => {
+    const A = signal('virtual', 'signal-A');
+    const ir: NativeCircuitIr = {
+      format: 'comblang-ncir',
+      version: 2,
+      networks: [
+        { id: network(1), color: 'red', provenance },
+        { id: network(2), color: 'green', provenance },
+        { id: network(3), color: 'red', provenance },
+      ],
+      producers: [
+        {
+          id: producer(2),
+          kind: 'decider',
+          provenance,
+          destinations: [network(3)],
+          config: {
+            condition: {
+              kind: 'compare',
+              left: {
+                kind: 'signal',
+                signal: A,
+                refKind: 'single',
+                network: network(1),
+              },
+              comparator: '>',
+              right: { kind: 'constant', value: 0 },
+            },
+            outputs: [],
+            elseOutputs: [
+              {
+                mode: 'copy',
+                signal: { kind: 'signal', signal: A },
+                input: { refKind: 'single', network: network(2) },
+              },
+            ],
+          },
+        },
+      ],
+    };
+
+    const lowered = lowerNativeBlueprintConfig(ir, 1024);
+
+    expect(lowered.combinators[0]?.inputNetworks).toEqual([network(1), network(2)]);
+    expect(lowered.combinators[0]?.entity.control_behavior).toMatchObject({
+      decider_conditions: {
+        else_outputs: [{ networks: { red: false, green: true } }],
+      },
+    });
+  });
 });

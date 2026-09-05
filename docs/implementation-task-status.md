@@ -15,4 +15,31 @@ Status: **implemented; browser upgrade gate pending**.
 
 Still required for full lifecycle acceptance: exercise an actual version upgrade with two sibling path deployments in a browser and verify that the new shell plus compiler/test Workers remain available offline after activation. No server is left running by this check.
 
-Next independent task: F02, accumulation of diagnostics from every compilation stage.
+## F02 — Preserve diagnostics from every compilation stage
+
+Status: **complete in the current web compilation boundary**.
+
+- Compilation diagnostics are append-only across environment/profile preflight, parse, semantic validation, executed elaboration, and lowering.
+- Success and exception paths retain earlier warnings, including their primary and related source spans.
+- CLI and browser hosts share one execution-failure normalizer for stable codes, messages, primary spans, and related information.
+- `pipelineDiagnostics` provides the authoritative ordered browser/Worker transport view. Existing parse-only `diagnostics` and non-parser `compilerDiagnostics` remain compatibility projections.
+- The browser editor, status summary, and first-error selection consume the combined list without duplicating parser diagnostics.
+- Regression coverage includes successful lowering with a warning, execution failure after a warning, environment-before-parser ordering, and the existing invalid-profile source sentinel.
+
+Validation: **902 tests in 85 files**, format check, typecheck, and complete CLI/web production builds pass. The existing Vite large-chunk warning remains.
+
+## F03 — Share normalized producer input traversal
+
+Status: **complete**.
+
+- The compiler owns one pure traversal for arithmetic operands, every nested Decider condition leaf, normal outputs, else outputs, and single/pair Network references.
+- The occurrence view preserves descriptor order and repeated rows. The topology view expands pairs and returns frozen distinct Network IDs in first-reference order.
+- Runtime color constraints, debug structural graph queries/documents, and native blueprint wiring consume the same topology view.
+- Constants and constant rows without an explicit input do not create circuit inputs.
+- Focused integration coverage proves both members of a pair, repeated rows, an else-only native input, and an else-only input participating in connector color conflicts.
+
+Validation: **907 tests in 86 files**, format check, typecheck, and complete CLI/web production builds pass. The existing Vite large-chunk warning remains.
+
+The browser's temporary Direct Plan depth heuristic remains separate by design; F08 replaces it with resolved NCIR graph/SCC analysis after the common compilation artifact exists.
+
+Next task: F04, a stateful parity DSU for incremental color constraints.

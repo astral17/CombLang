@@ -13,6 +13,7 @@ import type {
   Quantifier,
 } from './ir.js';
 import { nativeDeciderConditionGroups } from './native-decider-conditions.js';
+import { producerInputNetworkIds } from './producer-network-references.js';
 
 export class BlueprintJsonError extends Error {
   readonly code = 'BP1001';
@@ -215,38 +216,6 @@ function deciderEntity(
   };
 }
 
-function producerInputs(producer: CircuitProducerNode): NetworkId[] {
-  const inputs: NetworkId[] = [];
-  const add = (network: NetworkId | undefined) => {
-    if (network !== undefined && !inputs.includes(network)) inputs.push(network);
-  };
-  const addRef = (value: LogicalNetworkRef) => {
-    const networks = value.refKind === 'single' ? [value.network] : value.networks;
-    for (const network of networks) add(network);
-  };
-  if (producer.kind === 'arithmetic') {
-    if (producer.config.left.kind !== 'constant') addRef(producer.config.left);
-    if (producer.config.right.kind !== 'constant') addRef(producer.config.right);
-  } else if (producer.kind === 'decider') {
-    const walk = (condition: LogicalDeciderCondition) => {
-      if (condition.kind === 'and' || condition.kind === 'or') {
-        condition.conditions.forEach(walk);
-      } else {
-        addRef(condition.left);
-        if (condition.right.kind === 'signal') addRef(condition.right);
-      }
-    };
-    walk(producer.config.condition);
-    producer.config.outputs.forEach((output) => {
-      if (output.input !== undefined) addRef(output.input);
-    });
-    producer.config.elseOutputs?.forEach((output) => {
-      if (output.input !== undefined) addRef(output.input);
-    });
-  }
-  return inputs;
-}
-
 /** Resolves logical NCIR references into native combinator fields before JSON assembly. */
 export function lowerNativeBlueprintConfig(
   ir: NativeCircuitIr,
@@ -284,7 +253,7 @@ export function lowerNativeBlueprintConfig(
     }
     return {
       producer,
-      inputNetworks: producerInputs(producer),
+      inputNetworks: producerInputNetworkIds(producer),
       entity,
     };
   });

@@ -1,4 +1,5 @@
 import { ColorConstraintError, solveCircuitColors } from '@comblang/compiler/color-solver';
+import { producerInputNetworkIds } from '@comblang/compiler/producer-network-references';
 import type {
   ArithmeticOperation,
   CircuitColor,
@@ -605,38 +606,6 @@ export class DslRuntime {
         });
   }
 
-  #producerInputs(producer: CircuitProducerNode): NetworkId[] {
-    const result: NetworkId[] = [];
-    const add = (network: NetworkId | undefined) => {
-      if (network !== undefined) result.push(network);
-    };
-    const addRef = (value: LogicalNetworkRef) => {
-      for (const network of value.refKind === 'single' ? [value.network] : value.networks)
-        add(network);
-    };
-    if (producer.kind === 'arithmetic') {
-      if (producer.config.left.kind !== 'constant') addRef(producer.config.left);
-      if (producer.config.right.kind !== 'constant') addRef(producer.config.right);
-    } else if (producer.kind === 'decider') {
-      const walk = (condition: LogicalDeciderCondition) => {
-        if (condition.kind === 'and' || condition.kind === 'or') {
-          condition.conditions.forEach(walk);
-        } else {
-          addRef(condition.left);
-          if (condition.right.kind === 'signal') addRef(condition.right);
-        }
-      };
-      walk(producer.config.condition);
-      producer.config.outputs.forEach((output) => {
-        if (output.input !== undefined) addRef(output.input);
-      });
-      producer.config.elseOutputs?.forEach((output) => {
-        if (output.input !== undefined) addRef(output.input);
-      });
-    }
-    return unique(result);
-  }
-
   #solveColors(producers: readonly CircuitProducerNode[]): Map<NetworkId, CircuitColor> {
     const constraints: {
       left: NetworkId;
@@ -674,7 +643,7 @@ export class DslRuntime {
     };
     for (const producer of producers) {
       constrainConnector(
-        this.#producerInputs(producer),
+        producerInputNetworkIds(producer),
         `Input of ${producer.id}`,
         producer.provenance.source,
       );
@@ -758,7 +727,8 @@ export class DslRuntime {
     };
     const inputNetworks = (producer: CircuitProducerNode) => {
       const result: { red?: NetworkId; green?: NetworkId } = {};
-      for (const network of this.#producerInputs(producer)) result[colors.get(network)!] = network;
+      for (const network of producerInputNetworkIds(producer))
+        result[colors.get(network)!] = network;
       return result;
     };
     const concrete: SynchronousDevice[] = [];
