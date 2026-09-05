@@ -1,5 +1,12 @@
-const CACHE_NAME = 'comblang-shell-v6';
 const APP_SHELL_URL = new URL('./', self.registration.scope).href;
+const APP_SCOPE_PATH = new URL(APP_SHELL_URL).pathname;
+const CACHE_NAMESPACE = `comblang-shell:${encodeURIComponent(APP_SCOPE_PATH)}:`;
+const CACHE_NAME = `${CACHE_NAMESPACE}v7`;
+
+function isWithinAppScope(value) {
+  const url = new URL(value, APP_SHELL_URL);
+  return url.origin === self.location.origin && url.href.startsWith(APP_SHELL_URL);
+}
 
 async function fetchAndCache(cache, url) {
   const response = await fetch(url, { cache: 'no-cache' });
@@ -12,9 +19,13 @@ async function precacheApplication() {
   const cache = await caches.open(CACHE_NAME);
   const shellResponse = await fetchAndCache(cache, APP_SHELL_URL);
   const html = await shellResponse.text();
-  const assetUrls = [...html.matchAll(/(?:src|href)=["']([^"']+)["']/g)].map(
-    (match) => new URL(match[1], APP_SHELL_URL).href,
-  );
+  const assetUrls = [
+    ...new Set(
+      [...html.matchAll(/(?:src|href)=["']([^"']+)["']/g)]
+        .map((match) => new URL(match[1], APP_SHELL_URL).href)
+        .filter(isWithinAppScope),
+    ),
+  ];
 
   const assetResponses = await Promise.all(
     assetUrls.map(async (url) => ({ url, response: await fetchAndCache(cache, url) })),
@@ -27,7 +38,7 @@ async function precacheApplication() {
       /["']([^"']*(?:parser|test)\.worker-[\w-]+\.js)["']/g,
     )) {
       const nestedUrl = new URL(match[1], url);
-      if (nestedUrl.origin === self.location.origin) nestedAssets.add(nestedUrl.href);
+      if (isWithinAppScope(nestedUrl)) nestedAssets.add(nestedUrl.href);
     }
   }
   await Promise.all([...nestedAssets].map((url) => fetchAndCache(cache, url)));
@@ -44,7 +55,11 @@ self.addEventListener('activate', (event) => {
       caches
         .keys()
         .then((keys) =>
-          Promise.all(keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))),
+          Promise.all(
+            keys
+              .filter((key) => key.startsWith(CACHE_NAMESPACE) && key !== CACHE_NAME)
+              .map((key) => caches.delete(key)),
+          ),
         ),
       self.clients.claim(),
     ]),
@@ -56,7 +71,7 @@ self.addEventListener('message', (event) => {
   const urls = event.data.urls.filter((value) => {
     if (typeof value !== 'string') return false;
     try {
-      return new URL(value).origin === self.location.origin;
+      return isWithinAppScope(value);
     } catch {
       return false;
     }
@@ -76,7 +91,7 @@ self.addEventListener('fetch', (event) => {
   const request = event.request;
   if (request.method !== 'GET') return;
   const url = new URL(request.url);
-  if (url.origin !== self.location.origin) return;
+  if (!isWithinAppScope(url)) return;
 
   if (request.mode === 'navigate') {
     event.respondWith(
@@ -89,22 +104,24 @@ self.addEventListener('fetch', (event) => {
             .then((cache) => cache.put(APP_SHELL_URL, cachedResponse))
             .then(() => response);
         })
-        .catch(() => caches.match(APP_SHELL_URL).then((response) => response ?? Response.error())),
+        .catch(() =>
+          caches
+            .open(CACHE_NAME)
+            .then((cache) => cache.match(APP_SHELL_URL))
+            .then((response) => response ?? Response.error()),
+        ),
     );
     return;
   }
 
   event.respondWith(
-    caches.match(request).then((cached) => {
+    caches.open(CACHE_NAME).then(async (cache) => {
+      const cached = await cache.match(request);
       if (cached !== undefined) return cached;
-      return fetch(request).then((response) => {
-        if (!response.ok) return response;
-        const cachedResponse = response.clone();
-        return caches
-          .open(CACHE_NAME)
-          .then((cache) => cache.put(request, cachedResponse))
-          .then(() => response);
-      });
+      const response = await fetch(request);
+      if (!response.ok) return response;
+      await cache.put(request, response.clone());
+      return response;
     }),
   );
 });

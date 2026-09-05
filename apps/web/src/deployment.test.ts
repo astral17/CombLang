@@ -29,5 +29,7 @@ describe('static deployment configuration', () => {
     expect(worker).toContain('precacheApplication()');
     expect(worker).toContain('(?:parser|test)\\.worker-');
     expect(worker).toContain("request.mode === 'navigate'");
+    expect(worker).toContain('CACHE_NAMESPACE');
+    expect(worker).toContain('isWithinAppScope');
   });
 });

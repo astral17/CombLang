@@ -39,7 +39,7 @@ To test from another device on the same local network:
 npm run dev:web
 ```
 
-The production web build uses relative assets so it can later be published under a GitHub Pages project subpath. Its same-origin Service Worker atomically caches the HTML, CSS, main JavaScript, and compiler Worker. After one successful online production visit, the workbench can reload and compile without a server or network connection. Vite development mode deliberately does not register this production cache; an already open development page can still recompile offline because its compiler Worker is persistent.
+The production web build uses relative assets so it can later be published under a GitHub Pages project subpath. Its Service Worker gives each deployment scope a separate versioned cache, atomically caches the HTML, CSS, main JavaScript, and compiler/test Workers, and never deletes or reads caches belonging to another application or sibling Pages path. Warm-up and fetch handling are restricted to that same scope. After one successful online production visit, the workbench can reload and compile without a server or network connection. Vite development mode deliberately does not register this production cache; an already open development page can still recompile offline because its compiler Worker is persistent.
 
 ## Minimal circuit
 
