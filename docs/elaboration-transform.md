@@ -44,3 +44,9 @@ Each actually entered loop body opens a provenance instance and closes it in `fi
 `elaboration-transform-functions.ts` owns instrumented function declarations and their direct return statements. Its prologue maps executed identifier parameters to the appropriate implicit Network, `Readonly`, `Ref`, `Move`, or concrete Producer runtime boundary using the original argument span. The body opens one function provenance/ownership frame and closes it in `finally`, including exceptional exits.
 
 Only a return whose nearest function-like ancestor is that declaration receives its declared Network or Producer return contract. Returns inside nested arrows, callbacks, methods, or function expressions remain owned by those JavaScript functions and cannot accidentally transfer the outer function's ownership. Parameter-default and binding-pattern rewriting is supplied as an explicit callback; the function family does not duplicate binding logic.
+
+### Bindings and defaults
+
+`elaboration-transform-bindings.ts` owns identifier, tuple, object, and parameter binding materialization. A direct `new Network<R/G>()` binding receives its stable source name and late alias reader; a nested construction remains anonymous. Other executed initializers pass through contextual Network materialization unless an explicit Producer annotation retains and validates the physical handle.
+
+Tuple and object destructuring emit runtime descriptors for each supported flat destination, including property mapping, color, and concrete Producer kind. Defaults recurse through the same policy, so parameters, destructuring elements, and loop bindings do not gain a separate DSL expression path. Test-only `t.instantiate` also enters here because a direct binding supplies its stable debug instance name; an unbound call instead receives a source-offset identity. Function instrumentation consumes `transformParameter` as an explicit dependency.
