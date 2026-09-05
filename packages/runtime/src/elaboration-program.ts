@@ -40,6 +40,10 @@ import {
 } from './elaboration-operators.js';
 import { createElaborationOwnershipPolicy } from './elaboration-ownership.js';
 import { resolveNetworkArgument } from './network-argument-policy.js';
+import {
+  bindNetworkParameter,
+  type NetworkParameterCapability,
+} from './network-parameter-policy.js';
 import { ProducerLifecycle } from './producer-lifecycle.js';
 import { validateProducerAttachment } from './producer-attachment-policy.js';
 import { bindProducerHandle } from './producer-handle-policy.js';
@@ -488,52 +492,7 @@ class ElaborationRecorder {
       if (!isRawSpan(rawSpan) || (capability !== 'readonly' && capability !== 'ref')) {
         throw new Error('Invalid Network parameter capability descriptor.');
       }
-      if (this.#isProducer(value)) {
-        value = this.api.networkArgument(
-          value,
-          this.#currentFunctionName(),
-          parameter,
-          capability,
-          fixedColor,
-          rawSpan,
-        );
-      }
-      if (!this.#isNetwork(value)) {
-        throw new ElaborationExecutionError(
-          `${capability === 'readonly' ? 'Readonly<Network>' : 'Ref<Network>'} parameter ${parameter} received a non-Network value.`,
-          this.#span(rawSpan),
-          'RT2015',
-        );
-      }
-      this.#recordDslCall();
-      const source = this.#networkState(value).callArgument ?? this.#span(rawSpan);
-      const sourceRaw = { start: source.start, end: source.end };
-      this.#ownership.assertReadable(value, source);
-      if (fixedColor !== undefined)
-        this.#requireNetworkColor(value, capability, fixedColor, sourceRaw);
-      const frame = this.#currentFunctionFrame();
-      if (frame === undefined) {
-        throw new Error('Network parameter borrow was created outside a function frame.');
-      }
-      const borrow = this.#ownership.borrow(value, capability, parameter, source, frame);
-      this.#capabilityUses.push({
-        network: value.name,
-        capability,
-        parameter,
-        ...(fixedColor === undefined ? {} : { fixedColor }),
-        provenance: borrow.source,
-        instancePath: this.#path(),
-      });
-      return this.#networkValue(
-        {
-          kind: 'network',
-          name: value.name,
-          declaration: value.declaration,
-          capability,
-          generation: value.generation,
-        },
-        { ownership: this.#networkState(value).ownership, borrow },
-      );
+      return this.#networkParameter(value, capability, parameter, fixedColor, rawSpan);
     },
     moveParameter: (
       value: unknown,
@@ -542,59 +501,7 @@ class ElaborationRecorder {
       rawSpan: RawSpan,
     ): NetworkValue => {
       if (!isRawSpan(rawSpan)) throw new Error('Invalid Move<Network> parameter descriptor.');
-      if (this.#isProducer(value)) {
-        value = this.api.networkArgument(
-          value,
-          this.#currentFunctionName(),
-          parameter,
-          'move',
-          fixedColor,
-          rawSpan,
-        );
-      }
-      if (this.#isPair(value) || this.#isPairSelection(value)) {
-        throw new ElaborationExecutionError(
-          'pair(a, b) is a read-only input view and cannot transfer ownership.',
-          this.#span(rawSpan),
-          'RT2020',
-        );
-      }
-      if (!this.#isNetwork(value)) {
-        throw new ElaborationExecutionError(
-          `Move<Network> parameter ${parameter} received a non-Network value.`,
-          this.#span(rawSpan),
-          'RT2015',
-        );
-      }
-      this.#recordDslCall();
-      const source = this.#networkState(value).callArgument ?? this.#span(rawSpan);
-      const sourceRaw = { start: source.start, end: source.end };
-      this.#ownership.assertConsumable(value, source, 'source');
-      const frame = this.#currentFunctionFrame();
-      if (frame === undefined) {
-        throw new Error('Network ownership transfer was created outside a function frame.');
-      }
-      if (fixedColor !== undefined) this.#requireNetworkColor(value, 'move', fixedColor, sourceRaw);
-      const state = this.#networkState(value);
-      this.#ownership.moveToFrame(value, source, frame);
-      this.#capabilityUses.push({
-        network: value.name,
-        capability: 'move',
-        parameter,
-        ...(fixedColor === undefined ? {} : { fixedColor }),
-        provenance: source,
-        instancePath: this.#path(),
-      });
-      return this.#networkValue(
-        {
-          kind: 'network',
-          name: value.name,
-          declaration: value.declaration,
-          capability: 'move',
-          generation: state.ownership.generation,
-        },
-        { ownership: state.ownership },
-      );
+      return this.#networkParameter(value, 'move', parameter, fixedColor, rawSpan);
     },
     producerHandle: (
       value: unknown,
@@ -1579,6 +1486,66 @@ class ElaborationRecorder {
 
   #assertConsumableNetwork(network: NetworkValue, rawSpan: RawSpan, role: string): void {
     this.#ownership.assertConsumable(network, this.#span(rawSpan), role);
+  }
+
+  #networkParameter(
+    value: unknown,
+    capability: NetworkParameterCapability,
+    parameter: string,
+    fixedColor: 'red' | 'green' | undefined,
+    rawSpan: RawSpan,
+  ): NetworkValue {
+    const bound = bindNetworkParameter(
+      value,
+      {
+        functionName: this.#currentFunctionName(),
+        parameter,
+        capability,
+        ...(fixedColor === undefined ? {} : { fixedColor }),
+        source: this.#span(rawSpan),
+        frame: this.#currentFunctionFrame(),
+      },
+      {
+        isProducer: (candidate): candidate is ProducerValue => this.#isProducer(candidate),
+        isNetwork: (candidate): candidate is NetworkValue => this.#isNetwork(candidate),
+        isPair: (candidate): candidate is PairValue => this.#isPair(candidate),
+        isPairSelection: (candidate): candidate is PairSelectedValue =>
+          this.#isPairSelection(candidate),
+        resolveProducerArgument: (producer, descriptor) =>
+          this.api.networkArgument(
+            producer,
+            descriptor.functionName,
+            descriptor.parameter,
+            descriptor.capability,
+            descriptor.fixedColor,
+            rawSpan,
+          ),
+        recordDslCall: () => this.#recordDslCall(),
+        stateFor: (network) => this.#networkState(network),
+        assertReadable: (network, source) => this.#ownership.assertReadable(network, source),
+        assertConsumable: (network, source, role) =>
+          this.#ownership.assertConsumable(network, source, role),
+        requireColor: (network, requiredCapability, color, source) =>
+          this.#requireNetworkColor(network, requiredCapability, color, {
+            start: source.start,
+            end: source.end,
+          }),
+        borrow: (network, borrowCapability, name, source, frame) =>
+          this.#ownership.borrow(network, borrowCapability, name, source, frame),
+        moveToFrame: (network, source, frame) =>
+          this.#ownership.moveToFrame(network, source, frame),
+        brandNetwork: (network, state) => this.#networkValue(network, state),
+      },
+    );
+    this.#capabilityUses.push({
+      network: bound.value.name,
+      capability,
+      parameter,
+      ...(fixedColor === undefined ? {} : { fixedColor }),
+      provenance: bound.provenance,
+      instancePath: this.#path(),
+    });
+    return bound.value;
   }
 
   #returnOwnedValue(value: unknown, rawSpan: RawSpan): unknown {

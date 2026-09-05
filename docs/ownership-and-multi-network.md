@@ -101,6 +101,14 @@ readability or capability failure is attributed to the call site rather than the
 function declaration. Non-Network values fail with `RT2015` before a view is
 created.
 
+After category resolution, one shared capability policy applies the actual
+function boundary. `Readonly`/`Ref` register a borrow in the active function
+frame and return a view carrying that borrow; `Move` first rejects read-only
+pair views, then advances the physical ownership generation into that frame.
+Color requirements use the same call-site provenance. Only a successful
+boundary produces capability-audit metadata, and its dynamic instance path is
+recorded by the elaboration recorder rather than the ownership policy.
+
 The initial implicit policy is deliberately read-only, not inferred writable
 borrowing. Use `Ref<Network>` to attach outputs and `Move<Network>` to consume or
 return the caller's ownership. Borrow expiry, overlap checks, and escape checks
