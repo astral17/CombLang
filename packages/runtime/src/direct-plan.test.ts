@@ -221,7 +221,7 @@ const output: Network = Scale(input);`,
       {
         code: 'RT1004',
         severity: 'error',
-        message: 'Unknown attachment Network: missing.',
+        message: '$.producers[0].destinations[0]: invalid attachment destination.',
         span: attachment.source,
       },
     ]);

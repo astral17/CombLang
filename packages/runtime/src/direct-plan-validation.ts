@@ -24,14 +24,7 @@ function failure(
   span?: SourceSpan,
 ): DirectPlanEnvelopeValidationResult {
   return {
-    diagnostics: [
-      {
-        code,
-        severity: 'error',
-        message,
-        ...(span === undefined ? {} : { span }),
-      },
-    ],
+    diagnostics: [{ code, severity: 'error', message, ...(span === undefined ? {} : { span }) }],
   };
 }
 
@@ -41,15 +34,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function descriptorSpan(value: unknown, key: 'source' | 'provenance'): SourceSpan | undefined {
   if (!isRecord(value)) return undefined;
-  const span = value[key];
-  if (!isRecord(span)) return undefined;
-  return typeof span.fileId === 'string' &&
-    span.fileId.length > 0 &&
-    Number.isSafeInteger(span.start) &&
-    Number.isSafeInteger(span.end) &&
-    Number(span.start) >= 0 &&
-    Number(span.end) >= Number(span.start)
-    ? (span as unknown as SourceSpan)
+  const valueSpan = value[key];
+  if (!isRecord(valueSpan)) return undefined;
+  return typeof valueSpan.fileId === 'string' &&
+    valueSpan.fileId.length > 0 &&
+    Number.isSafeInteger(valueSpan.start) &&
+    Number.isSafeInteger(valueSpan.end) &&
+    Number(valueSpan.start) >= 0 &&
+    Number(valueSpan.end) >= Number(valueSpan.start)
+    ? (valueSpan as unknown as SourceSpan)
     : undefined;
 }
 
@@ -60,17 +53,22 @@ function isInstancePath(value: unknown): value is readonly string[] {
   );
 }
 
-/**
- * Validates the versioned transport envelope before any runtime graph is allocated.
- * Topology and circuit-configuration validation remain part of direct-plan elaboration.
- */
+function payloadFailure(path: string, message: string, span?: SourceSpan) {
+  return failure('RT1001', `${path}: ${message}`, span);
+}
+
+function exceedsLimit(value: readonly unknown[]): boolean {
+  return value.length > 100_000;
+}
+
+/** Validates the versioned transport envelope before any runtime graph is allocated. */
 export function validateDirectPlanEnvelope(plan: unknown): DirectPlanEnvelopeValidationResult {
-  if (!isRecord(plan) || plan.format !== 'comblang-direct-plan' || plan.version !== 2) {
+  if (!isRecord(plan) || plan.format !== 'comblang-direct-plan' || plan.version !== 2)
     return failure('RT1001', 'Unsupported direct elaboration plan format.');
-  }
-  if (!Array.isArray(plan.networks) || !Array.isArray(plan.producers)) {
+  if (!Array.isArray(plan.networks) || !Array.isArray(plan.producers))
     return failure('RT1001', 'Invalid direct elaboration plan envelope.');
-  }
+  if (exceedsLimit(plan.networks) || exceedsLimit(plan.producers))
+    return payloadFailure('$', 'top-level collection exceeds the 100000 item limit.');
 
   const declarations = new Map<string, DirectPlanNetwork>();
   for (const candidate of plan.networks) {
@@ -83,20 +81,18 @@ export function validateDirectPlanEnvelope(plan: unknown): DirectPlanEnvelopeVal
         candidate.fixedColor !== 'green') ||
       descriptorSpan(candidate, 'source') === undefined ||
       !isInstancePath(candidate.instancePath)
-    ) {
+    )
       return failure(
         'RT1001',
         'Invalid Network descriptor in direct plan.',
         descriptorSpan(candidate, 'source'),
       );
-    }
-    if (declarations.has(candidate.name)) {
+    if (declarations.has(candidate.name))
       return failure(
         'RT1002',
         `Duplicate Network in direct plan: ${candidate.name}.`,
         candidate.source as SourceSpan,
       );
-    }
     declarations.set(candidate.name, candidate as unknown as DirectPlanNetwork);
   }
 
@@ -108,9 +104,80 @@ export function validateDirectPlanEnvelope(plan: unknown): DirectPlanEnvelopeVal
     'debugInstances',
     'diagnostics',
   ] as const;
-  for (const key of optionalDescriptorArrays) {
-    if (plan[key] !== undefined && !Array.isArray(plan[key])) {
+  for (const key of optionalDescriptorArrays)
+    if (plan[key] !== undefined && !Array.isArray(plan[key]))
       return failure('RT1001', `Invalid ${key} collection in direct plan.`);
+
+  for (const [index, transfer] of ((plan.networkTransfers ?? []) as unknown[]).entries()) {
+    const path = `$.networkTransfers[${index}]`;
+    if (!isRecord(transfer)) return payloadFailure(path, 'expected an object.');
+    if (
+      typeof transfer.destination !== 'string' ||
+      !declarations.has(transfer.destination) ||
+      typeof transfer.source !== 'string' ||
+      !declarations.has(transfer.source) ||
+      descriptorSpan(transfer, 'provenance') === undefined ||
+      !isInstancePath(transfer.instancePath)
+    )
+      return payloadFailure(
+        path,
+        'invalid Network transfer.',
+        descriptorSpan(transfer, 'provenance'),
+      );
+  }
+
+  for (const [index, pair] of ((plan.networkPairs ?? []) as unknown[]).entries()) {
+    const path = `$.networkPairs[${index}]`;
+    if (!isRecord(pair)) return payloadFailure(path, 'expected an object.');
+    const names = pair.networks;
+    if (
+      !Array.isArray(names) ||
+      names.length !== 2 ||
+      names[0] === names[1] ||
+      names.some((name) => typeof name !== 'string' || !declarations.has(name)) ||
+      descriptorSpan(pair, 'provenance') === undefined ||
+      !isInstancePath(pair.instancePath)
+    )
+      return payloadFailure(path, 'invalid Network pair.', descriptorSpan(pair, 'provenance'));
+  }
+
+  for (const [index, producer] of plan.producers.entries()) {
+    const path = `$.producers[${index}]`;
+    if (!isRecord(producer)) return payloadFailure(path, 'expected a Producer object.');
+    if (
+      producer.kind !== 'arithmetic' &&
+      producer.kind !== 'decider' &&
+      producer.kind !== 'constant'
+    )
+      return payloadFailure(
+        `${path}.kind`,
+        'unknown Producer tag.',
+        descriptorSpan(producer, 'source'),
+      );
+    if (
+      descriptorSpan(producer, 'source') === undefined ||
+      !isInstancePath(producer.instancePath) ||
+      !Array.isArray(producer.destinations)
+    )
+      return payloadFailure(
+        path,
+        'invalid Producer provenance or destinations.',
+        descriptorSpan(producer, 'source'),
+      );
+    for (const [destinationIndex, destination] of producer.destinations.entries()) {
+      const destinationPath = `${path}.destinations[${destinationIndex}]`;
+      if (
+        !isRecord(destination) ||
+        typeof destination.network !== 'string' ||
+        !declarations.has(destination.network) ||
+        descriptorSpan(destination, 'source') === undefined ||
+        !isInstancePath(destination.instancePath)
+      )
+        return failure(
+          'RT1004',
+          `${destinationPath}: invalid attachment destination.`,
+          descriptorSpan(destination, 'source'),
+        );
     }
   }
 
@@ -125,13 +192,12 @@ export function validateDirectPlanEnvelope(plan: unknown): DirectPlanEnvelopeVal
       descriptorSpan(alias, 'source') === undefined ||
       !isInstancePath(alias.instancePath) ||
       typeof alias.moved !== 'boolean'
-    ) {
+    )
       return failure(
         'RT1001',
         'Invalid Network alias descriptor in direct plan.',
         descriptorSpan(alias, 'source'),
       );
-    }
   }
 
   const capabilityUses = (plan.capabilityUses ?? []) as unknown[];
@@ -146,13 +212,12 @@ export function validateDirectPlanEnvelope(plan: unknown): DirectPlanEnvelopeVal
       (use.fixedColor !== undefined && use.fixedColor !== 'red' && use.fixedColor !== 'green') ||
       descriptorSpan(use, 'provenance') === undefined ||
       !isInstancePath(use.instancePath)
-    ) {
+    )
       return failure(
         'RT1001',
         'Invalid capability descriptor in direct plan.',
         descriptorSpan(use, 'provenance'),
       );
-    }
   }
 
   return {

@@ -58,4 +58,50 @@ describe('direct plan envelope validation', () => {
       { code, severity: 'error', message },
     ]);
   });
+
+  test.each([
+    {
+      name: 'null Producer',
+      mutate: (plan: Record<string, unknown>) => (plan.producers = [null]),
+      path: '$.producers[0]',
+    },
+    {
+      name: 'unknown Producer tag',
+      mutate: (plan: Record<string, unknown>) =>
+        (plan.producers = [{ kind: 'lamp', source: span, instancePath: [], destinations: [] }]),
+      path: '$.producers[0].kind',
+    },
+    {
+      name: 'malformed pair',
+      mutate: (plan: Record<string, unknown>) =>
+        (plan.networkPairs = [{ networks: ['input'], provenance: span, instancePath: [] }]),
+      path: '$.networkPairs[0]',
+    },
+    {
+      name: 'unknown attachment Network',
+      mutate: (plan: Record<string, unknown>) =>
+        (plan.producers = [
+          {
+            kind: 'constant',
+            outputs: [],
+            source: span,
+            instancePath: [],
+            destinations: [{ network: 'missing', source: span, instancePath: [] }],
+          },
+        ]),
+      path: '$.producers[0].destinations[0]',
+    },
+  ])('rejects $name with its payload path', ({ mutate, path }) => {
+    const plan: Record<string, unknown> = {
+      format: 'comblang-direct-plan',
+      version: 2,
+      networks: [{ name: 'input', source: span, instancePath: [] }],
+      producers: [],
+    };
+    mutate(plan);
+    expect(validateDirectPlanEnvelope(plan).diagnostics[0]).toMatchObject({
+      code: expect.stringMatching(/^RT100[14]$/),
+      message: expect.stringContaining(path),
+    });
+  });
 });

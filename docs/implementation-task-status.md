@@ -72,3 +72,20 @@ Status: **complete**.
 Validation: **919 tests in 87 files**, format check, typecheck, and complete CLI/web production builds pass. The existing Vite large-chunk warning remains.
 
 Next task: F06, strict Direct Plan payload ingress and replay color validation.
+
+## F06 — Strict Direct Plan payload ingress
+
+Status: **in progress**.
+
+Completed ingress foundation:
+
+- Top-level Network/Producer collections have an explicit size boundary before runtime allocation.
+- Producer entries must be objects with known tags, valid provenance, instance paths, and attachment arrays.
+- Transfer and pair descriptors validate shape, provenance, paths, cardinality, distinctness, and referenced Network names.
+- Attachment references are rejected as `RT1004` at ingress rather than reaching partial runtime allocation.
+- New malformed-payload diagnostics include JSON-style paths such as `$.producers[0].destinations[0]`.
+- Regression coverage includes `producers: [null]`, an unknown Producer tag, a malformed pair, and an unknown attachment Network.
+
+Validation: **923 tests in 87 files**, format check, and typecheck pass.
+
+Still required to complete F06: canonical frozen reconstruction without the remaining plan cast; exhaustive nested arithmetic/condition/output/debug/diagnostic validation with depth limits; `output`/`outputs` normalization; and making replay consume only the canonical result.
