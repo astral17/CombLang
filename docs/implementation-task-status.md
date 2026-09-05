@@ -56,3 +56,19 @@ Status: **complete**.
 Validation: **913 tests in 87 files**, format check, typecheck, and complete CLI/web production builds pass. The existing Vite large-chunk warning remains.
 
 Next task: F05, online color constraints and a failed recorder lifecycle.
+
+## F05 — Online constraints and failed recorder lifecycle
+
+Status: **complete**.
+
+- The source recorder registers color identities at Network creation and checks fixed requirements, pairs, producer inputs, attachments, and zero-tick transfers incrementally.
+- Opaque ownership state is the stable color identity across aliases, moves, function-return rebinding, and display-name changes.
+- The first inconsistent operation now reports its own source span immediately; replay retains the same topology checks as an independent boundary.
+- A confirmed DSL-domain failure poisons the recorder and remains the result even if user source catches it. Ordinary JavaScript may continue, but later DSL recording and finalization rethrow the first failure.
+- Ordinary methods, getters, coercions, and callbacks crossing the execution bridge do not poison the recorder merely because they throw.
+- Successful finalization and uncaught source exits seal the recorder against delayed asynchronous DSL mutations.
+- Regression coverage includes the contradictory pair prefix, caught and uncaught failures, producer input/output connectors, inferred parameter colors, fixed-color and pair-collapsing transfers, stable renamed/aliased identities, ordinary bridge exceptions, and delayed callbacks after success or throw.
+
+Validation: **919 tests in 87 files**, format check, typecheck, and complete CLI/web production builds pass. The existing Vite large-chunk warning remains.
+
+Next task: F06, strict Direct Plan payload ingress and replay color validation.

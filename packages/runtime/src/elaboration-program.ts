@@ -12,6 +12,7 @@ import type { PrototypeProvider } from '@comblang/prototypes';
 import type { Diagnostic, SourceFileId, SourceSpan } from '@comblang/shared';
 
 import { ElaborationExecutionError, ElaborationOperationLimitError } from './elaboration-errors.js';
+import { ElaborationColorConstraints } from './elaboration-color-constraints.js';
 import { ElaborationProvenanceFormatter } from './elaboration-provenance.js';
 import {
   RuntimeValueRegistry,
@@ -93,6 +94,10 @@ interface PendingNetworkAlias {
   readonly read: () => unknown;
 }
 
+interface ExecutionApiFrame {
+  dslDomain: boolean;
+}
+
 export interface ElaborationExecutionOptions {
   readonly dslCallBudget?: number;
   /** Explicit immutable prototype environment exposed to source as `prototypes`. */
@@ -136,7 +141,10 @@ class ElaborationRecorder {
   readonly #producerLifecycle = new ProducerLifecycle();
   readonly #runtimeValues = new RuntimeValueRegistry();
   readonly #ownership = createElaborationOwnershipPolicy((network) => this.#networkState(network));
-  #sealed = false;
+  readonly #colors = new ElaborationColorConstraints();
+  readonly #executionApiFrames: ExecutionApiFrame[] = [];
+  #status: 'active' | 'failed' | 'sealed' = 'active';
+  #firstFailure: unknown;
   #anonymousOrdinal = 0;
   readonly #networkNameCounts = new Map<string, number>();
   readonly #functionCallCounts = new Map<string, number>();
@@ -441,6 +449,12 @@ class ElaborationRecorder {
           [{ message: 'The repeated Network is declared here.', span: values[0]!.declaration }],
         );
       }
+      this.#colors.different(
+        this.#networkState(values[0]!).ownership,
+        this.#networkState(values[1]!).ownership,
+        this.#span(rawSpan),
+        'pair(a, b) uses both wire colors',
+      );
       const pair: PairValue = this.#runtimeValue({
         kind: 'pair',
         networks: values as [NetworkValue, NetworkValue],
@@ -643,6 +657,22 @@ class ElaborationRecorder {
         );
       }
       const provenance = this.#span(rawSpan);
+      const destinationColor = this.#networkState(destination).ownership.colorRequirement?.color;
+      const sourceColor = this.#networkState(source).ownership.colorRequirement?.color;
+      const fixedColorConflict =
+        destinationColor !== undefined &&
+        sourceColor !== undefined &&
+        destinationColor !== sourceColor;
+      this.#colors.same(
+        this.#networkState(destination).ownership,
+        this.#networkState(source).ownership,
+        provenance,
+        '.take(source) unifies both physical Networks',
+        fixedColorConflict ? 'RT2014' : 'RT2020',
+        fixedColorConflict
+          ? 'Network transfer unifies contradictory red/green color requirements.'
+          : 'Network transfer collapses Networks required to use opposite wire colors.',
+      );
       this.#networkTransfers.push({
         destination: destination.name,
         source: source.name,
@@ -1107,59 +1137,71 @@ class ElaborationRecorder {
   });
 
   plan(): DirectElaborationPlan {
-    this.#finalizeUnusedProducers();
-    this.#sealed = true;
-    const declarations = new Map(this.#networks.map((network) => [network.name, network]));
-    return {
-      format: 'comblang-direct-plan',
-      version: 2,
-      networks: Object.freeze([...this.#networks]),
-      networkAliases: Object.freeze(
-        [...this.#networkAliases.values()].flatMap(({ read, ...alias }) => {
-          const value = read();
-          if (!this.#isNetwork(value)) return [];
-          const state = this.#networkState(value);
-          // Borrowed local views expire with their call frame. Physical declarations
-          // remain in the index independently of their original source handles.
-          if (state.borrow !== undefined) return [];
-          const declaration = declarations.get(value.name);
-          if (
-            declaration !== undefined &&
-            JSON.stringify(declaration.instancePath) === JSON.stringify(alias.instancePath) &&
-            alias.source.start <= declaration.source.start &&
-            alias.source.end >= declaration.source.end
-          )
-            return [];
-          return [
-            Object.freeze({
-              ...alias,
-              network: value.name,
-              moved:
-                value.generation !== state.ownership.generation ||
-                state.ownership.consumedAt !== undefined,
-            }),
-          ];
-        }),
-      ),
-      networkTransfers: Object.freeze([...this.#networkTransfers]),
-      networkPairs: Object.freeze([...this.#networkPairs]),
-      capabilityUses: Object.freeze([...this.#capabilityUses]),
-      debugInstances: Object.freeze([...this.#debugInstances]),
-      producers: Object.freeze([...this.#producers]),
-      diagnostics: Object.freeze([...this.#diagnostics]),
-    };
+    if (this.#status === 'failed') throw this.#firstFailure;
+    if (this.#status === 'sealed') {
+      throw new Error('The elaboration runtime has already been sealed.');
+    }
+    try {
+      this.#finalizeUnusedProducers();
+      const declarations = new Map(this.#networks.map((network) => [network.name, network]));
+      const plan: DirectElaborationPlan = {
+        format: 'comblang-direct-plan',
+        version: 2,
+        networks: Object.freeze([...this.#networks]),
+        networkAliases: Object.freeze(
+          [...this.#networkAliases.values()].flatMap(({ read, ...alias }) => {
+            const value = read();
+            if (!this.#isNetwork(value)) return [];
+            const state = this.#networkState(value);
+            // Borrowed local views expire with their call frame. Physical declarations
+            // remain in the index independently of their original source handles.
+            if (state.borrow !== undefined) return [];
+            const declaration = declarations.get(value.name);
+            if (
+              declaration !== undefined &&
+              JSON.stringify(declaration.instancePath) === JSON.stringify(alias.instancePath) &&
+              alias.source.start <= declaration.source.start &&
+              alias.source.end >= declaration.source.end
+            )
+              return [];
+            return [
+              Object.freeze({
+                ...alias,
+                network: value.name,
+                moved:
+                  value.generation !== state.ownership.generation ||
+                  state.ownership.consumedAt !== undefined,
+              }),
+            ];
+          }),
+        ),
+        networkTransfers: Object.freeze([...this.#networkTransfers]),
+        networkPairs: Object.freeze([...this.#networkPairs]),
+        capabilityUses: Object.freeze([...this.#capabilityUses]),
+        debugInstances: Object.freeze([...this.#debugInstances]),
+        producers: Object.freeze([...this.#producers]),
+        diagnostics: Object.freeze([...this.#diagnostics]),
+      };
+      this.#status = 'sealed';
+      return plan;
+    } catch (error) {
+      this.#poison(error);
+      throw this.#firstFailure;
+    }
   }
 
   executionApi(): typeof this.api {
     const wrapped = Object.entries(this.api).map(([name, operation]) => [
       name,
       (...args: unknown[]) => {
+        const frame: ExecutionApiFrame = { dslDomain: false };
+        this.#executionApiFrames.push(frame);
         const rawSpan =
           (name === 'network' || name === 'materialize') && typeof args.at(-1) === 'function'
             ? args.at(-2)
             : args.at(-1);
         try {
-          if (this.#sealed) {
+          if (this.#status === 'sealed') {
             if (isRawSpan(rawSpan)) {
               throw new ElaborationExecutionError(
                 'The elaboration runtime is sealed; delayed asynchronous DSL calls cannot mutate a completed plan.',
@@ -1175,14 +1217,18 @@ class ElaborationRecorder {
           if (this.#isProducer(result)) this.#producerLifecycle.register(result);
           return result;
         } catch (error) {
-          if (
+          const domainFailure =
+            frame.dslDomain ||
             error instanceof ElaborationOperationLimitError ||
-            error instanceof ElaborationExecutionError
+            error instanceof ElaborationExecutionError;
+          let normalized: unknown = error;
+          if (
+            !(error instanceof ElaborationExecutionError) &&
+            !(error instanceof ElaborationOperationLimitError) &&
+            error instanceof Error &&
+            isRawSpan(rawSpan)
           ) {
-            throw error;
-          }
-          if (error instanceof Error && isRawSpan(rawSpan)) {
-            throw new ElaborationExecutionError(
+            normalized = new ElaborationExecutionError(
               error.message,
               this.#span(rawSpan),
               'EX1001',
@@ -1190,11 +1236,27 @@ class ElaborationRecorder {
               { cause: error },
             );
           }
-          throw error;
+          if (domainFailure && this.#status !== 'sealed') this.#poison(normalized);
+          throw normalized;
+        } finally {
+          const popped = this.#executionApiFrames.pop();
+          if (popped !== frame) {
+            throw new Error('Elaboration execution API frame stack is unbalanced.');
+          }
         }
       },
     ]);
     return Object.freeze(Object.fromEntries(wrapped)) as typeof this.api;
+  }
+
+  closeAfterExecution(): void {
+    if (this.#status === 'active') this.#status = 'sealed';
+  }
+
+  #poison(error: unknown): void {
+    if (this.#status === 'failed') return;
+    this.#status = 'failed';
+    this.#firstFailure = error;
   }
 
   #span(raw: RawSpan): SourceSpan {
@@ -1329,6 +1391,7 @@ class ElaborationRecorder {
         ? {}
         : { colorRequirement: { color: fixedColor, source: declaration } }),
     };
+    this.#colors.registerNetwork(ownership, instanceName, declaration, fixedColor);
     return this.#networkValue(
       {
         kind: 'network',
@@ -1387,6 +1450,7 @@ class ElaborationRecorder {
       source: this.#span(rawSpan),
       ...(fixedColor === undefined ? {} : { fixedColor }),
     };
+    this.#colors.renameNetwork(state.ownership, boundName, this.#span(rawSpan));
     for (let index = 0; index < this.#producers.length; index += 1) {
       const producer = this.#producers[index]!;
       if (!producer.destinations.some(({ network }) => network === value.name)) continue;
@@ -1426,6 +1490,11 @@ class ElaborationRecorder {
     });
     const boundValue = bindProducerOutputSignal(value, outputSignal, source, (producer) =>
       this.#runtimeValue(producer),
+    );
+    this.#colors.constrainConnector(
+      networks.map((network) => this.#networkState(network).ownership),
+      source,
+      'Producer output connector',
     );
     const planIndex = this.#producers.length;
     this.#producers.push({
@@ -1468,6 +1537,8 @@ class ElaborationRecorder {
     rawSpan: RawSpan,
   ): void {
     if (!this.#ownership.requireColor(network, capability, color, this.#span(rawSpan))) return;
+    const source = this.#span(rawSpan);
+    this.#colors.requireColor(this.#networkState(network).ownership, network.name, color, source);
     const index = this.#networks.findLastIndex(({ name }) => name === network.name);
     const declaration = this.#networks[index];
     if (declaration === undefined) {
@@ -1787,6 +1858,7 @@ class ElaborationRecorder {
   }
 
   #runtimeValue<T extends RuntimeObjectValue>(value: T): T {
+    if (value.kind === 'producer') this.#colors.registerProducerInputs(value);
     return this.#runtimeValues.brand(value);
   }
 
@@ -1909,6 +1981,14 @@ class ElaborationRecorder {
   }
 
   #recordDslCall(): void {
+    const frame = this.#executionApiFrames.at(-1);
+    if (frame !== undefined) frame.dslDomain = true;
+    if (this.#status === 'failed') throw this.#firstFailure;
+    if (this.#status === 'sealed') {
+      throw new Error(
+        'The elaboration runtime is sealed; delayed asynchronous DSL calls cannot mutate a completed plan.',
+      );
+    }
     this.#dslCalls += 1;
     if (this.#dslCalls > this.#dslCallBudget) {
       throw new ElaborationOperationLimitError(this.#dslCallBudget);
@@ -1935,6 +2015,11 @@ export function executeElaborationProgram(
     throw new Error('Elaboration DSL call budget must be a positive safe integer.');
   }
   const recorder = new ElaborationRecorder(program.fileId, dslCallBudget, options.prototypes);
-  Function(program.runtimeParameter, `"use strict";\n${program.code}`)(recorder.executionApi());
+  try {
+    Function(program.runtimeParameter, `"use strict";\n${program.code}`)(recorder.executionApi());
+  } catch (error) {
+    recorder.closeAfterExecution();
+    throw error;
+  }
   return recorder.plan();
 }

@@ -148,6 +148,8 @@ available. This is an export failure, not an error in source execution; see
 
 `tryElaborateDirectPlan()` returns these runtime diagnostics without throwing. `elaborateDirectPlan()` throws `RuntimeDiagnosticError` carrying the same structured value.
 
+Executed source checks color constraints incrementally. Its `RT2010` points to the first operation that makes the accepted prefix inconsistent; Direct Plan replay checks the final serialized topology independently.
+
 ## Debug and structural diagnostics
 
 | Code      | Meaning                                                                    |

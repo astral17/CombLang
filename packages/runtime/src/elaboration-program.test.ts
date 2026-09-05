@@ -98,7 +98,7 @@ result.values[0] += CC();`,
     expect(() => executeElaborationProgram(transformElaborationModule(parsed))).not.toThrow();
   });
 
-  test('validates all returned handles before transferring any ownership', () => {
+  test('poisons the recorder after a caught invalid ownership return', () => {
     const parsed = parseFile({
       path: 'return-atomic-validation.factorio.ts',
       text: `const external = new Network();
@@ -112,16 +112,16 @@ const result = Recover();
 result += CC();`,
     });
     expect(validateDslSemantics(parsed)).toEqual([]);
-    const plan = executeElaborationProgram(transformElaborationModule(parsed));
-    expect(plan.producers).toHaveLength(2);
-    expect(() => elaborateDirectPlan(plan)).not.toThrow();
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+      expect.objectContaining({ code: 'RT2019' }),
+    );
   });
 
   test.each([
     { invalid: '[output, { duplicate: output }]', code: 'RT2012' },
     { invalid: '[output, { borrowed: input }]', code: 'RT2017' },
     { invalid: '[output, pair(new Network(), new Network())]', code: 'RT2020' },
-  ])('rejects $invalid without invalidating an earlier owned member', ({ invalid, code }) => {
+  ])('keeps the first fatal error after catching $invalid', ({ invalid, code }) => {
     const parsed = parseFile({
       path: 'recover-return-validation.factorio.ts',
       text: `function Recover(input: Readonly<Network>): Network {
@@ -140,9 +140,9 @@ const output = Recover(new Network());
 output += CC();`,
     });
     expect(validateDslSemantics(parsed)).toEqual([]);
-    const plan = executeElaborationProgram(transformElaborationModule(parsed));
-    expect(plan.producers).toHaveLength(2);
-    expect(() => elaborateDirectPlan(plan)).not.toThrow();
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+      expect.objectContaining({ code }),
+    );
   });
 
   test('invalidates pre-return aliases while allowing the returned cyclic container', () => {
@@ -292,6 +292,10 @@ try { missing.to(argument()); } catch {}
 try { null.to(argument()); } catch {}
 const broken = { get to() { throw new Error('getter failed'); } };
 try { broken.to(argument()); } catch {}
+const throwing = { to() { throw new Error('ordinary method failed'); } };
+try { throwing.to(); } catch {}
+const coercion = { valueOf() { throw new Error('ordinary coercion failed'); } };
+try { (coercion as any) + 1; } catch {}
 if (calls !== 1) throw new Error('wrong argument evaluation');
 const output = CC();`,
     });
@@ -613,6 +617,29 @@ globalThis.${globalKey} = Promise.resolve().then(() => input + 1);`,
         span: expect.any(Object),
       });
       expect(plan.producers).toEqual([]);
+    } finally {
+      delete (globalThis as unknown as Record<string, unknown>)[globalKey];
+    }
+  });
+
+  test('seals the runtime when source throws before finalization', async () => {
+    const globalKey = '__comblangLateDslMutationAfterThrowTest';
+    const parsed = parseFile({
+      path: 'late-promise-after-throw.factorio.ts',
+      text: `const input = new Network();
+globalThis.${globalKey} = Promise.resolve().then(() => input + 1);
+throw new Error('source failed');`,
+    });
+
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+      'source failed',
+    );
+    const lateMutation = (globalThis as unknown as Record<string, unknown>)[globalKey];
+    try {
+      await expect(lateMutation).rejects.toMatchObject({
+        code: 'RT2025',
+        span: expect.any(Object),
+      });
     } finally {
       delete (globalThis as unknown as Record<string, unknown>)[globalKey];
     }
@@ -2506,15 +2533,16 @@ const copied: Network = IF(Anything(pair(red, green)) > 0, Everything(pair(red, 
 const second = new Network<R>();
 const inputs = pair(first, second);`,
     });
-    const conflictPlan = executeElaborationProgram(transformElaborationModule(conflicting));
-    const result = tryElaborateDirectPlan(conflictPlan);
-    const conflict = result.diagnostics[0];
-    expect(conflict).toMatchObject({ code: 'RT2010', severity: 'error', span: expect.any(Object) });
-    expect(
-      conflict?.span === undefined
-        ? undefined
-        : conflicting.text.slice(conflict.span.start, conflict.span.end),
-    ).toBe('pair(first, second)');
+    try {
+      executeElaborationProgram(transformElaborationModule(conflicting));
+      expect.fail('Expected the pair color conflict during source execution.');
+    } catch (error) {
+      const conflict = error as ElaborationExecutionError;
+      expect(conflict).toMatchObject({ code: 'RT2010', span: expect.any(Object) });
+      expect(conflicting.text.slice(conflict.span.start, conflict.span.end)).toBe(
+        'pair(first, second)',
+      );
+    }
 
     const destination = parseFile({
       path: 'pair-destination.factorio.ts',
@@ -2570,12 +2598,138 @@ const second = new Network();
 const inputs = pair(first, second);
 first.take(second);`,
     });
-    const collapsedResult = tryElaborateDirectPlan(
-      executeElaborationProgram(transformElaborationModule(collapsed)),
+    expect(() => executeElaborationProgram(transformElaborationModule(collapsed))).toThrowError(
+      expect.objectContaining({ code: 'RT2020', span: expect.any(Object) }),
     );
-    expect(collapsedResult.diagnostics).toEqual([
-      expect.objectContaining({ code: 'RT2020', severity: 'error', span: expect.any(Object) }),
-    ]);
+  });
+
+  test('reports the first conflicting pair online and preserves it after a user catch', () => {
+    const secondPair = 'pair(b, c)';
+    const parsed = parseFile({
+      path: 'online-color-conflict.factorio.ts',
+      text: `const a = new Network<R>();
+const b = new Network();
+const c = new Network<G>();
+pair(a, b);
+try { ${secondPair}; } catch (error) {
+  if (error.code !== 'RT2010') throw error;
+}
+const ordinary = { to() { return 4; } }.to() + 1;
+if (ordinary !== 5) throw new Error('ordinary code did not continue');
+CC();`,
+    });
+
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected the first color conflict to poison finalization.');
+    } catch (error) {
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2010');
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(secondPair);
+    }
+  });
+
+  test('stops at an uncaught online conflict and rejects finalization after a caught one', () => {
+    const conflict = 'pair(b, c)';
+    const prefix = `const a = new Network<R>();
+const b = new Network();
+const c = new Network<G>();
+pair(a, b);`;
+    for (const [path, text] of [
+      [
+        'uncaught-online-color.factorio.ts',
+        `${prefix}\n${conflict};\nthrow new Error('sentinel');`,
+      ],
+      [
+        'caught-online-color-finalize.factorio.ts',
+        `${prefix}\ntry { ${conflict}; } catch {}\nconst ordinary = 2 + 3;`,
+      ],
+    ] as const) {
+      const parsed = parseFile({ path, text });
+      try {
+        executeElaborationProgram(transformElaborationModule(parsed));
+        expect.fail('Expected the first online color conflict.');
+      } catch (error) {
+        const failure = error as ElaborationExecutionError;
+        expect(failure.code).toBe('RT2010');
+        expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(conflict);
+      }
+    }
+  });
+
+  test('applies an inferred color constraint when a parameter requires a fixed color', () => {
+    const call = 'NeedsRed(inferredGreen)';
+    const parsed = parseFile({
+      path: 'online-parameter-color.factorio.ts',
+      text: `function NeedsRed(input: Readonly<Network<R>>) { return 1; }
+const red = new Network<R>();
+const inferredGreen = new Network();
+pair(red, inferredGreen);
+${call};`,
+    });
+
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected the parameter color requirement to conflict online.');
+    } catch (error) {
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2010');
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe('inferredGreen');
+    }
+  });
+
+  test('checks producer input and output connector colors at their source operations', () => {
+    const inputExpression = 'red + otherRed';
+    const input = parseFile({
+      path: 'online-input-color.factorio.ts',
+      text: `const red = new Network<R>();
+const otherRed = new Network<R>();
+const output = ${inputExpression};`,
+    });
+    try {
+      executeElaborationProgram(transformElaborationModule(input));
+      expect.fail('Expected the input connector conflict during producer creation.');
+    } catch (error) {
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2010');
+      expect(input.text.slice(failure.span.start, failure.span.end)).toBe(inputExpression);
+    }
+
+    const attachmentExpression = '(input + 0).to(first, second)';
+    const output = parseFile({
+      path: 'online-output-color.factorio.ts',
+      text: `const input = new Network();
+const first = new Network<G>();
+const second = new Network<G>();
+${attachmentExpression};`,
+    });
+    try {
+      executeElaborationProgram(transformElaborationModule(output));
+      expect.fail('Expected the output connector conflict during attachment.');
+    } catch (error) {
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2010');
+      expect(output.text.slice(failure.span.start, failure.span.end)).toBe(attachmentExpression);
+    }
+  });
+
+  test('keeps color identity through return rebinding, aliases, and take', () => {
+    const parsed = parseFile({
+      path: 'stable-online-color-identity.factorio.ts',
+      text: `function Make(input: Readonly<Network>): Network<R> { return input + 0; }
+const source = new Network();
+const rebound = Make(source);
+const alias = rebound;
+const joined = new Network();
+rebound.take(joined);
+const green = new Network<G>();
+pair(alias, green);
+const output: Network = alias + 0;`,
+    });
+
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    expect(plan.networkTransfers).toMatchObject([{ destination: 'rebound', source: 'joined' }]);
+    expect(() => elaborateDirectPlan(plan)).not.toThrow();
   });
 
   test('materializes loop-local Networks and feeds them into arithmetic producers', () => {
@@ -2914,18 +3068,13 @@ c.take(b);`,
 const green = new Network<G>();
 red.take(green);`,
     });
-    const result = tryElaborateDirectPlan(
-      executeElaborationProgram(transformElaborationModule(conflicting)),
-    );
-    expect(result.diagnostics).toEqual([
+    expect(() => executeElaborationProgram(transformElaborationModule(conflicting))).toThrowError(
       expect.objectContaining({
         code: 'RT2014',
-        span: expect.objectContaining({
-          start: conflicting.text.indexOf('red.take(green)'),
-        }),
+        span: expect.objectContaining({ start: conflicting.text.indexOf('red.take(green)') }),
         related: expect.any(Array),
       }),
-    ]);
+    );
   });
 
   test('preserves an ordinary JavaScript .take method', () => {
