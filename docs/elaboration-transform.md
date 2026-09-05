@@ -32,3 +32,9 @@ Unsupported async syntax is retained in the output metadata and rejected by the 
 `elaboration-transform-enum.ts` owns the complete enum rewrite family. It evaluates the supported side-effect-free numeric subset through the shared language helper, resolves earlier local or enum-qualified members, and emits a frozen runtime object. A known numeric initializer advances implicit numbering; a dynamic initializer is passed back through the main expression visitor and suspends implicit numbering until another explicit numeric constant establishes a new base.
 
 Keeping this rule outside the dispatch visitor prevents enum-specific state from leaking into unrelated binding and expression branches. The semantic preflight remains responsible for source-linked `CL1048` when an implicit member follows a dynamic value; the lowering invariant still rejects such input if the transform is invoked without semantic preflight.
+
+### Control-flow instrumentation
+
+`elaboration-transform-control-flow.ts` owns `if`, conditional expressions, `for`, `for…of`, `for…in`, `while`, and `do…while`. It does not evaluate or unroll them. Conditions remain native JavaScript expressions after their descendants are transformed, then pass through `controlTest` so an executed DSL value cannot be used as JavaScript truthiness accidentally. A conditionless `for (;;)` remains conditionless.
+
+Each actually entered loop body opens a provenance instance and closes it in `finally`. Consequently `continue`, `break`, `return`, and thrown exceptions cannot leave the dynamic instance stack unbalanced. Simple loop bindings contribute their executed name/value; destructuring and other ambiguous initializers use the stable `iteration` fallback rather than inventing a binding identity.
