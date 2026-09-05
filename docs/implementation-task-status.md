@@ -42,4 +42,17 @@ Validation: **907 tests in 86 files**, format check, typecheck, and complete CLI
 
 The browser's temporary Direct Plan depth heuristic remains separate by design; F08 replaces it with resolved NCIR graph/SCC analysis after the common compilation artifact exists.
 
-Next task: F04, a stateful parity DSU for incremental color constraints.
+## F04 — Stateful parity DSU
+
+Status: **complete**.
+
+- `CircuitColorConstraints<Id>` incrementally registers Networks and applies same, different, and fixed-color constraints without depending on the source runtime or DOM.
+- A rejected contradictory relation leaves the accepted semantic relations intact; path compression remains an observational optimization.
+- Conflicts retain their reason and opaque provenance, while relations and fixed colors reject unknown IDs instead of registering them implicitly.
+- Resolution is deterministic across union orders: the earliest registered member orients each free component to red, and the fixed anchor orients constrained components.
+- `solveCircuitColors` remains the compatible batch API and delegates to the same stateful engine.
+- Tests compare every prefix of a small graph with a BFS oracle and cover a contradictory triangle, fixed anchors, isolated nodes, unknown IDs, equal and repeated relations, repeated resolution, post-resolution mutation, and alternate union orders.
+
+Validation: **913 tests in 87 files**, format check, typecheck, and complete CLI/web production builds pass. The existing Vite large-chunk warning remains.
+
+Next task: F05, online color constraints and a failed recorder lifecycle.

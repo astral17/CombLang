@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./blueprint-json": "./src/blueprint-json.ts",
+    "./circuit-color-constraints": "./src/circuit-color-constraints.ts",
     "./color-solver": "./src/color-solver.ts",
     "./direct-plan": "./src/direct-plan.ts",
     "./direct-plan-schema": "./src/direct-plan-schema.ts",
