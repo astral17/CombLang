@@ -17,6 +17,12 @@ Executed functions may return ordinary JavaScript values containing owned Networ
 
 The ordering is intentional. A caught validation or budget failure cannot leave the caller with a partially moved return value. Producer handles remain unchanged; their affine attachment lifecycle is independent from Network ownership transfer.
 
+## Explicitly typed Network returns
+
+An explicit `Network` or `Readonly<Network>` return uses a narrower front-end policy before the same ownership transfer. An executed Network is checked against an optional `R`/`G` requirement; an executed Producer is first materialized into the reserved `$return` Network and remains one physical combinator. Every other value reports `RT2022` at the return expression.
+
+The ownership layer then verifies that the current function owns the Network and transfers it to the caller with a fresh generation. `Network` exposes that owned handle directly. `Readonly<Network>` creates a read-only caller view only after the transfer succeeds, so a failed transfer cannot publish a partially prepared wrapper. This path does not recursively traverse containers; unannotated graph returns use the algorithm below.
+
 ## Traversal boundary
 
 Only arrays and objects whose prototype is `Object.prototype` or `null` are traversed. Maps, Sets, class instances, functions, accessors, and prototype properties stay opaque ordinary JavaScript. Supporting one of those categories requires an explicit language contract rather than incidental enumeration.

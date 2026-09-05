@@ -1,7 +1,6 @@
 import ts from 'typescript';
 
 import {
-  evaluateNumericConstantExpression,
   networkTypeFromAnnotation,
   parseDslTypeText,
   wildcardDslNames,
@@ -12,6 +11,7 @@ import {
   analyzeElaborationTransform,
   producerHandleTypeName,
 } from './elaboration-transform-analysis.js';
+import { lowerEnumDeclaration } from './elaboration-transform-enum.js';
 import { printErasedTypeScript } from './typescript-erase.js';
 
 export interface ElaborationJavaScript {
@@ -442,70 +442,11 @@ export function transformElaborationModule(
         );
       }
       if (ts.isEnumDeclaration(node)) {
-        const memberValues = new Map<string, number>();
-        let nextNumericValue: number | undefined = 0;
-        const numericLiteral = (value: number): ts.Expression =>
-          value < 0 || Object.is(value, -0)
-            ? factory.createPrefixUnaryExpression(
-                ts.SyntaxKind.MinusToken,
-                factory.createNumericLiteral(Math.abs(value)),
-              )
-            : factory.createNumericLiteral(value);
-        const properties = node.members.map((member) => {
-          const name =
-            ts.isIdentifier(member.name) || ts.isStringLiteral(member.name)
-              ? member.name.text
-              : member.name.getText(file.ast);
-          let value: ts.Expression;
-          if (member.initializer === undefined) {
-            if (nextNumericValue === undefined) {
-              throw new Error(
-                `Enum ${node.name.text}.${name} requires an explicit initializer because the previous value is not a supported numeric constant.`,
-              );
-            }
-            value = numericLiteral(nextNumericValue);
-            memberValues.set(name, nextNumericValue);
-            nextNumericValue += 1;
-          } else {
-            const evaluated = evaluateNumericConstantExpression(member.initializer, (reference) => {
-              if (ts.isIdentifier(reference)) return memberValues.get(reference.text);
-              return ts.isIdentifier(reference.expression) &&
-                reference.expression.text === node.name.text
-                ? memberValues.get(reference.name.text)
-                : undefined;
-            });
-            if (evaluated === undefined || !Number.isFinite(evaluated)) {
-              value = ts.visitNode(member.initializer, visit) as ts.Expression;
-              nextNumericValue = undefined;
-            } else {
-              value = numericLiteral(evaluated);
-              memberValues.set(name, evaluated);
-              nextNumericValue = evaluated + 1;
-            }
-          }
-          return factory.createPropertyAssignment(factory.createStringLiteral(name), value);
+        return lowerEnumDeclaration(node, {
+          factory,
+          sourceFile: file.ast,
+          transformExpression: (expression) => ts.visitNode(expression, visit) as ts.Expression,
         });
-        return factory.createVariableStatement(
-          undefined,
-          factory.createVariableDeclarationList(
-            [
-              factory.createVariableDeclaration(
-                node.name,
-                undefined,
-                undefined,
-                factory.createCallExpression(
-                  factory.createPropertyAccessExpression(
-                    factory.createIdentifier('Object'),
-                    'freeze',
-                  ),
-                  undefined,
-                  [factory.createObjectLiteralExpression(properties, true)],
-                ),
-              ),
-            ],
-            ts.NodeFlags.Const,
-          ),
-        );
       }
       if (ts.isParameter(node)) return transformParameter(node);
 

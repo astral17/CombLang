@@ -44,6 +44,7 @@ import {
   bindNetworkParameter,
   type NetworkParameterCapability,
 } from './network-parameter-policy.js';
+import { returnNetworkValue } from './network-return-policy.js';
 import { ProducerLifecycle } from './producer-lifecycle.js';
 import { validateProducerAttachment } from './producer-attachment-policy.js';
 import { bindProducerHandle } from './producer-handle-policy.js';
@@ -530,33 +531,28 @@ class ElaborationRecorder {
           'A function Network return must be Network or Readonly<Network>, optionally with R/G.',
         );
       }
-      let network: NetworkValue;
-      if (this.#isProducer(value)) {
-        network = this.#network('$return', rawSpan, fixedColor);
-        this.#networkState(network).returnBindingAvailable = true;
-        this.#attach(network, value, rawSpan);
-      } else if (this.#isNetwork(value)) {
-        network = value;
-        if (fixedColor !== undefined) {
-          this.#requireNetworkColor(
-            network,
-            capability === 'readonly' ? 'readonly' : 'move',
-            fixedColor,
-            rawSpan,
-          );
-        }
-      } else {
-        throw new ElaborationExecutionError(
-          'A function declared to return Network must return a Network or a combinator expression.',
-          this.#span(rawSpan),
-          'RT2022',
-        );
-      }
-      const returned = this.#returnOwnedNetwork(network, rawSpan);
-      if (capability === 'owned') return returned;
-      return this.#networkValue(
-        { ...returned, capability: 'readonly' },
-        { ...this.#networkState(returned) },
+      return returnNetworkValue(
+        value,
+        {
+          capability,
+          ...(fixedColor === undefined ? {} : { fixedColor }),
+          source: this.#span(rawSpan),
+        },
+        {
+          isProducer: (candidate): candidate is ProducerValue => this.#isProducer(candidate),
+          isNetwork: (candidate): candidate is NetworkValue => this.#isNetwork(candidate),
+          materializeProducer: (producer, color) => {
+            const network = this.#network('$return', rawSpan, color);
+            this.#networkState(network).returnBindingAvailable = true;
+            this.#attach(network, producer, rawSpan);
+            return network;
+          },
+          requireColor: (network, requiredCapability, color) =>
+            this.#requireNetworkColor(network, requiredCapability, color, rawSpan),
+          transferToCaller: (network) => this.#returnOwnedNetwork(network, rawSpan),
+          stateFor: (network) => this.#networkState(network),
+          brandNetwork: (network, state) => this.#networkValue(network, state),
+        },
       );
     },
     networkArgument: (

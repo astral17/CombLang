@@ -26,3 +26,9 @@ The prepass intentionally records positive facts, not a general TypeScript type 
 The AST visitor owns local syntax transformations and evaluation order. It consumes the prepass instead of rebuilding name/scope heuristics inside individual node branches. Runtime calls retain source spans, and transform-generated temporaries use the hygienic runtime parameter selected before rewriting.
 
 Unsupported async syntax is retained in the output metadata and rejected by the execution boundary. The transform does not partially execute or silently erase it.
+
+### Enum lowering
+
+`elaboration-transform-enum.ts` owns the complete enum rewrite family. It evaluates the supported side-effect-free numeric subset through the shared language helper, resolves earlier local or enum-qualified members, and emits a frozen runtime object. A known numeric initializer advances implicit numbering; a dynamic initializer is passed back through the main expression visitor and suspends implicit numbering until another explicit numeric constant establishes a new base.
+
+Keeping this rule outside the dispatch visitor prevents enum-specific state from leaking into unrelated binding and expression branches. The semantic preflight remains responsible for source-linked `CL1048` when an implicit member follows a dynamic value; the lowering invariant still rejects such input if the transform is invoked without semantic preflight.
