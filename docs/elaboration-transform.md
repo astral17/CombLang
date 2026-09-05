@@ -50,3 +50,11 @@ Only a return whose nearest function-like ancestor is that declaration receives 
 `elaboration-transform-bindings.ts` owns identifier, tuple, object, and parameter binding materialization. A direct `new Network<R/G>()` binding receives its stable source name and late alias reader; a nested construction remains anonymous. Other executed initializers pass through contextual Network materialization unless an explicit Producer annotation retains and validates the physical handle.
 
 Tuple and object destructuring emit runtime descriptors for each supported flat destination, including property mapping, color, and concrete Producer kind. Defaults recurse through the same policy, so parameters, destructuring elements, and loop bindings do not gain a separate DSL expression path. Test-only `t.instantiate` also enters here because a direct binding supplies its stable debug instance name; an unbound call instead receives a source-offset identity. Function instrumentation consumes `transformParameter` as an explicit dependency.
+
+### Calls and element access
+
+`elaboration-transform-calls.ts` owns optional chains, direct DSL calls, ordinary direct and member calls, fluent `when(...).then/else` forms, and element reads. Optional operations remain native JavaScript chains: only their descendants are transformed, so computed keys and arguments are still skipped by nullish short-circuiting.
+
+Ordinary calls pass source-bearing argument records to the runtime. Spread arguments expand through `spreadCallArguments`, while member calls prepare the receiver and key before evaluating arguments so both JavaScript order and `this` binding are retained. Direct `eval` deliberately remains native because wrapping it would change its lexical environment.
+
+An element access is rewritten as an executed DSL boundary only when it is a read. Assignment, compound-assignment, increment/decrement, and `delete` targets remain available to their owning operator transform; this prevents a read wrapper from changing JavaScript write semantics. Test-only instantiation is delegated back to the binding component because stable instance naming depends on the surrounding binding.
