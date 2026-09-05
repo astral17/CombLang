@@ -13,6 +13,7 @@ import {
 } from './elaboration-transform-analysis.js';
 import { transformControlFlowNode } from './elaboration-transform-control-flow.js';
 import { lowerEnumDeclaration } from './elaboration-transform-enum.js';
+import { transformFunctionBoundaryNode } from './elaboration-transform-functions.js';
 import { printErasedTypeScript } from './typescript-erase.js';
 
 export interface ElaborationJavaScript {
@@ -104,21 +105,6 @@ export function transformElaborationModule(
         ((ts.isBreakStatement(parent) || ts.isContinueStatement(parent)) && parent.label === node)
       );
     };
-    const borrowDescriptorForType = (
-      type: ts.TypeNode | undefined,
-    ):
-      | {
-          readonly capability: 'readonly' | 'ref' | 'move';
-          readonly color?: 'red' | 'green';
-        }
-      | undefined => {
-      const syntax = networkTypeFromAnnotation(type, file.ast);
-      if (syntax === undefined || syntax.capability === 'owned') return undefined;
-      return {
-        capability: syntax.capability,
-        ...(syntax.color === undefined ? {} : { color: syntax.color }),
-      };
-    };
     const bindingReader = (name: string): ts.Expression =>
       factory.createArrowFunction(
         undefined,
@@ -143,14 +129,6 @@ export function transformElaborationModule(
     const colorForType = (node: ts.TypeNode | undefined): ts.Expression => {
       const color = networkTypeFromAnnotation(node, file.ast)?.color;
       return color === undefined ? factory.createVoidZero() : factory.createStringLiteral(color);
-    };
-    const enclosingFunctionDeclaration = (node: ts.Node): ts.FunctionDeclaration | undefined => {
-      for (let parent = node.parent; parent !== undefined; parent = parent.parent) {
-        if (ts.isFunctionLike(parent)) {
-          return ts.isFunctionDeclaration(parent) ? parent : undefined;
-        }
-      }
-      return undefined;
     };
     const bindingDescriptor = (
       name: ts.BindingName,
@@ -400,150 +378,15 @@ export function transformElaborationModule(
         );
       }
 
-      if (
-        ts.isReturnStatement(node) &&
-        node.expression !== undefined &&
-        enclosingFunctionDeclaration(node) !== undefined
-      ) {
-        const owner = enclosingFunctionDeclaration(node)!;
-        const networkReturn = networkTypeFromAnnotation(owner.type, file.ast);
-        return factory.updateReturnStatement(
-          node,
-          networkReturn === undefined
-            ? dslCall(factory, 'returnValue', [
-                ts.visitNode(node.expression, visit) as ts.Expression,
-                spanLiteral(factory, node),
-                producerHandleTypeName(file, owner.type) === undefined
-                  ? factory.createVoidZero()
-                  : factory.createStringLiteral(producerHandleTypeName(file, owner.type)!),
-              ])
-            : dslCall(factory, 'returnNetwork', [
-                ts.visitNode(node.expression, visit) as ts.Expression,
-                factory.createStringLiteral(networkReturn.capability),
-                networkReturn.color === undefined
-                  ? factory.createVoidZero()
-                  : factory.createStringLiteral(networkReturn.color),
-                spanLiteral(factory, node),
-              ]),
-        );
-      }
-
-      if (ts.isFunctionDeclaration(node) && node.body !== undefined) {
-        const name = node.name?.text ?? '<anonymous>';
-        const parameters = node.parameters.map(transformParameter);
-        const parameterBindings = node.parameters.flatMap((parameter, index) => {
-          if (!ts.isIdentifier(parameter.name)) return [];
-          const source = dslCall(factory, 'parameterSource', [
-            factory.createNumericLiteral(index),
-            spanLiteral(factory, parameter),
-          ]);
-          const producerType = producerHandleTypeName(file, parameter.type);
-          if (producerType !== undefined) {
-            return [
-              factory.createExpressionStatement(
-                factory.createAssignment(
-                  parameter.name,
-                  dslCall(factory, 'producerHandle', [
-                    parameter.name,
-                    factory.createStringLiteral(producerType),
-                    factory.createStringLiteral(parameter.name.text),
-                    source,
-                  ]),
-                ),
-              ),
-            ];
-          }
-          const descriptor = borrowDescriptorForType(parameter.type);
-          const networkType = networkTypeFromAnnotation(parameter.type, file.ast);
-          if (parameter.type === undefined || networkType?.capability === 'owned') {
-            return [
-              factory.createExpressionStatement(
-                factory.createAssignment(
-                  parameter.name,
-                  dslCall(factory, 'implicitNetworkParameter', [
-                    parameter.name,
-                    factory.createStringLiteral(parameter.name.text),
-                    networkType?.color === undefined
-                      ? factory.createVoidZero()
-                      : factory.createStringLiteral(networkType.color),
-                    spanLiteral(factory, parameter),
-                    source,
-                    networkType === undefined ? factory.createFalse() : factory.createTrue(),
-                  ]),
-                ),
-              ),
-            ];
-          }
-          if (descriptor === undefined) return [];
-          return [
-            factory.createExpressionStatement(
-              factory.createAssignment(
-                parameter.name,
-                descriptor.capability === 'move'
-                  ? dslCall(factory, 'moveParameter', [
-                      parameter.name,
-                      factory.createStringLiteral(parameter.name.text),
-                      descriptor.color === undefined
-                        ? factory.createVoidZero()
-                        : factory.createStringLiteral(descriptor.color),
-                      source,
-                    ])
-                  : dslCall(factory, 'borrowParameter', [
-                      parameter.name,
-                      factory.createStringLiteral(descriptor.capability),
-                      factory.createStringLiteral(parameter.name.text),
-                      descriptor.color === undefined
-                        ? factory.createVoidZero()
-                        : factory.createStringLiteral(descriptor.color),
-                      source,
-                    ]),
-              ),
-            ),
-          ];
-        });
-        const body = factory.createBlock(
-          [
-            factory.createExpressionStatement(
-              dslCall(factory, 'enterFunction', [
-                factory.createStringLiteral(name),
-                node.name ?? factory.createVoidZero(),
-                spanLiteral(factory, node),
-              ]),
-            ),
-            factory.createTryStatement(
-              factory.createBlock(
-                [
-                  ...parameterBindings,
-                  ...node.body.statements.map(
-                    (statement) => ts.visitNode(statement, visit) as ts.Statement,
-                  ),
-                ],
-                true,
-              ),
-              undefined,
-              factory.createBlock(
-                [
-                  factory.createExpressionStatement(
-                    dslCall(factory, 'exitInstance', [spanLiteral(factory, node)]),
-                  ),
-                ],
-                true,
-              ),
-            ),
-          ],
-          true,
-        );
-        return factory.updateFunctionDeclaration(
-          node,
-          node.modifiers,
-          node.asteriskToken,
-          node.name,
-          node.typeParameters,
-          parameters,
-          node.type,
-          body,
-        );
-      }
+      const functionBoundary = transformFunctionBoundaryNode(node, {
+        factory,
+        file,
+        visit,
+        dslCall: (name, arguments_) => dslCall(factory, name, arguments_),
+        spanLiteral: (source) => spanLiteral(factory, source),
+        transformParameter,
+      });
+      if (functionBoundary !== undefined) return functionBoundary;
 
       const controlFlow = transformControlFlowNode(node, {
         factory,

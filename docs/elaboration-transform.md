@@ -38,3 +38,9 @@ Keeping this rule outside the dispatch visitor prevents enum-specific state from
 `elaboration-transform-control-flow.ts` owns `if`, conditional expressions, `for`, `for…of`, `for…in`, `while`, and `do…while`. It does not evaluate or unroll them. Conditions remain native JavaScript expressions after their descendants are transformed, then pass through `controlTest` so an executed DSL value cannot be used as JavaScript truthiness accidentally. A conditionless `for (;;)` remains conditionless.
 
 Each actually entered loop body opens a provenance instance and closes it in `finally`. Consequently `continue`, `break`, `return`, and thrown exceptions cannot leave the dynamic instance stack unbalanced. Simple loop bindings contribute their executed name/value; destructuring and other ambiguous initializers use the stable `iteration` fallback rather than inventing a binding identity.
+
+### Function boundaries
+
+`elaboration-transform-functions.ts` owns instrumented function declarations and their direct return statements. Its prologue maps executed identifier parameters to the appropriate implicit Network, `Readonly`, `Ref`, `Move`, or concrete Producer runtime boundary using the original argument span. The body opens one function provenance/ownership frame and closes it in `finally`, including exceptional exits.
+
+Only a return whose nearest function-like ancestor is that declaration receives its declared Network or Producer return contract. Returns inside nested arrows, callbacks, methods, or function expressions remain owned by those JavaScript functions and cannot accidentally transfer the outer function's ownership. Parameter-default and binding-pattern rewriting is supplied as an explicit callback; the function family does not duplicate binding logic.
