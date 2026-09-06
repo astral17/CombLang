@@ -1,9 +1,0 @@
-{
-  "name": "comblang-runtime-prototype-exporter",
-  "version": "0.1.0",
-  "title": "CombLang runtime prototype exporter",
-  "author": "CombLang contributors",
-  "factorio_version": "2.1",
-  "dependencies": ["base >= 2.1.16"],
-  "description": "Read-only export of runtime-resolved structural prototype facts with explicit provenance and per-field outcomes."
-}

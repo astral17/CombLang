@@ -99,11 +99,11 @@ Factorio version, active mod versions, expansions, or startup-settings state:
 
 ```json
 {
-  "factorioVersion": "2.1.16",
+  "factorioVersion": "2.1.17",
   "expansions": ["space-age"],
   "mods": [
-    { "name": "base", "version": "2.1.16" },
-    { "name": "space-age", "version": "2.1.16" }
+    { "name": "base", "version": "2.1.17" },
+    { "name": "space-age", "version": "2.1.17" }
   ],
   "startupSettingsIdentity": "project-specific-hash-or-label",
   "startupSettings": []
@@ -142,16 +142,18 @@ Generator `comblang-factorio-data-dump-v1.4` also retains item recipe quality
 metadata and quality-chain links. The supplied dump has six quality records and
 four explicit `next` links, but no explicit recipe quality transformations; tests
 for those transformations use synthetic inputs. This is not an exhaustive native
-RecipePrototype implementation. Generator `comblang-factorio-data-dump-v1.5`
+RecipePrototype implementation. Generator `comblang-factorio-data-dump-v1.6`
 retains all 662 recipes in the same supplied dump, including 11 empty-output
 recipes; only the circuit-capability warning remains in that smoke run. Explicit
 malformed recipe booleans or invalid/ambiguous raw main-product names now fail
 with `PD1001` at their raw field path. Lack of loss warnings does not establish
-complete recipe behavior coverage.
+complete recipe behavior coverage. For entity footprint, v1.6 uses explicit
+`tile_width` and `tile_height` per axis, falling back to collision-box dimensions
+as specified by the prototype API; it never substitutes the selection box.
 
 ### Product probability and excluded amounts
 
-The checked-in Factorio prototype API snapshot 2.1.16 describes `ProductPrototypeBase`,
+The checked-in Factorio prototype API snapshot 2.1.17 describes `ProductPrototypeBase`,
 `SharedProbabilityDefinition`, and the item/fluid ingredient/product definitions.
 The normalized mapping is:
 
@@ -185,7 +187,7 @@ equivalent readers for new datasets.
 
 ### Spoilage and fluidbox metadata
 
-The same checked-in 2.1.16 API snapshot defines these optional ingredient/product fields:
+The same checked-in 2.1.17 API snapshot defines these optional ingredient/product fields:
 
 | Dump field                  | Normalized field          | Valid domain                                             |
 | --------------------------- | ------------------------- | -------------------------------------------------------- |
@@ -224,7 +226,7 @@ validation errors, not silently discarded facts.
 
 ### Recipe quality transformations and chains
 
-The local 2.1.16 prototype API defines these item-only fields:
+The pinned 2.1.17 prototype API defines these item-only fields:
 
 | Dump field            | Normalized field    | Applies to                                          |
 | --------------------- | ------------------- | --------------------------------------------------- |
@@ -269,14 +271,13 @@ therefore emits entities and crafting data while setting
 table must supply those facts. It never infers them merely from the presence of
 a connector.
 
-This path still requires conformance verification. In particular, fixtures
-must compare the raw data with the control-stage read-only
-`prototypes: LuaPrototypes` views. The bundled local
-Factorio 2.1.16 runtime API confirms that `LuaPrototypes` exposes dictionaries
-for items, fluids, recipes, entities, qualities, virtual signals, and other
-resolved prototypes. A runtime exporter is planned for structural facts even
-when similar fields exist in the dump: the two APIs need not have identical
-semantics. Neither extraction API becomes the public compiler contract.
+This path still requires native behavior conformance verification. The pinned
+Factorio 2.1.17 runtime API confirms that `LuaPrototypes` exposes corresponding
+read-only dictionaries, and the optional runtime exporter can compare loaded
+values when a concrete ambiguity appears. It is not a prerequisite for the
+structural database while no non-reproducible difference is known. Neither raw
+extraction nor the optional validation transport becomes the public compiler
+contract.
 
 Extraction details still need conformance fixtures against base, Space Age, and
 at least one mod that modifies a vanilla recipe or entity. The architecture does
@@ -356,9 +357,9 @@ are untouched. Validation happens before the CLI opens the output for writing.
 
 The identity check prevents accidental cross-database mixing; it does not certify
 the truth of manually supplied assertions. A read-only observation collector now
-ships under `tools/factorio-circuit-probe`, but it has not yet been executed in
+ships under `tools/comblang-circuit-probe_0.1.0`, but it has not yet been executed in
 Factorio and is not a capability inference probe or verified table. The local
-2.1.16 runtime API provides
+The 2.1.17 runtime API provides
 `LuaEntity.get_control_behavior()` / `get_or_create_control_behavior()` and distinct
 control-behavior classes, but `LuaEntityPrototype` does not directly expose the
 nine normalized booleans. A future fixture/probe must test the corresponding native
@@ -369,7 +370,7 @@ test save, not mutate the user's working save.
 
 ### Collecting raw native observations
 
-The [collector instructions](../tools/factorio-circuit-probe/README.md) describe
+The [collector instructions](../tools/comblang-circuit-probe_0.1.0/README.md) describe
 installation into a disposable test environment and the explicit player command
 `/comblang-probe [case label]`. It reads only the selected existing entity, never
 creates a missing control behavior, and appends to

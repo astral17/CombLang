@@ -1,15 +1,15 @@
 # Circuit observation probe
 
-Development collector for Factorio 2.1.16 or newer 2.1 builds. Its API calls have
-been checked against the local 2.1.16 documentation. **It has not yet been run in
+Development collector for Factorio 2.1.17 or newer 2.1 builds. Its API calls have
+been checked against the pinned 2.1.17 documentation. **It has not yet been run in
 Factorio.** Automated repository checks cover the JSONL reader, CLI, and static
 package guards, not native Lua execution or game behavior.
 
 ## Install and capture
 
-1. Copy this directory into the Factorio user-data `mods` directory, naming the
-   copied directory `comblang-circuit-probe_0.1.0`. It must contain `info.json` and
-   `control.lua` directly, not an extra nested folder. Enable the mod in Factorio.
+1. Copy the directory `comblang-circuit-probe_0.1.0` unchanged into the Factorio
+   user-data `mods` directory. It must contain `info.json` and `control.lua`
+   directly, not an extra nested folder. Enable the mod in Factorio.
 2. Use a disposable test save or a copy of a save. Keep the intended base / Space
    Age / modded configuration and startup settings. Loading with an additional mod
    can affect other mods even though this collector has no data-stage scripts.

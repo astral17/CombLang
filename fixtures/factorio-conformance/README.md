@@ -4,7 +4,7 @@ This directory separates verified Factorio behavior from provisional simulator c
 
 Current authoritative inputs:
 
-- Factorio Runtime API 2.1.16 / API version 6 as the recorded API baseline;
+- Factorio Runtime API 2.1.17 / API version 6 as the recorded API baseline;
 - official Factorio Wiki descriptions for arithmetic, decider, and wildcard behavior;
 - structural invariants in the project architecture documents.
 
@@ -24,7 +24,7 @@ Tests in `packages/simulator` are deterministic executable specifications. Cases
 
 ## Prototype circuit observations
 
-The [read-only collector](../../tools/factorio-circuit-probe/README.md) provides
+The [read-only collector](../../tools/comblang-circuit-probe_0.1.0/README.md) provides
 explicit selected-entity snapshots for Phase 5.5 investigation. Native execution
 of that collector is not yet verified. Its synthetic parser fixture lives separately
 in `fixtures/prototype-observations` and must not be treated as game evidence.

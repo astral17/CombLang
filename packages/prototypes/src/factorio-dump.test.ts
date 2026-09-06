@@ -79,8 +79,8 @@ function dumpFixture(): unknown {
           [1.2, 1.2],
         ],
         selection_box: [
-          [-1.5, -1.5],
-          [1.5, 1.5],
+          [-5, -5],
+          [5, 5],
         ],
         crafting_categories: ['crafting', 'crafting-with-fluid'],
         fluid_boxes: [{ production_type: 'input' }],
@@ -252,7 +252,7 @@ describe('Factorio data-raw-dump normalizer', () => {
     const normalized = normalizeFactorioDataDump(dumpFixture(), metadata);
     const { database, prototypes } = await loadPrototypeDatabase(normalized.database);
 
-    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.5');
+    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.6');
     expect(prototypes.item.grenade?.stackSize).toBe(100);
     expect(prototypes.recipe['iron-plate']).toMatchObject({
       categories: ['crafting'],
@@ -281,6 +281,41 @@ describe('Factorio data-raw-dump normalizer', () => {
       ]),
     );
     expect(prototypes.recipe['recipe-unknown']?.products).toEqual([]);
+  });
+
+  test('prefers explicit tile dimensions and falls back per axis to the collision box', () => {
+    const dump = dumpFixture() as {
+      'assembling-machine': Record<string, Record<string, unknown>>;
+    };
+    const assembler = dump['assembling-machine'].assembler!;
+    assembler.tile_width = 2;
+    assembler.tile_height = 3;
+    expect(normalizeFactorioDataDump(dump, metadata).database.entities[0]).toMatchObject({
+      tileWidth: 2,
+      tileHeight: 3,
+    });
+
+    delete assembler.tile_height;
+    expect(normalizeFactorioDataDump(dump, metadata).database.entities[0]).toMatchObject({
+      tileWidth: 2,
+      tileHeight: 3,
+    });
+  });
+
+  test.each([
+    ['tile_width', 0],
+    ['tile_height', 1.5],
+  ])('rejects invalid explicit entity %s', (field, value) => {
+    const dump = dumpFixture() as {
+      'assembling-machine': Record<string, Record<string, unknown>>;
+    };
+    dump['assembling-machine'].assembler![field] = value;
+    expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
+      expect.objectContaining({
+        code: 'PD1001',
+        path: `assembling-machine.assembler.${field}`,
+      }),
+    );
   });
 
   test('preserves zero-base probabilistic extra counts used by recycling recipes', () => {

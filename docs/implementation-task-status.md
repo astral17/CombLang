@@ -132,8 +132,8 @@ Next task: F09, pin the Factorio API inventory inputs and generator boundary ins
 
 Status: **complete**.
 
-- The Factorio runtime and prototype JSON API schemas are checked in under a versioned `tools/factorio-api/fixtures/2.1.16` directory together with the required documentation license.
-- A snapshot manifest records exact Factorio 2.1.16 / JSON API 6 metadata, SHA-256 for every copied file, and the explicit offline regeneration command.
+- The Factorio runtime and prototype JSON API schemas are checked in under the selected versioned fixture directory `tools/factorio-api/fixtures/2.1.17`.
+- A snapshot manifest records exact Factorio 2.1.17 / JSON API 6 metadata, SHA-256 for every copied file, and the explicit offline regeneration command.
 - The development-only generator verifies every hash and both schema headers before producing an inventory. It neither fetches a latest version nor participates in the ordinary production build.
 - The generated artifact carries repository-relative provenance only. Compiler, CLI, web, and generator operation do not depend on a sibling analysis workspace.
 - `control-behavior-review.json` separately assigns every discovered class to an implementation wave and pins the reviewed 40 classes / 37 concrete / 3 abstract / 47 BlueprintEntity variants baseline. API drift fails closed until the review manifest is deliberately updated.
@@ -146,21 +146,25 @@ Next task: F10, add the read-only runtime structural exporter without conflating
 
 ## F10 — Runtime structural exporter
 
-Status: **implemented; native capture gate pending**.
+Status: **rejected and removed**.
 
-- A dedicated Factorio mod scans runtime `prototypes` without sharing the selected-entity observation probe or inferring circuit capabilities.
-- The capture includes items, fluids, recipes, entities, qualities, recipe categories, selected global/per-entity limits, exact active mods and startup settings, collector version, and the pinned API version/hashes.
-- Runtime ingredient/product roles and resolved main-product records are preserved. Entity `tile_width`/`tile_height` are captured independently from selection and collision boxes.
-- Every fact and startup setting is an explicit `value`, `absent`, `unknown`, or `error` outcome; failed getters never become zero, false, or empty defaults.
-- A bounded `PR1001` parser validates complete artifacts, environment consistency, collection identity, nested JSON values, and outcome shapes, then deeply freezes the transport without treating it as a normalized Prototype DB.
-- `factorio-dsl prototypes runtime-capture` provides human and JSON inspection. Synthetic fixtures cover false/zero/empty preservation, runtime roles, a 2×3 tile footprint against a 10×10 selection box, errors, unknowns, malformed paths, and immutable output.
-- Static guards verify that every accessed field/method exists in the pinned 2.1.16 runtime API, embedded API hashes match F09, and the tool contains no known entity/control/settings mutation calls.
+The prototype-wide mod, transport parser, synthetic capture, CLI command, and
+packaging tests were removed. Review of the final 2.1.17 `--dump-data` artifact
+did not identify a required structural fact unique to the runtime scan. A future
+runtime tool must be narrow and justified by a reproducible dump/runtime
+discrepancy rather than recreating a parallel prototype database.
 
-Still required: install the tool in a disposable Factorio environment, produce and review a small base capture, verify explicit startup setting values, and compare native tile dimensions against the matching raw dump. Until that external run, F10 must not be labelled complete and its synthetic fixture is not native evidence.
+## F11 — Source-aware normalized prototype model
 
-Validation: **1004 tests in 93 files**, pinned inventory check, format check, typecheck, CLI synthetic-capture smoke test, and complete CLI/web production builds pass. The existing Vite large-chunk warning remains.
+Status: **in progress**.
 
-Next task after the native gate: F11, introduce the source-aware normalized runtime prototype model while retaining raw-only facts separately.
+- The final `--dump-data` artifact is the primary structural source; runtime capture is an optional divergence check, not a required parallel database.
+- Raw entity footprint now honors explicit `tile_width`/`tile_height` independently and uses the documented collision-box fallback per missing axis. Selection-box geometry is never treated as placement size.
+- The data-dump generator identity is bumped to v1.6 so old normalized artifacts cannot silently claim the changed footprint semantics.
+
+Still required: add the per-field evidence/source sidecar, finish the role-aware normalized recipe model, preserve raw-only fields separately, and reject stale source/API pins at the merge boundary.
+
+Next independent task: F14, normalize typed counts, tuples, arrays, Maps, and dictionaries into ordered constant-combinator rows.
 
 ## F13 — SignalPropertyKey codec
 

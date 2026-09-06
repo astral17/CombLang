@@ -194,8 +194,20 @@ function recipeComponent(value: JsonObject, path: string): RecipeComponent {
   };
 }
 
-function dimensions(record: JsonObject, path: string): readonly [number, number] | undefined {
-  const value = record.selection_box ?? record.collision_box;
+function explicitTileDimension(value: unknown, path: string): number | undefined {
+  if (value === undefined) return undefined;
+  const result = finite(value, path);
+  if (!Number.isInteger(result) || result <= 0) {
+    throw new FactorioDumpError(path, 'expected a positive integer.');
+  }
+  return result;
+}
+
+function collisionDimensions(
+  record: JsonObject,
+  path: string,
+): readonly [number, number] | undefined {
+  const value = record.collision_box;
   if (!Array.isArray(value) || value.length !== 2) return undefined;
   const first = value[0];
   const second = value[1];
@@ -205,6 +217,15 @@ function dimensions(record: JsonObject, path: string): readonly [number, number]
   const width = Math.max(1, Math.ceil(Math.abs(finite(second[0], path) - finite(first[0], path))));
   const height = Math.max(1, Math.ceil(Math.abs(finite(second[1], path) - finite(first[1], path))));
   return [width, height];
+}
+
+function dimensions(record: JsonObject, path: string): readonly [number, number] | undefined {
+  const tileWidth = explicitTileDimension(record.tile_width, `${path}.tile_width`);
+  const tileHeight = explicitTileDimension(record.tile_height, `${path}.tile_height`);
+  if (tileWidth !== undefined && tileHeight !== undefined) return [tileWidth, tileHeight];
+  const fallback = collisionDimensions(record, `${path}.collision_box`);
+  if (fallback === undefined) return undefined;
+  return [tileWidth ?? fallback[0], tileHeight ?? fallback[1]];
 }
 
 function hasFluidBoxes(value: unknown): boolean {
@@ -340,7 +361,7 @@ export function normalizeFactorioDataDump(
       if (typeof rawRecord !== 'object' || rawRecord === null || Array.isArray(rawRecord)) continue;
       const record = rawRecord as JsonObject;
       if (record.name !== name || record.type !== table) continue;
-      const size = dimensions(record, `${table}.${name}.selection_box`);
+      const size = dimensions(record, `${table}.${name}`);
       if (size === undefined) continue;
       const categories = Array.isArray(record.crafting_categories)
         ? record.crafting_categories.map((category, index) =>
@@ -369,7 +390,7 @@ export function normalizeFactorioDataDump(
 
   const environment: PrototypeEnvironment = {
     ...metadata,
-    generatorVersion: 'comblang-factorio-data-dump-v1.5',
+    generatorVersion: 'comblang-factorio-data-dump-v1.6',
   };
   const candidate = {
     schemaVersion: 1,

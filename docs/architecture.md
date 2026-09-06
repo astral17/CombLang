@@ -143,7 +143,7 @@ Direct-plan validation has both result-oriented and strict entry points. `tryEla
 
 The direct runtime uses `RT2xxx` diagnostics for handle ownership, attachment cardinality, output-signal binding, missing outputs, invalid condition groups, connector capacity, and color conflicts. All executed attachment spellings converge before direct-plan serialization, so duplicate/capacity/output-binding failures have the same code and source provenance. Combinator creation or attachment provenance supplies the primary span where available. A color conflict also retains related Network declarations when the failing constraint identifies more than one source-bearing Network.
 
-The checked-in API baseline is Factorio Runtime API 2.1.16 / API version 6. Generated schemas and conformance fixtures must record that version and remain checked into this repository, so builds never depend on sibling directories.
+The checked-in API baseline is Factorio Runtime API 2.1.17 / API version 6. Generated schemas and conformance fixtures must record that version and remain checked into this repository, so builds never depend on sibling directories.
 
 ## Deployment and interface invariants
 

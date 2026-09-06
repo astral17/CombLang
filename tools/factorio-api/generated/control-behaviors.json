@@ -2,11 +2,11 @@
   "format": "comblang-control-behavior-inventory",
   "version": 1,
   "source": {
-    "snapshot": "fixtures/2.1.16",
-    "applicationVersion": "2.1.16",
+    "snapshot": "fixtures/2.1.17",
+    "applicationVersion": "2.1.17",
     "apiVersion": 6,
-    "runtimeSha256": "1c21fc0d6c56f75aea97ef45b73e4915a361b0b0d912dbc01aad7046e9088348",
-    "prototypeSha256": "4c915eb230f9ea6e2e617d3b83e735e4cac04a45fb49414c2f677b97fba40104"
+    "runtimeSha256": "2e1fd436404b712af6fe7b6c53e21a8f5688092a9e132fd2a5571327a96e5211",
+    "prototypeSha256": "156f33cb4bc7ee2c538bb93f291f5270f2cdc45be654bbe6f226e402bf8f5368"
   },
   "counts": {
     "classes": 40,

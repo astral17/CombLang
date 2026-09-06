@@ -6,6 +6,6 @@ export interface FactorioApiBaseline {
 
 export const FACTORIO_API_BASELINE: FactorioApiBaseline = Object.freeze({
   application: 'factorio',
-  gameVersion: '2.1.16',
+  gameVersion: '2.1.17',
   runtimeApiVersion: 6,
 });

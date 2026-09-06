@@ -124,7 +124,6 @@ Later phases cover prototype profiles, typed Factorio objects, exact constructor
 - [Prototype environment](docs/prototype-environment.md) — the Phase 5.5 normalized modded-data provider, Factorio exporter, loading, and environment-identity boundary.
 - [Circuit graph metrics](docs/circuit-graph-metrics.md) — resolved NCIR dependencies, DAG depth, feedback SCCs, and unknown-latency propagation.
 - [Pinned Factorio API inputs](tools/factorio-api/README.md) — versioned local schemas, hashes, license, reviewed ControlBehavior coverage, and offline regeneration.
-- [Runtime prototype exporter](tools/factorio-runtime-prototype-exporter/README.md) — read-only Factorio capture procedure, structural scope, explicit field outcomes, and native verification status.
 - [Prototype truth sources and audit follow-up](docs/prototype-truth-sources.md) — raw/runtime/behavior authority, identity migration, and pending September 4 recommendations.
 - [Runtime debug index](docs/debug-index.md) — exact lexical scopes, physical Network/Producer mappings, deterministic queries, and current ambiguity boundary.
 - [Source-linked schematic editing](docs/source-linked-schematic.md) — planned comment descriptions, diagram-to-source navigation, and safe `.at` write-back.

@@ -29,10 +29,10 @@ afterEach(async () => {
 });
 
 describe('pinned Factorio API inventory', () => {
-  it('retains the reviewed 2.1.16 baseline', () => {
+  it('retains the reviewed 2.1.17 baseline', () => {
     expect(inventory.source).toMatchObject({
-      snapshot: 'fixtures/2.1.16',
-      applicationVersion: '2.1.16',
+      snapshot: 'fixtures/2.1.17',
+      applicationVersion: '2.1.17',
       apiVersion: 6,
     });
     expect(inventory.counts).toEqual({

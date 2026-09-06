@@ -157,14 +157,14 @@ describe('raw circuit observation JSONL', () => {
 });
 
 test('probe package has an explicit command and no entity/behavior mutation hooks (static guard, not Lua execution)', async () => {
-  const root = new URL('../../../tools/factorio-circuit-probe/', import.meta.url);
+  const root = new URL('../../../tools/comblang-circuit-probe_0.1.0/', import.meta.url);
   const info = JSON.parse(await readFile(new URL('info.json', root), 'utf8'));
   const lua = (await readFile(new URL('control.lua', root), 'utf8')).replace(/--[^\n]*/g, '');
   expect(info).toMatchObject({
     name: 'comblang-circuit-probe',
     version: sample.probeVersion,
     factorio_version: '2.1',
-    dependencies: ['base >= 2.1.16'],
+    dependencies: ['base >= 2.1.17'],
   });
   expect(lua).toContain('commands.add_command("comblang-probe"');
   expect(lua).toContain('entity.get_control_behavior()');

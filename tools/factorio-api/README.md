@@ -2,10 +2,10 @@
 
 This development-only tool owns the machine-readable Factorio API inputs used
 to review CombLang's native entity and control-behavior coverage. The current
-snapshot is Factorio **2.1.16**, JSON API schema **6**.
+snapshot is Factorio **2.1.17**, JSON API schema **6**.
 
 The repository contains the runtime and prototype JSON snapshots plus the
-documentation license under `fixtures/2.1.16/`. `manifest.json` pins every file
+documentation license under `fixtures/2.1.17/`. `manifest.json` pins every file
 by SHA-256. The generator verifies all hashes and API metadata before reading
 the schemas, then verifies the separately reviewed class assignment and the
 40/37/3/47 baseline. A new API class or BlueprintEntity variant therefore fails
@@ -29,3 +29,7 @@ overwriting an old snapshot. Update its hashes, change `snapshotVersion`, review
 every class/wave and changed variant, regenerate the inventory, and commit those
 changes together. Schema presence documents Factorio's API shape; it does not
 claim that CombLang implements, simulates, or has natively verified a field.
+
+The 2.1.17 review found the expected 40/37/3/47 control-behavior baseline. Its API
+delta adds the `elevated-rail-above-metal` render layer and adjusts an unrelated
+runtime method overload.

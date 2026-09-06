@@ -1,40 +1,39 @@
 # Prototype truth sources and September audit follow-up
 
-Status: extraction architecture decision accepted; runtime exporter and native
-conformance still pending. This records the triage of the September 4 master
+Status: `--dump-data` is the primary structural input; optional runtime validation
+and native behavior conformance are still pending. This records the triage of the September 4 master
 audit and additional design notes against the current implementation, not an
 assertion that every recommendation has been implemented.
 
 ## Three different kinds of evidence
 
-| Layer                       | Authority and intended use                                                                                                        | Not evidence of                                                   |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| Raw data-stage dump         | `factorio.exe --dump-data`: modded prototype declarations, diagnostics, raw-only fields and comparison against runtime resolution | Runtime defaults, typed resolved products, or native behavior     |
-| Runtime structural snapshot | Read-only `prototypes: LuaPrototypes` exporter: resolved items, recipes, entities, qualities, and environment metadata            | Complete circuit behavior or craftability of a configured machine |
-| Reviewed behavior fixtures  | Native observations/configuration round trips and explicit conformance cases in a matching environment                            | Untested features or another mod/version/settings combination     |
+| Layer                       | Authority and intended use                                                                                                       | Not evidence of                                                  |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
+| Raw data-stage dump         | `factorio.exe --dump-data`: finalized modded `data.raw`, typed recipe rows, structural prototype fields, and diagnostics         | Native circuit behavior or environment identity without metadata |
+| Runtime structural snapshot | Optional read-only `LuaPrototypes` cross-check for engine-loaded values, runtime-only getters, and captured environment metadata | A required production input or complete circuit behavior         |
+| Reviewed behavior fixtures  | Native observations/configuration round trips and explicit conformance cases in a matching environment                           | Untested features or another mod/version/settings combination    |
 
 The compiler receives a normalized immutable provider, not a raw dump or a live
 game connection. The simulator continues to consume lowered devices and buses;
 it does not become a factory simulator or depend on `packages/prototypes`.
 
-The current schema/normalizer predates this split. Its accepted fields mix raw
-declarations and normalization defaults; successful validation and a stable hash
-do **not** certify runtime-resolved correctness. Coverage flags describe available
-data, not evidence quality. No runtime exporter or per-field evidence sidecar has
-been implemented yet. Do not label existing raw-derived databases authoritative.
+The current schema/normalizer predates this split. Successful validation and a
+stable hash do **not** certify native behavior, and coverage flags describe
+available data rather than evidence quality. A runtime exporter transport exists,
+but no captured runtime fact has been shown to add required structural information
+that cannot be recovered from the final dump plus the pinned prototype schema.
 
 ## Extraction plan
 
-The next extraction slice should capture actual runtime item stack sizes, recipe
-ingredients/products and their item/fluid roles, typed `main_product`, recipe
-categories/energy, entity `tile_width`/`tile_height`, crafting limits, and quality
-chains. Capture game/mod/startup-setting values from the same environment.
-Unknown/unreadable facts must remain distinct from explicit negative or empty
-facts. Preserve raw-only metadata separately rather than inventing runtime facts.
+The extraction path normalizes the final dump's item stack sizes, typed recipe
+ingredients/products, `main_product`, categories/energy, entity footprint inputs,
+crafting fields, and quality chains. A mandatory companion metadata file records
+the game/mod/startup-setting environment because the dump does not identify it.
+Unknown fields remain distinct from explicit negative or empty facts.
 
 The runtime API snapshot and prototype API snapshot checked for this decision are
-the hash-pinned Factorio 2.1.16 / JSON API 6 fixtures under
-`tools/factorio-api/fixtures/2.1.16`. Their offline inventory generator and review
+the hash-pinned Factorio 2.1.17 / JSON API 6 fixtures under
+`tools/factorio-api/fixtures/2.1.17`. Their offline inventory generator and review
 manifest are documented in `tools/factorio-api/README.md`. Exporter outputs must
 state their own exact version; declarations in manually supplied metadata are not
 proof of the version that generated a dump.
@@ -43,10 +42,9 @@ In particular:
 
 - Empty-output recipes are legal. Preserve them, including engine sentinel
   recipes; they contribute no entries to the product index.
-- Runtime entity tiling dimensions are authoritative for placement. The current
-  raw normalizer's selection-box-derived dimensions remain a known defect.
-  A raw fallback must honor explicit `tile_width`/`tile_height` and documented
-  collision-box defaults; a selection box is not a tile footprint.
+- Entity tiling dimensions honor explicit `tile_width`/`tile_height` independently,
+  then use the prototype API's documented per-axis collision-box fallback. A
+  selection box is not a tile footprint.
 - Product and ingredient schemas must be validated by role and item/fluid type.
   Do not tighten runtime rules on a mixed raw representation first: raw artifacts
   such as fluid `extra_count_fraction` must not become authoritative runtime facts.
@@ -58,31 +56,20 @@ In particular:
 - Duplicate ingredients and numeric limits need their own validation pass after
   the role/source split. Duplicate **products** may be intentional and must remain.
 
-Gate for a bundled first-run database: checked-in reproducible exporter inputs,
-validated captures from base, Space Age, and a modded override, and native
-conformance for the capabilities claimed. A smoke test of a supplied dump is not
-this gate. The existing observation mod still needs execution in Factorio.
+Gate for a bundled first-run database: checked-in reproducible dump plus metadata
+inputs from base, Space Age, and a modded override, and native conformance for the
+behavior capabilities claimed. A runtime structural capture is optional unless a
+concrete divergence makes it necessary. The observation mod still needs execution
+in Factorio for behavior evidence.
 
-## Runtime structural exporter
+## Runtime structural exporter decision
 
-`tools/factorio-runtime-prototype-exporter` is now the separate read-only runtime
-collector for this layer. It scans `prototypes.item`, `fluid`, `recipe`, `entity`,
-`quality`, and `recipe_category`; records runtime recipe component roles and the
-resolved main product; and keeps entity tile dimensions independent from
-selection/collision boxes. Environment metadata includes the exact base version,
-complete active mod list, startup-setting outcomes, collector version, and the
-hashes of the pinned API schemas used to implement the collector.
-
-Every fact is transported as `value`, `absent`, `unknown`, or `error`. Consequently
-a failed or inapplicable getter cannot become a fabricated zero, false, or empty
-collection. `parseRuntimePrototypeCaptureJson` validates and deeply freezes this
-transport without promoting it to a normalized database. The CLI command
-`prototypes runtime-capture` exposes the same inspection boundary.
-
-The checked-in artifact is synthetic and proves the parser/transport contract
-only. The Lua collector has not yet run in Factorio, so the exporter remains
-implemented-unverified and no runtime facts have been promoted into the built-in
-profile.
+The prototype-wide runtime exporter, its transport parser, and its CLI command
+were removed after reviewing the 2.1.17 dump. It duplicated final `data.raw`
+without demonstrating a structural fact required by CombLang that could not be
+recovered from the dump and pinned schema. A narrow runtime probe may be added in
+the future only for a concrete, reproducible discrepancy; no generic capture
+format is retained speculatively.
 
 ## Implemented audit corrections
 
@@ -90,7 +77,8 @@ profile.
   locale collation. This applies to normalization, provider collections, identity,
   and setting-object comparison; recipe row order remains significant.
 - The normalizer retains empty-output recipes and no longer emits a skip warning
-  for them. Its generator version is now `comblang-factorio-data-dump-v1.5`.
+  for them. Version `comblang-factorio-data-dump-v1.6` also uses explicit tile
+  dimensions before the documented collision-box fallback.
 - Explicit malformed recipe booleans and `main_product` values fail with `PD1001`
   and a raw field path. A nonempty raw main-product name must identify exactly
   one product namespace. Repeated rows in that namespace are allowed; matching

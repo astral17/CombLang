@@ -1,5 +1,5 @@
 -- Read-only observations, NOT capability assertions. No automatic event handlers.
--- API contract reviewed against Factorio 2.1.16; native execution still needs verification.
+-- API contract reviewed against Factorio 2.1.17; native execution still needs verification.
 local output_path = "comblang/circuit-observations.jsonl"
 local fields = {
   "object_name", "type",

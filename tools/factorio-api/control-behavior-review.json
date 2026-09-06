@@ -1,7 +1,7 @@
 {
   "format": "comblang-control-behavior-review",
   "version": 1,
-  "snapshotVersion": "2.1.16",
+  "snapshotVersion": "2.1.17",
   "expectedCounts": {
     "classes": 40,
     "concrete": 37,
