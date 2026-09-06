@@ -151,7 +151,7 @@ complete recipe behavior coverage.
 
 ### Product probability and excluded amounts
 
-The local Factorio prototype API snapshot 2.1.16 describes `ProductPrototypeBase`,
+The checked-in Factorio prototype API snapshot 2.1.16 describes `ProductPrototypeBase`,
 `SharedProbabilityDefinition`, and the item/fluid ingredient/product definitions.
 The normalized mapping is:
 
@@ -185,7 +185,7 @@ equivalent readers for new datasets.
 
 ### Spoilage and fluidbox metadata
 
-The same local 2.1.16 API snapshot defines these optional ingredient/product fields:
+The same checked-in 2.1.16 API snapshot defines these optional ingredient/product fields:
 
 | Dump field                  | Normalized field          | Valid domain                                             |
 | --------------------------- | ------------------------- | -------------------------------------------------------- |

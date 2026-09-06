@@ -2,3 +2,6 @@ node_modules
 dist
 coverage
 package-lock.json
+tools/factorio-api/fixtures/*/runtime-api.json
+tools/factorio-api/fixtures/*/prototype-api.json
+tools/factorio-api/generated/*.json

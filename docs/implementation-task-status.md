@@ -127,3 +127,19 @@ Status: **complete**.
 Validation: **983 tests in 90 files**, format check, typecheck, and complete CLI/web production builds pass. The web main bundle remains about 628 kB; the existing Vite large-chunk warning remains.
 
 Next task: F09, pin the Factorio API inventory inputs and generator boundary inside this repository.
+
+## F09 — Pinned Factorio API snapshot and generator boundary
+
+Status: **complete**.
+
+- The Factorio runtime and prototype JSON API schemas are checked in under a versioned `tools/factorio-api/fixtures/2.1.16` directory together with the required documentation license.
+- A snapshot manifest records exact Factorio 2.1.16 / JSON API 6 metadata, SHA-256 for every copied file, and the explicit offline regeneration command.
+- The development-only generator verifies every hash and both schema headers before producing an inventory. It neither fetches a latest version nor participates in the ordinary production build.
+- The generated artifact carries repository-relative provenance only. Compiler, CLI, web, and generator operation do not depend on a sibling analysis workspace.
+- `control-behavior-review.json` separately assigns every discovered class to an implementation wave and pins the reviewed 40 classes / 37 concrete / 3 abstract / 47 BlueprintEntity variants baseline. API drift fails closed until the review manifest is deliberately updated.
+- Persisted names use explicit UTF-16 code-unit ordering rather than locale collation. `factorio-api:inventory:check` compares regenerated output byte-for-byte.
+- Regression coverage verifies the baseline, deterministic isolated generation, portable provenance, code-unit ordering, missing class review, and hash mismatch failure.
+
+Validation: **989 tests in 91 files**, deterministic inventory check, format check, typecheck, and complete CLI/web production builds pass. The pinned raw schemas are excluded from formatter rewrites, and the existing Vite large-chunk warning remains.
+
+Next task: F10, add the read-only runtime structural exporter without conflating API schema presence with captured game facts.

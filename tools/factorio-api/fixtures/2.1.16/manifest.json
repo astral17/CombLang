@@ -1,0 +1,22 @@
+{
+  "format": "comblang-factorio-api-snapshot",
+  "version": 1,
+  "application": "factorio",
+  "applicationVersion": "2.1.16",
+  "apiVersion": 6,
+  "files": {
+    "runtime-api.json": {
+      "stage": "runtime",
+      "sha256": "1c21fc0d6c56f75aea97ef45b73e4915a361b0b0d912dbc01aad7046e9088348"
+    },
+    "prototype-api.json": {
+      "stage": "prototype",
+      "sha256": "4c915eb230f9ea6e2e617d3b83e735e4cac04a45fb49414c2f677b97fba40104"
+    },
+    "LICENSE.txt": {
+      "stage": "license",
+      "sha256": "736f65e7cbebb955cb0af215730c39ede3470d6b537e5c0f792b8c3fcc0aec9f"
+    }
+  },
+  "regenerationCommand": "npm run factorio-api:inventory"
+}

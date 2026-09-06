@@ -33,8 +33,11 @@ Unknown/unreadable facts must remain distinct from explicit negative or empty
 facts. Preserve raw-only metadata separately rather than inventing runtime facts.
 
 The runtime API snapshot and prototype API snapshot checked for this decision are
-Factorio 2.1.16. Exporter outputs must state their own exact version; declarations
-in manually supplied metadata are not proof of the version that generated a dump.
+the hash-pinned Factorio 2.1.16 / JSON API 6 fixtures under
+`tools/factorio-api/fixtures/2.1.16`. Their offline inventory generator and review
+manifest are documented in `tools/factorio-api/README.md`. Exporter outputs must
+state their own exact version; declarations in manually supplied metadata are not
+proof of the version that generated a dump.
 
 In particular:
 

@@ -77,7 +77,7 @@ The current repository implements the Phase 3 source compiler, the complete Phas
     - [ ] Generate and validate the built-in vanilla/Space Age first-run database.
   - [ ] Establish authoritative runtime structural export alongside the offline raw `factorio.exe --dump-data` normalizer; verify base, Space Age, and modded-override fixtures.
     - [x] Implement the initial raw normalizer for item subtypes, fluids, multi-category recipes, count/temperature metadata, qualities, virtual signals, recipe categories, and bounding boxes through `factorio-dsl prototypes normalize`. This transitional mapping is not verified runtime truth; footprint correction remains below.
-    - [x] Smoke-test the external dump without making repository code or tests depend on `../Analysis`.
+    - [x] Smoke-test the external dump without making repository code or tests depend on a sibling analysis workspace.
     - [x] Preserve independent and shared product probabilities plus statistics/productivity exclusions as distinct validated facts, including identity/JSON/provider coverage and a full external-dump smoke check.
     - [x] Preserve item ingredient/product spoilage and fluidbox routing metadata with role/type/range validation, immutable ordered indexes, identity coverage, and a full external-dump smoke check.
     - [x] Distinguish unknown circuit capabilities from explicit negative facts; load identity-bound per-entity circuit supplements through CLI/library, reject stale or conflicting assertions, and track partial versus complete coverage.
@@ -121,6 +121,7 @@ Later phases cover prototype profiles, typed Factorio objects, exact constructor
 - [Native objects, Deciders, and parameters](docs/native-objects-deciders-and-parameters.md) — planned Phase 6–8 semantic domains and conformance requirements.
 - [Prototype environment](docs/prototype-environment.md) — the Phase 5.5 normalized modded-data provider, Factorio exporter, loading, and environment-identity boundary.
 - [Circuit graph metrics](docs/circuit-graph-metrics.md) — resolved NCIR dependencies, DAG depth, feedback SCCs, and unknown-latency propagation.
+- [Pinned Factorio API inputs](tools/factorio-api/README.md) — versioned local schemas, hashes, license, reviewed ControlBehavior coverage, and offline regeneration.
 - [Prototype truth sources and audit follow-up](docs/prototype-truth-sources.md) — raw/runtime/behavior authority, identity migration, and pending September 4 recommendations.
 - [Runtime debug index](docs/debug-index.md) — exact lexical scopes, physical Network/Producer mappings, deterministic queries, and current ambiguity boundary.
 - [Source-linked schematic editing](docs/source-linked-schematic.md) — planned comment descriptions, diagram-to-source navigation, and safe `.at` write-back.

@@ -1,0 +1,6 @@
+# Hash-pinned source artifacts and byte-for-byte generated output must not be
+# rewritten by platform line-ending conversion.
+tools/factorio-api/fixtures/*/runtime-api.json -text
+tools/factorio-api/fixtures/*/prototype-api.json -text
+tools/factorio-api/fixtures/*/LICENSE.txt -text
+tools/factorio-api/generated/*.json -text

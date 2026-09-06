@@ -1,0 +1,67 @@
+{
+  "format": "comblang-control-behavior-review",
+  "version": 1,
+  "snapshotVersion": "2.1.16",
+  "expectedCounts": {
+    "classes": 40,
+    "concrete": 37,
+    "abstract": 3,
+    "entityVariants": 47
+  },
+  "waves": {
+    "foundation": [
+      "LuaControlBehavior",
+      "LuaCombinatorControlBehavior",
+      "LuaGenericOnOffControlBehavior"
+    ],
+    "existing_and_selector": [
+      "LuaArithmeticCombinatorControlBehavior",
+      "LuaDeciderCombinatorControlBehavior",
+      "LuaConstantCombinatorControlBehavior",
+      "LuaSelectorCombinatorControlBehavior"
+    ],
+    "first_entity_slice": [
+      "LuaContainerControlBehavior",
+      "LuaInserterControlBehavior",
+      "LuaLampControlBehavior",
+      "LuaAssemblingMachineControlBehavior"
+    ],
+    "simple_readers": [
+      "LuaAccumulatorControlBehavior",
+      "LuaSingleFluidBoxControlBehavior",
+      "LuaHeatPipeControlBehavior",
+      "LuaReactorControlBehavior",
+      "LuaLabControlBehavior",
+      "LuaProxyContainerControlBehavior"
+    ],
+    "production_and_transport": [
+      "LuaAgriculturalTowerControlBehavior",
+      "LuaBoilerControlBehavior",
+      "LuaFurnaceControlBehavior",
+      "LuaMiningDrillControlBehavior",
+      "LuaPumpControlBehavior",
+      "LuaLoaderControlBehavior",
+      "LuaTransportBeltControlBehavior",
+      "LuaSplitterControlBehavior"
+    ],
+    "logistic_and_rail": [
+      "LuaLogisticContainerControlBehavior",
+      "LuaRoboportControlBehavior",
+      "LuaTrainStopControlBehavior",
+      "LuaRailSignalBaseControlBehavior",
+      "LuaCargoLandingPadControlBehavior"
+    ],
+    "space_combat_and_display": [
+      "LuaAsteroidCollectorControlBehavior",
+      "LuaRocketSiloControlBehavior",
+      "LuaSpacePlatformHubControlBehavior",
+      "LuaArtilleryTurretControlBehavior",
+      "LuaLandMineControlBehavior",
+      "LuaTurretControlBehavior",
+      "LuaWallControlBehavior",
+      "LuaProgrammableSpeakerControlBehavior",
+      "LuaDisplayPanelControlBehavior",
+      "LuaRadarControlBehavior"
+    ]
+  }
+}

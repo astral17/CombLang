@@ -10,9 +10,11 @@
   ],
   "scripts": {
     "build": "npm run typecheck && npm run build --workspace @comblang/cli && npm run build --workspace @comblang/web",
-    "check": "npm run format:check && npm run typecheck && npm test",
+    "check": "npm run format:check && npm run typecheck && npm run factorio-api:inventory:check && npm test",
     "cli": "npm run build --workspace @comblang/cli --silent && node apps/cli/dist/main.js",
     "dev:web": "npm run dev --workspace @comblang/web",
+    "factorio-api:inventory": "node tools/factorio-api/generate-control-behavior-inventory.mjs",
+    "factorio-api:inventory:check": "node tools/factorio-api/generate-control-behavior-inventory.mjs --check",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "vitest run",
