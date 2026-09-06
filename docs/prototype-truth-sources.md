@@ -63,6 +63,27 @@ validated captures from base, Space Age, and a modded override, and native
 conformance for the capabilities claimed. A smoke test of a supplied dump is not
 this gate. The existing observation mod still needs execution in Factorio.
 
+## Runtime structural exporter
+
+`tools/factorio-runtime-prototype-exporter` is now the separate read-only runtime
+collector for this layer. It scans `prototypes.item`, `fluid`, `recipe`, `entity`,
+`quality`, and `recipe_category`; records runtime recipe component roles and the
+resolved main product; and keeps entity tile dimensions independent from
+selection/collision boxes. Environment metadata includes the exact base version,
+complete active mod list, startup-setting outcomes, collector version, and the
+hashes of the pinned API schemas used to implement the collector.
+
+Every fact is transported as `value`, `absent`, `unknown`, or `error`. Consequently
+a failed or inapplicable getter cannot become a fabricated zero, false, or empty
+collection. `parseRuntimePrototypeCaptureJson` validates and deeply freezes this
+transport without promoting it to a normalized database. The CLI command
+`prototypes runtime-capture` exposes the same inspection boundary.
+
+The checked-in artifact is synthetic and proves the parser/transport contract
+only. The Lua collector has not yet run in Factorio, so the exporter remains
+implemented-unverified and no runtime facts have been promoted into the built-in
+profile.
+
 ## Implemented audit corrections
 
 - Persisted canonical ordering uses lexicographic UTF-16 code units, never host

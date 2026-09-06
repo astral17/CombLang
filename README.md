@@ -85,7 +85,8 @@ The current repository implements the Phase 3 source compiler, the complete Phas
     - [x] Compare observation provenance against a selected database through CLI/library: exact game/mod/setting values and entity key/type, original JSONL lines, and separate match/mismatch/unverified results. Preserve optional startup setting snapshots in database identity without trusting legacy labels as evidence.
     - [x] Preserve item recipe quality transformations and explicit quality-chain links, with type/range/reference/cycle checks and chain-based bounds validation; keep unknown legacy links distinct from explicit chain ends.
     - [x] Record the raw/runtime/behavior authority split and September 4 audit triage; correct locale-dependent identity ordering, retain empty-output recipes, reject malformed raw recipe flags/main products, and rename the coarse crafting helper to `isBasicCraftingCompatible`.
-    - [ ] Export read-only runtime `prototypes` structural facts with exact environment provenance; retain raw-only metadata separately.
+    - [x] Implement a separate read-only runtime `prototypes` structural exporter, strict capture parser, CLI inspection, exact environment/API provenance, and per-field value/absent/unknown/error outcomes. Native execution and reviewed base/Space Age/modded captures remain pending.
+    - [ ] Run and review the runtime structural exporter against base, Space Age, and a modded override; retain raw-only metadata separately.
     - [ ] Replace selection-box-derived footprints with runtime tile dimensions (or explicit raw tiles/documented collision defaults), including zero-sized and asymmetric cases.
     - [ ] Separate ingredient/product and item/fluid validation at the correct source boundary; cover zero fluid amounts, duplicate ingredients, numeric bounds, temperature rules, and real crafting constraints with unknown/evidence-aware results.
     - [ ] Derive or probe exact circuit capabilities; then lock base, Space Age, and modded-override conformance fixtures.
@@ -122,6 +123,7 @@ Later phases cover prototype profiles, typed Factorio objects, exact constructor
 - [Prototype environment](docs/prototype-environment.md) — the Phase 5.5 normalized modded-data provider, Factorio exporter, loading, and environment-identity boundary.
 - [Circuit graph metrics](docs/circuit-graph-metrics.md) — resolved NCIR dependencies, DAG depth, feedback SCCs, and unknown-latency propagation.
 - [Pinned Factorio API inputs](tools/factorio-api/README.md) — versioned local schemas, hashes, license, reviewed ControlBehavior coverage, and offline regeneration.
+- [Runtime prototype exporter](tools/factorio-runtime-prototype-exporter/README.md) — read-only Factorio capture procedure, structural scope, explicit field outcomes, and native verification status.
 - [Prototype truth sources and audit follow-up](docs/prototype-truth-sources.md) — raw/runtime/behavior authority, identity migration, and pending September 4 recommendations.
 - [Runtime debug index](docs/debug-index.md) — exact lexical scopes, physical Network/Producer mappings, deterministic queries, and current ambiguity boundary.
 - [Source-linked schematic editing](docs/source-linked-schematic.md) — planned comment descriptions, diagram-to-source navigation, and safe `.at` write-back.

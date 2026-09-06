@@ -22,6 +22,8 @@ import {
   loadPrototypeDatabaseJson,
   normalizeFactorioDataDump,
   PrototypeValidationError,
+  parseRuntimePrototypeCaptureJson,
+  RuntimePrototypeCaptureError,
   type FactorioDumpMetadata,
   type PrototypeProvider,
 } from '@comblang/prototypes';
@@ -46,6 +48,7 @@ Usage:
   factorio-dsl prototypes normalize <data-raw-dump.json> <metadata.json> <output.json>
   factorio-dsl prototypes supplement [--json] <database.json> <circuit.json> <output.json>
   factorio-dsl prototypes observations [--json] <circuit-observations.jsonl>
+  factorio-dsl prototypes runtime-capture [--json] <runtime-prototypes.json>
   factorio-dsl prototypes compare-observations [--json] <database.json> <circuit-observations.jsonl>
 
 Checks circuits, executes browser/Node-neutral JavaScript test files, and processes prototype dumps, circuit supplements, or raw observations.`;
@@ -339,6 +342,38 @@ async function inspectCircuitObservations(
   return 0;
 }
 
+async function inspectRuntimePrototypeCapture(
+  fileNames: readonly string[],
+  json: boolean,
+): Promise<number> {
+  if (fileNames.length !== 2) {
+    console.error(usage);
+    return 2;
+  }
+  const capture = parseRuntimePrototypeCaptureJson(await readFile(resolve(fileNames[1]!), 'utf8'));
+  if (json) {
+    console.log(JSON.stringify({ mode: 'runtime-prototype-capture-only', capture }, null, 2));
+    return 0;
+  }
+
+  const collections = Object.entries(capture.collections);
+  const outcomes = [
+    ...collections.flatMap(([, records]) => records.flatMap(({ facts }) => Object.values(facts))),
+    ...Object.values(capture.limits),
+    ...capture.environment.startupSettings.map(({ outcome }) => outcome),
+  ];
+  const count = (status: (typeof outcomes)[number]['status']) =>
+    outcomes.filter((outcome) => outcome.status === status).length;
+  console.log(
+    `Runtime prototype capture: Factorio ${capture.environment.factorioVersion}, collector ${capture.collectorVersion}.`,
+  );
+  console.log(collections.map(([name, records]) => `${name}=${records.length}`).join(', '));
+  console.log(
+    `Facts: ${count('value')} value, ${count('absent')} absent, ${count('unknown')} unknown, ${count('error')} error. Not normalized or behavior-verified.`,
+  );
+  return 0;
+}
+
 async function compareObservations(fileNames: readonly string[], json: boolean): Promise<number> {
   if (fileNames.length !== 3) {
     console.error(usage);
@@ -386,6 +421,7 @@ export async function run(
     if (command === 'prototypes') {
       const files = rest.filter((argument) => argument !== '--json');
       if (files[0] === 'observations') return await inspectCircuitObservations(files, json);
+      if (files[0] === 'runtime-capture') return await inspectRuntimePrototypeCapture(files, json);
       if (files[0] === 'compare-observations') return await compareObservations(files, json);
       return files[0] === 'supplement'
         ? await supplementPrototypes(files, json)
@@ -438,6 +474,7 @@ export async function run(
         code:
           error instanceof CircuitSupplementError ||
           error instanceof CircuitObservationError ||
+          error instanceof RuntimePrototypeCaptureError ||
           error instanceof PrototypeValidationError ||
           error instanceof FactorioDumpError
             ? error.code
@@ -446,6 +483,7 @@ export async function run(
         message,
         ...(error instanceof CircuitSupplementError ||
         error instanceof CircuitObservationError ||
+        error instanceof RuntimePrototypeCaptureError ||
         error instanceof PrototypeValidationError ||
         error instanceof FactorioDumpError
           ? { path: error.path }

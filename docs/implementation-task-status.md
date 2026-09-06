@@ -143,3 +143,21 @@ Status: **complete**.
 Validation: **989 tests in 91 files**, deterministic inventory check, format check, typecheck, and complete CLI/web production builds pass. The pinned raw schemas are excluded from formatter rewrites, and the existing Vite large-chunk warning remains.
 
 Next task: F10, add the read-only runtime structural exporter without conflating API schema presence with captured game facts.
+
+## F10 — Runtime structural exporter
+
+Status: **implemented; native capture gate pending**.
+
+- A dedicated Factorio mod scans runtime `prototypes` without sharing the selected-entity observation probe or inferring circuit capabilities.
+- The capture includes items, fluids, recipes, entities, qualities, recipe categories, selected global/per-entity limits, exact active mods and startup settings, collector version, and the pinned API version/hashes.
+- Runtime ingredient/product roles and resolved main-product records are preserved. Entity `tile_width`/`tile_height` are captured independently from selection and collision boxes.
+- Every fact and startup setting is an explicit `value`, `absent`, `unknown`, or `error` outcome; failed getters never become zero, false, or empty defaults.
+- A bounded `PR1001` parser validates complete artifacts, environment consistency, collection identity, nested JSON values, and outcome shapes, then deeply freezes the transport without treating it as a normalized Prototype DB.
+- `factorio-dsl prototypes runtime-capture` provides human and JSON inspection. Synthetic fixtures cover false/zero/empty preservation, runtime roles, a 2×3 tile footprint against a 10×10 selection box, errors, unknowns, malformed paths, and immutable output.
+- Static guards verify that every accessed field/method exists in the pinned 2.1.16 runtime API, embedded API hashes match F09, and the tool contains no known entity/control/settings mutation calls.
+
+Still required: install the tool in a disposable Factorio environment, produce and review a small base capture, verify explicit startup setting values, and compare native tile dimensions against the matching raw dump. Until that external run, F10 must not be labelled complete and its synthetic fixture is not native evidence.
+
+Validation: **1004 tests in 93 files**, pinned inventory check, format check, typecheck, CLI synthetic-capture smoke test, and complete CLI/web production builds pass. The existing Vite large-chunk warning remains.
+
+Next task after the native gate: F11, introduce the source-aware normalized runtime prototype model while retaining raw-only facts separately.

@@ -626,6 +626,55 @@ describe('factorio-dsl prototypes normalize', () => {
   });
 });
 
+describe('factorio-dsl prototypes runtime-capture', () => {
+  test('inspects a runtime capture without treating it as a normalized database', async () => {
+    const path = fileURLToPath(
+      new URL('../../../fixtures/runtime-prototypes/synthetic.json', import.meta.url),
+    );
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['prototypes', 'runtime-capture', '--json', path])).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      mode: 'runtime-prototype-capture-only',
+      capture: {
+        kind: 'comblang-runtime-prototype-snapshot',
+        environment: { factorioVersion: '2.1.16' },
+        collections: {
+          items: [{ key: 'item:iron-plate' }],
+          entities: [
+            {
+              key: 'entity:wide-machine',
+              facts: {
+                tileWidth: { status: 'value', value: 2 },
+                tileHeight: { status: 'value', value: 3 },
+              },
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  test('reports capture paths and PR1001 for malformed JSON', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'comblang-runtime-capture-'));
+    temporaryDirectories.push(directory);
+    const path = join(directory, 'runtime-prototypes.json');
+    await writeFile(path, '{', 'utf8');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['prototypes', 'runtime-capture', '--json', path])).toBe(2);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      diagnostics: [
+        expect.objectContaining({
+          code: 'PR1001',
+          severity: 'error',
+          path: '<json>',
+        }),
+      ],
+    });
+  });
+});
+
 describe('factorio-dsl test', () => {
   test.each(['memo', 'object'])(
     'runs the checked-in %s acceptance testbench through CLI JSON',

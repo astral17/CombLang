@@ -1,0 +1,106 @@
+{
+  "schemaVersion": 1,
+  "kind": "comblang-runtime-prototype-snapshot",
+  "collectorVersion": "0.1.0",
+  "apiReference": {
+    "applicationVersion": "2.1.16",
+    "apiVersion": 6,
+    "runtimeSha256": "1c21fc0d6c56f75aea97ef45b73e4915a361b0b0d912dbc01aad7046e9088348",
+    "prototypeSha256": "4c915eb230f9ea6e2e617d3b83e735e4cac04a45fb49414c2f677b97fba40104"
+  },
+  "environment": {
+    "factorioVersion": "2.1.16",
+    "mods": [
+      { "name": "base", "version": "2.1.16" },
+      { "name": "comblang-runtime-prototype-exporter", "version": "0.1.0" }
+    ],
+    "startupSettings": [
+      { "name": "enabled-setting", "outcome": { "status": "value", "value": false } },
+      { "name": "broken-setting", "outcome": { "status": "error", "message": "read failed" } }
+    ]
+  },
+  "collections": {
+    "items": [
+      {
+        "key": "item:iron-plate",
+        "name": "iron-plate",
+        "type": "item",
+        "facts": {
+          "stackSize": { "status": "value", "value": 100 },
+          "weight": { "status": "value", "value": 1000 },
+          "placeResult": { "status": "absent" }
+        }
+      }
+    ],
+    "fluids": [
+      {
+        "key": "fluid:water",
+        "name": "water",
+        "type": "fluid",
+        "facts": {
+          "defaultTemperature": { "status": "value", "value": 15 },
+          "maxTemperature": { "status": "value", "value": 100 }
+        }
+      }
+    ],
+    "recipes": [
+      {
+        "key": "recipe:empty-output",
+        "name": "empty-output",
+        "type": "recipe",
+        "facts": {
+          "categories": { "status": "value", "value": ["crafting"] },
+          "energy": { "status": "value", "value": 0.5 },
+          "ingredients": {
+            "status": "value",
+            "value": [{ "type": "item", "name": "iron-plate", "amount": 1 }]
+          },
+          "products": { "status": "value", "value": [] },
+          "mainProduct": { "status": "absent" }
+        }
+      }
+    ],
+    "entities": [
+      {
+        "key": "entity:wide-machine",
+        "name": "wide-machine",
+        "type": "assembling-machine",
+        "facts": {
+          "tileWidth": { "status": "value", "value": 2 },
+          "tileHeight": { "status": "value", "value": 3 },
+          "selectionBox": {
+            "status": "value",
+            "value": { "leftTop": { "x": -5, "y": -5 }, "rightBottom": { "x": 5, "y": 5 } }
+          },
+          "collisionBox": { "status": "error", "message": "unreadable" },
+          "craftingCategories": { "status": "value", "value": ["crafting"] },
+          "ingredientCount": { "status": "value", "value": 4 },
+          "fluidCapacity": { "status": "unknown", "reason": "not applicable to this prototype" }
+        }
+      }
+    ],
+    "qualities": [
+      {
+        "key": "quality:normal",
+        "name": "normal",
+        "type": "quality",
+        "facts": {
+          "level": { "status": "value", "value": 0 },
+          "next": { "status": "value", "value": "uncommon" }
+        }
+      }
+    ],
+    "recipeCategories": [
+      {
+        "key": "recipe-category:crafting",
+        "name": "crafting",
+        "type": "recipe-category",
+        "facts": {}
+      }
+    ]
+  },
+  "limits": {
+    "maxUndergroundBeltDistance": { "status": "value", "value": 11 },
+    "maxCircuitWireDistance": { "status": "unknown", "reason": "per-entity value" }
+  }
+}
