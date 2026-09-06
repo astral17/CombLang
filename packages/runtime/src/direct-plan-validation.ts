@@ -61,6 +61,109 @@ function exceedsLimit(value: readonly unknown[]): boolean {
   return value.length > 100_000;
 }
 
+const signalTypes = new Set([
+  'item',
+  'fluid',
+  'virtual',
+  'entity',
+  'recipe',
+  'space-location',
+  'asteroid-chunk',
+  'quality',
+]);
+
+const arithmeticOperations = new Set([
+  'add',
+  'subtract',
+  'multiply',
+  'divide',
+  'modulo',
+  'power',
+  'left-shift',
+  'right-shift',
+  'bit-and',
+  'bit-or',
+  'bit-xor',
+]);
+
+function isCircuitValue(value: unknown): value is number {
+  return (
+    Number.isSafeInteger(value) && Number(value) >= -2_147_483_648 && Number(value) <= 2_147_483_647
+  );
+}
+
+function isSignalId(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    typeof value.type === 'string' &&
+    signalTypes.has(value.type) &&
+    typeof value.name === 'string' &&
+    value.name.length > 0 &&
+    (value.quality === undefined || (typeof value.quality === 'string' && value.quality.length > 0))
+  );
+}
+
+function validateNetworkRef(
+  value: Record<string, unknown>,
+  path: string,
+  declarations: ReadonlyMap<string, DirectPlanNetwork>,
+  span: SourceSpan,
+): DirectPlanEnvelopeValidationResult | undefined {
+  if (value.refKind === 'single') {
+    if (typeof value.network === 'string' && declarations.has(value.network)) return undefined;
+    return failure('RT1003', `${path}: invalid or unknown input Network.`, span);
+  }
+  if (value.refKind === 'pair') {
+    const networks = value.networks;
+    if (
+      Array.isArray(networks) &&
+      networks.length === 2 &&
+      networks[0] !== networks[1] &&
+      networks.every((network) => typeof network === 'string' && declarations.has(network))
+    )
+      return undefined;
+    return failure('RT1003', `${path}: invalid or unknown input Network pair.`, span);
+  }
+  return payloadFailure(`${path}.refKind`, 'unknown Network reference tag.', span);
+}
+
+function validateArithmeticOperand(
+  value: unknown,
+  path: string,
+  declarations: ReadonlyMap<string, DirectPlanNetwork>,
+  span: SourceSpan,
+): DirectPlanEnvelopeValidationResult | undefined {
+  if (!isRecord(value)) return payloadFailure(path, 'expected an arithmetic operand.', span);
+  if (value.kind === 'constant')
+    return isCircuitValue(value.value)
+      ? undefined
+      : payloadFailure(`${path}.value`, 'expected a signed int32 circuit value.', span);
+  if (value.kind === 'signal' && !isSignalId(value.signal))
+    return payloadFailure(`${path}.signal`, 'expected a valid SignalID.', span);
+  if (value.kind !== 'signal' && value.kind !== 'each')
+    return payloadFailure(`${path}.kind`, 'unknown arithmetic operand tag.', span);
+  return validateNetworkRef(value, path, declarations, span);
+}
+
+function validateArithmeticProducer(
+  producer: Record<string, unknown>,
+  path: string,
+  declarations: ReadonlyMap<string, DirectPlanNetwork>,
+  span: SourceSpan,
+): DirectPlanEnvelopeValidationResult | undefined {
+  const left = validateArithmeticOperand(producer.left, `${path}.left`, declarations, span);
+  if (left !== undefined) return left;
+  if (typeof producer.operation !== 'string' || !arithmeticOperations.has(producer.operation))
+    return payloadFailure(`${path}.operation`, 'unknown arithmetic operation.', span);
+  const right = validateArithmeticOperand(producer.right, `${path}.right`, declarations, span);
+  if (right !== undefined) return right;
+  if (!isRecord(producer.output))
+    return payloadFailure(`${path}.output`, 'expected an arithmetic output.', span);
+  if (producer.output.kind === 'each') return undefined;
+  if (producer.output.kind === 'signal' && isSignalId(producer.output.signal)) return undefined;
+  return payloadFailure(`${path}.output`, 'invalid arithmetic output.', span);
+}
+
 /** Validates the versioned transport envelope before any runtime graph is allocated. */
 export function validateDirectPlanEnvelope(plan: unknown): DirectPlanEnvelopeValidationResult {
   if (!isRecord(plan) || plan.format !== 'comblang-direct-plan' || plan.version !== 2)
@@ -178,6 +281,15 @@ export function validateDirectPlanEnvelope(plan: unknown): DirectPlanEnvelopeVal
           `${destinationPath}: invalid attachment destination.`,
           descriptorSpan(destination, 'source'),
         );
+    }
+    if (producer.kind === 'arithmetic') {
+      const invalid = validateArithmeticProducer(
+        producer,
+        path,
+        declarations,
+        producer.source as SourceSpan,
+      );
+      if (invalid !== undefined) return invalid;
     }
   }
 

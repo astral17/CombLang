@@ -83,9 +83,10 @@ Completed ingress foundation:
 - Producer entries must be objects with known tags, valid provenance, instance paths, and attachment arrays.
 - Transfer and pair descriptors validate shape, provenance, paths, cardinality, distinctness, and referenced Network names.
 - Attachment references are rejected as `RT1004` at ingress rather than reaching partial runtime allocation.
+- Arithmetic producers now validate both operand unions, signed-int32 constants, SignalIDs, operations, output unions, and single/pair input Network references before replay. Unknown inputs retain `RT1003`; malformed fields identify their JSON path.
 - New malformed-payload diagnostics include JSON-style paths such as `$.producers[0].destinations[0]`.
-- Regression coverage includes `producers: [null]`, an unknown Producer tag, a malformed pair, and an unknown attachment Network.
+- Regression coverage includes `producers: [null]`, an unknown Producer tag, a malformed pair, an unknown attachment Network, and malformed arithmetic operands/operations/outputs.
 
-Validation: **923 tests in 87 files**, format check, and typecheck pass.
+Validation: **942 tests in 87 files**, format check, and typecheck pass.
 
-Still required to complete F06: canonical frozen reconstruction without the remaining plan cast; exhaustive nested arithmetic/condition/output/debug/diagnostic validation with depth limits; `output`/`outputs` normalization; and making replay consume only the canonical result.
+Still required to complete F06: canonical frozen reconstruction without the remaining plan cast; exhaustive condition/output/constant/debug/diagnostic validation with depth limits; `output`/`outputs` normalization; and making replay consume only the canonical result.

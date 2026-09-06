@@ -104,4 +104,113 @@ describe('direct plan envelope validation', () => {
       message: expect.stringContaining(path),
     });
   });
+
+  test('accepts a complete arithmetic producer with single and pair inputs', () => {
+    const plan = {
+      format: 'comblang-direct-plan',
+      version: 2,
+      networks: [
+        { name: 'a', source: span, instancePath: [] },
+        { name: 'b', source: span, instancePath: [] },
+        { name: 'out', source: span, instancePath: [] },
+      ],
+      producers: [
+        {
+          kind: 'arithmetic',
+          left: {
+            kind: 'signal',
+            signal: { type: 'virtual', name: 'signal-A' },
+            refKind: 'single',
+            network: 'a',
+          },
+          operation: 'add',
+          right: { kind: 'each', refKind: 'pair', networks: ['a', 'b'] },
+          output: { kind: 'each' },
+          destinations: [{ network: 'out', source: span, instancePath: [] }],
+          source: span,
+          instancePath: [],
+        },
+      ],
+    };
+
+    expect(validateDirectPlanEnvelope(plan).diagnostics).toEqual([]);
+  });
+
+  test.each([
+    {
+      name: 'unknown arithmetic operation',
+      mutate: (producer: Record<string, unknown>) => (producer.operation = 'rotate'),
+      path: '$.producers[0].operation',
+      code: 'RT1001',
+    },
+    {
+      name: 'fractional circuit constant',
+      mutate: (producer: Record<string, unknown>) =>
+        (producer.left = { kind: 'constant', value: 1.5 }),
+      path: '$.producers[0].left.value',
+      code: 'RT1001',
+    },
+    {
+      name: 'malformed SignalID',
+      mutate: (producer: Record<string, unknown>) =>
+        (producer.left = {
+          kind: 'signal',
+          signal: { type: 'unknown', name: 'signal-A' },
+          refKind: 'single',
+          network: 'input',
+        }),
+      path: '$.producers[0].left.signal',
+      code: 'RT1001',
+    },
+    {
+      name: 'unknown input Network',
+      mutate: (producer: Record<string, unknown>) =>
+        (producer.left = { kind: 'each', refKind: 'single', network: 'missing' }),
+      path: '$.producers[0].left',
+      code: 'RT1003',
+    },
+    {
+      name: 'collapsed input pair',
+      mutate: (producer: Record<string, unknown>) =>
+        (producer.right = {
+          kind: 'each',
+          refKind: 'pair',
+          networks: ['input', 'input'],
+        }),
+      path: '$.producers[0].right',
+      code: 'RT1003',
+    },
+    {
+      name: 'malformed arithmetic output',
+      mutate: (producer: Record<string, unknown>) =>
+        (producer.output = { kind: 'signal', signal: { type: 'virtual', name: '' } }),
+      path: '$.producers[0].output',
+      code: 'RT1001',
+    },
+  ])('rejects $name before replay', ({ mutate, path, code }) => {
+    const producer: Record<string, unknown> = {
+      kind: 'arithmetic',
+      left: { kind: 'each', refKind: 'single', network: 'input' },
+      operation: 'add',
+      right: { kind: 'constant', value: 1 },
+      output: { kind: 'each' },
+      destinations: [{ network: 'output', source: span, instancePath: [] }],
+      source: span,
+      instancePath: [],
+    };
+    mutate(producer);
+    const plan = {
+      format: 'comblang-direct-plan',
+      version: 2,
+      networks: [
+        { name: 'input', source: span, instancePath: [] },
+        { name: 'output', source: span, instancePath: [] },
+      ],
+      producers: [producer],
+    };
+
+    expect(validateDirectPlanEnvelope(plan).diagnostics).toMatchObject([
+      { code, message: expect.stringContaining(path) },
+    ]);
+  });
 });
