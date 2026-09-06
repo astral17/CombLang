@@ -181,9 +181,14 @@ Unknown extension fields are tolerated so compatible exporters may add data
 without changing the v1 consumer contract.
 
 Recipe metadata validation uses `PT1001` for invalid independent/shared probability
-ranges or excluded amounts, and `PT1004` for product-only metadata on ingredients
-or mixed legacy/new probability forms. Missing fields are not silently filled with
-numeric defaults; explicit zeros remain present in the normalized identity.
+ranges, excluded amounts, and canonical amount shape/domain failures. Ingredients
+require one exact amount; products require either an exact amount or a complete
+range. Item ingredients and products use their documented integer domains, fluid
+ingredients must be positive, and fluid products may be zero. Normalized descending
+ranges are rejected at `amountMax`; the raw converter applies Factorio's documented
+product fallback and emits the effective `amountMax = amountMin`. Missing fields are
+not silently filled with numeric defaults; explicit zeros remain present in the
+normalized identity.
 
 Spoilage and fluidbox fields also use `PT1001` for malformed values or bounds
 (`percentSpoiled` in `[0, 1)`, `spoilWeight` in `[0, 1]`, uint32 routing indexes,
@@ -200,8 +205,10 @@ are retained rather than skipped. `PD2002` reports capability data that the nati
 dump cannot prove. `PD2003` reports a known raw recipe-component field retained by
 `data.raw` but inapplicable to its normalized item/fluid and ingredient/product
 role; the converter omits that field and preserves its exact snake_case path in the
-warning. Conversion warnings are explicit coverage or omission notices; they do
-not make the normalized v1 subset invalid.
+warning. Applicable malformed amount values fail as `PD1001` at their raw
+snake_case amount path; incomplete product amount forms do the same. Conversion
+warnings are explicit coverage or omission notices; they do not make the normalized
+v1 subset invalid.
 
 Recipe quality transforms use `PT1001` for invalid booleans/int8 shifts, `PT1002`
 for malformed canonical quality keys, and `PT1004` for wrong component roles/types,

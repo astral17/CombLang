@@ -251,7 +251,7 @@ describe('PrototypeDatabase v1', () => {
     const olderJson = JSON.stringify(older);
     const loadedOlder = await loadPrototypeDatabase(JSON.parse(olderJson));
     const newer = mutableFixture();
-    newer.environment.generatorVersion = 'comblang-factorio-data-dump-v1.7';
+    newer.environment.generatorVersion = 'comblang-factorio-data-dump-v1.8';
     const loadedNewer = await loadPrototypeDatabase(newer);
 
     expect(loadedOlder.database.environment.generatorVersion).toBe('fixture-v1');

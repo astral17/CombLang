@@ -470,11 +470,228 @@ describe('Factorio data-raw-dump normalizer', () => {
     );
   });
 
+  test.each([
+    {
+      title: 'zero item product',
+      recipe: 'iron-plate',
+      role: 'results',
+      component: { type: 'item', name: 'iron-plate', amount: 0 },
+      expected: { prototype: 'item:iron-plate', amount: 0 },
+    },
+    {
+      title: 'zero fluid product',
+      recipe: 'heated-water',
+      role: 'results',
+      component: { type: 'fluid', name: 'water', amount: 0 },
+      expected: { prototype: 'fluid:water', amount: 0 },
+    },
+    {
+      title: 'zero to uint16 item product range',
+      recipe: 'iron-plate',
+      role: 'results',
+      component: { type: 'item', name: 'iron-plate', amount_min: 0, amount_max: 65535 },
+      expected: { prototype: 'item:iron-plate', amountMin: 0, amountMax: 65535 },
+    },
+    {
+      title: 'zero fluid product range',
+      recipe: 'heated-water',
+      role: 'results',
+      component: { type: 'fluid', name: 'water', amount_min: 0, amount_max: 0 },
+      expected: { prototype: 'fluid:water', amountMin: 0, amountMax: 0 },
+    },
+  ] as const)('accepts raw amount boundary: $title', (caseData) => {
+    const dump = dumpFixture() as {
+      recipe: Record<string, { ingredients: unknown; results: unknown }>;
+    };
+    dump.recipe[caseData.recipe]![caseData.role] = [caseData.component];
+    const normalized = normalizeFactorioDataDump(dump, metadata);
+    const recipe = normalized.database.recipes.find(({ name }) => name === caseData.recipe)!;
+    expect(recipe.products[0]).toMatchObject(caseData.expected);
+  });
+
+  test('accepts a positive fluid ingredient but rejects a zero fluid ingredient at its raw path', () => {
+    const dump = dumpFixture() as {
+      recipe: Record<string, { ingredients: unknown; results: unknown }>;
+    };
+    dump.recipe['heated-water']!.ingredients = [{ type: 'fluid', name: 'water', amount: 0 }];
+    expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
+      expect.objectContaining({
+        code: 'PD1001',
+        path: 'recipe.heated-water.ingredients[0].amount',
+      }),
+    );
+    dump.recipe['heated-water']!.ingredients = [{ type: 'fluid', name: 'water', amount: 0.25 }];
+    expect(
+      normalizeFactorioDataDump(dump, metadata).database.recipes.find(
+        ({ name }) => name === 'heated-water',
+      )?.ingredients,
+    ).toEqual([{ prototype: 'fluid:water', amount: 0.25 }]);
+  });
+
+  test.each([
+    [
+      'item fractional exact amount',
+      'iron-plate',
+      'results',
+      { type: 'item', name: 'iron-plate', amount: 1.5 },
+      'amount',
+    ],
+    [
+      'item overflowing exact amount',
+      'iron-plate',
+      'results',
+      { type: 'item', name: 'iron-plate', amount: 65536 },
+      'amount',
+    ],
+    [
+      'item fractional range minimum',
+      'iron-plate',
+      'results',
+      { type: 'item', name: 'iron-plate', amount_min: 1.5, amount_max: 2 },
+      'amount_min',
+    ],
+    [
+      'item overflowing range maximum',
+      'iron-plate',
+      'results',
+      { type: 'item', name: 'iron-plate', amount_min: 1, amount_max: 65536 },
+      'amount_max',
+    ],
+    [
+      'fluid negative exact amount',
+      'heated-water',
+      'results',
+      { type: 'fluid', name: 'water', amount: -0.1 },
+      'amount',
+    ],
+    [
+      'fluid negative range minimum',
+      'heated-water',
+      'results',
+      { type: 'fluid', name: 'water', amount_min: -1, amount_max: 2 },
+      'amount_min',
+    ],
+  ] as const)('rejects invalid raw amount: %s', (title, recipeName, role, component, field) => {
+    const dump = dumpFixture() as {
+      recipe: Record<string, { ingredients: unknown; results: unknown }>;
+    };
+    dump.recipe[recipeName]![role] = [component];
+    expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
+      expect.objectContaining({
+        code: 'PD1001',
+        path: `recipe.${recipeName}.${role}[0].${field}`,
+      }),
+    );
+  });
+
+  test.each([
+    ['missing range maximum', { type: 'item', name: 'iron-plate', amount_min: 1 }, 'amount_max'],
+    ['missing range minimum', { type: 'fluid', name: 'water', amount_max: 2 }, 'amount_min'],
+    [
+      'exact plus range',
+      { type: 'item', name: 'iron-plate', amount: 1, amount_min: 1, amount_max: 2 },
+      'amount',
+    ],
+  ] as const)('rejects malformed raw amount shape: %s', (title, component, field) => {
+    const dump = dumpFixture() as {
+      recipe: Record<string, { results: unknown }>;
+    };
+    dump.recipe['iron-plate']!.results = [component];
+    expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
+      expect.objectContaining({
+        code: 'PD1001',
+        path: `recipe.iron-plate.results[0].${field}`,
+      }),
+    );
+  });
+
+  test.each([
+    [
+      'descending item product range',
+      'iron-plate',
+      { type: 'item', name: 'iron-plate', amount_min: 4, amount_max: 2 },
+      { amountMin: 4, amountMax: 4 },
+    ],
+    [
+      'descending fluid product range',
+      'heated-water',
+      { type: 'fluid', name: 'water', amount_min: 4, amount_max: 2 },
+      { amountMin: 4, amountMax: 4 },
+    ],
+  ] as const)(
+    'normalizes the documented raw descending range: %s',
+    (title, recipeName, component, expected) => {
+      const dump = dumpFixture() as {
+        recipe: Record<string, { results: unknown }>;
+      };
+      dump.recipe[recipeName]!.results = [component];
+      const recipe = normalizeFactorioDataDump(dump, metadata).database.recipes.find(
+        ({ name }) => name === recipeName,
+      )!;
+      expect(recipe.products[0]).toMatchObject({
+        prototype: component.type + ':' + component.name,
+        ...expected,
+      });
+    },
+  );
+
+  test('retains duplicate ingredient and product rows through JSON, provider, indexes, and identity', async () => {
+    const dump = dumpFixture() as {
+      recipe: Record<string, { ingredients: unknown; results: unknown }>;
+    };
+    dump.recipe['iron-plate']!.ingredients = [
+      { type: 'item', name: 'grenade', amount: 1 },
+      { type: 'item', name: 'grenade', amount: 1 },
+    ];
+    dump.recipe['iron-plate']!.results = [
+      { type: 'item', name: 'iron-plate', amount: 1 },
+      { type: 'item', name: 'iron-plate', amount: 1 },
+      { type: 'fluid', name: 'water', amount: 0 },
+    ];
+
+    const normalized = normalizeFactorioDataDump(dump, metadata).database;
+    const loaded = await loadPrototypeDatabase(JSON.parse(JSON.stringify(normalized)));
+    const recipe = loaded.prototypes.recipe['iron-plate']!;
+    expect(recipe.ingredients).toEqual([
+      { prototype: 'item:grenade', amount: 1 },
+      { prototype: 'item:grenade', amount: 1 },
+    ]);
+    expect(recipe.products).toEqual([
+      { prototype: 'item:iron-plate', amount: 1 },
+      { prototype: 'item:iron-plate', amount: 1 },
+      { prototype: 'fluid:water', amount: 0 },
+    ]);
+    expect(loaded.prototypes.recipesProducing('item:iron-plate')).toEqual([
+      expect.objectContaining({ key: 'recipe:iron-plate' }),
+    ]);
+    expect(loaded.prototypes.recipesProducing('fluid:water').map(({ key }) => key)).toEqual([
+      'recipe:heated-water',
+      'recipe:iron-plate',
+    ]);
+
+    const reorderedDump = dumpFixture() as {
+      recipe: Record<string, { ingredients: unknown; results: unknown }>;
+    };
+    reorderedDump.recipe['iron-plate']!.ingredients = [
+      { type: 'item', name: 'grenade', amount: 1 },
+      { type: 'item', name: 'grenade', amount: 2 },
+    ];
+    reorderedDump.recipe['iron-plate']!.results = [
+      { type: 'fluid', name: 'water', amount: 0 },
+      { type: 'item', name: 'iron-plate', amount: 1 },
+      { type: 'item', name: 'iron-plate', amount: 1 },
+    ];
+    const reordered = await loadPrototypeDatabase(
+      JSON.parse(JSON.stringify(normalizeFactorioDataDump(reorderedDump, metadata).database)),
+    );
+    expect(reordered.prototypes.identity).not.toBe(loaded.prototypes.identity);
+  });
+
   test('normalizes defaults, item subtypes, categories, temperature, and entities', async () => {
     const normalized = normalizeFactorioDataDump(dumpFixture(), metadata);
     const { database, prototypes } = await loadPrototypeDatabase(normalized.database);
 
-    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.7');
+    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.8');
     expect(prototypes.item.grenade?.stackSize).toBe(100);
     expect(prototypes.recipe['iron-plate']).toMatchObject({
       categories: ['crafting'],

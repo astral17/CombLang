@@ -16,6 +16,8 @@ import {
   type QualityPrototypeKey,
   type RecipeCategoryPrototype,
   type RecipeComponent,
+  type RecipeIngredient,
+  type RecipeProduct,
   type RecipePrototype,
   type RecipePrototypeKey,
   type VirtualSignalPrototype,
@@ -26,6 +28,7 @@ import {
   recipeComponentApplicabilityIssues,
   type RecipeComponentKind,
 } from './recipe-component-policy.js';
+import { evaluateRecipeAmount } from './recipe-amount-policy.js';
 
 export class PrototypeValidationError extends Error {
   readonly code: string;
@@ -273,6 +276,8 @@ function qualityKey(value: unknown, path: string): QualityPrototypeKey {
   return key as QualityPrototypeKey;
 }
 
+function parseComponent(value: unknown, path: string, role: 'ingredient'): RecipeIngredient;
+function parseComponent(value: unknown, path: string, role: 'product'): RecipeProduct;
 function parseComponent(
   value: unknown,
   path: string,
@@ -291,12 +296,6 @@ function parseComponent(
   const amountMin = optionalFinite(input.amountMin, `${path}.amountMin`);
   const amountMax = optionalFinite(input.amountMax, `${path}.amountMax`);
   const extraCountFraction = optionalFinite(input.extraCountFraction, `${path}.extraCountFraction`);
-  if ((amount === undefined) === (amountMin === undefined && amountMax === undefined)) {
-    invalid('PT1001', path, 'expected either amount or an amountMin/amountMax range.');
-  }
-  if ((amountMin === undefined) !== (amountMax === undefined)) {
-    invalid('PT1001', path, 'amountMin and amountMax must be provided together.');
-  }
   if (extraCountFraction !== undefined && (extraCountFraction < 0 || extraCountFraction >= 1)) {
     invalid(
       'PT1001',
@@ -304,16 +303,18 @@ function parseComponent(
       'expected a value from 0 up to, but not including, 1.',
     );
   }
-  if (
-    amount !== undefined &&
-    (amount < 0 || (amount === 0 && (extraCountFraction === undefined || extraCountFraction === 0)))
-  ) {
-    invalid('PT1001', `${path}.amount`, 'must be positive unless extraCountFraction is positive.');
-  }
-  if (amountMin !== undefined && amountMax !== undefined) {
-    if (amountMin <= 0 || amountMax <= 0 || amountMin > amountMax) {
-      invalid('PT1001', path, 'expected a positive amount range with amountMin <= amountMax.');
-    }
+  const amountPolicy = evaluateRecipeAmount(
+    {
+      ...(amount === undefined ? {} : { amount }),
+      ...(amountMin === undefined ? {} : { amountMin }),
+      ...(amountMax === undefined ? {} : { amountMax }),
+      ...(extraCountFraction === undefined ? {} : { extraCountFraction }),
+    },
+    role,
+    kind,
+  );
+  for (const issue of amountPolicy.issues) {
+    invalid('PT1001', `${path}.${issue.field}`, issue.message);
   }
   const probability = optionalFinite(input.probability, `${path}.probability`);
   if (probability !== undefined && (probability < 0 || probability > 1)) {
@@ -440,7 +441,7 @@ function parseComponent(
     ...(temperature === undefined ? {} : { temperature }),
     ...(temperatureMin === undefined ? {} : { temperatureMin }),
     ...(temperatureMax === undefined ? {} : { temperatureMax }),
-  });
+  }) as RecipeComponent;
 }
 
 function boundedInteger(value: unknown, path: string, min: number, max: number): number {

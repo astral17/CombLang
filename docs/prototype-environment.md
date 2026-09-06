@@ -56,7 +56,19 @@ Every prototype carries a canonical namespaced key such as
 prototype arrays, expansions, mods, categories, qualities, and generated
 indexes have deterministic ordering. Recipe ingredient/product order remains
 part of the normalized content; repeated products do not duplicate a recipe in
-the `recipesByProduct` index.
+the `recipesByProduct` index. TypeScript exposes ingredients and products as
+precise item/fluid unions: the canonical `prototype` key is the kind
+discriminant, while the containing array is the role discriminant. These
+discriminants are not serialized as duplicate `role`/`kind` properties.
+
+Normalized ingredients require an exact amount: item ingredients use integer
+amounts `1..65535`, while fluid ingredients use finite positive amounts.
+Products use either an exact amount or a complete range; item product values are
+integers in `0..65535`, fluid product values are finite and non-negative. Thus
+zero item/fluid products are valid, but zero ingredients are not. Normalized
+ranges must be ascending, and `extraCountFraction` never substitutes for a
+missing or invalid amount. Raw product ranges follow Factorio's documented
+descending-range fallback by emitting the effective `amountMax = amountMin`.
 
 `validatePrototypeDatabase()` accepts untrusted JSON-shaped values, ignores
 unknown extension fields, copies and freezes accepted data, and rejects:
@@ -144,7 +156,7 @@ Generator `comblang-factorio-data-dump-v1.4` also retains item recipe quality
 metadata and quality-chain links. The supplied dump has six quality records and
 four explicit `next` links, but no explicit recipe quality transformations; tests
 for those transformations use synthetic inputs. This is not an exhaustive native
-RecipePrototype implementation. Generator `comblang-factorio-data-dump-v1.7`
+RecipePrototype implementation. Generator `comblang-factorio-data-dump-v1.8`
 retains all 662 recipes in the same supplied dump, including 11 empty-output
 recipes; only the circuit-capability warning remains in that smoke run. Explicit
 malformed values of applicable recipe fields, recipe booleans, or invalid/ambiguous
@@ -152,7 +164,10 @@ raw main-product names fail with `PD1001` at their raw field path. A known raw
 recipe field that is inapplicable to its item/fluid and ingredient/product role is
 omitted from normalized facts and emits `PD2003` at the raw snake_case field path;
 this is an omission warning, not native behavior evidence. Lack of loss warnings
-does not establish complete recipe behavior coverage. For entity footprint, v1.7 uses explicit
+does not establish complete recipe behavior coverage. Applicable malformed amount
+values and incomplete/conflicting amount forms fail with `PD1001` at their raw
+snake_case paths. A descending raw product range is normalized to the effective
+`amountMax = amountMin` documented by Factorio. For entity footprint, v1.8 uses explicit
 `tile_width` and `tile_height` per axis, falling back to collision-box dimensions
 as specified by the prototype API; it never substitutes the selection box.
 

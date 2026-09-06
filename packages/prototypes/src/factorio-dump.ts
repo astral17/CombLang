@@ -5,6 +5,8 @@ import type {
   PrototypeMod,
   PrototypeStartupSetting,
   RecipeComponent,
+  RecipeIngredient,
+  RecipeProduct,
   RecipePrototype,
 } from './schema.js';
 import {
@@ -13,6 +15,7 @@ import {
   type RecipeComponentKind,
   type RecipeComponentRole,
 } from './recipe-component-policy.js';
+import { evaluateRecipeAmount } from './recipe-amount-policy.js';
 import { buildPrototypeIndexes, validatePrototypeDatabase } from './validation.js';
 
 type JsonObject = Record<string, unknown>;
@@ -136,6 +139,18 @@ const rawFieldNames: Readonly<Record<RecipeComponentField, string>> = {
 function recipeComponent(
   value: JsonObject,
   path: string,
+  role: 'ingredient',
+  warnings: FactorioDumpWarning[],
+): RecipeIngredient;
+function recipeComponent(
+  value: JsonObject,
+  path: string,
+  role: 'product',
+  warnings: FactorioDumpWarning[],
+): RecipeProduct;
+function recipeComponent(
+  value: JsonObject,
+  path: string,
   role: RecipeComponentRole,
   warnings: FactorioDumpWarning[],
 ): RecipeComponent {
@@ -232,11 +247,26 @@ function recipeComponent(
   const temperatureMax = project('temperatureMax')
     ? optionalFinite(value.maximum_temperature, `${path}.maximum_temperature`)
     : undefined;
-  return {
+  const amountPolicy = evaluateRecipeAmount(
+    {
+      ...(amount === undefined ? {} : { amount }),
+      ...(amountMin === undefined ? {} : { amountMin }),
+      ...(amountMax === undefined ? {} : { amountMax }),
+      ...(extraCountFraction === undefined ? {} : { extraCountFraction }),
+    },
+    role,
+    kind,
+    { allowDescendingProductRange: true },
+  );
+  for (const issue of amountPolicy.issues) {
+    throw new FactorioDumpError(`${path}.${rawFieldNames[issue.field]}`, issue.message);
+  }
+  const effectiveAmount = amountPolicy.effective;
+  return Object.freeze({
     prototype: `${type}:${nonEmptyString(value.name, `${path}.name`)}`,
-    ...(amount === undefined ? {} : { amount }),
-    ...(amountMin === undefined ? {} : { amountMin }),
-    ...(amountMax === undefined ? {} : { amountMax }),
+    ...(effectiveAmount.amount === undefined ? {} : { amount: effectiveAmount.amount }),
+    ...(effectiveAmount.amountMin === undefined ? {} : { amountMin: effectiveAmount.amountMin }),
+    ...(effectiveAmount.amountMax === undefined ? {} : { amountMax: effectiveAmount.amountMax }),
     ...(extraCountFraction === undefined ? {} : { extraCountFraction }),
     ...(probability === undefined ? {} : { probability }),
     ...(independentProbability === undefined ? {} : { independentProbability }),
@@ -257,7 +287,7 @@ function recipeComponent(
     ...(temperature === undefined ? {} : { temperature }),
     ...(temperatureMin === undefined ? {} : { temperatureMin }),
     ...(temperatureMax === undefined ? {} : { temperatureMax }),
-  };
+  }) as RecipeComponent;
 }
 
 function explicitTileDimension(value: unknown, path: string): number | undefined {
@@ -458,7 +488,7 @@ export function normalizeFactorioDataDump(
 
   const environment: PrototypeEnvironment = {
     ...metadata,
-    generatorVersion: 'comblang-factorio-data-dump-v1.7',
+    generatorVersion: 'comblang-factorio-data-dump-v1.8',
   };
   const candidate = {
     schemaVersion: 1,

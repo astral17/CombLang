@@ -21,6 +21,126 @@ function fixture(
   return value;
 }
 
+function editedComponentFixture(
+  role: 'products' | 'ingredients',
+  recipeName: string,
+  edit: (component: Record<string, unknown>) => void,
+) {
+  const value = syntheticPrototypeDatabase() as {
+    recipes: {
+      name: string;
+      ingredients: Record<string, unknown>[];
+      products: Record<string, unknown>[];
+    }[];
+  };
+  const recipe = value.recipes.find(({ name }) => name === recipeName)!;
+  edit(recipe[role][0]!);
+  return value;
+}
+
+describe('recipe amount validation', () => {
+  test('validates item and fluid ingredient domains', () => {
+    expect(() => validatePrototypeDatabase(fixture({ amount: 1 }, 'ingredients'))).not.toThrow();
+    expect(() =>
+      validatePrototypeDatabase(fixture({ amount: 65535 }, 'ingredients')),
+    ).not.toThrow();
+    expect(() => validatePrototypeDatabase(fixture({ amount: 0 }, 'ingredients'))).toThrowError(
+      expect.objectContaining({ code: 'PT1001', path: expect.stringContaining('.amount') }),
+    );
+    expect(() =>
+      validatePrototypeDatabase(fixture({ amount: 0 }, 'ingredients', 'water-cycle')),
+    ).toThrowError(
+      expect.objectContaining({ code: 'PT1001', path: expect.stringContaining('.amount') }),
+    );
+    expect(() =>
+      validatePrototypeDatabase(fixture({ amount: 0.25 }, 'ingredients', 'water-cycle')),
+    ).not.toThrow();
+  });
+
+  test('validates item and fluid product zero and uint16 boundaries', () => {
+    expect(() => validatePrototypeDatabase(fixture({ amount: 0 }))).not.toThrow();
+    expect(() => validatePrototypeDatabase(fixture({ amount: 65535 }))).not.toThrow();
+    for (const amount of [65536, 1.5]) {
+      expect(() => validatePrototypeDatabase(fixture({ amount }, 'products'))).toThrowError(
+        expect.objectContaining({ code: 'PT1001', path: expect.stringContaining('.amount') }),
+      );
+    }
+    expect(() =>
+      validatePrototypeDatabase(fixture({ amount: 0 }, 'products', 'water-cycle')),
+    ).not.toThrow();
+    expect(() =>
+      validatePrototypeDatabase(fixture({ amount: 0.25 }, 'products', 'water-cycle')),
+    ).not.toThrow();
+  });
+
+  test('requires complete product amount forms and rejects exact/range conflicts', () => {
+    expect(() =>
+      validatePrototypeDatabase(
+        editedComponentFixture('products', 'iron-gear-wheel', (component) => {
+          delete component.amount;
+        }),
+      ),
+    ).toThrowError(
+      expect.objectContaining({ code: 'PT1001', path: expect.stringContaining('.amount') }),
+    );
+    expect(() =>
+      validatePrototypeDatabase(
+        editedComponentFixture('products', 'iron-gear-wheel', (component) => {
+          delete component.amount;
+          component.amountMin = 1;
+        }),
+      ),
+    ).toThrowError(
+      expect.objectContaining({ code: 'PT1001', path: expect.stringContaining('.amountMax') }),
+    );
+    expect(() =>
+      validatePrototypeDatabase(
+        editedComponentFixture('products', 'iron-gear-wheel', (component) => {
+          component.amountMin = 1;
+          component.amountMax = 2;
+        }),
+      ),
+    ).toThrowError(
+      expect.objectContaining({ code: 'PT1001', path: expect.stringContaining('.amount') }),
+    );
+    expect(() =>
+      validatePrototypeDatabase(
+        editedComponentFixture('products', 'iron-gear-wheel', (component) => {
+          delete component.amount;
+          component.extraCountFraction = 0.5;
+        }),
+      ),
+    ).toThrowError(
+      expect.objectContaining({ code: 'PT1001', path: expect.stringContaining('.amount') }),
+    );
+  });
+
+  test('rejects ranges on ingredients and descending normalized product ranges', () => {
+    expect(() =>
+      validatePrototypeDatabase(
+        editedComponentFixture('ingredients', 'iron-gear-wheel', (component) => {
+          delete component.amount;
+          component.amountMin = 1;
+          component.amountMax = 2;
+        }),
+      ),
+    ).toThrowError(
+      expect.objectContaining({ code: 'PT1004', path: expect.stringContaining('.amountMin') }),
+    );
+    expect(() =>
+      validatePrototypeDatabase(
+        editedComponentFixture('products', 'modded-gear-wheel', (component) => {
+          delete component.amount;
+          component.amountMin = 2;
+          component.amountMax = 1;
+        }),
+      ),
+    ).toThrowError(
+      expect.objectContaining({ code: 'PT1001', path: expect.stringContaining('.amountMax') }),
+    );
+  });
+});
+
 describe('recipe product metadata', () => {
   test.each([
     { independentProbability: -0.1 },

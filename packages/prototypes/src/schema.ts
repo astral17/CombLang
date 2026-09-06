@@ -66,8 +66,7 @@ export interface FluidPrototype {
   readonly name: string;
 }
 
-export interface RecipeComponent {
-  readonly prototype: ProductPrototypeKey;
+interface RecipeComponentFieldShape {
   readonly amount?: number;
   readonly amountMin?: number;
   readonly amountMax?: number;
@@ -98,13 +97,85 @@ export interface RecipeComponent {
   readonly temperatureMax?: number;
 }
 
+export type ItemRecipeIngredient = RecipeComponentFieldShape & {
+  readonly prototype: ItemPrototypeKey;
+  readonly amount: number;
+  readonly amountMin?: never;
+  readonly amountMax?: never;
+  readonly extraCountFraction?: never;
+  readonly probability?: never;
+  readonly independentProbability?: never;
+  readonly sharedProbability?: never;
+  readonly ignoredByProductivity?: never;
+  readonly affectedByQuality?: never;
+  readonly percentSpoiled?: never;
+  readonly alwaysFresh?: never;
+  readonly resetFreshnessOnCraft?: never;
+  readonly fluidboxIndex?: never;
+  readonly fluidboxMultiplier?: never;
+  readonly optionalFluidboxIndexes?: never;
+  readonly temperature?: never;
+  readonly temperatureMin?: never;
+  readonly temperatureMax?: never;
+};
+
+export type FluidRecipeIngredient = RecipeComponentFieldShape & {
+  readonly prototype: FluidPrototypeKey;
+  readonly amount: number;
+  readonly amountMin?: never;
+  readonly amountMax?: never;
+  readonly extraCountFraction?: never;
+  readonly probability?: never;
+  readonly independentProbability?: never;
+  readonly sharedProbability?: never;
+  readonly ignoredByProductivity?: never;
+  readonly affectedByQuality?: never;
+  readonly qualityChange?: never;
+  readonly qualityMin?: never;
+  readonly qualityMax?: never;
+  readonly percentSpoiled?: never;
+  readonly alwaysFresh?: never;
+  readonly resetFreshnessOnCraft?: never;
+  readonly spoilWeight?: never;
+};
+
+export type ItemRecipeProduct = RecipeComponentFieldShape & {
+  readonly prototype: ItemPrototypeKey;
+  readonly spoilWeight?: never;
+  readonly fluidboxIndex?: never;
+  readonly fluidboxMultiplier?: never;
+  readonly optionalFluidboxIndexes?: never;
+  readonly temperature?: never;
+  readonly temperatureMin?: never;
+  readonly temperatureMax?: never;
+};
+
+export type FluidRecipeProduct = RecipeComponentFieldShape & {
+  readonly prototype: FluidPrototypeKey;
+  readonly extraCountFraction?: never;
+  readonly affectedByQuality?: never;
+  readonly qualityChange?: never;
+  readonly qualityMin?: never;
+  readonly qualityMax?: never;
+  readonly percentSpoiled?: never;
+  readonly alwaysFresh?: never;
+  readonly resetFreshnessOnCraft?: never;
+  readonly spoilWeight?: never;
+  readonly temperatureMin?: never;
+  readonly temperatureMax?: never;
+};
+
+export type RecipeIngredient = ItemRecipeIngredient | FluidRecipeIngredient;
+export type RecipeProduct = ItemRecipeProduct | FluidRecipeProduct;
+export type RecipeComponent = RecipeIngredient | RecipeProduct;
+
 export interface RecipePrototype {
   readonly key: RecipePrototypeKey;
   readonly name: string;
   readonly categories: readonly string[];
   readonly energy: number;
-  readonly ingredients: readonly RecipeComponent[];
-  readonly products: readonly RecipeComponent[];
+  readonly ingredients: readonly RecipeIngredient[];
+  readonly products: readonly RecipeProduct[];
   readonly mainProduct?: ProductPrototypeKey;
   readonly enabledByDefault?: boolean;
   readonly allowProductivity?: boolean;
