@@ -174,6 +174,9 @@ function constantEntity(
             filters: producer.config.outputs.map((output, index) => ({
               index: index + 1,
               ...signalJson(output.signal),
+              // BlueprintLogisticFilter uses an omitted quality to mean "any",
+              // unlike SignalID where omission defaults to normal.
+              quality: output.signal.quality ?? 'normal',
               comparator: '=',
               count: output.value,
             })),

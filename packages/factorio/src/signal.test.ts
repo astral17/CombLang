@@ -54,14 +54,16 @@ describe('SignalID', () => {
     expect(parseSignalPropertyKey(encodeSignalPropertyKey(value))).toEqual(value);
   });
 
-  test('distinguishes omitted quality from an explicit normal quality', () => {
+  test('canonicalizes omitted and explicit normal quality to the same identity key', () => {
     const omitted = Signal('item', 'iron-plate');
     const normal = Signal('item', 'iron-plate', 'normal');
 
     expect(encodeSignalPropertyKey(omitted)).toBe('signal:v1/item/iron-plate/');
-    expect(encodeSignalPropertyKey(normal)).toBe('signal:v1/item/iron-plate/normal');
+    expect(encodeSignalPropertyKey(normal)).toBe('signal:v1/item/iron-plate/');
+    expect(signalKey(normal)).toBe(signalKey(omitted));
+    expect(sameSignal(normal, omitted)).toBe(true);
     expect(parseSignalPropertyKey(encodeSignalPropertyKey(omitted))).toEqual(omitted);
-    expect(parseSignalPropertyKey(encodeSignalPropertyKey(normal))).toEqual(normal);
+    expect(parseSignalPropertyKey(encodeSignalPropertyKey(normal))).toEqual(omitted);
   });
 
   test.each([
@@ -73,6 +75,7 @@ describe('SignalID', () => {
     'signal:v1/item/%/',
     'signal:v1/item/%2f/',
     'signal:v1/item/%69ron-plate/',
+    'signal:v1/item/iron-plate/normal',
   ])('rejects malformed or noncanonical property key %s', (key) => {
     expect(() => parseSignalPropertyKey(key)).toThrow(TypeError);
   });

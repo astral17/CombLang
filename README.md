@@ -65,6 +65,11 @@ The current repository implements the Phase 3 source compiler, the complete Phas
   - [x] Document the executable testbench language/API and its separation from compile-time assertions, Factorio conformance fixtures, and future Phase 6 typed-object state adapters; publish runnable acceptance programs and the coverage matrix.
   - [x] Preserve caller bindings for already-existing Networks returned by functions in the debug/query result (`const output = MemoCell(input)` supports `network('output')`); retain physical identity, source provenance, scope ambiguity, final initialized scalar bindings, and moved-alias rejection. Covered by passing acceptance and runtime regressions.
 - [ ] Phase 5.5 — external prototype environment foundation
+  - [ ] Finish the F01 browser cache schema/version upgrade gate; compilation cache isolation itself is implemented.
+  - [x] Complete F02-F09 foundation audit slices: preserve diagnostics, unify graph traversal/metrics, enforce online color and replay validation boundaries, share compilation artifacts, and pin the offline Factorio 2.1.17 API inventory.
+  - [x] Reject and remove the speculative F10 runtime-wide prototype exporter after the final `--dump-data` output and pinned schema showed no required additional structural facts.
+  - [ ] Complete F11 evidence-aware normalized prototype roles, native behavior fixtures, and the bundled first-run database; successful structural normalization alone is not native conformance.
+  - [x] Complete F13 canonical Signal property-key encoding and F14 ordered `CC` source normalization.
   - [x] Add a versioned normalized Prototype DB, structural/referential/index validator, immutable LuaPrototypes-shaped `prototypes.*` tables plus derived collections/query helpers, deterministic environment identity, browser/Node JSON boundary, and synthetic base/modded fixtures in a dedicated package.
   - [x] Inject the provider explicitly into compiler consumers; keep prototype facts out of the simulator and avoid a global mutable registry.
     - [x] Reserve source `prototypes`, route it through the hygienic elaboration bridge, and thread an optional provider through runtime, browser compiler, and CLI library entry points with source-linked missing-environment diagnostics.
@@ -75,19 +80,18 @@ The current repository implements the Phase 3 source compiler, the complete Phas
     - [x] Add browser-local JSON selection, identity-keyed IndexedDB persistence, tab-local active selection, reload restoration, explicit disable, and pinned rehydration after Worker restart.
     - [x] Add explicit versioned CLI project profiles with project-relative source/test/database paths, optional identity pins, and conflict/missing-profile diagnostics before source execution.
     - [ ] Generate and validate the built-in vanilla/Space Age first-run database.
-  - [ ] Establish authoritative runtime structural export alongside the offline raw `factorio.exe --dump-data` normalizer; verify base, Space Age, and modded-override fixtures.
+  - [ ] Complete the authoritative `factorio.exe --dump-data` structural path and reviewed native behavior evidence for base, Space Age, and modded-override fixtures.
     - [x] Implement the initial raw normalizer for item subtypes, fluids, multi-category recipes, count/temperature metadata, qualities, virtual signals, recipe categories, and bounding boxes through `factorio-dsl prototypes normalize`. This transitional mapping is not verified runtime truth; footprint correction remains below.
     - [x] Smoke-test the external dump without making repository code or tests depend on a sibling analysis workspace.
     - [x] Preserve independent and shared product probabilities plus statistics/productivity exclusions as distinct validated facts, including identity/JSON/provider coverage and a full external-dump smoke check.
     - [x] Preserve item ingredient/product spoilage and fluidbox routing metadata with role/type/range validation, immutable ordered indexes, identity coverage, and a full external-dump smoke check.
     - [x] Distinguish unknown circuit capabilities from explicit negative facts; load identity-bound per-entity circuit supplements through CLI/library, reject stale or conflicting assertions, and track partial versus complete coverage.
-    - [x] Add an explicit read-only Factorio observation mod, immutable JSONL reader and CLI inspection; retain mod/settings provenance and false/absent/error distinctions without generating capability assertions. Native execution of the collector is still pending.
+    - [x] Add an explicit read-only Factorio circuit probe mod, immutable JSONL reader and CLI inspection; retain mod/settings provenance and false/absent/error distinctions without generating capability assertions. Native execution of the probe is still pending.
     - [x] Compare observation provenance against a selected database through CLI/library: exact game/mod/setting values and entity key/type, original JSONL lines, and separate match/mismatch/unverified results. Preserve optional startup setting snapshots in database identity without trusting legacy labels as evidence.
     - [x] Preserve item recipe quality transformations and explicit quality-chain links, with type/range/reference/cycle checks and chain-based bounds validation; keep unknown legacy links distinct from explicit chain ends.
     - [x] Record the raw/runtime/behavior authority split and September 4 audit triage; correct locale-dependent identity ordering, retain empty-output recipes, reject malformed raw recipe flags/main products, and rename the coarse crafting helper to `isBasicCraftingCompatible`.
-    - [x] Implement a separate read-only runtime `prototypes` structural exporter, strict capture parser, CLI inspection, exact environment/API provenance, and per-field value/absent/unknown/error outcomes. Native execution and reviewed base/Space Age/modded captures remain pending.
-    - [ ] Run and review the runtime structural exporter against base, Space Age, and a modded override; retain raw-only metadata separately.
-    - [ ] Replace selection-box-derived footprints with runtime tile dimensions (or explicit raw tiles/documented collision defaults), including zero-sized and asymmetric cases.
+    - [x] Remove the runtime-wide structural exporter, parser, fixtures, and CLI surface after review found no useful facts beyond final `data.raw`; retain only the narrow behavior probe for evidence `--dump-data` cannot provide.
+    - [x] Replace selection-box-derived footprints with independent explicit raw tile dimensions and the documented per-axis collision-box fallback, including zero-sized and asymmetric cases.
     - [ ] Separate ingredient/product and item/fluid validation at the correct source boundary; cover zero fluid amounts, duplicate ingredients, numeric bounds, temperature rules, and real crafting constraints with unknown/evidence-aware results.
     - [ ] Derive or probe exact circuit capabilities; then lock base, Space Age, and modded-override conformance fixtures.
   - [x] Poison TestSession after a failed partially applied boundary; block mutation/retry while retaining last committed snapshot reads, traces, and model state. Preserve the original exception; do not poison on ordinary out-of-boundary assertions or `settle` non-convergence.
@@ -95,10 +99,12 @@ The current repository implements the Phase 3 source compiler, the complete Phas
 - [ ] Phase 6 — universal persistent Factorio Entity handles with a generic modded fallback and typed facades: shared circuit inputs, native single-comparison `enable`, Roboport, Lamp, Constant, logistics entities, belts, displays, and train stops.
   - [ ] Define common identity/configuration/placement and explicit connector selection before individual constructors; keep circuit, native, and future logistic configuration separate.
   - [ ] Connect the same Entity identity to test mocks/adapters without introducing full factory simulation.
-  - [ ] Define shared CC signal-value inputs (typed counts, tuples, arrays, maps, computed-key objects), ordinary JS key semantics, duplicate handling, and ordering before adding overloads.
+  - [x] Define and implement shared CC signal-value inputs (typed counts, tuples, nested arrays, maps, and computed-key objects), ordinary JS key semantics, duplicate preservation, source paths, and stable ordering before adding sections.
     - [x] Add the reversible canonical `signal:v1/` property-key codec and string coercion exclusively to source Signal handles; keep structural Signal IDs and internal bus keys unchanged.
+    - [x] Normalize every accepted source into immutable ordered rows, retain zeros and duplicate Signal identities, canonicalize counts to int32, and reject cyclic/deep containers, enumerable symbol keys, malformed canonical keys, and arbitrary iterables.
   - [x] Allow simple function parameters `input: Network` and untyped `input` with an initial implicit read-only borrow for direct Network values and one declaration warning per compilation. Ordinary untyped JS values remain unchanged; writes require `Ref` and consumption requires `Move`. Automatic writable inference and broader binding-pattern integration remain deferred.
 - [ ] Phase 7 — exact constructors and native-config stress: Arithmetic, full Decider normal/else output lists, duplicate outputs, `Everything`, Selector, raw entities, LUTs, and large generated configurations.
+  - [ ] Verify exact Constant section/filter behavior, including multiplier/group/active/isOn and quality comparators. Keep ordinary omitted Signal quality equal to `normal`; expose an any-quality filter only after native behavior fixtures define its useful source semantics.
   - [x] Validate the currently implemented `Each`/`Everything` output compatibility against the final post-execution Decider descriptor, including dynamically generated rows and conditions.
   - [ ] Verify Each-to-concrete copy-count behavior, constant-row interaction, duplicate multiplicity, conditional subsets, and `pair(red, green)` selections against exported Factorio fixtures; never lower these rows as a sum/reduce.
   - [ ] Preserve per-output source span, dynamic instance path, ordinal, and implicit/explicit/exact syntax intent through the final generated Decider descriptor; extend authoritative post-execution validation as the exact surface grows.
@@ -136,7 +142,6 @@ Later phases cover prototype profiles, typed Factorio objects, exact constructor
 - [Architecture notes](docs/architecture.md) — package boundaries, lowering decisions, runtime invariants, and implementation status.
 - [Direct plan schema](docs/direct-plan-schema.md) — stable elaboration transport, versioning, validation ownership, and dependency direction.
 - [Elaboration transform](docs/elaboration-transform.md) — source prepass, hygienic runtime bridge, lexical Producer slots, and AST rewrite boundary.
-- [Implementation task status](docs/implementation-task-status.md) — post-audit foundation work, completed checks, and explicit external evidence gates.
 - [Returned Network ownership](docs/return-ownership.md) — container graph traversal, atomic ownership transfer, aliases, cycles, and double-move rules.
 - [Compile-time JavaScript](docs/compile-time-javascript.md) — supported metaprogramming subset and explicit compatibility limits.
 - [Security model](docs/security-model.md) — current trusted-source assumption and Worker/CLI isolation limits.

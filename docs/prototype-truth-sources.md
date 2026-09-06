@@ -19,9 +19,9 @@ it does not become a factory simulator or depend on `packages/prototypes`.
 
 The current schema/normalizer predates this split. Successful validation and a
 stable hash do **not** certify native behavior, and coverage flags describe
-available data rather than evidence quality. A runtime exporter transport exists,
-but no captured runtime fact has been shown to add required structural information
-that cannot be recovered from the final dump plus the pinned prototype schema.
+available data rather than evidence quality. The speculative runtime exporter
+transport was removed because no captured runtime fact was shown to add required
+structural information unavailable from the final dump plus the pinned schema.
 
 ## Extraction plan
 
@@ -114,10 +114,11 @@ would be ambiguous. This does not imply simulating the entire game.
 
 The following language/runtime work is tracked separately from prototype data:
 
-- Define a shared `SignalValueSource` for CC: typed counts, signal/count tuples,
-  arrays, maps, and ordinary computed-key objects. Preserve actual JavaScript key
-  behavior: `{ A: 5 }` is a string key, not the variable `A`. Specify duplicate
-  handling, ordering, and Signal-to-property-key identity before implementation.
+- Implemented: the shared `SignalValueSource` for CC accepts typed counts,
+  signal/count tuples, nested arrays, maps, and ordinary computed-key objects.
+  It preserves actual JavaScript key behavior (`{ A: 5 }` is an item-name string
+  key, not the variable `A`), executed ordering, duplicates, zeros, source paths,
+  and canonical Signal property keys without accepting arbitrary iterables.
 - Move parity/color contradiction checks into elaboration operations (including
   fixed colors, pairs, connector inputs, and attachments). A contradiction must
   fail at its first executed operation with source provenance, before subsequent

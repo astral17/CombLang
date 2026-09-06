@@ -339,20 +339,31 @@ describe('Factorio blueprint JSON generator', () => {
         {
           id: producer(1),
           kind: 'constant',
-          config: { outputs: [{ signal: IRON, value: 5 }] },
+          config: {
+            outputs: [
+              { signal: IRON, value: 5 },
+              { signal: signal('item', 'iron-plate', 'legendary'), value: 2 },
+            ],
+          },
           destinations: [network(1)],
           provenance: { instancePath: [], expansionStack: [] },
         },
       ],
     };
 
-    const filter = (
+    const filters = (
       generateBlueprintJson(ir).blueprint.entities[0]?.control_behavior as {
         sections: { sections: { filters: Record<string, unknown>[] }[] };
       }
-    ).sections.sections[0]!.filters[0];
-    expect(filter).toMatchObject({ name: 'iron-plate', count: 5 });
+    ).sections.sections[0]!.filters;
+    const filter = filters[0];
+    expect(filter).toMatchObject({ name: 'iron-plate', quality: 'normal', count: 5 });
     expect(filter).not.toHaveProperty('type');
+    expect(filters[1]).toMatchObject({
+      name: 'iron-plate',
+      quality: 'legendary',
+      count: 2,
+    });
   });
 
   test('preserves ordered duplicate-signal Decider output rows', () => {

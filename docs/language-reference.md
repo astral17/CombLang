@@ -38,17 +38,17 @@ const counts = { [A]: 5 };
 ```
 
 The external key is exactly
-`signal:v1/<type>/<encodeURIComponent(name)>/<encodeURIComponent(quality ?? '')>`.
+`signal:v1/<type>/<encodeURIComponent(name)>/<encoded non-normal quality or empty>`.
 `String(A)` returns that key, while numeric/default coercion is rejected. The
-codec distinguishes omitted quality from explicit `normal`, accepts every Signal
-namespace, and rejects malformed/noncanonical percent encoding. This external
+codec treats omitted quality and explicit `normal` as the same Factorio Signal
+identity, accepts every Signal namespace, and rejects malformed/noncanonical percent encoding. This external
 format does not replace the internal `signalKey` used by circuit buses.
 
 Only source-created nominal handles have this coercion. The public structural
 `Signal(...)` helper in `@comblang/factorio` still returns an ordinary frozen
 object, and `Signal('signal:v1/virtual/signal-A/')` still means an item with that
-literal name. `CC({ [A]: 5 })` is not accepted yet: F13 supplies the reversible
-key boundary, while F14 will add object/Map/tuple normalization to `CC`.
+literal name. The canonical property-key form is accepted by `CC` dictionaries;
+an ordinary bare string key remains item shorthand.
 
 ## Networks and colors
 
@@ -188,11 +188,44 @@ The exact `Decider({...})` constructor remains Phase 7 work.
 
 ```ts
 const constants: Network = CC(5 * A, -2 * B);
+const rows = [
+  [A, 3],
+  [B, -4],
+];
+const generated = CC(
+  [A, 1],
+  rows,
+  new Map([
+    [A, 2],
+    ['iron-plate', 50],
+  ]),
+  { [B]: 7, 'copper-plate': 25 },
+);
 out += CC(5 * A);
 to(first, second) += CC(5 * A, -2 * B);
 ```
 
-Each argument is a finite safe-integer value multiplied by a declared Signal value; the count is canonicalized to signed int32. A Signal may occur only once in one `CC` call.
+`CC` accepts typed counts (`count * Signal`), `[Signal|string, count]` tuples,
+nested arrays of accepted rows, `Map<Signal|string, count>`, and plain objects.
+Object keys produced by `[Signal]` use the canonical `signal:v1/` codec; bare
+strings mean item Signals. Counts must be finite safe integers and are
+canonicalized to signed int32.
+
+Rows preserve executed source order, including zeros and repeated Signal
+identities; they are neither sorted, merged, nor deduplicated. Maps preserve
+entry order and may retain two different Signal handles with equal identities.
+Plain objects follow `Object.keys` order and ordinary overwrite behavior.
+Arbitrary iterables, enumerable symbol keys, malformed canonical keys, cyclic
+arrays, and nesting beyond the bounded container depth are rejected at the
+executed `CC(...)` call.
+
+Factorio's `BlueprintLogisticFilter` differs from an ordinary `SignalID`: an
+omitted filter quality means “any quality”, while an omitted SignalID quality
+means `normal`. Blueprint export therefore writes `quality: "normal"` explicitly
+for an unqualified constant row; otherwise the game can import it as an any-quality
+filter that does not represent the requested constant. A user-facing any-quality
+constant-filter syntax is not exposed until its native behavior is covered by
+the exact Constant surface and conformance fixtures.
 
 `CC()` is valid and creates one empty physical constant combinator. It emits no signals but can still be placed and attached, for example `CC().at(1, 2).to(out)`. An empty generated list in `CC(...entries)` has the same meaning. Like any other combinator, an unattached standalone `CC()` receives `CL2001`, not an error.
 

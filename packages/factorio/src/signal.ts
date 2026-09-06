@@ -55,7 +55,10 @@ export function encodeSignalPropertyKey(id: SignalId): SignalPropertyKey {
     throw new TypeError('A signal quality cannot be empty when provided.');
   }
   const name = encodeSignalComponent(id.name, 'name');
-  const quality = encodeSignalComponent(id.quality ?? '', 'quality');
+  const quality = encodeSignalComponent(
+    id.quality === undefined || id.quality === 'normal' ? '' : id.quality,
+    'quality',
+  );
   return `${SIGNAL_PROPERTY_KEY_PREFIX}${id.type}/${name}/${quality}` as SignalPropertyKey;
 }
 
@@ -129,7 +132,8 @@ export function signal(typeOrName: SignalType | string, name?: string, quality?:
 }
 
 export function signalKey(id: SignalId): string {
-  return `${id.type}\u0000${id.name}\u0000${id.quality ?? ''}`;
+  const quality = id.quality === undefined || id.quality === 'normal' ? '' : id.quality;
+  return `${id.type}\u0000${id.name}\u0000${quality}`;
 }
 
 export function sameSignal(left: SignalId, right: SignalId): boolean {

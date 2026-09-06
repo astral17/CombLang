@@ -21,6 +21,7 @@ import { ElaborationExecutionError, ElaborationOperationLimitError } from './ela
 import { ElaborationColorConstraints } from './elaboration-color-constraints.js';
 import { ElaborationProvenanceFormatter } from './elaboration-provenance.js';
 import { CombinatorRegistry } from './combinator-registry.js';
+import { normalizeSignalValueSources } from './constant-signal-values.js';
 import {
   RuntimeValueRegistry,
   type CombinatorDescriptor,
@@ -404,10 +405,10 @@ class ElaborationRecorder {
       this.#recordDslCall();
       const rawSpan = args.at(-1);
       if (!isRawSpan(rawSpan)) throw new Error('Constant combinator is missing provenance.');
-      const outputs = args.slice(0, -1);
-      if (!outputs.every((value): value is SignalValue => this.#isSignalValue(value))) {
-        throw new Error('CC entries must be numeric Signal values.');
-      }
+      const outputs = normalizeSignalValueSources(args.slice(0, -1), {
+        isSignal: (value): value is SignalHandle => this.#isSignal(value),
+        isSignalValue: (value): value is SignalValue => this.#isSignalValue(value),
+      });
       return this.#createCombinator(
         {
           kind: 'constant',

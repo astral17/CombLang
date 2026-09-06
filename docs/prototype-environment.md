@@ -122,8 +122,9 @@ The converter reads every item subtype carrying raw `stack_size`, not
 only the literal `item` table. It applies the raw RecipePrototype defaults
 (`categories = ["crafting"]`, `energy_required = 0.5`, and enabled by default),
 preserves multiple categories, exact fluid temperature, and
-`amount + extra_count_fraction`. Its current selection-box-based entity dimensions
-are a known defect, not verified placement facts; see the extraction plan above.
+`amount + extra_count_fraction`. Entity dimensions use explicit `tile_width` and
+`tile_height` independently, with the prototype API's documented per-axis
+collision-box fallback; selection boxes are not used as tile footprints.
 Empty-output recipes, including sentinel/parameter recipes, are retained. They
 do not contribute product-index entries.
 
@@ -273,11 +274,10 @@ a connector.
 
 This path still requires native behavior conformance verification. The pinned
 Factorio 2.1.17 runtime API confirms that `LuaPrototypes` exposes corresponding
-read-only dictionaries, and the optional runtime exporter can compare loaded
-values when a concrete ambiguity appears. It is not a prerequisite for the
-structural database while no non-reproducible difference is known. Neither raw
-extraction nor the optional validation transport becomes the public compiler
-contract.
+read-only dictionaries. A narrow runtime probe may be introduced for a concrete
+reproducible discrepancy, but the removed prototype-wide exporter is not a
+prerequisite for the structural database. Raw extraction itself does not become
+the public compiler contract.
 
 Extraction details still need conformance fixtures against base, Space Age, and
 at least one mod that modifies a vanilla recipe or entity. The architecture does

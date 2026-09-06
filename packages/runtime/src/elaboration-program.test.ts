@@ -2310,6 +2310,55 @@ Gate(biased, threshold).to(output, mirror);`,
     ]);
   });
 
+  test('normalizes ordered CC tuples, arrays, maps, and computed-key objects', () => {
+    const parsed = parseFile({
+      path: 'constant-source-containers.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const SAME_A = Signal("virtual", "signal-A");
+const B = Signal("virtual", "signal-B");
+const rows = [[A, 2], [[SAME_A, 3]]];
+const mapped = new Map([[A, 4], [SAME_A, 5]]);
+const dictionary = { [B]: 6, "iron-plate": 7 };
+const output = CC(1 * A, rows, mapped, dictionary);`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.producers).toMatchObject([
+      {
+        kind: 'constant',
+        outputs: [
+          { signal: { type: 'virtual', name: 'signal-A' }, value: 1 },
+          { signal: { type: 'virtual', name: 'signal-A' }, value: 2 },
+          { signal: { type: 'virtual', name: 'signal-A' }, value: 3 },
+          { signal: { type: 'virtual', name: 'signal-A' }, value: 4 },
+          { signal: { type: 'virtual', name: 'signal-A' }, value: 5 },
+          { signal: { type: 'virtual', name: 'signal-B' }, value: 6 },
+          { signal: { type: 'item', name: 'iron-plate' }, value: 7 },
+        ],
+      },
+    ]);
+  });
+
+  test('attributes an invalid CC container row to the complete call', () => {
+    const call = 'CC([A, 1.5])';
+    const parsed = parseFile({
+      path: 'invalid-constant-source-container.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const output = ${call};`,
+    });
+
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected the invalid tuple count to fail.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ElaborationExecutionError);
+      const failure = error as ElaborationExecutionError;
+      expect(failure.message).toContain('args[0].value');
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(call);
+    }
+  });
+
   test('retains empty constant combinators from literal and generated calls', () => {
     const parsed = parseFile({
       path: 'empty-constant.factorio.ts',

@@ -1,6 +1,12 @@
 import ts from 'typescript';
 
-import { circuitConstant, Signal, signalTypes, type SignalId } from '@comblang/factorio';
+import {
+  circuitConstant,
+  sameSignal,
+  Signal,
+  signalTypes,
+  type SignalId,
+} from '@comblang/factorio';
 import { spanForNode, type ParsedSourceFile } from '@comblang/language';
 import type { Diagnostic, SourceSpan } from '@comblang/shared';
 
@@ -180,14 +186,6 @@ function numericLiteral(expression: ts.Expression): number | undefined {
     return -Number(expression.operand.text);
   }
   return undefined;
-}
-
-function sameSignal(left: SignalId, right: SignalId): boolean {
-  return (
-    left.type === right.type &&
-    left.name === right.name &&
-    (left.quality ?? 'normal') === (right.quality ?? 'normal')
-  );
 }
 
 function foldCompileTimeInteger(
