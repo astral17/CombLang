@@ -213,4 +213,289 @@ describe('direct plan envelope validation', () => {
       { code, message: expect.stringContaining(path) },
     ]);
   });
+
+  test('accepts nested Decider conditions, repeated output rows, and empty constants', () => {
+    const plan = {
+      format: 'comblang-direct-plan',
+      version: 2,
+      networks: [
+        { name: 'input', source: span, instancePath: [] },
+        { name: 'other', source: span, instancePath: [] },
+        { name: 'output', source: span, instancePath: [] },
+      ],
+      producers: [
+        {
+          kind: 'decider',
+          condition: {
+            kind: 'and',
+            conditions: [
+              {
+                kind: 'compare-signal',
+                signal: { type: 'virtual', name: 'signal-A' },
+                comparator: '>',
+                constant: 0,
+                refKind: 'single',
+                network: 'input',
+              },
+              {
+                kind: 'or',
+                conditions: [
+                  {
+                    kind: 'compare-wildcard',
+                    wildcard: 'anything',
+                    comparator: '!=',
+                    constant: 0,
+                    refKind: 'pair',
+                    networks: ['input', 'other'],
+                  },
+                ],
+              },
+            ],
+          },
+          output: { kind: 'each', refKind: 'single', network: 'input' },
+          outputs: [
+            { kind: 'each', refKind: 'single', network: 'input' },
+            {
+              kind: 'signal-constant',
+              signal: { type: 'virtual', name: 'signal-B' },
+              value: 2,
+            },
+          ],
+          elseOutputs: [
+            {
+              kind: 'wildcard',
+              wildcard: 'everything',
+              refKind: 'single',
+              network: 'other',
+            },
+          ],
+          destinations: [{ network: 'output', source: span, instancePath: [] }],
+          source: span,
+          instancePath: [],
+          placement: { x: 1.5, y: -2, direction: 12 },
+          debugCaptureIds: ['gate'],
+        },
+        {
+          kind: 'constant',
+          outputs: [],
+          destinations: [{ network: 'other', source: span, instancePath: [] }],
+          source: span,
+          instancePath: [],
+        },
+      ],
+    };
+
+    expect(validateDirectPlanEnvelope(plan).diagnostics).toEqual([]);
+  });
+
+  test.each([
+    {
+      name: 'unknown nested comparator',
+      mutate: (producer: Record<string, unknown>) => {
+        const condition = producer.condition as {
+          conditions: { comparator: string }[];
+        };
+        condition.conditions[0]!.comparator = '===';
+      },
+      path: '$.producers[0].condition.conditions[0].comparator',
+      code: 'RT1001',
+    },
+    {
+      name: 'unknown signal-to-signal input',
+      mutate: (producer: Record<string, unknown>) => {
+        producer.condition = {
+          kind: 'compare-signals',
+          comparator: '=',
+          left: {
+            signal: { type: 'virtual', name: 'signal-A' },
+            refKind: 'single',
+            network: 'input',
+          },
+          right: {
+            signal: { type: 'virtual', name: 'signal-B' },
+            refKind: 'single',
+            network: 'missing',
+          },
+        };
+      },
+      path: '$.producers[0].condition.right',
+      code: 'RT1003',
+    },
+    {
+      name: 'invalid normal output row',
+      mutate: (producer: Record<string, unknown>) => {
+        producer.outputs = [{ kind: 'each-constant', value: 2 ** 31 }];
+      },
+      path: '$.producers[0].outputs[0].value',
+      code: 'RT1001',
+    },
+    {
+      name: 'invalid else output row',
+      mutate: (producer: Record<string, unknown>) => {
+        producer.elseOutputs = [
+          {
+            kind: 'wildcard',
+            wildcard: 'each',
+            refKind: 'single',
+            network: 'input',
+          },
+        ];
+      },
+      path: '$.producers[0].elseOutputs[0].wildcard',
+      code: 'RT1001',
+    },
+    {
+      name: 'invalid placement direction',
+      mutate: (producer: Record<string, unknown>) => {
+        producer.placement = { x: 1, y: 2, direction: 16 };
+      },
+      path: '$.producers[0].placement',
+      code: 'RT1001',
+    },
+    {
+      name: 'empty capture ID',
+      mutate: (producer: Record<string, unknown>) => {
+        producer.debugCaptureIds = [''];
+      },
+      path: '$.producers[0].debugCaptureIds[0]',
+      code: 'RT1001',
+    },
+  ])('rejects Decider $name before replay', ({ mutate, path, code }) => {
+    const producer: Record<string, unknown> = {
+      kind: 'decider',
+      condition: {
+        kind: 'and',
+        conditions: [
+          {
+            kind: 'compare-each',
+            comparator: '>',
+            constant: 0,
+            refKind: 'single',
+            network: 'input',
+          },
+        ],
+      },
+      output: { kind: 'each', refKind: 'single', network: 'input' },
+      destinations: [{ network: 'output', source: span, instancePath: [] }],
+      source: span,
+      instancePath: [],
+    };
+    mutate(producer);
+    const plan = {
+      format: 'comblang-direct-plan',
+      version: 2,
+      networks: [
+        { name: 'input', source: span, instancePath: [] },
+        { name: 'output', source: span, instancePath: [] },
+      ],
+      producers: [producer],
+    };
+
+    expect(validateDirectPlanEnvelope(plan).diagnostics).toMatchObject([
+      { code, message: expect.stringContaining(path) },
+    ]);
+  });
+
+  test('rejects an excessively nested Decider condition before recursive lowering', () => {
+    let condition: Record<string, unknown> = {
+      kind: 'compare-each',
+      comparator: '>',
+      constant: 0,
+      refKind: 'single',
+      network: 'input',
+    };
+    for (let depth = 0; depth < 130; depth += 1)
+      condition = { kind: 'and', conditions: [condition] };
+    const plan = {
+      format: 'comblang-direct-plan',
+      version: 2,
+      networks: [
+        { name: 'input', source: span, instancePath: [] },
+        { name: 'output', source: span, instancePath: [] },
+      ],
+      producers: [
+        {
+          kind: 'decider',
+          condition,
+          output: { kind: 'each', refKind: 'single', network: 'input' },
+          destinations: [{ network: 'output', source: span, instancePath: [] }],
+          source: span,
+          instancePath: [],
+        },
+      ],
+    };
+
+    expect(validateDirectPlanEnvelope(plan).diagnostics).toMatchObject([
+      {
+        code: 'RT1001',
+        message: expect.stringContaining('condition nesting exceeds'),
+      },
+    ]);
+  });
+
+  test.each([
+    {
+      name: 'missing output array',
+      outputs: undefined,
+      path: '$.producers[0].outputs',
+    },
+    {
+      name: 'invalid constant SignalID',
+      outputs: [{ signal: { type: 'item', name: '' }, value: 1 }],
+      path: '$.producers[0].outputs[0].signal',
+    },
+    {
+      name: 'out-of-range constant value',
+      outputs: [
+        {
+          signal: { type: 'virtual', name: 'signal-A' },
+          value: -(2 ** 31) - 1,
+        },
+      ],
+      path: '$.producers[0].outputs[0].value',
+    },
+  ])('rejects Constant $name before replay', ({ outputs, path }) => {
+    const plan = {
+      format: 'comblang-direct-plan',
+      version: 2,
+      networks: [{ name: 'output', source: span, instancePath: [] }],
+      producers: [
+        {
+          kind: 'constant',
+          ...(outputs === undefined ? {} : { outputs }),
+          destinations: [{ network: 'output', source: span, instancePath: [] }],
+          source: span,
+          instancePath: [],
+        },
+      ],
+    };
+
+    expect(validateDirectPlanEnvelope(plan).diagnostics).toMatchObject([
+      { code: 'RT1001', message: expect.stringContaining(path) },
+    ]);
+  });
+
+  test('rejects duplicate capture IDs before creating any Producer', () => {
+    const constant = (captureId: string) => ({
+      kind: 'constant',
+      outputs: [],
+      destinations: [{ network: 'output', source: span, instancePath: [] }],
+      source: span,
+      instancePath: [],
+      debugCaptureIds: [captureId],
+    });
+    const plan = {
+      format: 'comblang-direct-plan',
+      version: 2,
+      networks: [{ name: 'output', source: span, instancePath: [] }],
+      producers: [constant('same'), constant('same')],
+    };
+
+    expect(validateDirectPlanEnvelope(plan).diagnostics).toMatchObject([
+      {
+        code: 'RT1001',
+        message: expect.stringContaining('$.producers[1].debugCaptureIds[0]'),
+      },
+    ]);
+  });
 });

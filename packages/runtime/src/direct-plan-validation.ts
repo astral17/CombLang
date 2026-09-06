@@ -86,6 +86,9 @@ const arithmeticOperations = new Set([
   'bit-xor',
 ]);
 
+const comparators = new Set(['>', '<', '=', '>=', '<=', '!=']);
+const maximumNestedConditionDepth = 128;
+
 function isCircuitValue(value: unknown): value is number {
   return (
     Number.isSafeInteger(value) && Number(value) >= -2_147_483_648 && Number(value) <= 2_147_483_647
@@ -162,6 +165,202 @@ function validateArithmeticProducer(
   if (producer.output.kind === 'each') return undefined;
   if (producer.output.kind === 'signal' && isSignalId(producer.output.signal)) return undefined;
   return payloadFailure(`${path}.output`, 'invalid arithmetic output.', span);
+}
+
+function validateDeciderCondition(
+  value: unknown,
+  path: string,
+  declarations: ReadonlyMap<string, DirectPlanNetwork>,
+  span: SourceSpan,
+  depth = 0,
+  budget = { remaining: 100_000 },
+): DirectPlanEnvelopeValidationResult | undefined {
+  if (depth > maximumNestedConditionDepth)
+    return payloadFailure(
+      path,
+      `condition nesting exceeds the ${maximumNestedConditionDepth} level limit.`,
+      span,
+    );
+  budget.remaining -= 1;
+  if (budget.remaining < 0)
+    return payloadFailure(path, 'condition tree exceeds the 100000 node limit.', span);
+  if (!isRecord(value)) return payloadFailure(path, 'expected a Decider condition.', span);
+  if (value.kind === 'and' || value.kind === 'or') {
+    if (!Array.isArray(value.conditions))
+      return payloadFailure(`${path}.conditions`, 'expected a condition array.', span);
+    if (exceedsLimit(value.conditions))
+      return payloadFailure(`${path}.conditions`, 'condition array exceeds the item limit.', span);
+    for (const [index, child] of value.conditions.entries()) {
+      const invalid = validateDeciderCondition(
+        child,
+        `${path}.conditions[${index}]`,
+        declarations,
+        span,
+        depth + 1,
+        budget,
+      );
+      if (invalid !== undefined) return invalid;
+    }
+    return undefined;
+  }
+  if (typeof value.comparator !== 'string' || !comparators.has(value.comparator))
+    return payloadFailure(`${path}.comparator`, 'unknown Decider comparator.', span);
+  if (value.kind === 'compare-signals') {
+    for (const side of ['left', 'right'] as const) {
+      const operand = value[side];
+      const operandPath = `${path}.${side}`;
+      if (!isRecord(operand))
+        return payloadFailure(operandPath, 'expected a signal operand.', span);
+      if (!isSignalId(operand.signal))
+        return payloadFailure(`${operandPath}.signal`, 'expected a valid SignalID.', span);
+      const invalid = validateNetworkRef(operand, operandPath, declarations, span);
+      if (invalid !== undefined) return invalid;
+    }
+    return undefined;
+  }
+  if (
+    value.kind !== 'compare-each' &&
+    value.kind !== 'compare-signal' &&
+    value.kind !== 'compare-wildcard'
+  )
+    return payloadFailure(`${path}.kind`, 'unknown Decider condition tag.', span);
+  if (!isCircuitValue(value.constant))
+    return payloadFailure(`${path}.constant`, 'expected a signed int32 circuit value.', span);
+  if (value.kind === 'compare-signal' && !isSignalId(value.signal))
+    return payloadFailure(`${path}.signal`, 'expected a valid SignalID.', span);
+  if (
+    value.kind === 'compare-wildcard' &&
+    value.wildcard !== 'anything' &&
+    value.wildcard !== 'everything'
+  )
+    return payloadFailure(`${path}.wildcard`, 'unknown Decider wildcard.', span);
+  return validateNetworkRef(value, path, declarations, span);
+}
+
+function validateDeciderOutput(
+  value: unknown,
+  path: string,
+  declarations: ReadonlyMap<string, DirectPlanNetwork>,
+  span: SourceSpan,
+): DirectPlanEnvelopeValidationResult | undefined {
+  if (!isRecord(value)) return payloadFailure(path, 'expected a Decider output.', span);
+  if (value.kind === 'each-constant')
+    return isCircuitValue(value.value)
+      ? undefined
+      : payloadFailure(`${path}.value`, 'expected a signed int32 circuit value.', span);
+  if (value.kind === 'signal-constant') {
+    if (!isSignalId(value.signal))
+      return payloadFailure(`${path}.signal`, 'expected a valid SignalID.', span);
+    return isCircuitValue(value.value)
+      ? undefined
+      : payloadFailure(`${path}.value`, 'expected a signed int32 circuit value.', span);
+  }
+  if (value.kind === 'signal' && !isSignalId(value.signal))
+    return payloadFailure(`${path}.signal`, 'expected a valid SignalID.', span);
+  if (value.kind === 'wildcard' && value.wildcard !== 'anything' && value.wildcard !== 'everything')
+    return payloadFailure(`${path}.wildcard`, 'unknown Decider wildcard.', span);
+  if (value.kind !== 'each' && value.kind !== 'signal' && value.kind !== 'wildcard')
+    return payloadFailure(`${path}.kind`, 'unknown Decider output tag.', span);
+  return validateNetworkRef(value, path, declarations, span);
+}
+
+function validateDeciderProducer(
+  producer: Record<string, unknown>,
+  path: string,
+  declarations: ReadonlyMap<string, DirectPlanNetwork>,
+  span: SourceSpan,
+): DirectPlanEnvelopeValidationResult | undefined {
+  const condition = validateDeciderCondition(
+    producer.condition,
+    `${path}.condition`,
+    declarations,
+    span,
+  );
+  if (condition !== undefined) return condition;
+  const compatibilityOutput = validateDeciderOutput(
+    producer.output,
+    `${path}.output`,
+    declarations,
+    span,
+  );
+  if (compatibilityOutput !== undefined) return compatibilityOutput;
+  for (const key of ['outputs', 'elseOutputs'] as const) {
+    const outputs = producer[key];
+    if (outputs === undefined) continue;
+    if (!Array.isArray(outputs) || exceedsLimit(outputs))
+      return payloadFailure(`${path}.${key}`, 'expected a bounded output array.', span);
+    for (const [index, output] of outputs.entries()) {
+      const invalid = validateDeciderOutput(output, `${path}.${key}[${index}]`, declarations, span);
+      if (invalid !== undefined) return invalid;
+    }
+  }
+  return undefined;
+}
+
+function validateConstantProducer(
+  producer: Record<string, unknown>,
+  path: string,
+  span: SourceSpan,
+): DirectPlanEnvelopeValidationResult | undefined {
+  if (!Array.isArray(producer.outputs) || exceedsLimit(producer.outputs))
+    return payloadFailure(`${path}.outputs`, 'expected a bounded constant output array.', span);
+  for (const [index, output] of producer.outputs.entries()) {
+    const outputPath = `${path}.outputs[${index}]`;
+    if (!isRecord(output)) return payloadFailure(outputPath, 'expected a constant output.', span);
+    if (!isSignalId(output.signal))
+      return payloadFailure(`${outputPath}.signal`, 'expected a valid SignalID.', span);
+    if (!isCircuitValue(output.value))
+      return payloadFailure(`${outputPath}.value`, 'expected a signed int32 circuit value.', span);
+  }
+  return undefined;
+}
+
+function validateProducerMetadata(
+  producer: Record<string, unknown>,
+  path: string,
+  span: SourceSpan,
+  captureIds: Set<string>,
+): DirectPlanEnvelopeValidationResult | undefined {
+  if (
+    producer.bindingName !== undefined &&
+    (typeof producer.bindingName !== 'string' || producer.bindingName.length === 0)
+  )
+    return payloadFailure(`${path}.bindingName`, 'expected a non-empty string.', span);
+  if (producer.debugCaptureIds !== undefined) {
+    if (!Array.isArray(producer.debugCaptureIds) || exceedsLimit(producer.debugCaptureIds))
+      return payloadFailure(`${path}.debugCaptureIds`, 'expected a bounded string array.', span);
+    for (const [index, captureId] of producer.debugCaptureIds.entries()) {
+      if (typeof captureId !== 'string' || captureId.length === 0)
+        return payloadFailure(
+          `${path}.debugCaptureIds[${index}]`,
+          'expected a non-empty string.',
+          span,
+        );
+      if (captureIds.has(captureId))
+        return payloadFailure(
+          `${path}.debugCaptureIds[${index}]`,
+          'duplicate Producer debug capture.',
+          span,
+        );
+      captureIds.add(captureId);
+    }
+  }
+  if (producer.placement !== undefined) {
+    const placement = producer.placement;
+    if (
+      !isRecord(placement) ||
+      typeof placement.x !== 'number' ||
+      !Number.isFinite(placement.x) ||
+      typeof placement.y !== 'number' ||
+      !Number.isFinite(placement.y) ||
+      (placement.direction !== undefined &&
+        (!Number.isInteger(placement.direction) ||
+          Number(placement.direction) < 0 ||
+          Number(placement.direction) > 15))
+    )
+      return payloadFailure(`${path}.placement`, 'invalid entity placement.', span);
+  }
+  return undefined;
 }
 
 /** Validates the versioned transport envelope before any runtime graph is allocated. */
@@ -244,6 +443,7 @@ export function validateDirectPlanEnvelope(plan: unknown): DirectPlanEnvelopeVal
       return payloadFailure(path, 'invalid Network pair.', descriptorSpan(pair, 'provenance'));
   }
 
+  const captureIds = new Set<string>();
   for (const [index, producer] of plan.producers.entries()) {
     const path = `$.producers[${index}]`;
     if (!isRecord(producer)) return payloadFailure(path, 'expected a Producer object.');
@@ -282,15 +482,16 @@ export function validateDirectPlanEnvelope(plan: unknown): DirectPlanEnvelopeVal
           descriptorSpan(destination, 'source'),
         );
     }
-    if (producer.kind === 'arithmetic') {
-      const invalid = validateArithmeticProducer(
-        producer,
-        path,
-        declarations,
-        producer.source as SourceSpan,
-      );
-      if (invalid !== undefined) return invalid;
-    }
+    const producerSpan = producer.source as SourceSpan;
+    const metadata = validateProducerMetadata(producer, path, producerSpan, captureIds);
+    if (metadata !== undefined) return metadata;
+    const invalid =
+      producer.kind === 'arithmetic'
+        ? validateArithmeticProducer(producer, path, declarations, producerSpan)
+        : producer.kind === 'decider'
+          ? validateDeciderProducer(producer, path, declarations, producerSpan)
+          : validateConstantProducer(producer, path, producerSpan);
+    if (invalid !== undefined) return invalid;
   }
 
   const aliases = (plan.networkAliases ?? []) as unknown[];
