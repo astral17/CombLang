@@ -196,10 +196,12 @@ preserved as inactive metadata, not rejected; it must not be applied by consumer
 Native dump conversion uses `PD1001` for a malformed or internally inconsistent
 `data-raw-dump` shape, including malformed recipe flags and invalid or ambiguous
 main-product names. `PD2001` is retired: empty-output recipes and engine sentinels
-are retained by generator v1.5 rather than skipped.
-`PD2002` reports capability data that
-the native dump cannot prove. Conversion warnings are explicit coverage notices;
-they do not make the normalized v1 subset invalid.
+are retained rather than skipped. `PD2002` reports capability data that the native
+dump cannot prove. `PD2003` reports a known raw recipe-component field retained by
+`data.raw` but inapplicable to its normalized item/fluid and ingredient/product
+role; the converter omits that field and preserves its exact snake_case path in the
+warning. Conversion warnings are explicit coverage or omission notices; they do
+not make the normalized v1 subset invalid.
 
 Recipe quality transforms use `PT1001` for invalid booleans/int8 shifts, `PT1002`
 for malformed canonical quality keys, and `PT1004` for wrong component roles/types,

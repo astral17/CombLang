@@ -84,9 +84,10 @@ The currently implemented raw extraction path is Factorio's own command-line
 stage and writes the raw prototype dump under `script-output`. A
 separate offline CombLang converter can then select and normalize the small v1
 schema without loading raw prototype JSON in the compiler. This is data-stage
-resolution, not the runtime `LuaPrototypes` view. The planned runtime structural
-exporter will provide authoritative resolved facts; the dump remains useful for
-diagnostics and raw-only metadata.
+resolution, not the runtime `LuaPrototypes` view. The former runtime-wide exporter
+was removed after it produced no required structural facts beyond final `data.raw`;
+an optional narrow runtime cross-check remains appropriate only if a concrete
+divergence is found. Reviewed behavior fixtures remain a separate evidence layer.
 
 The command is:
 
@@ -121,8 +122,8 @@ verified against the values. Supplying a label does not replace a captured snaps
 The converter reads every item subtype carrying raw `stack_size`, not
 only the literal `item` table. It applies the raw RecipePrototype defaults
 (`categories = ["crafting"]`, `energy_required = 0.5`, and enabled by default),
-preserves multiple categories, exact fluid temperature, and
-`amount + extra_count_fraction`. Entity dimensions use explicit `tile_width` and
+preserves multiple categories, exact fluid temperature, and role/kind-applicable
+recipe component fields. Entity dimensions use explicit `tile_width` and
 `tile_height` independently, with the prototype API's documented per-axis
 collision-box fallback; selection boxes are not used as tile footprints.
 Empty-output recipes, including sentinel/parameter recipes, are retained. They
@@ -143,12 +144,15 @@ Generator `comblang-factorio-data-dump-v1.4` also retains item recipe quality
 metadata and quality-chain links. The supplied dump has six quality records and
 four explicit `next` links, but no explicit recipe quality transformations; tests
 for those transformations use synthetic inputs. This is not an exhaustive native
-RecipePrototype implementation. Generator `comblang-factorio-data-dump-v1.6`
+RecipePrototype implementation. Generator `comblang-factorio-data-dump-v1.7`
 retains all 662 recipes in the same supplied dump, including 11 empty-output
 recipes; only the circuit-capability warning remains in that smoke run. Explicit
-malformed recipe booleans or invalid/ambiguous raw main-product names now fail
-with `PD1001` at their raw field path. Lack of loss warnings does not establish
-complete recipe behavior coverage. For entity footprint, v1.6 uses explicit
+malformed values of applicable recipe fields, recipe booleans, or invalid/ambiguous
+raw main-product names fail with `PD1001` at their raw field path. A known raw
+recipe field that is inapplicable to its item/fluid and ingredient/product role is
+omitted from normalized facts and emits `PD2003` at the raw snake_case field path;
+this is an omission warning, not native behavior evidence. Lack of loss warnings
+does not establish complete recipe behavior coverage. For entity footprint, v1.7 uses explicit
 `tile_width` and `tile_height` per axis, falling back to collision-box dimensions
 as specified by the prototype API; it never substitutes the selection box.
 
@@ -176,7 +180,12 @@ Explicit zero and omitted fields remain distinct. In particular the native
 not replaced with zero by the loader. Excluded counts may exceed the crafted amount.
 Item exclusions use non-negative uint16 counts; fluid exclusions allow non-negative
 finite amounts. Independent/shared probabilities and productivity exclusions are
-product-only; statistics exclusions also belong on ingredients.
+product-only; statistics exclusions also belong on ingredients. Amount ranges and
+legacy probability are product-only; `extra_count_fraction` and quality/spoilage
+fields are restricted to their item roles, while fluidbox and temperature fields
+are restricted to fluid roles. Temperature ranges are ingredient-only. The raw
+converter omits a present but inapplicable field with `PD2003` and its exact raw
+path instead of promoting it to a normalized runtime fact.
 
 Legacy normalized `probability` remains supported, but mixing it with the new
 independent/shared probability representation is rejected as an ambiguous normalized
@@ -221,9 +230,12 @@ normalized JSON itself requires an array.
 All seven fields remain optional in schema v1. Explicit zero, false and empty lists
 remain distinguishable from omission through JSON serialization, provider access
 and identity calculation. New generators may require an explicit identity-pin
-update; existing data without these fields still loads unchanged. Item-only fields
-on fluids, fluid-only fields on items and incorrect ingredient/product roles are
-validation errors, not silently discarded facts.
+update; existing data without these fields still loads unchanged. The strict
+normalized validator reports item-only fields on fluids, fluid-only fields on
+items and incorrect ingredient/product roles as `PT1004` at the canonical field
+path. The raw converter instead treats a known inapplicable field as a `PD2003`
+warning and omits it from the normalized component. Explicit zero, false and
+empty-list values in an applicable role remain valid facts.
 
 ### Recipe quality transformations and chains
 
@@ -247,6 +259,11 @@ Missing bounds are not filled. Native defaults choose the end/start of the chain
 of the provided opposite bound. References are checked when quality coverage is
 available. Product/ingredient roles, item-only use, booleans, shifts and key shapes
 are validated regardless of reference coverage.
+
+The normalized schema remains v1 and does not serialize discriminated recipe
+component `role`/`kind` fields or evidence sidecars. Those are future F11 design
+work; the current role/kind policy is a package-internal validation and raw
+projection boundary.
 
 `prototypes.quality[name].next` contains a canonical quality key, `null` for a
 known chain end, or is omitted for unknown linkage in older databases. The native

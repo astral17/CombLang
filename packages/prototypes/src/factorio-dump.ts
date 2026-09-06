@@ -7,6 +7,12 @@ import type {
   RecipeComponent,
   RecipePrototype,
 } from './schema.js';
+import {
+  isRecipeComponentFieldApplicable,
+  type RecipeComponentField,
+  type RecipeComponentKind,
+  type RecipeComponentRole,
+} from './recipe-component-policy.js';
 import { buildPrototypeIndexes, validatePrototypeDatabase } from './validation.js';
 
 type JsonObject = Record<string, unknown>;
@@ -21,7 +27,7 @@ export interface FactorioDumpMetadata {
 }
 
 export interface FactorioDumpWarning {
-  readonly code: 'PD2001' | 'PD2002';
+  readonly code: 'PD2001' | 'PD2002' | 'PD2003';
   readonly path: string;
   readonly message: string;
 }
@@ -101,27 +107,74 @@ function optionalNumbers(value: unknown, path: string): readonly number[] | unde
   throw new FactorioDumpError(path, 'expected an array or the empty-object sentinel.');
 }
 
-function recipeComponent(value: JsonObject, path: string): RecipeComponent {
+const rawFieldNames: Readonly<Record<RecipeComponentField, string>> = {
+  amount: 'amount',
+  amountMin: 'amount_min',
+  amountMax: 'amount_max',
+  extraCountFraction: 'extra_count_fraction',
+  probability: 'probability',
+  independentProbability: 'independent_probability',
+  sharedProbability: 'shared_probability',
+  ignoredByStats: 'ignored_by_stats',
+  ignoredByProductivity: 'ignored_by_productivity',
+  affectedByQuality: 'affected_by_quality',
+  qualityChange: 'quality_change',
+  qualityMin: 'quality_min',
+  qualityMax: 'quality_max',
+  percentSpoiled: 'percent_spoiled',
+  alwaysFresh: 'always_fresh',
+  resetFreshnessOnCraft: 'reset_freshness_on_craft',
+  spoilWeight: 'spoil_weight',
+  fluidboxIndex: 'fluidbox_index',
+  fluidboxMultiplier: 'fluidbox_multiplier',
+  optionalFluidboxIndexes: 'optional_fluidbox_indexes',
+  temperature: 'temperature',
+  temperatureMin: 'minimum_temperature',
+  temperatureMax: 'maximum_temperature',
+};
+
+function recipeComponent(
+  value: JsonObject,
+  path: string,
+  role: RecipeComponentRole,
+  warnings: FactorioDumpWarning[],
+): RecipeComponent {
   const type = nonEmptyString(value.type, `${path}.type`);
   if (type !== 'item' && type !== 'fluid') {
     throw new FactorioDumpError(`${path}.type`, 'expected item or fluid.');
   }
-  const amount = optionalFinite(value.amount, `${path}.amount`);
-  const amountMin = optionalFinite(value.amount_min, `${path}.amount_min`);
-  const amountMax = optionalFinite(value.amount_max, `${path}.amount_max`);
-  const extraCountFraction = optionalFinite(
-    value.extra_count_fraction,
-    `${path}.extra_count_fraction`,
-  );
-  const probability = optionalFinite(value.probability, `${path}.probability`);
-  const independentProbability = optionalFinite(
-    value.independent_probability,
-    `${path}.independent_probability`,
-  );
-  const shared =
-    value.shared_probability === undefined
-      ? undefined
-      : object(value.shared_probability, `${path}.shared_probability`);
+  const kind: RecipeComponentKind = type;
+  const project = (field: RecipeComponentField): boolean => {
+    const rawField = rawFieldNames[field];
+    if (!Object.prototype.hasOwnProperty.call(value, rawField)) return false;
+    if (isRecipeComponentFieldApplicable(field, role, kind)) return true;
+    warnings.push({
+      code: 'PD2003',
+      path: `${path}.${rawField}`,
+      message: `Raw field ${rawField} was retained by data.raw but was not promoted to a normalized runtime fact for this ${kind} ${role}.`,
+    });
+    return false;
+  };
+
+  const amount = project('amount') ? optionalFinite(value.amount, `${path}.amount`) : undefined;
+  const amountMin = project('amountMin')
+    ? optionalFinite(value.amount_min, `${path}.amount_min`)
+    : undefined;
+  const amountMax = project('amountMax')
+    ? optionalFinite(value.amount_max, `${path}.amount_max`)
+    : undefined;
+  const extraCountFraction = project('extraCountFraction')
+    ? optionalFinite(value.extra_count_fraction, `${path}.extra_count_fraction`)
+    : undefined;
+  const probability = project('probability')
+    ? optionalFinite(value.probability, `${path}.probability`)
+    : undefined;
+  const independentProbability = project('independentProbability')
+    ? optionalFinite(value.independent_probability, `${path}.independent_probability`)
+    : undefined;
+  const shared = project('sharedProbability')
+    ? object(value.shared_probability, `${path}.shared_probability`)
+    : undefined;
   const sharedProbability =
     shared === undefined
       ? undefined
@@ -129,43 +182,56 @@ function recipeComponent(value: JsonObject, path: string): RecipeComponent {
           min: finite(shared.min, `${path}.shared_probability.min`),
           max: finite(shared.max, `${path}.shared_probability.max`),
         };
-  const ignoredByStats = optionalFinite(value.ignored_by_stats, `${path}.ignored_by_stats`);
-  const ignoredByProductivity = optionalFinite(
-    value.ignored_by_productivity,
-    `${path}.ignored_by_productivity`,
-  );
-  const percentSpoiled = optionalFinite(value.percent_spoiled, `${path}.percent_spoiled`);
-  const spoilWeight = optionalFinite(value.spoil_weight, `${path}.spoil_weight`);
-  const alwaysFresh = optionalBoolean(value.always_fresh, `${path}.always_fresh`);
-  const resetFreshnessOnCraft = optionalBoolean(
-    value.reset_freshness_on_craft,
-    `${path}.reset_freshness_on_craft`,
-  );
-  const fluidboxIndex = optionalFinite(value.fluidbox_index, `${path}.fluidbox_index`);
-  const fluidboxMultiplier = optionalFinite(
-    value.fluidbox_multiplier,
-    `${path}.fluidbox_multiplier`,
-  );
-  const optionalFluidboxIndexes = optionalNumbers(
-    value.optional_fluidbox_indexes,
-    `${path}.optional_fluidbox_indexes`,
-  );
-  const affectedByQuality = optionalBoolean(
-    value.affected_by_quality,
-    `${path}.affected_by_quality`,
-  );
-  const qualityChange = optionalFinite(value.quality_change, `${path}.quality_change`);
+  const ignoredByStats = project('ignoredByStats')
+    ? optionalFinite(value.ignored_by_stats, `${path}.ignored_by_stats`)
+    : undefined;
+  const ignoredByProductivity = project('ignoredByProductivity')
+    ? optionalFinite(value.ignored_by_productivity, `${path}.ignored_by_productivity`)
+    : undefined;
+  const percentSpoiled = project('percentSpoiled')
+    ? optionalFinite(value.percent_spoiled, `${path}.percent_spoiled`)
+    : undefined;
+  const spoilWeight = project('spoilWeight')
+    ? optionalFinite(value.spoil_weight, `${path}.spoil_weight`)
+    : undefined;
+  const alwaysFresh = project('alwaysFresh')
+    ? optionalBoolean(value.always_fresh, `${path}.always_fresh`)
+    : undefined;
+  const resetFreshnessOnCraft = project('resetFreshnessOnCraft')
+    ? optionalBoolean(value.reset_freshness_on_craft, `${path}.reset_freshness_on_craft`)
+    : undefined;
+  const fluidboxIndex = project('fluidboxIndex')
+    ? optionalFinite(value.fluidbox_index, `${path}.fluidbox_index`)
+    : undefined;
+  const fluidboxMultiplier = project('fluidboxMultiplier')
+    ? optionalFinite(value.fluidbox_multiplier, `${path}.fluidbox_multiplier`)
+    : undefined;
+  const optionalFluidboxIndexes = project('optionalFluidboxIndexes')
+    ? optionalNumbers(value.optional_fluidbox_indexes, `${path}.optional_fluidbox_indexes`)
+    : undefined;
+  const affectedByQuality = project('affectedByQuality')
+    ? optionalBoolean(value.affected_by_quality, `${path}.affected_by_quality`)
+    : undefined;
+  const qualityChange = project('qualityChange')
+    ? optionalFinite(value.quality_change, `${path}.quality_change`)
+    : undefined;
   const qualityMin =
-    value.quality_min === undefined
+    !project('qualityMin') || value.quality_min === undefined
       ? undefined
       : (`quality:${nonEmptyString(value.quality_min, `${path}.quality_min`)}` as const);
   const qualityMax =
-    value.quality_max === undefined
+    !project('qualityMax') || value.quality_max === undefined
       ? undefined
       : (`quality:${nonEmptyString(value.quality_max, `${path}.quality_max`)}` as const);
-  const temperature = optionalFinite(value.temperature, `${path}.temperature`);
-  const temperatureMin = optionalFinite(value.minimum_temperature, `${path}.minimum_temperature`);
-  const temperatureMax = optionalFinite(value.maximum_temperature, `${path}.maximum_temperature`);
+  const temperature = project('temperature')
+    ? optionalFinite(value.temperature, `${path}.temperature`)
+    : undefined;
+  const temperatureMin = project('temperatureMin')
+    ? optionalFinite(value.minimum_temperature, `${path}.minimum_temperature`)
+    : undefined;
+  const temperatureMax = project('temperatureMax')
+    ? optionalFinite(value.maximum_temperature, `${path}.maximum_temperature`)
+    : undefined;
   return {
     prototype: `${type}:${nonEmptyString(value.name, `${path}.name`)}`,
     ...(amount === undefined ? {} : { amount }),
@@ -296,7 +362,8 @@ export function normalizeFactorioDataDump(
   for (const record of records(dump, 'recipe')) {
     const name = record.name as string;
     const products = componentList(record.results, `recipe.${name}.results`).map(
-      (component, index) => recipeComponent(component, `recipe.${name}.results[${index}]`),
+      (component, index) =>
+        recipeComponent(component, `recipe.${name}.results[${index}]`, 'product', warnings),
     );
     const rawCategories =
       record.categories === undefined
@@ -310,7 +377,8 @@ export function normalizeFactorioDataDump(
       nonEmptyString(category, `recipe.${name}.categories[${index}]`),
     );
     const ingredients = componentList(record.ingredients, `recipe.${name}.ingredients`).map(
-      (component, index) => recipeComponent(component, `recipe.${name}.ingredients[${index}]`),
+      (component, index) =>
+        recipeComponent(component, `recipe.${name}.ingredients[${index}]`, 'ingredient', warnings),
     );
     if (record.main_product !== undefined && typeof record.main_product !== 'string') {
       throw new FactorioDumpError(`recipe.${name}.main_product`, 'expected a string.');
@@ -390,7 +458,7 @@ export function normalizeFactorioDataDump(
 
   const environment: PrototypeEnvironment = {
     ...metadata,
-    generatorVersion: 'comblang-factorio-data-dump-v1.6',
+    generatorVersion: 'comblang-factorio-data-dump-v1.7',
   };
   const candidate = {
     schemaVersion: 1,

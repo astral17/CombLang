@@ -15,6 +15,7 @@ type MutableDatabase = {
   environment: {
     expansions: string[];
     mods: { name: string; version: string }[];
+    generatorVersion: string;
     startupSettingsIdentity?: string;
     generatedAt?: string;
   };
@@ -243,6 +244,19 @@ describe('PrototypeDatabase v1', () => {
     );
     expect(same).toBe(base);
     expect(new Set([base, content, mods, settings]).size).toBe(4);
+  });
+
+  test('preserves an older generator label and includes it in content identity', async () => {
+    const older = mutableFixture();
+    const olderJson = JSON.stringify(older);
+    const loadedOlder = await loadPrototypeDatabase(JSON.parse(olderJson));
+    const newer = mutableFixture();
+    newer.environment.generatorVersion = 'comblang-factorio-data-dump-v1.7';
+    const loadedNewer = await loadPrototypeDatabase(newer);
+
+    expect(loadedOlder.database.environment.generatorVersion).toBe('fixture-v1');
+    expect(JSON.stringify(older)).toBe(olderJson);
+    expect(loadedOlder.prototypes.identity).not.toBe(loadedNewer.prototypes.identity);
   });
 
   test('builds deterministic multi-recipe product indexes without duplicate rows', () => {

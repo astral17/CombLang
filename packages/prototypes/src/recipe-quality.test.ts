@@ -47,7 +47,12 @@ test.each([
 test('limits quality roll control to item products and other quality fields to items', () => {
   expect(() =>
     validatePrototypeDatabase(fixture({ affectedByQuality: false }, 'ingredients')),
-  ).toThrowError(expect.objectContaining({ code: 'PT1004' }));
+  ).toThrowError(
+    expect.objectContaining({
+      code: 'PT1004',
+      path: expect.stringContaining('.affectedByQuality'),
+    }),
+  );
   for (const role of ['ingredients', 'products'] as const) {
     for (const fields of [
       { affectedByQuality: false },
@@ -56,7 +61,10 @@ test('limits quality roll control to item products and other quality fields to i
       { qualityMax: 'quality:rare' },
     ]) {
       expect(() => validatePrototypeDatabase(fixture(fields, role, true))).toThrowError(
-        expect.objectContaining({ code: 'PT1004' }),
+        expect.objectContaining({
+          code: 'PT1004',
+          path: expect.stringContaining(`.${Object.keys(fields)[0]}`),
+        }),
       );
     }
   }

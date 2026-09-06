@@ -51,6 +51,46 @@ describe('recipe product metadata', () => {
     );
   });
 
+  test('enforces shared product and ingredient-only applicability at canonical field paths', () => {
+    for (const [field, fields, role, recipeName] of [
+      ['amountMin', { amountMin: 1 }, 'ingredients', 'iron-gear-wheel'],
+      ['amountMax', { amountMax: 2 }, 'ingredients', 'iron-gear-wheel'],
+      ['probability', { probability: 0.5 }, 'ingredients', 'iron-gear-wheel'],
+      ['independentProbability', { independentProbability: 0.5 }, 'ingredients', 'iron-gear-wheel'],
+      [
+        'sharedProbability',
+        { sharedProbability: { min: 0, max: 1 } },
+        'ingredients',
+        'iron-gear-wheel',
+      ],
+      ['ignoredByProductivity', { ignoredByProductivity: 0 }, 'ingredients', 'iron-gear-wheel'],
+      ['extraCountFraction', { extraCountFraction: 0 }, 'ingredients', 'iron-gear-wheel'],
+      ['extraCountFraction', { extraCountFraction: 0 }, 'products', 'water-cycle'],
+      ['temperatureMin', { temperatureMin: 15 }, 'products', 'water-cycle'],
+      ['temperatureMax', { temperatureMax: 100 }, 'products', 'water-cycle'],
+    ] as const) {
+      expect(() => validatePrototypeDatabase(fixture(fields, role, recipeName))).toThrowError(
+        expect.objectContaining({
+          code: 'PT1004',
+          path: expect.stringContaining(`.${field}`),
+        }),
+      );
+    }
+    expect(() =>
+      validatePrototypeDatabase(
+        fixture({ amountMin: 1, amountMax: 2 }, 'products', 'modded-gear-wheel'),
+      ),
+    ).not.toThrow();
+    expect(() =>
+      validatePrototypeDatabase(fixture({ extraCountFraction: 0 }, 'products')),
+    ).not.toThrow();
+    expect(() =>
+      validatePrototypeDatabase(
+        fixture({ temperatureMin: 15, temperatureMax: 100 }, 'ingredients', 'water-cycle'),
+      ),
+    ).not.toThrow();
+  });
+
   test('keeps legacy probabilities but rejects mixed legacy/new probability models', () => {
     expect(() => validatePrototypeDatabase(fixture({ probability: 0.2 }))).not.toThrow();
     for (const fields of [

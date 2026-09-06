@@ -48,6 +48,9 @@ In particular:
 - Product and ingredient schemas must be validated by role and item/fluid type.
   Do not tighten runtime rules on a mixed raw representation first: raw artifacts
   such as fluid `extra_count_fraction` must not become authoritative runtime facts.
+  The normalized v1 policy reports those fields as `PT1004` at canonical paths;
+  the raw converter omits known inapplicable fields and emits `PD2003` at their
+  exact raw snake_case paths. Applicable malformed values remain `PD1001`.
   Zero fluid amounts, product-only probability/ranges, and temperature roles need
   explicit regression coverage at the correct boundary.
 - Circuit connector geometry is not proof of behavior-level capabilities. Keep
@@ -77,8 +80,9 @@ format is retained speculatively.
   locale collation. This applies to normalization, provider collections, identity,
   and setting-object comparison; recipe row order remains significant.
 - The normalizer retains empty-output recipes and no longer emits a skip warning
-  for them. Version `comblang-factorio-data-dump-v1.6` also uses explicit tile
-  dimensions before the documented collision-box fallback.
+  for them. Version `comblang-factorio-data-dump-v1.7` also uses explicit tile
+  dimensions before the documented collision-box fallback and role/kind-aware
+  normalized recipe projection.
 - Explicit malformed recipe booleans and `main_product` values fail with `PD1001`
   and a raw field path. A nonempty raw main-product name must identify exactly
   one product namespace. Repeated rows in that namespace are allowed; matching
@@ -100,8 +104,10 @@ Pins that no longer match are intentionally rejected; there is no compatibility
 fallback. Reload the JSON without a stale pin, inspect the new identity, and
 explicitly update project/supplement pins as appropriate. In the browser, select
 the JSON again if the cached identity no longer matches. Old entries are not
-silently migrated or exempted from validation. Regenerating a raw database with v1.5 also
-changes its contents and generator metadata, hence its identity.
+silently migrated or exempted from validation. Regenerating a raw database with
+v1.7 also changes its contents and generator metadata, hence its identity. Older
+valid schema-v1 JSON retains its recorded generator label when loaded; the loader
+does not rewrite it to the current raw converter identity.
 
 ## Additional design notes: planned, not current syntax
 

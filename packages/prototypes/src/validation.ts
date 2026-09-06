@@ -22,6 +22,10 @@ import {
 } from './schema.js';
 
 import { compareCanonicalString } from './canonical.js';
+import {
+  recipeComponentApplicabilityIssues,
+  type RecipeComponentKind,
+} from './recipe-component-policy.js';
 
 export class PrototypeValidationError extends Error {
   readonly code: string;
@@ -279,6 +283,10 @@ function parseComponent(
   if (!prototype.startsWith('item:') && !prototype.startsWith('fluid:')) {
     invalid('PT1002', `${path}.prototype`, 'expected an item: or fluid: prototype key.');
   }
+  const kind: RecipeComponentKind = prototype.startsWith('item:') ? 'item' : 'fluid';
+  for (const issue of recipeComponentApplicabilityIssues(input, role, kind)) {
+    invalid('PT1004', `${path}.${issue.field}`, issue.message);
+  }
   const amount = optionalFinite(input.amount, `${path}.amount`);
   const amountMin = optionalFinite(input.amountMin, `${path}.amountMin`);
   const amountMax = optionalFinite(input.amountMax, `${path}.amountMax`);
@@ -348,18 +356,6 @@ function parseComponent(
     }
   }
   if (
-    role === 'ingredient' &&
-    (independentProbability !== undefined ||
-      sharedProbability !== undefined ||
-      ignoredByProductivity !== undefined)
-  ) {
-    invalid(
-      'PT1004',
-      path,
-      'product probability and productivity fields are not valid on ingredients.',
-    );
-  }
-  if (
     probability !== undefined &&
     (independentProbability !== undefined || sharedProbability !== undefined)
   ) {
@@ -382,16 +378,6 @@ function parseComponent(
   if (spoilWeight !== undefined && (spoilWeight < 0 || spoilWeight > 1)) {
     invalid('PT1001', `${path}.spoilWeight`, 'expected 0 <= spoilWeight <= 1.');
   }
-  for (const [field, value, requiredRole] of [
-    ['percentSpoiled', percentSpoiled, 'product'],
-    ['alwaysFresh', alwaysFresh, 'product'],
-    ['resetFreshnessOnCraft', resetFreshnessOnCraft, 'product'],
-    ['spoilWeight', spoilWeight, 'ingredient'],
-  ] as const) {
-    if (value !== undefined && (!prototype.startsWith('item:') || role !== requiredRole)) {
-      invalid('PT1004', `${path}.${field}`, `valid only on item ${requiredRole}s.`);
-    }
-  }
   const fluidboxIndex = optionalFinite(input.fluidboxIndex, `${path}.fluidboxIndex`);
   const fluidboxMultiplier = optionalFinite(input.fluidboxMultiplier, `${path}.fluidboxMultiplier`);
   const optionalFluidboxIndexes =
@@ -407,15 +393,6 @@ function parseComponent(
     boundedInteger(fluidboxIndex, `${path}.fluidboxIndex`, 0, 4294967295);
   if (fluidboxMultiplier !== undefined)
     boundedInteger(fluidboxMultiplier, `${path}.fluidboxMultiplier`, 1, 255);
-  for (const [field, value] of [
-    ['fluidboxIndex', fluidboxIndex],
-    ['fluidboxMultiplier', fluidboxMultiplier],
-    ['optionalFluidboxIndexes', optionalFluidboxIndexes],
-  ] as const) {
-    if (value !== undefined && !prototype.startsWith('fluid:')) {
-      invalid('PT1004', `${path}.${field}`, 'valid only on fluid ingredients/products.');
-    }
-  }
   const affectedByQuality = optionalBoolean(input.affectedByQuality, `${path}.affectedByQuality`);
   const qualityChange =
     input.qualityChange === undefined
@@ -425,34 +402,9 @@ function parseComponent(
     input.qualityMin === undefined ? undefined : qualityKey(input.qualityMin, `${path}.qualityMin`);
   const qualityMax =
     input.qualityMax === undefined ? undefined : qualityKey(input.qualityMax, `${path}.qualityMax`);
-  for (const [field, value] of [
-    ['affectedByQuality', affectedByQuality],
-    ['qualityChange', qualityChange],
-    ['qualityMin', qualityMin],
-    ['qualityMax', qualityMax],
-  ] as const) {
-    if (
-      value !== undefined &&
-      (!prototype.startsWith('item:') || (field === 'affectedByQuality' && role !== 'product'))
-    ) {
-      invalid(
-        'PT1004',
-        `${path}.${field}`,
-        field === 'affectedByQuality'
-          ? 'valid only on item products.'
-          : 'valid only on item ingredients/products.',
-      );
-    }
-  }
   const temperature = optionalFinite(input.temperature, `${path}.temperature`);
   const temperatureMin = optionalFinite(input.temperatureMin, `${path}.temperatureMin`);
   const temperatureMax = optionalFinite(input.temperatureMax, `${path}.temperatureMax`);
-  if (
-    (temperature !== undefined || temperatureMin !== undefined || temperatureMax !== undefined) &&
-    !prototype.startsWith('fluid:')
-  ) {
-    invalid('PT1004', path, 'temperature constraints are valid only for fluids.');
-  }
   if (temperature !== undefined && (temperatureMin !== undefined || temperatureMax !== undefined)) {
     invalid('PT1001', path, 'exact temperature cannot be combined with a temperature range.');
   }

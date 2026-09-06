@@ -44,7 +44,6 @@ function dumpFixture(): unknown {
             name: 'water',
             amount: 10,
             temperature: 100,
-            extra_count_fraction: 0.25,
           },
         ],
         main_product: 'water',
@@ -124,6 +123,14 @@ describe('Factorio data-raw-dump normalizer', () => {
         ({ name }) => name === 'iron-plate',
       )?.mainProduct,
     ).toBe('item:iron-plate');
+    expect(
+      normalizeFactorioDataDump(dump, metadata).database.recipes.find(
+        ({ name }) => name === 'iron-plate',
+      )?.products,
+    ).toEqual([
+      { prototype: 'item:iron-plate', amount: 1 },
+      { prototype: 'item:iron-plate', amount: 2 },
+    ]);
     dump.fluid['iron-plate'] = { type: 'fluid', name: 'iron-plate' };
     (recipe.results as unknown[]).push({ type: 'fluid', name: 'iron-plate', amount: 1 });
     invalid();
@@ -235,6 +242,221 @@ describe('Factorio data-raw-dump normalizer', () => {
     expect(normalized.warnings.some(({ path }) => /probability|ignored_by/.test(path))).toBe(false);
   });
 
+  test.each([
+    {
+      title: 'amount minimum on ingredient',
+      recipe: 'iron-plate',
+      role: 'ingredients',
+      rawField: 'amount_min',
+      normalizedField: 'amountMin',
+      value: 1,
+    },
+    {
+      title: 'amount maximum on ingredient',
+      recipe: 'iron-plate',
+      role: 'ingredients',
+      rawField: 'amount_max',
+      normalizedField: 'amountMax',
+      value: 2,
+    },
+    {
+      title: 'legacy probability on ingredient',
+      recipe: 'iron-plate',
+      role: 'ingredients',
+      rawField: 'probability',
+      normalizedField: 'probability',
+      value: 0.5,
+    },
+    {
+      title: 'independent probability on ingredient',
+      recipe: 'iron-plate',
+      role: 'ingredients',
+      rawField: 'independent_probability',
+      normalizedField: 'independentProbability',
+      value: 0.5,
+    },
+    {
+      title: 'shared probability on ingredient',
+      recipe: 'iron-plate',
+      role: 'ingredients',
+      rawField: 'shared_probability',
+      normalizedField: 'sharedProbability',
+      value: { min: 0, max: 1 },
+    },
+    {
+      title: 'ignored productivity on ingredient',
+      recipe: 'iron-plate',
+      role: 'ingredients',
+      rawField: 'ignored_by_productivity',
+      normalizedField: 'ignoredByProductivity',
+      value: 0,
+    },
+    {
+      title: 'extra count fraction on fluid product',
+      recipe: 'heated-water',
+      role: 'products',
+      rawField: 'extra_count_fraction',
+      normalizedField: 'extraCountFraction',
+      value: 0.25,
+    },
+    {
+      title: 'quality roll on fluid product',
+      recipe: 'heated-water',
+      role: 'products',
+      rawField: 'affected_by_quality',
+      normalizedField: 'affectedByQuality',
+      value: false,
+    },
+    {
+      title: 'quality change on fluid product',
+      recipe: 'heated-water',
+      role: 'products',
+      rawField: 'quality_change',
+      normalizedField: 'qualityChange',
+      value: 1,
+    },
+    {
+      title: 'quality minimum on fluid product',
+      recipe: 'heated-water',
+      role: 'products',
+      rawField: 'quality_min',
+      normalizedField: 'qualityMin',
+      value: 'normal',
+    },
+    {
+      title: 'quality maximum on fluid product',
+      recipe: 'heated-water',
+      role: 'products',
+      rawField: 'quality_max',
+      normalizedField: 'qualityMax',
+      value: 'normal',
+    },
+    {
+      title: 'spoil percentage on fluid product',
+      recipe: 'heated-water',
+      role: 'products',
+      rawField: 'percent_spoiled',
+      normalizedField: 'percentSpoiled',
+      value: 0.5,
+    },
+    {
+      title: 'freshness flag on fluid product',
+      recipe: 'heated-water',
+      role: 'products',
+      rawField: 'always_fresh',
+      normalizedField: 'alwaysFresh',
+      value: false,
+    },
+    {
+      title: 'freshness reset on fluid product',
+      recipe: 'heated-water',
+      role: 'products',
+      rawField: 'reset_freshness_on_craft',
+      normalizedField: 'resetFreshnessOnCraft',
+      value: true,
+    },
+    {
+      title: 'spoil weight on fluid ingredient',
+      recipe: 'heated-water',
+      role: 'ingredients',
+      rawField: 'spoil_weight',
+      normalizedField: 'spoilWeight',
+      value: 0,
+    },
+    {
+      title: 'fluidbox index on item product',
+      recipe: 'iron-plate',
+      role: 'products',
+      rawField: 'fluidbox_index',
+      normalizedField: 'fluidboxIndex',
+      value: 0,
+    },
+    {
+      title: 'fluidbox multiplier on item product',
+      recipe: 'iron-plate',
+      role: 'products',
+      rawField: 'fluidbox_multiplier',
+      normalizedField: 'fluidboxMultiplier',
+      value: 1,
+    },
+    {
+      title: 'optional fluidbox indexes on item product',
+      recipe: 'iron-plate',
+      role: 'products',
+      rawField: 'optional_fluidbox_indexes',
+      normalizedField: 'optionalFluidboxIndexes',
+      value: {},
+    },
+    {
+      title: 'temperature on item product',
+      recipe: 'iron-plate',
+      role: 'products',
+      rawField: 'temperature',
+      normalizedField: 'temperature',
+      value: 50,
+    },
+    {
+      title: 'minimum temperature on item ingredient',
+      recipe: 'iron-plate',
+      role: 'ingredients',
+      rawField: 'minimum_temperature',
+      normalizedField: 'temperatureMin',
+      value: 10,
+    },
+    {
+      title: 'maximum temperature on item ingredient',
+      recipe: 'iron-plate',
+      role: 'ingredients',
+      rawField: 'maximum_temperature',
+      normalizedField: 'temperatureMax',
+      value: 100,
+    },
+    {
+      title: 'minimum temperature on fluid product',
+      recipe: 'heated-water',
+      role: 'products',
+      rawField: 'minimum_temperature',
+      normalizedField: 'temperatureMin',
+      value: 10,
+    },
+    {
+      title: 'maximum temperature on fluid product',
+      recipe: 'heated-water',
+      role: 'products',
+      rawField: 'maximum_temperature',
+      normalizedField: 'temperatureMax',
+      value: 100,
+    },
+  ] as const)('warns and omits inapplicable raw fields: $title', (caseData) => {
+    const dump = dumpFixture() as {
+      recipe: Record<string, { ingredients: unknown[]; results: unknown[] }>;
+    };
+    const recipe = dump.recipe[caseData.recipe]!;
+    if (caseData.role === 'ingredients' && !Array.isArray(recipe.ingredients)) {
+      recipe.ingredients = [{ type: 'fluid', name: 'water', amount: 10 }];
+    }
+    const rawComponents = caseData.role === 'products' ? recipe.results : recipe.ingredients;
+    Object.assign(rawComponents[0] as Record<string, unknown>, {
+      [caseData.rawField]: caseData.value,
+    });
+
+    const normalized = normalizeFactorioDataDump(dump, metadata);
+    const warning = normalized.warnings.filter(({ code }) => code === 'PD2003');
+    expect(warning).toEqual([
+      expect.objectContaining({
+        code: 'PD2003',
+        path: `recipe.${caseData.recipe}.${caseData.role === 'products' ? 'results' : 'ingredients'}[0].${caseData.rawField}`,
+        message: expect.stringContaining('retained by data.raw'),
+      }),
+    ]);
+    const normalizedRecipe = normalized.database.recipes.find(
+      ({ name }) => name === caseData.recipe,
+    )!;
+    const component =
+      caseData.role === 'products' ? normalizedRecipe.products[0] : normalizedRecipe.ingredients[0];
+    expect(component).not.toHaveProperty(caseData.normalizedField);
+  });
+
   test('rejects malformed raw shared probability with its dump path', () => {
     const dump = dumpFixture() as { recipe: Record<string, { results: unknown }> };
     dump.recipe['iron-plate']!.results = [
@@ -252,7 +474,7 @@ describe('Factorio data-raw-dump normalizer', () => {
     const normalized = normalizeFactorioDataDump(dumpFixture(), metadata);
     const { database, prototypes } = await loadPrototypeDatabase(normalized.database);
 
-    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.6');
+    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.7');
     expect(prototypes.item.grenade?.stackSize).toBe(100);
     expect(prototypes.recipe['iron-plate']).toMatchObject({
       categories: ['crafting'],
@@ -318,17 +540,26 @@ describe('Factorio data-raw-dump normalizer', () => {
     );
   });
 
-  test('preserves zero-base probabilistic extra counts used by recycling recipes', () => {
+  test('warns and omits an inapplicable fluid product extra count', () => {
     const dump = dumpFixture() as {
       recipe: Record<string, { results: unknown }>;
     };
     dump.recipe['heated-water']!.results = [
-      { type: 'fluid', name: 'water', amount: 0, extra_count_fraction: 0.25 },
+      { type: 'fluid', name: 'water', amount: 1, extra_count_fraction: 0.25 },
     ];
 
-    expect(normalizeFactorioDataDump(dump, metadata).database.recipes[0]?.products).toEqual([
-      { prototype: 'fluid:water', amount: 0, extraCountFraction: 0.25 },
-    ]);
+    const normalized = normalizeFactorioDataDump(dump, metadata);
+    expect(
+      normalized.database.recipes.find(({ name }) => name === 'heated-water')?.products,
+    ).toEqual([{ prototype: 'fluid:water', amount: 1 }]);
+    expect(normalized.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'PD2003',
+          path: 'recipe.heated-water.results[0].extra_count_fraction',
+        }),
+      ]),
+    );
   });
 
   test('accepts the older singular recipe category dump shape', () => {
@@ -411,10 +642,10 @@ describe('Factorio data-raw-dump normalizer', () => {
       optionalFluidboxIndexes: [],
     });
     expect(normalized.warnings.some(({ path }) => /spoil|fresh|fluidbox/.test(path))).toBe(false);
+    expect(normalized.warnings.some(({ code }) => code === 'PD2003')).toBe(false);
   });
 
   test.each([
-    ['always_fresh', 1, 'always_fresh'],
     ['optional_fluidbox_indexes', { first: 1 }, 'optional_fluidbox_indexes'],
     ['optional_fluidbox_indexes', ['2'], 'optional_fluidbox_indexes[0]'],
   ])('reports malformed raw %s with its dump path', (field, value, suffix) => {
@@ -424,6 +655,27 @@ describe('Factorio data-raw-dump normalizer', () => {
     ];
     expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
       expect.objectContaining({ code: 'PD1001', path: `recipe.heated-water.results[0].${suffix}` }),
+    );
+  });
+
+  test('warns and omits an inapplicable malformed item-only raw field on a fluid', () => {
+    const dump = dumpFixture() as { recipe: Record<string, { results: unknown }> };
+    dump.recipe['heated-water']!.results = [
+      { type: 'fluid', name: 'water', amount: 10, always_fresh: 1 },
+    ];
+
+    const normalized = normalizeFactorioDataDump(dump, metadata);
+    expect(
+      normalized.database.recipes.find(({ name }) => name === 'heated-water')?.products[0],
+    ).not.toHaveProperty('alwaysFresh');
+    expect(normalized.warnings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: 'PD2003',
+          path: 'recipe.heated-water.results[0].always_fresh',
+          message: expect.stringContaining('retained by data.raw'),
+        }),
+      ]),
     );
   });
 
