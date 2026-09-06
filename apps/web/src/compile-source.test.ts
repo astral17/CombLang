@@ -42,6 +42,41 @@ describe('browser source compilation', () => {
     expect(result.pipelineDiagnostics).toEqual(result.compilerDiagnostics);
   });
 
+  test('links malformed CC tuple counts to the executed call', () => {
+    const call = 'CC([A, 1.5])';
+    const text =
+      "const A = Signal('virtual', 'signal-A');\n" +
+      'const output = new Network();\n' +
+      `output += ${call};`;
+    const result = compileSource({ path: 'malformed-tuple.factorio.ts', text });
+    const diagnostic = result.compilerDiagnostics.find(({ code }) => code === 'EX1001');
+
+    expect(result.plan).toBeUndefined();
+    expect(diagnostic).toMatchObject({
+      code: 'EX1001',
+      severity: 'error',
+      message: expect.stringContaining('args[0].value'),
+      span: expect.any(Object),
+    });
+    expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(call);
+  });
+
+  test('links malformed signal object keys to the executed call', () => {
+    const call = "CC({ 'signal:broken': 1 })";
+    const text = 'const output = new Network();\n' + `output += ${call};`;
+    const result = compileSource({ path: 'malformed-signal-key.factorio.ts', text });
+    const diagnostic = result.compilerDiagnostics.find(({ code }) => code === 'EX1001');
+
+    expect(result.plan).toBeUndefined();
+    expect(diagnostic).toMatchObject({
+      code: 'EX1001',
+      severity: 'error',
+      message: expect.stringContaining('args[0].object["signal:broken"].key'),
+      span: expect.any(Object),
+    });
+    expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(call);
+  });
+
   test('orders environment, parser, and semantic diagnostics without executing invalid source', () => {
     const environmentError: Diagnostic = {
       code: 'ENV_TEST',

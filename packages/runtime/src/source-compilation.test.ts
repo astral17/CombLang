@@ -29,6 +29,57 @@ output += input + 1;`,
     expect(stages.filter((stage) => stage === 'lower')).toHaveLength(1);
   });
 
+  test('compiles every supported CC source form through the shared host service', () => {
+    const compilation = compileSourceProgram({
+      path: 'ordered-constant.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const sameA = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B', 'legendary');
+const output = new Network();
+output += CC(
+  1 * A,
+  [sameA, 2],
+  [[B, 3]],
+  new Map([[A, 4], [sameA, 5], ['iron-plate', 6]]),
+  { [B]: 7, 'copper-plate': 0 },
+);`,
+    });
+
+    expect(compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error')).toEqual(
+      [],
+    );
+    expect(compilation.execution).toBeDefined();
+    const producers = compilation.execution!.circuit.graph.producers;
+    expect(producers).toHaveLength(1);
+    expect(producers[0]).toMatchObject({ kind: 'constant' });
+
+    const producer = producers[0]!;
+    if (producer.kind !== 'constant') throw new Error('Expected one constant producer.');
+    expect(
+      producer.config.outputs.map(({ signal, value }) => [
+        signal.type,
+        signal.name,
+        signal.quality,
+        value,
+      ]),
+    ).toEqual([
+      ['virtual', 'signal-A', undefined, 1],
+      ['virtual', 'signal-A', undefined, 2],
+      ['virtual', 'signal-B', 'legendary', 3],
+      ['virtual', 'signal-A', undefined, 4],
+      ['virtual', 'signal-A', undefined, 5],
+      ['item', 'iron-plate', undefined, 6],
+      ['virtual', 'signal-B', 'legendary', 7],
+      ['item', 'copper-plate', undefined, 0],
+    ]);
+
+    const [first, second, , fourth, fifth] = producer.config.outputs;
+    expect(first!.signal).not.toBe(second!.signal);
+    expect(first!.signal).not.toBe(fifth!.signal);
+    expect(first!.signal).toEqual(second!.signal);
+    expect(first!.signal).toEqual(fifth!.signal);
+  });
+
   test('separates host-local execution from a structured-clone-safe artifact', () => {
     const compilation = compileSourceProgram({
       path: 'transport.factorio.ts',
