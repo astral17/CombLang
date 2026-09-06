@@ -111,3 +111,19 @@ Status: **complete**.
 Validation: **974 tests in 89 files**, format check, typecheck, and complete CLI/web production builds pass. The isolated entry point keeps the main UI at about 626 kB and the test Worker at about 77 kB; the existing Vite large-chunk warning remains.
 
 Next task: F08, replace the Direct Plan preview heuristic with resolved NCIR graph/SCC metrics.
+
+## F08 — Resolved circuit graph metrics
+
+Status: **complete**.
+
+- `analyzeCircuitGraph` builds Producer dependencies from resolved NCIR rather than source or serialization order.
+- Every driver of an input Network participates. Input discovery uses the shared topology traversal, including pairs, nested conditions, copied outputs, and else-only inputs; zero-tick aliases are already canonical physical IDs.
+- An iterative SCC pass identifies multi-Producer cycles and self-feedback without depending on JavaScript recursion depth.
+- Acyclic circuits report the global maximum accumulated device latency. Feedback circuits report separately identified SCCs and a structural depth over the condensed component DAG, never a finite settle-time claim.
+- Arithmetic, Decider, and Constant combinators explicitly declare one committed tick. Unrecognised or caller-designated device latency remains unknown and propagates to depth instead of silently becoming one.
+- The browser proof now displays graph depth, feedback SCC count, and known/unknown device latency separately. Its compatibility `stages` field is derived from the same NCIR metric.
+- Regression coverage includes a three-stage chain followed by an independent Producer, reversed Producer order, a diamond with multiple drivers and a pair input, else-only Decider input, a zero-tick transferred Network, a two-node SCC, self-feedback, downstream work after an SCC, unknown latency, and invalid latency declarations.
+
+Validation: **983 tests in 90 files**, format check, typecheck, and complete CLI/web production builds pass. The web main bundle remains about 628 kB; the existing Vite large-chunk warning remains.
+
+Next task: F09, pin the Factorio API inventory inputs and generator boundary inside this repository.

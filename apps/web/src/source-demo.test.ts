@@ -169,6 +169,59 @@ const output: Network = Pipeline(input);`,
     ]);
   });
 
+  test('does not let a trailing independent branch reduce graph depth', () => {
+    const parsed = parseFile({
+      path: 'independent-branch.factorio.ts',
+      text: `const input = new Network();
+const first: Network = input + 1;
+const second: Network = first + 1;
+const third: Network = second + 1;
+const unrelated: Network = input + 7;`,
+    });
+    const demo = runSourcePlanDemo(compileDirectPlan(parsed).plan!);
+
+    expect(demo.stages).toBe(3);
+    expect(demo.graphMetrics).toEqual({
+      depth: 3,
+      feedback: false,
+      feedbackComponents: [],
+      unknownLatency: false,
+    });
+  });
+
+  test('reports feedback separately from its condensed structural depth', () => {
+    const parsed = parseFile({
+      path: 'feedback.factorio.ts',
+      text: `const loop = new Network();
+loop += loop + 1;`,
+    });
+    const demo = runSourcePlanDemo(compileDirectPlan(parsed).plan!, 7);
+
+    expect(demo.graphMetrics).toMatchObject({
+      depth: 1,
+      feedback: true,
+      unknownLatency: false,
+    });
+    expect(demo.graphMetrics.feedbackComponents).toHaveLength(1);
+  });
+
+  test('computes dependencies through a zero-tick transferred Network', () => {
+    const compiled = compileSource({
+      path: 'transferred-depth.factorio.ts',
+      text: `const input = new Network();
+let middle: Network = input + 1;
+const moved = new Network();
+moved.take(middle);
+const output: Network = moved + 1;`,
+    });
+    expect(compiled.compilerDiagnostics).toEqual([
+      expect.objectContaining({ code: 'CL2001', severity: 'warning' }),
+    ]);
+
+    const demo = runSourcePlanDemo(compiled.plan!);
+    expect(demo.graphMetrics).toMatchObject({ depth: 2, feedback: false });
+  });
+
   test('uses a folded integer subexpression without adding a physical stage', () => {
     const parsed = parseFile({
       path: 'folded-pipeline.factorio.ts',

@@ -101,6 +101,8 @@ const proofDescription = requiredElement<HTMLParagraphElement>('#proof-descripti
 const proofCombinators = requiredElement<HTMLElement>('#proof-combinators');
 const proofAttachments = requiredElement<HTMLElement>('#proof-attachments');
 const proofStages = requiredElement<HTMLElement>('#proof-stages');
+const proofFeedback = requiredElement<HTMLElement>('#proof-feedback');
+const proofLatency = requiredElement<HTMLElement>('#proof-latency');
 const proofFolds = requiredElement<HTMLElement>('#proof-folds');
 const waveform = requiredElement<HTMLElement>('#waveform');
 const waveformNetwork = requiredElement<HTMLSelectElement>('#waveform-network');
@@ -693,6 +695,8 @@ function renderProofError(message: string, compiledPlan?: DirectElaborationPlan)
   proofCombinators.textContent = '—';
   proofAttachments.textContent = '—';
   proofStages.textContent = '—';
+  proofFeedback.textContent = '—';
+  proofLatency.textContent = '—';
   proofFolds.textContent = '—';
   const empty = document.createElement('p');
   empty.className = 'proof-empty';
@@ -731,7 +735,9 @@ function renderSourceProof(
   stateStatus.textContent = '';
   proofCombinators.textContent = String(demo.combinators);
   proofAttachments.textContent = String(demo.attachments);
-  proofStages.textContent = String(demo.stages);
+  proofStages.textContent = demo.graphMetrics.depth?.toString() ?? 'unknown';
+  proofFeedback.textContent = String(demo.graphMetrics.feedbackComponents.length);
+  proofLatency.textContent = demo.graphMetrics.unknownLatency ? 'unknown' : 'known';
   proofFolds.textContent = String(foldedOperations);
   const callPaths = new Map<string, Set<string>>();
   for (const producer of plan.producers) {

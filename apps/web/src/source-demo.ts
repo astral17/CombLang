@@ -3,6 +3,10 @@ import type {
   PlanDeciderCondition,
   PlanNetworkRef,
 } from '@comblang/compiler/direct-plan-schema';
+import {
+  analyzeCircuitGraph,
+  type CircuitGraphMetrics,
+} from '@comblang/compiler/circuit-graph-metrics';
 import { signal, SparseBus, type SignalId } from '@comblang/factorio';
 import type { NetworkId } from '@comblang/shared';
 import type { SimulationSnapshot } from '@comblang/simulator';
@@ -28,6 +32,7 @@ export interface SourcePlanDemo {
   readonly combinators: number;
   readonly attachments: number;
   readonly stages: number;
+  readonly graphMetrics: CircuitGraphMetrics;
   readonly inputNetwork?: string;
   readonly outputNetwork?: string;
   readonly inputValue?: number;
@@ -243,59 +248,13 @@ function firstConditionNetwork(condition: PlanDeciderCondition): string | undefi
   return undefined;
 }
 
-function conditionNetworks(condition: PlanDeciderCondition): readonly string[] {
-  if (
-    condition.kind === 'compare-each' ||
-    condition.kind === 'compare-signal' ||
-    condition.kind === 'compare-wildcard'
-  ) {
-    return networkRefNames(condition);
-  }
-  if (condition.kind === 'compare-signals') {
-    return [...networkRefNames(condition.left), ...networkRefNames(condition.right)];
-  }
-  return condition.conditions.flatMap(conditionNetworks);
-}
-
-function producerInputNetworks(
-  producer: DirectElaborationPlan['producers'][number],
-): readonly string[] {
-  if (producer.kind === 'constant') return [];
-  if (producer.kind === 'decider') {
-    const outputs = producer.outputs ?? [producer.output];
-    return [
-      ...conditionNetworks(producer.condition),
-      ...outputs.flatMap((output) =>
-        output.kind === 'each' || output.kind === 'signal' || output.kind === 'wildcard'
-          ? networkRefNames(output)
-          : [],
-      ),
-    ];
-  }
-  return [producer.left, producer.right]
-    .filter((operand) => operand.kind === 'each' || operand.kind === 'signal')
-    .flatMap(networkRefNames);
-}
-
-function criticalPathStages(plan: DirectElaborationPlan): number {
-  const networkDepth = new Map<string, number>();
-  let finalDepth = 0;
-  for (const producer of plan.producers) {
-    const depth =
-      1 +
-      Math.max(0, ...producerInputNetworks(producer).map((name) => networkDepth.get(name) ?? 0));
-    for (const destination of producer.destinations) networkDepth.set(destination.network, depth);
-    finalDepth = depth;
-  }
-  return finalDepth;
-}
-
 export function runSourceCircuitDemo(
   artifact: SourceCircuitArtifact,
   inputValue = 7,
   tickCount?: number,
 ): SourcePlanDemo {
   const { plan, execution: executed } = artifact;
+  const graphMetrics = analyzeCircuitGraph(executed.circuit.ir);
   const firstProducer = plan.producers[0];
   const lastProducer = plan.producers.at(-1);
   if (firstProducer === undefined || lastProducer === undefined) {
@@ -304,6 +263,7 @@ export function runSourceCircuitDemo(
       combinators: 0,
       attachments: 0,
       stages: 0,
+      graphMetrics,
       colors: sourceFacingColors(plan, executed),
       waveform: [],
       timeline: [captureTimeline(simulation.snapshot, executed.circuit.ir.networks)],
@@ -352,7 +312,7 @@ export function runSourceCircuitDemo(
     },
   ];
   const timeline = [captureTimeline(simulation.snapshot, executed.circuit.ir.networks)];
-  const stages = criticalPathStages(plan);
+  const stages = graphMetrics.depth ?? 0;
   const ticks = tickCount ?? stages;
   let snapshot = simulation.snapshot;
   for (let tick = 1; tick <= ticks; tick += 1) {
@@ -369,6 +329,7 @@ export function runSourceCircuitDemo(
     combinators: executed.circuit.graph.producers.length,
     attachments: executed.circuit.graph.attachments.length,
     stages,
+    graphMetrics,
     ...(inputName === undefined ? {} : { inputNetwork: inputName, inputValue }),
     outputNetwork: survivingOutputName,
     outputValue: snapshot.read(output.id).get(A),

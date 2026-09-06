@@ -1,5 +1,6 @@
 export * from './color-solver.js';
 export * from './circuit-color-constraints.js';
+export * from './circuit-graph-metrics.js';
 export * from './blueprint-json.js';
 export * from './direct-plan.js';
 export * from './elaboration-transform.js';
