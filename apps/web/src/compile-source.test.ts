@@ -124,6 +124,7 @@ const source = CC(prototypes.item['iron-plate'].stackSize * PLATE);`,
     expect(result.compilerDiagnostics).toEqual([
       expect.objectContaining({ code: 'CL2001', severity: 'warning' }),
     ]);
+    expect(result.prototypeIdentity).toBe(prototypes.identity);
     expect(result.plan?.producers[0]).toMatchObject({
       kind: 'constant',
       outputs: [{ signal: { name: 'iron-plate' }, value: 100 }],

@@ -3,10 +3,14 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "exports": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./source-compilation": "./src/source-compilation.ts"
+  },
   "dependencies": {
     "@comblang/compiler": "0.0.0",
     "@comblang/factorio": "0.0.0",
+    "@comblang/language": "0.0.0",
     "@comblang/prototypes": "0.0.0",
     "@comblang/simulator": "0.0.0",
     "@comblang/shared": "0.0.0"

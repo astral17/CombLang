@@ -1,6 +1,6 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, test, vi } from 'vitest';
@@ -9,6 +9,10 @@ import {
   syntheticPrototypeDatabase,
   validatePrototypeDatabase,
 } from '@comblang/prototypes';
+import {
+  compileSourceProgram,
+  sourceCompilationArtifact,
+} from '@comblang/runtime/source-compilation';
 
 import { run } from './main.js';
 
@@ -42,6 +46,34 @@ afterEach(async () => {
 });
 
 describe('CLI prototype profiles', () => {
+  test.each([
+    ['successful warning', 'const output = CC();', 0],
+    ['parser error', 'const = ;', 1],
+    ['semantic error', 'const ANY = 5;', 1],
+    ['execution error', `throw new Error('stop');`, 1],
+    [
+      'runtime topology error',
+      'const first = new Network<R>(); const second = new Network<R>(); pair(first, second);',
+      1,
+    ],
+  ] as const)('matches shared pipeline diagnostics for a %s', async (_name, text, exitCode) => {
+    const path = await sourceFile(text);
+    const source = {
+      path: relative(process.cwd(), resolve(path)).replaceAll('\\', '/'),
+      text,
+    };
+    const expected = sourceCompilationArtifact(compileSourceProgram(source));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path])).toBe(exitCode);
+    const report = JSON.parse(String(log.mock.calls[0]?.[0])) as {
+      readonly diagnostics: unknown;
+    };
+    expect(report.diagnostics).toEqual(expected.pipelineDiagnostics);
+  });
+
   test('accepts implicit Network parameters and reports declaration warnings with exit zero', async () => {
     const text = `function Double(input) { return input * 2; }
 function Triple(input: Network) { return input * 3; }

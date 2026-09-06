@@ -96,14 +96,18 @@ Validation: **964 tests in 87 files**, format check, and typecheck pass.
 
 ## F07 — Shared compilation artifact and host service
 
-Status: **in progress; repeated browser preview lowering removed**.
+Status: **complete**.
 
 - The browser main thread creates one immutable `SourceCircuitArtifact` for each accepted Direct Plan.
 - The source proof, interactive controller, and blueprint JSON preview share its executed circuit instead of independently calling `elaborateDirectPlan`.
 - Simulation reset, tick editing, and history rebasing now create fresh simulation kernels over the same immutable circuit. They no longer replay the Direct Plan, while still discarding stale trace state.
 - Plan-only compatibility entry points remain for focused callers and tests; the production UI uses the artifact-taking APIs.
-- The compiler Worker transport remains structured-clone-safe: runtime handles, functions, and maps are constructed only on the receiving main thread and never cross the Worker boundary.
+- `compileSourceProgram` now owns parse, preflight, semantic validation, transform, executed source recording, Direct Plan replay, and the append-only diagnostic order in one browser/Node-neutral runtime module.
+- The local result retains its `ExecutedDirectPlan`; `sourceCompilationArtifact` strips host-local handles, functions, and maps into a structured-clone-safe Worker artifact.
+- Prototype identity is part of that artifact whenever an explicit environment is selected.
+- The compiler Worker and CLI are thin hosts over the common service. CLI project diagnostics no longer duplicate parser errors, and single-file success, warning, parser, semantic, execution, and topology-error results have parity coverage.
+- Compilation-stage instrumentation proves one core lowering per service invocation. The CLI test host reuses that execution while creating a fresh isolated `TestSession` for every test case.
 
-Validation for this slice: **965 tests in 88 files**, format check, typecheck, and complete CLI/web production builds pass. The existing Vite large-chunk warning remains.
+Validation: **974 tests in 89 files**, format check, typecheck, and complete CLI/web production builds pass. The isolated entry point keeps the main UI at about 626 kB and the test Worker at about 77 kB; the existing Vite large-chunk warning remains.
 
-Still required: move parse/preflight/transform/execute/lower orchestration into a host-neutral runtime compilation service, make the CLI and Worker thin adapters, carry prototype identity in its artifact, and add explicit CLI/web diagnostic-parity plus one-lowering instrumentation coverage.
+Next task: F08, replace the Direct Plan preview heuristic with resolved NCIR graph/SCC metrics.

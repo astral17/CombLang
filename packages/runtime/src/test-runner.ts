@@ -130,9 +130,8 @@ function failure(
   return { ...common, failureKind: 'runtime' };
 }
 
-/** Runs the temporary JavaScript test surface shared by browser and Node clients. */
-export function runDirectPlanTests(
-  plan: DirectElaborationPlan,
+function runTestsWithExecution(
+  getExecution: () => ExecutedDirectPlan,
   source: string,
   options: DirectPlanTestRunnerOptions = {},
 ): DirectPlanTestRun {
@@ -172,7 +171,7 @@ export function runDirectPlanTests(
   const results = registered.map((registeredTest): DirectPlanTestCaseResult => {
     let execution: ExecutedDirectPlan;
     try {
-      execution = elaborateDirectPlan(plan);
+      execution = getExecution();
     } catch (error) {
       return failure(registeredTest.name, error, sourceName, stackLineOffset);
     }
@@ -242,4 +241,37 @@ export function runDirectPlanTests(
   });
   const passed = results.filter(({ status }) => status === 'passed').length;
   return { results, passed, failed: results.length - passed };
+}
+
+/** Runs tests with a circuit already produced by the shared compilation service. */
+export function runExecutedDirectPlanTests(
+  execution: ExecutedDirectPlan,
+  source: string,
+  options: DirectPlanTestRunnerOptions = {},
+): DirectPlanTestRun {
+  return runTestsWithExecution(() => execution, source, options);
+}
+
+/** Compatibility entry point for callers that only own a serializable Direct Plan. */
+export function runDirectPlanTests(
+  plan: DirectElaborationPlan,
+  source: string,
+  options: DirectPlanTestRunnerOptions = {},
+): DirectPlanTestRun {
+  let attempted = false;
+  let execution: ExecutedDirectPlan | undefined;
+  let failure: unknown;
+  const getExecution = (): ExecutedDirectPlan => {
+    if (!attempted) {
+      attempted = true;
+      try {
+        execution = elaborateDirectPlan(plan);
+      } catch (error) {
+        failure = error;
+      }
+    }
+    if (execution !== undefined) return execution;
+    throw failure;
+  };
+  return runTestsWithExecution(getExecution, source, options);
 }

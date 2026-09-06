@@ -5,14 +5,12 @@ import { relative, resolve } from 'node:path';
 import process from 'node:process';
 import { pathToFileURL } from 'node:url';
 
-import { transformElaborationModule } from '@comblang/compiler';
 import type {
-  DirectElaborationPlan,
   DirectPlanCapabilityUse,
   DirectPlanNetworkPair,
   DirectPlanNetworkTransfer,
 } from '@comblang/compiler/direct-plan-schema';
-import { parseProject, validateDslSemantics } from '@comblang/language';
+import { parseProject } from '@comblang/language';
 import {
   applyEntityCircuitSupplement,
   CircuitSupplementError,
@@ -27,12 +25,8 @@ import {
   type FactorioDumpMetadata,
   type PrototypeProvider,
 } from '@comblang/prototypes';
-import {
-  executionFailureDiagnostic,
-  executeElaborationProgram,
-  runDirectPlanTests,
-  tryElaborateDirectPlan,
-} from '@comblang/runtime';
+import { runExecutedDirectPlanTests, type ExecutedDirectPlan } from '@comblang/runtime';
+import { compileParsedSourceProgram } from '@comblang/runtime/source-compilation';
 import { offsetToPosition, type Diagnostic } from '@comblang/shared';
 import { resolveProjectOptions } from './project-profile.js';
 
@@ -95,6 +89,13 @@ function formatDiagnostic(
   return `${source.path}:${position.line + 1}:${position.column + 1} - ${diagnostic.severity} ${diagnostic.code}: ${diagnostic.message}`;
 }
 
+function projectOnlyDiagnostics(project: ReturnType<typeof parseProject>): readonly Diagnostic[] {
+  const fileDiagnostics = new Set(
+    [...project.files.values()].flatMap((file) => [...file.diagnostics]),
+  );
+  return project.diagnostics.filter((diagnostic) => !fileDiagnostics.has(diagnostic));
+}
+
 async function check(
   fileNames: readonly string[],
   json: boolean,
@@ -119,27 +120,19 @@ async function check(
     [...project.files].map(([id, file]) => [id as string, { path: file.path, text: file.text }]),
   );
 
-  const diagnostics: Diagnostic[] = [...project.diagnostics];
+  const diagnostics: Diagnostic[] = [...projectOnlyDiagnostics(project)];
   let producerCount = 0;
   const capabilityUses: DirectPlanCapabilityUse[] = [];
   const networkTransfers: DirectPlanNetworkTransfer[] = [];
   const networkPairs: DirectPlanNetworkPair[] = [];
   for (const file of project.files.values()) {
-    if (file.diagnostics.some(({ severity }) => severity === 'error')) continue;
-    const semanticDiagnostics = validateDslSemantics(file);
-    diagnostics.push(...semanticDiagnostics);
-    if (semanticDiagnostics.some(({ severity }) => severity === 'error')) continue;
-    try {
-      const plan = executeElaborationProgram(transformElaborationModule(file), environment);
-      diagnostics.push(...(plan.diagnostics ?? []));
-      producerCount += plan.producers.length;
-      capabilityUses.push(...(plan.capabilityUses ?? []));
-      networkTransfers.push(...(plan.networkTransfers ?? []));
-      networkPairs.push(...(plan.networkPairs ?? []));
-      diagnostics.push(...tryElaborateDirectPlan(plan).diagnostics);
-    } catch (error) {
-      diagnostics.push(executionFailureDiagnostic(error));
-    }
+    const compiled = compileParsedSourceProgram(file, environment);
+    diagnostics.push(...compiled.pipelineDiagnostics);
+    if (compiled.plan === undefined) continue;
+    producerCount += compiled.plan.producers.length;
+    capabilityUses.push(...(compiled.plan.capabilityUses ?? []));
+    networkTransfers.push(...(compiled.plan.networkTransfers ?? []));
+    networkPairs.push(...(compiled.plan.networkPairs ?? []));
   }
 
   if (json) {
@@ -191,29 +184,19 @@ async function testCircuit(
   const testSource = await readFile(absoluteTest, 'utf8');
   const project = parseProject([source]);
   const file = [...project.files.values()][0];
-  const diagnostics: Diagnostic[] = [...project.diagnostics];
-  let plan: DirectElaborationPlan | undefined;
+  const diagnostics: Diagnostic[] = [...projectOnlyDiagnostics(project)];
+  let execution: ExecutedDirectPlan | undefined;
 
   if (file !== undefined && !diagnostics.some(({ severity }) => severity === 'error')) {
-    const semanticDiagnostics = validateDslSemantics(file);
-    diagnostics.push(...semanticDiagnostics);
-    if (!semanticDiagnostics.some(({ severity }) => severity === 'error')) {
-      try {
-        plan = executeElaborationProgram(transformElaborationModule(file), environment);
-        diagnostics.push(...(plan.diagnostics ?? []));
-        if (!diagnostics.some(({ severity }) => severity === 'error')) {
-          diagnostics.push(...tryElaborateDirectPlan(plan).diagnostics);
-        }
-      } catch (error) {
-        diagnostics.push(executionFailureDiagnostic(error));
-      }
-    }
+    const compiled = compileParsedSourceProgram(file, environment);
+    diagnostics.push(...compiled.pipelineDiagnostics);
+    execution = compiled.execution;
   }
 
   const tests =
-    plan === undefined || diagnostics.some(({ severity }) => severity === 'error')
+    execution === undefined || diagnostics.some(({ severity }) => severity === 'error')
       ? undefined
-      : runDirectPlanTests(plan, testSource, {
+      : runExecutedDirectPlanTests(execution, testSource, {
           sourceName: relative(process.cwd(), absoluteTest).replaceAll('\\', '/'),
           stackLineOffset: 3,
         });

@@ -450,7 +450,9 @@ state correctness; terminating a disposable browser worker remains the
 availability boundary for runaway microtask loops, and stronger CLI process
 isolation is deferred with the hardened sandbox.
 
-`runDirectPlanTests` in `@comblang/runtime` owns this result contract. The web
+`runDirectPlanTests` in `@comblang/runtime` owns this result contract. Callers that
+already have a local compilation result use `runExecutedDirectPlanTests` to reuse
+its immutable circuit while each test still receives a fresh `TestSession`. The web
 worker is a thin availability wrapper, while
 `factorio-dsl test [--json] source.factorio.ts circuit.test.js` invokes the same
 runner under Node. Consequently CLI JSON and browser messages preserve the same
