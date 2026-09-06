@@ -62,7 +62,9 @@ export interface SignalValue {
 }
 
 /** Source-visible Signal identity registered by one executed elaboration session. */
-export interface SignalHandle extends SignalId {}
+export interface SignalHandle extends SignalId {
+  [Symbol.toPrimitive]?(hint: 'string' | 'number' | 'default'): string;
+}
 
 export type WildcardName = 'each' | 'anything' | 'everything';
 

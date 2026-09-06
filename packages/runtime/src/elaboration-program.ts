@@ -1,4 +1,10 @@
-import { circuitConstant, sameSignal, Signal, type SignalId } from '@comblang/factorio';
+import {
+  circuitConstant,
+  encodeSignalPropertyKey,
+  sameSignal,
+  Signal,
+  type SignalId,
+} from '@comblang/factorio';
 import type { ElaborationJavaScript } from '@comblang/compiler';
 import type {
   DirectElaborationPlan,
@@ -1918,7 +1924,25 @@ class ElaborationRecorder {
   }
 
   #signalHandle(value: SignalId): SignalHandle {
-    return this.#runtimeValues.brandSignal(value);
+    const propertyKey = encodeSignalPropertyKey(value);
+    const handle = Object.create(Object.getPrototypeOf(value), {
+      ...Object.getOwnPropertyDescriptors(value),
+      [Symbol.toPrimitive]: {
+        configurable: false,
+        enumerable: false,
+        writable: false,
+        value: (hint: 'string' | 'number' | 'default') => {
+          if (hint !== 'string') {
+            throw new TypeError(
+              'A source Signal can only be coerced to a string property key; numeric/default coercion is not supported.',
+            );
+          }
+          return propertyKey;
+        },
+      },
+    }) as SignalHandle;
+    Object.freeze(handle);
+    return this.#runtimeValues.brandSignal(handle);
   }
 
   #isSelected(value: unknown): value is SelectedValue {

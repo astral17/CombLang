@@ -2419,6 +2419,42 @@ const input = CC(5 * A);`,
     });
   });
 
+  test('gives only source Signal handles canonical computed-property coercion', () => {
+    const parsed = parseFile({
+      path: 'signal-property-key.factorio.ts',
+      text: `const A = Signal("virtual", "signal/A%", "legendary");
+const key = String(A);
+const descriptor = Object.getOwnPropertyDescriptor(A, Symbol.toPrimitive);
+const values = {[A]: 5};
+const restored = JSON.parse(JSON.stringify(values));
+if (key !== "signal:v1/virtual/signal%2FA%25/legendary" ||
+    restored[key] !== 5 || descriptor?.enumerable !== false ||
+    typeof descriptor?.value !== "function" || !Object.isFrozen(A) ||
+    Object.keys(A).join(",") !== "type,name,quality") {
+  throw new Error("Signal property-key coercion was not preserved");
+}
+let numericRejected = false;
+try { Number(A); } catch { numericRejected = true; }
+if (!numericRejected) throw new Error("Signal numeric coercion must fail");
+let defaultRejected = false;
+try { descriptor.value("default"); } catch { defaultRejected = true; }
+if (!defaultRejected) throw new Error("Signal default coercion must fail");
+const output = CC(1 * A);`,
+    });
+
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    expect(plan.producers[0]).toMatchObject({
+      kind: 'constant',
+      outputs: [
+        {
+          signal: { type: 'virtual', name: 'signal/A%', quality: 'legendary' },
+          value: 1,
+        },
+      ],
+    });
+  });
+
   test('keeps untyped combinator declarations as physical handles', () => {
     const parsed = parseFile({
       path: 'inferred-producers.factorio.ts',

@@ -17,6 +17,85 @@ export interface SignalId {
   readonly quality?: string;
 }
 
+declare const signalPropertyKeyBrand: unique symbol;
+export type SignalPropertyKey = string & {
+  readonly [signalPropertyKeyBrand]: true;
+};
+
+const SIGNAL_PROPERTY_KEY_PREFIX = 'signal:v1/';
+
+function assertWellFormedComponent(value: string, label: string): void {
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1);
+      if (index + 1 >= value.length || next < 0xdc00 || next > 0xdfff)
+        throw new TypeError(`Signal ${label} contains an unpaired UTF-16 surrogate.`);
+      index += 1;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      throw new TypeError(`Signal ${label} contains an unpaired UTF-16 surrogate.`);
+    }
+  }
+}
+
+function encodeSignalComponent(value: string, label: string): string {
+  assertWellFormedComponent(value, label);
+  return encodeURIComponent(value);
+}
+
+/** Encodes an external, reversible JavaScript property key without changing internal bus keys. */
+export function encodeSignalPropertyKey(id: SignalId): SignalPropertyKey {
+  if (!signalTypes.includes(id.type)) {
+    throw new TypeError(`Unknown signal type: ${String(id.type)}.`);
+  }
+  if (typeof id.name !== 'string' || id.name.length === 0) {
+    throw new TypeError('A signal name cannot be empty.');
+  }
+  if (id.quality !== undefined && (typeof id.quality !== 'string' || id.quality.length === 0)) {
+    throw new TypeError('A signal quality cannot be empty when provided.');
+  }
+  const name = encodeSignalComponent(id.name, 'name');
+  const quality = encodeSignalComponent(id.quality ?? '', 'quality');
+  return `${SIGNAL_PROPERTY_KEY_PREFIX}${id.type}/${name}/${quality}` as SignalPropertyKey;
+}
+
+function decodeSignalComponent(value: string, label: string): string {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    throw new TypeError(`Signal property key has invalid percent encoding in ${label}.`);
+  }
+  assertWellFormedComponent(decoded, label);
+  return decoded;
+}
+
+/** Parses only the canonical external key; malformed prefixed strings never become item shorthand. */
+export function parseSignalPropertyKey(key: string): SignalId {
+  if (typeof key !== 'string' || !key.startsWith(SIGNAL_PROPERTY_KEY_PREFIX)) {
+    throw new TypeError(`Signal property key must start with ${SIGNAL_PROPERTY_KEY_PREFIX}.`);
+  }
+  const segments = key.split('/');
+  if (segments.length !== 4) {
+    throw new TypeError('Signal property key must contain exactly four segments.');
+  }
+  const [, rawType, rawName, rawQuality] = segments as [string, string, string, string];
+  if (!signalTypes.includes(rawType as SignalType)) {
+    throw new TypeError(`Unknown signal type in property key: ${rawType}.`);
+  }
+  const name = decodeSignalComponent(rawName, 'name');
+  const quality = decodeSignalComponent(rawQuality, 'quality');
+  if (name.length === 0) throw new TypeError('A signal property-key name cannot be empty.');
+  const decoded =
+    quality.length === 0
+      ? Signal(rawType as SignalType, name)
+      : Signal(rawType as SignalType, name, quality);
+  if (encodeSignalPropertyKey(decoded) !== key) {
+    throw new TypeError('Signal property key is not in canonical form.');
+  }
+  return decoded;
+}
+
 /** Creates the structural SignalID used by Factorio circuit networks. */
 export function Signal(name: string): SignalId;
 export function Signal(type: SignalType, name: string, quality?: string): SignalId;

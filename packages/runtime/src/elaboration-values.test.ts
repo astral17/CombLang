@@ -27,6 +27,25 @@ describe('runtime value registry', () => {
     expect(first.hasSignal({ type: 'virtual', name: 'signal-A' })).toBe(false);
   });
 
+  test('keeps a Signal function-valued symbol descriptor on the branded identity', () => {
+    const registry = new RuntimeValueRegistry();
+    const primitive = (hint: string) => (hint === 'string' ? 'signal:v1/virtual/signal-A/' : '');
+    const signal = Object.create(Object.prototype, {
+      type: { value: 'virtual', enumerable: true },
+      name: { value: 'signal-A', enumerable: true },
+      [Symbol.toPrimitive]: { value: primitive, enumerable: false },
+    }) as ReturnType<typeof Signal> & {
+      [Symbol.toPrimitive]: typeof primitive;
+    };
+
+    expect(registry.brandSignal(signal)).toBe(signal);
+    expect(registry.hasSignal(signal)).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(signal, Symbol.toPrimitive)).toMatchObject({
+      value: primitive,
+      enumerable: false,
+    });
+  });
+
   test('keeps mutable Network ownership state outside a frozen source handle', () => {
     const registry = new RuntimeValueRegistry();
     const network = registry.brandNetwork(

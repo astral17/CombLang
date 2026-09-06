@@ -161,3 +161,18 @@ Still required: install the tool in a disposable Factorio environment, produce a
 Validation: **1004 tests in 93 files**, pinned inventory check, format check, typecheck, CLI synthetic-capture smoke test, and complete CLI/web production builds pass. The existing Vite large-chunk warning remains.
 
 Next task after the native gate: F11, introduce the source-aware normalized runtime prototype model while retaining raw-only facts separately.
+
+## F13 — SignalPropertyKey codec
+
+Status: **complete**.
+
+- `encodeSignalPropertyKey` and `parseSignalPropertyKey` implement the canonical `signal:v1/<type>/<name>/<quality>` external key with percent-encoded name and quality components.
+- All Signal namespaces round-trip. Omitted quality remains distinct from explicit `normal`; slash, percent, Unicode, and supplementary characters are preserved.
+- Parsing requires exact canonical spelling and rejects missing/extra segments, empty names, unknown namespaces, malformed or lowercase/noncanonical percent escapes, and lone UTF-16 surrogates.
+- Source-created nominal Signal handles expose a frozen, non-enumerable `Symbol.toPrimitive` function for string/property-key coercion. Numeric/default coercion fails; ordinary structural Signal IDs do not gain coercion behavior.
+- Computed object keys and JSON string-key round trips use the external codec without changing internal `signalKey` or semantic `sameSignal` equality.
+- Registry coverage verifies that branding retains the original identity and function-valued symbol descriptor. `Signal('signal:v1/...')` remains the existing one-argument item-name construction.
+
+Validation: **1025 tests in 93 files**, pinned inventory check, format check, typecheck, and complete CLI/web production builds pass. The web main bundle remains about 628 kB; the parser Worker increases only by the codec implementation, and the existing Vite large-chunk warning remains.
+
+Next independent task: F14, normalize typed counts, tuples, arrays, Maps, and dictionaries into ordered constant-combinator rows.

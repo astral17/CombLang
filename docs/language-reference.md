@@ -29,6 +29,27 @@ that environment. A bundled first-run database is not implemented yet.
 
 The source value returned by `Signal(...)` is a nominal handle registered to the current elaboration session. A plain JavaScript object with `type` and `name` fields remains an ordinary object and is not accepted as a Signal operand or Network selection. Once a valid handle enters a direct plan, its identity is serialized as the structural `{ type, name, quality? }` Signal ID used by IR, simulation, and blueprint JSON. Name-only `network["chest"]` remains an explicit shorthand and does not require constructing a handle first.
 
+Source Signal handles can also become ordinary JavaScript computed-property keys:
+
+```ts
+const A = Signal('virtual', 'signal/A');
+const counts = { [A]: 5 };
+// The actual key is: signal:v1/virtual/signal%2FA/
+```
+
+The external key is exactly
+`signal:v1/<type>/<encodeURIComponent(name)>/<encodeURIComponent(quality ?? '')>`.
+`String(A)` returns that key, while numeric/default coercion is rejected. The
+codec distinguishes omitted quality from explicit `normal`, accepts every Signal
+namespace, and rejects malformed/noncanonical percent encoding. This external
+format does not replace the internal `signalKey` used by circuit buses.
+
+Only source-created nominal handles have this coercion. The public structural
+`Signal(...)` helper in `@comblang/factorio` still returns an ordinary frozen
+object, and `Signal('signal:v1/virtual/signal-A/')` still means an item with that
+literal name. `CC({ [A]: 5 })` is not accepted yet: F13 supplies the reversible
+key boundary, while F14 will add object/Map/tuple normalization to `CC`.
+
 ## Networks and colors
 
 ```ts

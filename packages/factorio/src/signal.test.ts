@@ -1,6 +1,14 @@
 import { describe, expect, test } from 'vitest';
 
-import { Signal, sameSignal, signal, signalKey } from './signal.js';
+import {
+  encodeSignalPropertyKey,
+  parseSignalPropertyKey,
+  Signal,
+  sameSignal,
+  signal,
+  signalKey,
+  signalTypes,
+} from './signal.js';
 
 describe('SignalID', () => {
   test('creates an immutable explicit Factorio signal structure', () => {
@@ -8,6 +16,7 @@ describe('SignalID', () => {
 
     expect(A).toEqual({ type: 'virtual', name: 'signal-A', quality: 'normal' });
     expect(Object.isFrozen(A)).toBe(true);
+    expect(Object.getOwnPropertySymbols(A)).toEqual([]);
     expect(signal('virtual', 'signal-A', 'normal')).toEqual(A);
   });
 
@@ -37,5 +46,50 @@ describe('SignalID', () => {
     expect(() => Signal('virtual', undefined as unknown as string)).toThrow(
       /name cannot be empty/i,
     );
+  });
+
+  test.each(signalTypes)('round-trips the %s signal namespace as a property key', (type) => {
+    const value = Signal(type, 'name/with%delimiters 🛰', 'quality/légendaire%');
+
+    expect(parseSignalPropertyKey(encodeSignalPropertyKey(value))).toEqual(value);
+  });
+
+  test('distinguishes omitted quality from an explicit normal quality', () => {
+    const omitted = Signal('item', 'iron-plate');
+    const normal = Signal('item', 'iron-plate', 'normal');
+
+    expect(encodeSignalPropertyKey(omitted)).toBe('signal:v1/item/iron-plate/');
+    expect(encodeSignalPropertyKey(normal)).toBe('signal:v1/item/iron-plate/normal');
+    expect(parseSignalPropertyKey(encodeSignalPropertyKey(omitted))).toEqual(omitted);
+    expect(parseSignalPropertyKey(encodeSignalPropertyKey(normal))).toEqual(normal);
+  });
+
+  test.each([
+    'item/iron-plate/',
+    'signal:v1/item//',
+    'signal:v1/item/iron-plate',
+    'signal:v1/item/iron-plate//extra',
+    'signal:v1/unknown/iron-plate/',
+    'signal:v1/item/%/',
+    'signal:v1/item/%2f/',
+    'signal:v1/item/%69ron-plate/',
+  ])('rejects malformed or noncanonical property key %s', (key) => {
+    expect(() => parseSignalPropertyKey(key)).toThrow(TypeError);
+  });
+
+  test('rejects lone surrogates with a codec-specific TypeError', () => {
+    expect(() => encodeSignalPropertyKey(Signal('item', '\ud800'))).toThrowError(
+      /unpaired UTF-16 surrogate/,
+    );
+    expect(() =>
+      encodeSignalPropertyKey({ type: 'item', name: 'plate', quality: '\udfff' }),
+    ).toThrowError(/unpaired UTF-16 surrogate/);
+  });
+
+  test('keeps a prefixed one-argument Signal name literal', () => {
+    expect(Signal('signal:v1/virtual/signal-A/')).toEqual({
+      type: 'item',
+      name: 'signal:v1/virtual/signal-A/',
+    });
   });
 });
