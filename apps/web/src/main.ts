@@ -734,10 +734,9 @@ function renderSourceProof(
   const callPaths = new Map<string, Set<string>>();
   for (const producer of plan.producers) {
     for (const path of producer.instancePath) {
-      const displayPath = path.startsWith('direct:$unused:') ? 'unused producer' : path;
-      const kinds = callPaths.get(displayPath) ?? new Set<string>();
+      const kinds = callPaths.get(path) ?? new Set<string>();
       kinds.add(producer.kind);
-      callPaths.set(displayPath, kinds);
+      callPaths.set(path, kinds);
     }
   }
   instancePaths.replaceChildren(

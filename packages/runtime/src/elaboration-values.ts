@@ -51,8 +51,6 @@ export interface NetworkValue {
 export interface NetworkRuntimeState {
   readonly ownership: NetworkOwnershipState;
   readonly borrow?: NetworkBorrow;
-  /** A producer materialized only to satisfy a function Network return may adopt its caller binding. */
-  returnBindingAvailable?: boolean;
   /** Direct call-site provenance carried into the callee's capability check. */
   readonly callArgument?: SourceSpan;
 }
@@ -109,11 +107,26 @@ export interface ConditionValue {
 
 type WithoutDestinations<T> = T extends unknown ? Omit<T, 'destinations'> : never;
 
-export interface ProducerValue {
-  readonly kind: 'producer';
-  /** Shared identity of one physical entity across fluent wrapper values. */
+type CompleteCombinatorDescriptor = WithoutDestinations<DirectPlanProducer>;
+type CompleteDeciderDescriptor = Extract<
+  CompleteCombinatorDescriptor,
+  { readonly kind: 'decider' }
+>;
+
+export type CombinatorDescriptor =
+  | Exclude<CompleteCombinatorDescriptor, { readonly kind: 'decider' }>
+  | (Omit<CompleteDeciderDescriptor, 'output'> & {
+      readonly output?: CompleteDeciderDescriptor['output'];
+    });
+
+/** Source-visible handle for one physical combinator. Its Network facet lives in the registry. */
+export interface CombinatorValue {
+  readonly kind: 'combinator';
   readonly identity: object;
-  readonly producer: WithoutDestinations<DirectPlanProducer>;
+  /** Scoped Network view used by a typed Combinator parameter. */
+  readonly networkFacet?: NetworkValue;
+  /** Original caller handle restored when a scoped parameter crosses the return boundary. */
+  readonly unrestrictedHandle?: CombinatorValue;
 }
 
 export type DslValue =
@@ -125,7 +138,7 @@ export type DslValue =
   | WildcardTokenValue
   | WildcardCountValue
   | ConditionValue
-  | ProducerValue
+  | CombinatorValue
   | SignalHandle
   | number;
 

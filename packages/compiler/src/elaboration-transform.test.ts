@@ -88,7 +88,7 @@ const input = new Network();`,
     const program = transformElaborationModule(source);
 
     expect(program.runtimeParameter).toBe('__dsl_2');
-    expect(program.code).toContain('const __dsl = __dsl_2.materialize(1');
+    expect(program.code).toContain('const __dsl = __dsl_2.bind(1');
     expect(program.code).toContain('__dsl_2.network(');
   });
 
@@ -118,7 +118,7 @@ for (let i = 0; i < 10; i++) {
               : undefined,
       ),
       constant: vi.fn(() => ({ producer: 'constant' })),
-      materialize: vi.fn((value, name) =>
+      bind: vi.fn((value, name) =>
         typeof value === 'object' && value?.producer !== undefined ? { network: name } : value,
       ),
       network: vi.fn(() => ({ network: 'anonymous' })),
@@ -266,8 +266,10 @@ to(first, second)[A] += comb;`,
     });
     const code = transformElaborationModule(source).code;
 
-    expect(code).toContain('let comb = __dsl.producerHandle(__dsl.deciderBranches(');
-    expect(code).not.toContain('__dsl.materialize(__dsl.deciderBranches(');
+    expect(code).toContain(
+      'let comb = __dsl.producerHandle(__dsl.invokePrepared(__dsl.prepareMember(__dsl.deciderStart(',
+    );
+    expect(code).not.toContain('__dsl.bind(__dsl.deciderStart(');
     expect(code).toContain('__dsl.attach(__dsl.select(__dsl.destinations(first, second');
   });
 
@@ -322,7 +324,7 @@ to(first, second)[A] += comb;`,
     });
     const code = transformElaborationModule(source).code;
 
-    expect(code).toContain('value = __dsl.producerHandle(value, "ArithmeticCombinator"');
+    expect(code).toContain('value = __dsl.combinatorParameter(value, "ArithmeticCombinator"');
     expect(code).toContain('return __dsl.returnValue(value');
     expect(code).toContain('"Producer"');
   });
@@ -424,12 +426,12 @@ for (const [loopValue = CC(8 * A)] of [[]]) { loopValue + 0; }`,
 
     expect(code).not.toMatch(/\bCC\(/);
     expect(code.match(/__dsl\.constant/g)).toHaveLength(7);
-    expect(code).toContain('input = __dsl.materialize(');
-    expect(code).toContain('fallback = __dsl.materialize(');
-    expect(code).toContain('arrayValue = __dsl.materialize(');
-    expect(code).toContain('objectValue = __dsl.materialize(');
-    expect(code).toContain('value = __dsl.materialize(');
-    expect(code).toContain('loopValue = __dsl.materialize(');
+    expect(code).toContain('input = __dsl.bind(');
+    expect(code).toContain('fallback = __dsl.bind(');
+    expect(code).toContain('arrayValue = __dsl.bind(');
+    expect(code).toContain('objectValue = __dsl.bind(');
+    expect(code).toContain('value = __dsl.bind(');
+    expect(code).toContain('loopValue = __dsl.bind(');
   });
 
   test('continues numeric enum values after constant expressions', () => {

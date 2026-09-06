@@ -89,7 +89,9 @@ destination.take(source);`,
       { network: 'moving', capability: 'move', parameter: 'input' },
     ]);
     expect(plan.networkPairs).toMatchObject([{ networks: ['red', 'green'] }]);
-    expect(plan.networkTransfers).toMatchObject([{ destination: 'destination', source: 'source' }]);
+    expect(plan.networkTransfers).toContainEqual(
+      expect.objectContaining({ destination: 'destination', source: 'source' }),
+    );
     expect(executed.capabilityUses).toEqual(plan.capabilityUses);
     expect(executed.circuit.graph.networks.map(({ name }) => name)).toContain('destination');
     expect(executed.circuit.ir.networks.map(({ name }) => name)).not.toContain('source');

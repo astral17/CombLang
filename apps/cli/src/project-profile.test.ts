@@ -120,13 +120,13 @@ describe('CLI project profile', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     expect(await run(['check', '--json', '--project', path])).toBe(0);
     expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
-      diagnostics: [],
+      diagnostics: [{ code: 'CL2001', severity: 'warning' }],
       producerCount: 1,
     });
     log.mockClear();
     expect(await run(['test', '--json', '--project', path])).toBe(0);
     expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
-      diagnostics: [],
+      diagnostics: [{ code: 'CL2001', severity: 'warning' }],
       tests: { passed: 1, failed: 0 },
     });
   });

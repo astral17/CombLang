@@ -74,11 +74,10 @@ const input = CC(); const a = Double(input); const b = Double(input); const c = 
     expect(result.plan?.producers).toHaveLength(4);
     expect(result.compilerDiagnostics).toEqual([
       expect.objectContaining({ code: 'CL2002', severity: 'warning' }),
-      expect.objectContaining({ code: 'CL2002', severity: 'warning' }),
     ]);
     expect(
       result.compilerDiagnostics.map(({ span }) => text.slice(span!.start, span!.end)),
-    ).toEqual(['input', 'input: Network']);
+    ).toEqual(['input: Network']);
   });
 
   test('compiles spread placement and attachment through the shared runtime', () => {
@@ -93,7 +92,7 @@ CC().at(...coordinates).to(...[output]);`,
       {
         kind: 'constant',
         placement: { x: 1, y: 2, direction: 4 },
-        destinations: [{ network: 'output' }],
+        destinations: [{}],
       },
     ]);
   });
@@ -122,7 +121,9 @@ const source = CC(prototypes.item['iron-plate'].stackSize * PLATE);`,
       { prototypes },
     );
 
-    expect(result.compilerDiagnostics).toEqual([]);
+    expect(result.compilerDiagnostics).toEqual([
+      expect.objectContaining({ code: 'CL2001', severity: 'warning' }),
+    ]);
     expect(result.plan?.producers[0]).toMatchObject({
       kind: 'constant',
       outputs: [{ signal: { name: 'iron-plate' }, value: 100 }],
@@ -164,9 +165,9 @@ merged.take(output);`;
       { network: 'output', capability: 'ref', parameter: 'output' },
     ]);
     expect(result.plan?.networkPairs).toMatchObject([{ networks: ['input', 'output'] }]);
-    expect(result.plan?.networkTransfers).toMatchObject([
-      { destination: 'merged', source: 'output' },
-    ]);
+    expect(result.plan?.networkTransfers).toContainEqual(
+      expect.objectContaining({ destination: 'merged', source: 'output' }),
+    );
   });
 
   test('attaches a duplicate to(...) destination diagnostic to its source statement', () => {
@@ -218,7 +219,7 @@ const output: Network = ${expression};`;
   test('attaches an incompatible combinator return diagnostic to return', () => {
     const returned = 'return tmp;';
     const text = `function test(input: Readonly<Network>): ArithmeticCombinator {
-  let tmp = input + 0;
+  let tmp: Network = input + 0;
   ${returned}
 }`;
     const result = compileSource({ path: 'main.factorio.ts', text });
@@ -229,18 +230,20 @@ const output: Network = ${expression};`;
     expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(returned);
   });
 
-  test('attaches repeated Producer use to the second attachment', () => {
-    const repeated = 'second += configured;';
+  test('attaches a third Combinator use to the exhausted output connector', () => {
+    const repeated = 'third += configured;';
     const text = `const A = Signal('virtual', 'signal-A');
 const input = new Network();
 const producer: ArithmeticCombinator = input + 0;
 const configured: ArithmeticCombinator = producer.at(1, 2);
 const first = new Network();
 const second = new Network();
+const third = new Network();
 first += producer;
+second += configured;
 ${repeated}`;
     const result = compileSource({ path: 'main.factorio.ts', text });
-    const diagnostic = result.compilerDiagnostics.find(({ code }) => code === 'RT2006');
+    const diagnostic = result.compilerDiagnostics.find(({ code }) => code === 'RT2028');
 
     expect(result.plan).toBeUndefined();
     expect(diagnostic).toMatchObject({
@@ -268,7 +271,7 @@ const output = Configure(${argument});`;
     expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(argument);
   });
 
-  test('reports a dynamic Producer tuple mismatch at its destructuring boundary', () => {
+  test('reports a dynamic Combinator tuple mismatch at its destructuring boundary', () => {
     const declaration = 'let [producer]: [ArithmeticCombinator] = values;';
     const text = `const input = new Network();
 const values = [when(input > 0).then(input)];

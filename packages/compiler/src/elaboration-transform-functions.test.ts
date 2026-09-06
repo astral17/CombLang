@@ -55,7 +55,9 @@ describe('elaboration function-boundary transform', () => {
     expect(code).toContain('__dsl.borrowParameter(read, "readonly", "read", "red"');
     expect(code).toContain('__dsl.borrowParameter(write, "ref", "write", "green"');
     expect(code).toContain('__dsl.moveParameter(moved, "moved", void 0');
-    expect(code).toContain('__dsl.producerHandle(producer, "ArithmeticCombinator", "producer"');
+    expect(code).toContain(
+      '__dsl.combinatorParameter(producer, "ArithmeticCombinator", "producer"',
+    );
     expect(code).toContain('return __dsl.returnNetwork(read, "readonly", "green"');
   });
 

@@ -5,7 +5,7 @@ import type {
   NetworkOwnershipState,
   NetworkRuntimeState,
   NetworkValue,
-  ProducerValue,
+  CombinatorValue,
   RuntimeNetworkCapability,
 } from './elaboration-values.js';
 import {
@@ -28,15 +28,9 @@ const network: NetworkValue = {
   capability: 'owned',
   generation: 0,
 };
-const producer: ProducerValue = {
-  kind: 'producer',
+const producer: CombinatorValue = {
+  kind: 'combinator',
   identity: {},
-  producer: {
-    kind: 'constant',
-    outputs: [],
-    source: declaration,
-    instancePath: [],
-  },
 };
 
 function descriptor(capability: RuntimeNetworkCapability = 'readonly'): NetworkArgumentDescriptor {
@@ -50,14 +44,11 @@ function descriptor(capability: RuntimeNetworkCapability = 'readonly'): NetworkA
 }
 
 function policy(state: NetworkRuntimeState = { ownership }): NetworkArgumentPolicyContext & {
-  materializeProducer: ReturnType<typeof vi.fn>;
   assertReadable: ReturnType<typeof vi.fn>;
   brandNetwork: ReturnType<typeof vi.fn>;
 } {
   return {
-    isProducer: (value): value is ProducerValue => value === producer,
-    isNetwork: (value): value is NetworkValue => value === network,
-    materializeProducer: vi.fn(() => network),
+    networkFacet: (value) => (value === producer || value === network ? network : undefined),
     assertReadable: vi.fn(),
     stateFor: () => state,
     brandNetwork: vi.fn((value: NetworkValue) => value),
@@ -65,16 +56,11 @@ function policy(state: NetworkRuntimeState = { ownership }): NetworkArgumentPoli
 }
 
 describe('Network call-argument policy', () => {
-  test('contextually materializes a Producer and carries the direct argument source', () => {
+  test('projects a Combinator primary facet and carries the direct argument source', () => {
     const context = policy();
 
     const resolved = resolveNetworkArgument(producer, descriptor(), context);
 
-    expect(context.materializeProducer).toHaveBeenCalledWith(
-      producer,
-      '$argument:Read:input',
-      'green',
-    );
     expect(context.assertReadable).toHaveBeenCalledWith(network, source, 'argument input');
     expect(context.brandNetwork).toHaveBeenCalledWith(
       { ...network },
@@ -95,7 +81,6 @@ describe('Network call-argument policy', () => {
 
     resolveNetworkArgument(network, descriptor(), context);
 
-    expect(context.materializeProducer).not.toHaveBeenCalled();
     expect(context.brandNetwork).toHaveBeenCalledWith(
       { ...network },
       { ownership, borrow, callArgument: source },

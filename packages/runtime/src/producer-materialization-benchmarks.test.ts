@@ -10,8 +10,8 @@ function planFor(name: string, text: string) {
   return executeElaborationProgram(transformElaborationModule(parsed));
 }
 
-describe('producer materialization design benchmarks', () => {
-  test('Scale keeps value-oriented inferred Networks', () => {
+describe('Combinator Network-facet design benchmarks', () => {
+  test('Scale narrows its eager primary Network without creating return topology', () => {
     const plan = planFor(
       'benchmark-scale',
       `function Scale(input: Readonly<Network>): Network {
@@ -25,11 +25,15 @@ const output = Scale(input);`,
     expect(plan.producers).toHaveLength(1);
     expect(plan.producers[0]).toMatchObject({
       kind: 'arithmetic',
-      destinations: [{ network: 'scaled' }],
+      destinations: [{ network: expect.stringMatching(/^\$combinator:.*:primary$/) }],
     });
+    expect(plan.networks.some(({ name }) => name.startsWith('$tmp:'))).toBe(false);
+    expect(plan.networkAliases).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: 'output' })]),
+    );
   });
 
-  test('Distance reuses materialized intermediates without cloning producers', () => {
+  test('Distance reuses eager primary lanes without cloning combinators', () => {
     const plan = planFor(
       'benchmark-distance',
       `const x1 = new Network();
@@ -44,13 +48,15 @@ const distanceSquared = squaredX + squaredY;`,
     );
 
     expect(plan.producers).toHaveLength(5);
+    const dx = plan.producers[0]!.destinations[0]!.network;
+    const dy = plan.producers[1]!.destinations[0]!.network;
     expect(plan.producers[2]).toMatchObject({
-      left: { kind: 'each', network: 'dx' },
-      right: { kind: 'each', network: 'dx' },
+      left: { kind: 'each', network: dx },
+      right: { kind: 'each', network: dx },
     });
     expect(plan.producers[3]).toMatchObject({
-      left: { kind: 'each', network: 'dy' },
-      right: { kind: 'each', network: 'dy' },
+      left: { kind: 'each', network: dy },
+      right: { kind: 'each', network: dy },
     });
   });
 
@@ -70,12 +76,18 @@ const output = MemoCell(input);`,
 
     expect(plan.producers).toHaveLength(2);
     expect(plan.producers).toMatchObject([
-      { kind: 'arithmetic', destinations: [{ network: 'out' }, { network: 'memory' }] },
-      { kind: 'decider', destinations: [{ network: 'out' }, { network: 'memory' }] },
+      { kind: 'arithmetic', destinations: [{}, {}] },
+      { kind: 'decider', destinations: [{}, {}] },
+    ]);
+    expect(plan.networkTransfers?.map(({ destination }) => destination)).toEqual([
+      'out',
+      'memory',
+      'out',
+      'memory',
     ]);
   });
 
-  test('RGB indicator defaults to Networks but explicit annotations retain handles', () => {
+  test('RGB indicator keeps inferred and explicitly annotated Combinator handles', () => {
     const plan = planFor(
       'benchmark-rgb',
       `const A = Signal('virtual', 'signal-A');
@@ -92,10 +104,17 @@ blueOutput += blue;`,
 
     expect(plan.producers).toHaveLength(3);
     expect(plan.producers).toMatchObject([
-      { kind: 'decider', destinations: [{ network: 'red' }] },
-      { kind: 'decider', destinations: [{ network: 'green' }] },
-      { kind: 'decider', destinations: [{ network: 'blueOutput' }] },
+      { kind: 'decider', destinations: [{}] },
+      { kind: 'decider', destinations: [{}] },
+      { kind: 'decider', destinations: [{}] },
     ]);
-    expect(plan.networks.map(({ name }) => name)).not.toContain('blue');
+    expect(plan.networkAliases).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: 'red' }),
+        expect.objectContaining({ name: 'green' }),
+        expect.objectContaining({ name: 'blue' }),
+      ]),
+    );
+    expect(plan.networkTransfers).toEqual([expect.objectContaining({ destination: 'blueOutput' })]);
   });
 });

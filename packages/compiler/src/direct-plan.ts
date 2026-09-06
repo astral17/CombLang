@@ -415,7 +415,7 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
         code: 'CL1043',
         severity: 'error',
         message:
-          '.as(...) is not part of the Producer API; bind an arithmetic output through destination[SIGNAL] or producer.to(destination, SIGNAL).',
+          '.as(...) is not part of the Combinator API; bind an arithmetic output through destination[SIGNAL] or combinator.to(destination, SIGNAL).',
         span: spanForNode(file, expression),
       });
       return undefined;
@@ -1403,10 +1403,10 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
 
   const lowerUnboundProducer = (expression: ts.Expression, source: SourceSpan): void => {
     temporaryNetworkOrdinal += 1;
-    const sink = `$unused:${temporaryNetworkOrdinal}`;
-    const instancePath = [`unused:${temporaryNetworkOrdinal}`];
-    networkNames.add(sink);
-    networks.push({ name: sink, source, instancePath });
+    const primaryOutput = `$output:${temporaryNetworkOrdinal}`;
+    const instancePath = [`unbound-output:${temporaryNetworkOrdinal}`];
+    networkNames.add(primaryOutput);
+    networks.push({ name: primaryOutput, source, instancePath });
     diagnostics.push({
       code: 'CL2001',
       severity: 'warning',
@@ -1414,7 +1414,7 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
         'This producer has no destination; its topology is checked, but its output is unused.',
       span: source,
     });
-    lowerDirectProducer(expression, [sink], source);
+    lowerDirectProducer(expression, [primaryOutput], source);
   };
 
   for (const statement of file.ast.statements) {

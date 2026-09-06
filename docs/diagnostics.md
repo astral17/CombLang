@@ -89,13 +89,13 @@ Call provenance is associated with the executed function identity, not its textu
 | `CL1040` | definite function escape of a borrowed Network                            | return a producer or an independently owned Network                                     |
 | `CL1041` | retired bare `Network` parameter error                                    | direct Network parameters now use an implicit read-only borrow                          |
 | `CL1042` | definite misuse of immutable `pair(a, b)` input view                      | use pair only for reads; use `to`/`.to` for output fan-out                              |
-| `CL1043` | unsupported `.as(...)` on a definite DSL Producer or Network              | bind the output Signal at the destination                                               |
-| `CL1044` | combinator-handle declaration, assignment, argument, or return mismatches | use a compatible unmaterialized producer of the annotated physical kind                 |
+| `CL1043` | unsupported `.as(...)` on a definite DSL Combinator or Network            | bind the output Signal at the destination                                               |
+| `CL1044` | combinator-handle declaration, assignment, argument, or return mismatches | use a compatible combinator of the annotated physical kind                              |
 | `CL1045` | user binding shadows a reserved free DSL identifier                       | rename the variable, parameter, function, class, or enum                                |
-| `CL1046` | one returned Network is destructured as producer fan-out                  | return an explicit container or retain a Producer return type                           |
-| `CL1047` | definite missing or non-Network argument for a known Network parameter    | pass a Network or a producer expression that can be materialized as one                 |
+| `CL1046` | one returned Network is destructured as combinator fan-out                | return an explicit container or retain a Combinator return type                         |
+| `CL1047` | definite missing or non-Network argument for a known Network parameter    | pass a Network or a Combinator whose primary facet is readable                          |
 | `CL1048` | implicit enum value follows a non-constant initializer                    | give that enum member an explicit numeric initializer                                   |
-| `CL2001` | producer has no user destination                                          | attach it, or keep the warning if intentional                                           |
+| `CL2001` | combinator output has no user destination                                 | read or attach it, or keep the warning if intentional                                   |
 | `CL2002` | parameter implicitly borrows a Network for reading                        | use explicit `Readonly<Network>`, `Ref<Network>`, or `Move<Network>` to document intent |
 | `EX1001` | transformed elaboration program threw                                     | inspect the execution message and supported executed subset                             |
 | `EX1002` | compile-time execution exceeded the worker time budget                    | fix an infinite/expensive loop or reduce generated work                                 |
@@ -119,12 +119,12 @@ available. This is an export failure, not an error in source execution; see
 | `RT1005` | a requested named Network does not exist                                                                    |
 | `RT1099` | unexpected lower-level failure contained at the result API                                                  |
 | `RT2001` | foreign or invalid runtime Network handle                                                                   |
-| `RT2002` | unknown or foreign runtime producer handle                                                                  |
+| `RT2002` | unknown or foreign runtime combinator handle                                                                |
 | `RT2003` | attachment has no destination                                                                               |
 | `RT2004` | attachment repeats a destination Network                                                                    |
 | `RT2005` | output connector has more than two destinations                                                             |
-| `RT2006` | one physical Producer identity was attached through another alias                                           |
-| `RT2007` | producer has no destination during elaboration                                                              |
+| `RT2006` | retired single-attachment diagnostic retained only for legacy direct plans                                  |
+| `RT2007` | legacy direct-plan producer has no destination                                                              |
 | `RT2008` | invalid empty native condition group                                                                        |
 | `RT2009` | a physical connector needs more than two logical Networks                                                   |
 | `RT2010` | red/green color constraints are mutually inconsistent                                                       |
@@ -139,12 +139,13 @@ available. This is an export failure, not an error in source execution; see
 | `RT2019` | ownership was dropped or returned without a valid transfer                                                  |
 | `RT2020` | pair input is repeated, malformed, or used as ownership/output                                              |
 | `RT2021` | executed DSL value used the unsupported `.as(...)` method                                                   |
-| `RT2022` | an executed Producer/Network return or destructuring boundary received a wrong value or kind                |
+| `RT2022` | an executed Combinator/Network return, builder, or destructuring boundary received a wrong value or kind    |
 | `RT2023` | destination Signal conflicts with the physical producer output                                              |
 | `RT2024` | circuit Condition was used as a JavaScript control-flow test                                                |
 | `RT2025` | a delayed asynchronous DSL call reached a sealed elaboration plan                                           |
 | `RT2026` | test instantiation received a non-function, uninstrumented factory, or unsupported cyclic/host return value |
 | `RT2027` | final executed Decider configuration has an incompatible `Each`/`Everything` output mode                    |
+| `RT2028` | a third distinct output connection was requested from one physical combinator                               |
 
 `tryElaborateDirectPlan()` returns these runtime diagnostics without throwing. `elaborateDirectPlan()` throws `RuntimeDiagnosticError` carrying the same structured value.
 

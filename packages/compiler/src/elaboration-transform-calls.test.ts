@@ -68,9 +68,11 @@ describe('elaboration call/member transform', () => {
       `when(test).then(a, b).else(c); when(other).else(fallback); object.method(value);`,
     );
 
-    expect(code.match(/__dsl\.deciderBranches/g)).toHaveLength(2);
-    expect(code).toContain('__dsl.deciderBranches(test, [a, b], [c]');
-    expect(code).toContain('__dsl.deciderBranches(other, void 0, [fallback]');
+    expect(code.match(/__dsl\.deciderStart/g)).toHaveLength(2);
+    expect(code).toContain('__dsl.prepareMember(__dsl.deciderStart(test');
+    expect(code).toContain('"then"');
+    expect(code).toContain('"else"');
+    expect(code).toContain('__dsl.prepareMember(__dsl.deciderStart(other');
     expect(code).toContain('__dsl.invokePrepared(__dsl.prepareMember(object, "method"');
   });
 

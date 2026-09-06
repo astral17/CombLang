@@ -51,7 +51,7 @@ const scaled: Network = Each(input) * 2;
 const output: Network = IF(scaled[A] > 0, scaled[A]);
 ```
 
-Every circuit arithmetic operation becomes one physical combinator and one synchronous tick. Typed declarations contextually materialize the producer into the declared Network.
+Every circuit arithmetic operation becomes one physical combinator with an eager primary output Network and one synchronous tick. A `Network` annotation narrows that same value to its primary facet; it creates no extra topology.
 
 ## Constant combinator
 

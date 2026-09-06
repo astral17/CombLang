@@ -4,7 +4,6 @@ import { ElaborationExecutionError } from './elaboration-errors.js';
 import type {
   NetworkRuntimeState,
   NetworkValue,
-  ProducerValue,
   RuntimeNetworkCapability,
 } from './elaboration-values.js';
 
@@ -17,13 +16,7 @@ export interface NetworkArgumentDescriptor {
 }
 
 export interface NetworkArgumentPolicyContext {
-  isProducer(value: unknown): value is ProducerValue;
-  isNetwork(value: unknown): value is NetworkValue;
-  materializeProducer(
-    producer: ProducerValue,
-    name: string,
-    fixedColor: 'red' | 'green' | undefined,
-  ): NetworkValue;
+  networkFacet(value: unknown): NetworkValue | undefined;
   assertReadable(network: NetworkValue, source: SourceSpan, role: string): void;
   stateFor(network: NetworkValue): NetworkRuntimeState;
   brandNetwork(value: NetworkValue, state: NetworkRuntimeState): NetworkValue;
@@ -48,16 +41,8 @@ export function resolveNetworkArgument(
   descriptor: NetworkArgumentDescriptor,
   context: NetworkArgumentPolicyContext,
 ): NetworkValue {
-  let network: NetworkValue;
-  if (context.isProducer(value)) {
-    network = context.materializeProducer(
-      value,
-      `$argument:${descriptor.functionName}:${descriptor.parameter}`,
-      descriptor.fixedColor,
-    );
-  } else if (context.isNetwork(value)) {
-    network = value;
-  } else {
+  const network = context.networkFacet(value);
+  if (network === undefined) {
     throw new ElaborationExecutionError(
       `${capabilityName(descriptor.capability)} parameter ${descriptor.parameter} received a non-Network value.`,
       descriptor.source,

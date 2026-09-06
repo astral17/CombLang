@@ -14,8 +14,11 @@ import type { Diagnostic, SourceFileId, SourceSpan } from '@comblang/shared';
 import { ElaborationExecutionError, ElaborationOperationLimitError } from './elaboration-errors.js';
 import { ElaborationColorConstraints } from './elaboration-color-constraints.js';
 import { ElaborationProvenanceFormatter } from './elaboration-provenance.js';
+import { CombinatorRegistry } from './combinator-registry.js';
 import {
   RuntimeValueRegistry,
+  type CombinatorDescriptor,
+  type CombinatorValue,
   type ConditionValue,
   type DestinationValue,
   type DslValue,
@@ -25,7 +28,6 @@ import {
   type NetworkValue,
   type PairSelectedValue,
   type PairValue,
-  type ProducerValue,
   type RuntimeObjectKind,
   type RuntimeObjectValue,
   type SelectedValue,
@@ -46,10 +48,9 @@ import {
   type NetworkParameterCapability,
 } from './network-parameter-policy.js';
 import { returnNetworkValue } from './network-return-policy.js';
-import { ProducerLifecycle } from './producer-lifecycle.js';
-import { validateProducerAttachment } from './producer-attachment-policy.js';
-import { bindProducerHandle } from './producer-handle-policy.js';
-import { bindProducerOutputSignal } from './producer-output-policy.js';
+import { validateCombinatorAttachment } from './combinator-attachment-policy.js';
+import { bindCombinatorHandle } from './combinator-handle-policy.js';
+import { bindCombinatorOutputSignal } from './combinator-output-policy.js';
 import { returnOwnedValue } from './return-owned-value-policy.js';
 
 interface RawSpan {
@@ -135,10 +136,10 @@ class ElaborationRecorder {
   readonly #networkPairs: NonNullable<DirectElaborationPlan['networkPairs']>[number][] = [];
   readonly #capabilityUses: NonNullable<DirectElaborationPlan['capabilityUses']>[number][] = [];
   readonly #debugInstances: NonNullable<DirectElaborationPlan['debugInstances']>[number][] = [];
-  readonly #producers: DirectPlanProducer[] = [];
   readonly #diagnostics: Diagnostic[] = [];
   readonly #implicitBorrowWarnings = new Set<string>();
-  readonly #producerLifecycle = new ProducerLifecycle();
+  readonly #combinators = new CombinatorRegistry();
+  readonly #combinatorByOutput = new Map<NetworkOwnershipState, CombinatorValue>();
   readonly #runtimeValues = new RuntimeValueRegistry();
   readonly #ownership = createElaborationOwnershipPolicy((network) => this.#networkState(network));
   readonly #colors = new ElaborationColorConstraints();
@@ -146,6 +147,7 @@ class ElaborationRecorder {
   #status: 'active' | 'failed' | 'sealed' = 'active';
   #firstFailure: unknown;
   #anonymousOrdinal = 0;
+  #combinatorOrdinal = 0;
   readonly #networkNameCounts = new Map<string, number>();
   readonly #functionCallCounts = new Map<string, number>();
   readonly #debugInstanceCounts = new Map<string, number>();
@@ -171,6 +173,7 @@ class ElaborationRecorder {
     isSignalId,
     isSelected: (value): value is SelectedValue => this.#isSelected(value),
     isNetwork: (value): value is NetworkValue => this.#isNetwork(value),
+    networkFacet: (value) => this.#networkFacet(value),
     isPair: (value): value is PairValue => this.#isPair(value),
     isWildcardToken: (value): value is WildcardTokenValue => this.#isWildcardToken(value),
     recordDslCall: () => this.#recordDslCall(),
@@ -178,6 +181,7 @@ class ElaborationRecorder {
     planNetworkRef: (value) => this.#planNetworkRef(value),
     arithmeticOperand: (value, source) => this.#arithmeticOperand(value, source),
     producerMetadata: (source) => ({ source: this.#span(source), instancePath: this.#path() }),
+    createCombinator: (descriptor, source) => this.#createCombinator(descriptor, source),
     brand: <T extends RuntimeObjectValue>(value: T): T => this.#runtimeValue(value),
   };
 
@@ -215,6 +219,8 @@ class ElaborationRecorder {
           take: (...values) => this.api.take(receiver, ...values, rawSpan),
           at: (...values) => this.api.place(receiver, ...values, rawSpan),
           as: (...values) => this.api.bindOutput(receiver, values[0] as SignalId, rawSpan),
+          then: (...values) => this.api.appendDecider(receiver, 'then', values, rawSpan),
+          else: (...values) => this.api.appendDecider(receiver, 'else', values, rawSpan),
         };
         const operation =
           typeof property === 'string' && Object.hasOwn(operations, property)
@@ -376,17 +382,19 @@ class ElaborationRecorder {
       }),
     wildcard: (
       value: WildcardName,
-      network: NetworkValue | PairValue,
+      network: NetworkValue | CombinatorValue | PairValue,
       rawSpan: RawSpan,
     ): SelectedValue => {
       this.#recordDslCall();
-      if (!this.#isNetwork(network) && !this.#isPair(network)) {
+      const facet = this.#rawNetworkFacet(network);
+      const readable = facet ?? network;
+      if (!this.#isNetwork(readable) && !this.#isPair(readable)) {
         throw new Error('Wildcard selection requires a Network or pair(a, b).');
       }
-      this.#assertReadableValue(network, rawSpan);
-      return this.#selectedValue(network, value);
+      this.#assertReadableValue(readable, rawSpan);
+      return this.#selectedValue(readable, value);
     },
-    constant: (...args: unknown[]): ProducerValue => {
+    constant: (...args: unknown[]): CombinatorValue => {
       this.#recordDslCall();
       const rawSpan = args.at(-1);
       if (!isRawSpan(rawSpan)) throw new Error('Constant combinator is missing provenance.');
@@ -394,16 +402,15 @@ class ElaborationRecorder {
       if (!outputs.every((value): value is SignalValue => this.#isSignalValue(value))) {
         throw new Error('CC entries must be numeric Signal values.');
       }
-      return this.#runtimeValue({
-        kind: 'producer',
-        identity: {},
-        producer: {
+      return this.#createCombinator(
+        {
           kind: 'constant',
           outputs: outputs.map(({ signal, value }) => ({ signal, value })),
           source: this.#span(rawSpan),
           instancePath: this.#path(),
         },
-      });
+        rawSpan,
+      );
     },
     network: (
       name: string | undefined,
@@ -433,35 +440,45 @@ class ElaborationRecorder {
           'RT2020',
         );
       }
-      if (!values.every((value): value is NetworkValue => this.#isNetwork(value))) {
+      const networks = values.map((value) => this.#rawNetworkFacet(value));
+      if (networks.some((value) => value === undefined)) {
         throw new ElaborationExecutionError(
           'pair(a, b) requires two Network values.',
           this.#span(rawSpan),
           'RT2020',
         );
       }
-      for (const value of values) this.#assertReadableNetwork(value, rawSpan);
-      if (this.#networkState(values[0]!).ownership === this.#networkState(values[1]!).ownership) {
+      const pairNetworks = networks as [NetworkValue, NetworkValue];
+      for (const value of pairNetworks) this.#assertReadableNetwork(value, rawSpan);
+      if (
+        this.#networkState(pairNetworks[0]).ownership ===
+        this.#networkState(pairNetworks[1]).ownership
+      ) {
         throw new ElaborationExecutionError(
           'pair(a, b) requires two distinct logical Networks.',
           this.#span(rawSpan),
           'RT2020',
-          [{ message: 'The repeated Network is declared here.', span: values[0]!.declaration }],
+          [
+            {
+              message: 'The repeated Network is declared here.',
+              span: pairNetworks[0].declaration,
+            },
+          ],
         );
       }
       this.#colors.different(
-        this.#networkState(values[0]!).ownership,
-        this.#networkState(values[1]!).ownership,
+        this.#networkState(pairNetworks[0]).ownership,
+        this.#networkState(pairNetworks[1]).ownership,
         this.#span(rawSpan),
         'pair(a, b) uses both wire colors',
       );
       const pair: PairValue = this.#runtimeValue({
         kind: 'pair',
-        networks: values as [NetworkValue, NetworkValue],
+        networks: pairNetworks,
         source: this.#span(rawSpan),
       });
       this.#networkPairs.push({
-        networks: [values[0]!.name, values[1]!.name],
+        networks: [pairNetworks[0].name, pairNetworks[1].name],
         provenance: pair.source,
         instancePath: this.#path(),
       });
@@ -523,11 +540,38 @@ class ElaborationRecorder {
       expectedType: unknown,
       bindingName: unknown,
       rawSpan: RawSpan,
-    ): ProducerValue => {
-      return this.#producerHandle(value, expectedType, rawSpan, bindingName);
+    ): CombinatorValue => {
+      return this.#combinatorHandle(value, expectedType, rawSpan, bindingName);
+    },
+    combinatorParameter: (
+      value: unknown,
+      expectedType: unknown,
+      parameter: unknown,
+      rawSpan: RawSpan,
+    ): CombinatorValue => {
+      if (typeof parameter !== 'string') {
+        throw new Error('Combinator parameter name must be a string.');
+      }
+      const combinator = this.#combinatorHandle(value, expectedType, rawSpan);
+      const networkFacet = this.#networkParameter(
+        combinator,
+        'readonly',
+        parameter,
+        undefined,
+        rawSpan,
+      );
+      return this.#runtimeValue({
+        kind: 'combinator',
+        identity: combinator.identity,
+        networkFacet,
+        unrestrictedHandle: combinator.unrestrictedHandle ?? combinator,
+      });
     },
     returnValue: (value: unknown, rawSpan: RawSpan, producerType?: unknown): unknown => {
-      if (producerType !== undefined) return this.#producerHandle(value, producerType, rawSpan);
+      if (producerType !== undefined) {
+        const combinator = this.#combinatorHandle(value, producerType, rawSpan);
+        return this.#returnCombinator(combinator, rawSpan);
+      }
       return this.#returnOwnedValue(value, rawSpan);
     },
     returnNetwork: (
@@ -553,14 +597,7 @@ class ElaborationRecorder {
           source: this.#span(rawSpan),
         },
         {
-          isProducer: (candidate): candidate is ProducerValue => this.#isProducer(candidate),
-          isNetwork: (candidate): candidate is NetworkValue => this.#isNetwork(candidate),
-          materializeProducer: (producer, color) => {
-            const network = this.#network('$return', rawSpan, color);
-            this.#networkState(network).returnBindingAvailable = true;
-            this.#attach(network, producer, rawSpan);
-            return network;
-          },
+          networkFacet: (candidate) => this.#networkFacet(candidate),
           requireColor: (network, requiredCapability, color) =>
             this.#requireNetworkColor(network, requiredCapability, color, rawSpan),
           transferToCaller: (network) => this.#returnOwnedNetwork(network, rawSpan),
@@ -596,13 +633,7 @@ class ElaborationRecorder {
           source: this.#span(rawSpan),
         },
         {
-          isProducer: (candidate): candidate is ProducerValue => this.#isProducer(candidate),
-          isNetwork: (candidate): candidate is NetworkValue => this.#isNetwork(candidate),
-          materializeProducer: (producer, name, color) => {
-            const network = this.#network(name, rawSpan, color);
-            this.#attach(network, producer, rawSpan);
-            return network;
-          },
+          networkFacet: (candidate) => this.#networkFacet(candidate),
           assertReadable: (network, source, role) =>
             this.#ownership.assertReadable(network, source, role),
           stateFor: (network) => this.#networkState(network),
@@ -626,7 +657,8 @@ class ElaborationRecorder {
           'RT2020',
         );
       }
-      if (!this.#isNetwork(destination)) {
+      const destinationNetwork = this.#rawNetworkFacet(destination);
+      if (destinationNetwork === undefined) {
         if (
           (typeof destination !== 'object' && typeof destination !== 'function') ||
           destination === null ||
@@ -643,69 +675,40 @@ class ElaborationRecorder {
         throw new Error('.take(source) requires exactly one source Network.');
       }
       const source = values[0];
-      if (!this.#isNetwork(source)) {
+      const sourceNetwork = this.#rawNetworkFacet(source);
+      if (sourceNetwork === undefined) {
         throw new Error('.take(source) requires a source Network.');
       }
-      this.#assertConsumableNetwork(destination, rawSpan, 'destination');
-      this.#assertConsumableNetwork(source, rawSpan, 'source');
-      if (this.#networkState(destination).ownership === this.#networkState(source).ownership) {
-        throw new ElaborationExecutionError(
-          'A Network cannot take itself.',
-          this.#span(rawSpan),
-          'RT2013',
-          [{ message: 'Network declared here.', span: destination.declaration }],
-        );
-      }
-      const provenance = this.#span(rawSpan);
-      const destinationColor = this.#networkState(destination).ownership.colorRequirement?.color;
-      const sourceColor = this.#networkState(source).ownership.colorRequirement?.color;
-      const fixedColorConflict =
-        destinationColor !== undefined &&
-        sourceColor !== undefined &&
-        destinationColor !== sourceColor;
-      this.#colors.same(
-        this.#networkState(destination).ownership,
-        this.#networkState(source).ownership,
-        provenance,
-        '.take(source) unifies both physical Networks',
-        fixedColorConflict ? 'RT2014' : 'RT2020',
-        fixedColorConflict
-          ? 'Network transfer unifies contradictory red/green color requirements.'
-          : 'Network transfer collapses Networks required to use opposite wire colors.',
-      );
-      this.#networkTransfers.push({
-        destination: destination.name,
-        source: source.name,
-        provenance,
-        instancePath: this.#path(),
-      });
-      this.#ownership.consume(source, provenance);
+      this.#assertConsumableNetwork(destinationNetwork, rawSpan, 'destination');
+      this.#transferNetwork(destinationNetwork, sourceNetwork, rawSpan);
       return destination;
     },
-    materialize: (
-      producer: unknown,
+    bind: (
+      value: unknown,
       name: string,
       fixedColor: 'red' | 'green' | undefined,
+      networkNarrowing: boolean,
       rawSpan: RawSpan,
       readBinding?: () => unknown,
     ): unknown => {
       let result: unknown;
-      if (this.#isNetwork(producer) && this.#networkState(producer).returnBindingAvailable) {
-        result = this.#bindReturnedNetwork(producer, name, fixedColor, rawSpan);
-      } else if (!this.#isProducer(producer)) {
-        if (this.#isNetwork(producer) && fixedColor !== undefined) {
-          this.#requireNetworkColor(producer, 'readonly', fixedColor, rawSpan);
+      if (this.#isCombinator(value)) {
+        const network = this.#rawNetworkFacet(value)!;
+        this.#combinators.bindName(value, name);
+        if (fixedColor !== undefined) {
+          this.#requireNetworkColor(network, 'readonly', fixedColor, rawSpan);
         }
-        result = producer;
+        result = networkNarrowing ? network : value;
       } else {
-        const network = this.#network(name, rawSpan, fixedColor);
-        this.#attach(network, producer, rawSpan);
-        result = network;
+        if (this.#isNetwork(value) && fixedColor !== undefined) {
+          this.#requireNetworkColor(value, 'readonly', fixedColor, rawSpan);
+        }
+        result = value;
       }
       if (readBinding !== undefined) this.#captureNetworkAlias(name, readBinding, rawSpan);
       return result;
     },
-    materializeArray: (
+    bindArray: (
       value: unknown,
       descriptors: readonly (BindingDescriptor | null)[],
       rawSpan: RawSpan,
@@ -721,11 +724,11 @@ class ElaborationRecorder {
       const hasProducerBindings = descriptors.some(
         (descriptor) => descriptor?.producerType !== undefined,
       );
-      if (!this.#isProducer(value)) {
+      if (!this.#isCombinator(value)) {
         if (!hasProducerBindings) return value;
         if (!Array.isArray(value)) {
           throw new ElaborationExecutionError(
-            'Producer tuple bindings require an executed array value.',
+            'Combinator tuple bindings require an executed array value.',
             this.#span(rawSpan),
             'RT2022',
           );
@@ -733,7 +736,7 @@ class ElaborationRecorder {
         const result = [...value];
         for (const [index, descriptor] of descriptors.entries()) {
           if (descriptor?.producerType !== undefined) {
-            result[index] = this.#producerHandle(
+            result[index] = this.#combinatorHandle(
               result[index],
               descriptor.producerType,
               rawSpan,
@@ -745,19 +748,19 @@ class ElaborationRecorder {
       }
       if (hasProducerBindings) {
         throw new ElaborationExecutionError(
-          'A single Producer cannot be destructured into Producer handles; put handles in an ordinary array first.',
+          'A single Combinator cannot be destructured into Combinator handles; put handles in an ordinary array first.',
           this.#span(rawSpan),
           'RT2022',
         );
       }
-      const bindings = descriptors.map((descriptor) =>
-        descriptor === null ? undefined : this.#bindingNetwork(descriptor, rawSpan),
+      const bindings = descriptors.map((descriptor, index) =>
+        descriptor === null
+          ? undefined
+          : this.#projectCombinatorOutput(value, index, descriptor, rawSpan),
       );
-      const networks = bindings.filter((network): network is NetworkValue => network !== undefined);
-      this.#attachMany(networks, value, rawSpan);
       return bindings;
     },
-    materializeObject: (
+    bindObject: (
       value: unknown,
       descriptors: readonly (BindingDescriptor | null)[],
       rawSpan: RawSpan,
@@ -773,11 +776,11 @@ class ElaborationRecorder {
       const producerDescriptors = descriptors.filter(
         (descriptor): descriptor is BindingDescriptor => descriptor?.producerType !== undefined,
       );
-      if (!this.#isProducer(value)) {
+      if (!this.#isCombinator(value)) {
         if (producerDescriptors.length === 0) return value;
         if (typeof value !== 'object' || value === null || Array.isArray(value)) {
           throw new ElaborationExecutionError(
-            'Producer object bindings require an executed object value.',
+            'Combinator object bindings require an executed object value.',
             this.#span(rawSpan),
             'RT2022',
           );
@@ -785,9 +788,9 @@ class ElaborationRecorder {
         const snapshot = Object.assign({}, value) as Record<string, unknown>;
         for (const descriptor of producerDescriptors) {
           if (descriptor.property === undefined) {
-            throw new Error('Producer object bindings require flat named properties.');
+            throw new Error('Combinator object bindings require flat named properties.');
           }
-          snapshot[descriptor.property] = this.#producerHandle(
+          snapshot[descriptor.property] = this.#combinatorHandle(
             snapshot[descriptor.property],
             descriptor.producerType,
             rawSpan,
@@ -798,22 +801,20 @@ class ElaborationRecorder {
       }
       if (producerDescriptors.length !== 0) {
         throw new ElaborationExecutionError(
-          'A single Producer cannot be destructured into Producer handles; put handles in an ordinary object first.',
+          'A single Combinator cannot be destructured into Combinator handles; put handles in an ordinary object first.',
           this.#span(rawSpan),
           'RT2022',
         );
       }
-      const entries = descriptors.map((descriptor) => {
+      const entries = descriptors.map((descriptor, index) => {
         if (descriptor === null || descriptor.property === undefined) {
-          throw new Error('Producer object binding requires flat named properties.');
+          throw new Error('Combinator object binding requires flat named properties.');
         }
-        return [descriptor.property, this.#bindingNetwork(descriptor, rawSpan)] as const;
+        return [
+          descriptor.property,
+          this.#projectCombinatorOutput(value, index, descriptor, rawSpan),
+        ] as const;
       });
-      this.#attachMany(
-        entries.map(([, network]) => network),
-        value,
-        rawSpan,
-      );
       return Object.fromEntries(entries);
     },
     compare: (operator: string, left: unknown, right: unknown, rawSpan: RawSpan): unknown => {
@@ -829,7 +830,7 @@ class ElaborationRecorder {
       }
       return value;
     },
-    decider: (...args: unknown[]): ProducerValue => {
+    decider: (...args: unknown[]): CombinatorValue => {
       this.#recordDslCall();
       const rawSpan = args.at(-1);
       const condition = args[0];
@@ -840,10 +841,8 @@ class ElaborationRecorder {
         throw new Error('IF/when requires at least one output specification.');
       }
       const outputs = outputValues.map((output) => this.#deciderOutput(output, rawSpan));
-      return this.#runtimeValue({
-        kind: 'producer',
-        identity: {},
-        producer: {
+      return this.#createCombinator(
+        {
           kind: 'decider',
           condition: condition.condition,
           output: outputs[0]!,
@@ -851,14 +850,73 @@ class ElaborationRecorder {
           source: this.#span(rawSpan),
           instancePath: this.#path(),
         },
-      });
+        rawSpan,
+      );
+    },
+    deciderStart: (condition: unknown, rawSpan: RawSpan): CombinatorValue => {
+      this.#recordDslCall();
+      if (!isRawSpan(rawSpan)) throw new Error('when(...) is missing provenance.');
+      if (!this.#isCondition(condition)) throw new Error('when(...) requires a circuit condition.');
+      return this.#createCombinator(
+        {
+          kind: 'decider',
+          condition: condition.condition,
+          source: this.#span(rawSpan),
+          instancePath: this.#path(),
+        },
+        rawSpan,
+      );
+    },
+    appendDecider: (
+      value: unknown,
+      branch: 'then' | 'else',
+      outputs: readonly unknown[],
+      rawSpan: RawSpan,
+    ): CombinatorValue => {
+      this.#recordDslCall();
+      if (!isRawSpan(rawSpan) || (branch !== 'then' && branch !== 'else')) {
+        throw new Error('Invalid when(...).then/else mutation descriptor.');
+      }
+      if (!this.#isCombinator(value)) {
+        throw new Error(`.${branch}(...) requires a DeciderCombinator.`);
+      }
+      const state = this.#combinators.stateFor(value);
+      if (state.descriptor.kind !== 'decider') {
+        throw new ElaborationExecutionError(
+          `.${branch}(...) requires a DeciderCombinator.`,
+          this.#span(rawSpan),
+          'RT2022',
+          [{ message: 'Physical combinator was created here.', span: state.descriptor.source }],
+        );
+      }
+      const appended = outputs.flatMap((output) => this.#deciderOutputs(output, rawSpan));
+      if (appended.length === 0) {
+        throw new Error(`.${branch}(output, ...) requires at least one output specification.`);
+      }
+      const thenOutputs =
+        state.descriptor.outputs ??
+        (state.descriptor.output === undefined || state.descriptor.elseOutputs !== undefined
+          ? []
+          : [state.descriptor.output]);
+      const elseOutputs = state.descriptor.elseOutputs ?? [];
+      const nextThen = branch === 'then' ? [...thenOutputs, ...appended] : thenOutputs;
+      const nextElse = branch === 'else' ? [...elseOutputs, ...appended] : elseOutputs;
+      const descriptor: CombinatorDescriptor = {
+        ...state.descriptor,
+        output: nextThen[0] ?? nextElse[0]!,
+        outputs: nextThen,
+        ...(nextElse.length === 0 ? {} : { elseOutputs: nextElse }),
+      };
+      this.#colors.registerCombinatorInputs(value.identity, descriptor, this.#span(rawSpan));
+      this.#combinators.update(value, descriptor);
+      return value;
     },
     deciderBranches: (
       condition: unknown,
       thenValue: unknown,
       elseValue: unknown,
       rawSpan: RawSpan,
-    ): ProducerValue => {
+    ): CombinatorValue => {
       this.#recordDslCall();
       if (!isRawSpan(rawSpan)) throw new Error('IF/when is missing provenance.');
       if (!this.#isCondition(condition)) throw new Error('IF/when requires a circuit condition.');
@@ -867,10 +925,8 @@ class ElaborationRecorder {
       if (thenOutputs.length === 0 && elseOutputs.length === 0) {
         throw new Error('IF/when requires at least one output specification.');
       }
-      return this.#runtimeValue({
-        kind: 'producer',
-        identity: {},
-        producer: {
+      return this.#createCombinator(
+        {
           kind: 'decider',
           condition: condition.condition,
           output: thenOutputs[0] ?? elseOutputs[0]!,
@@ -879,7 +935,8 @@ class ElaborationRecorder {
           source: this.#span(rawSpan),
           instancePath: this.#path(),
         },
-      });
+        rawSpan,
+      );
     },
     logical: (
       operator: 'and' | 'or',
@@ -939,7 +996,12 @@ class ElaborationRecorder {
       return this.#select(value, signal, rawSpan);
     },
     element: (value: unknown, key: unknown, rawSpan: RawSpan): unknown => {
-      if (this.#isNetwork(value) || this.#isPair(value) || this.#isDestination(value)) {
+      if (
+        this.#isNetwork(value) ||
+        this.#isCombinator(value) ||
+        this.#isPair(value) ||
+        this.#isDestination(value)
+      ) {
         this.#recordDslCall();
         return this.#select(value, key, rawSpan);
       }
@@ -950,9 +1012,9 @@ class ElaborationRecorder {
     },
     bindOutput: (producer: unknown, signal: SignalId, rawSpan: RawSpan): unknown => {
       if (!isRawSpan(rawSpan)) throw new Error('.as(...) is missing provenance.');
-      if (this.#isNetwork(producer) || this.#isProducer(producer)) {
+      if (this.#isNetwork(producer) || this.#isCombinator(producer)) {
         throw new ElaborationExecutionError(
-          '.as(...) is not part of the Producer API; bind an arithmetic output through destination[SIGNAL] or producer.to(destination, SIGNAL).',
+          '.as(...) is not part of the Combinator API; bind an arithmetic output through destination[SIGNAL] or combinator.to(destination, SIGNAL).',
           this.#span(rawSpan),
           'RT2021',
         );
@@ -975,7 +1037,7 @@ class ElaborationRecorder {
       if (!isRawSpan(rawSpan)) {
         throw new Error('.at(...) is missing provenance.');
       }
-      if (!this.#isProducer(producer)) {
+      if (!this.#isCombinator(producer)) {
         if (
           (typeof producer !== 'object' && typeof producer !== 'string') ||
           producer === null ||
@@ -988,9 +1050,6 @@ class ElaborationRecorder {
       this.#recordDslCall();
       if (args.length !== 4 && args.length !== 5) {
         throw new Error('.at(x, y, direction?) requires two or three arguments.');
-      }
-      if (this.#producerLifecycle.attachmentSource(producer) !== undefined) {
-        throw new Error('.at(...) must be applied before .to(...) or another attachment.');
       }
       if (
         typeof x !== 'number' ||
@@ -1014,18 +1073,16 @@ class ElaborationRecorder {
         y,
         ...(direction === undefined ? {} : { direction }),
       };
-      return this.#runtimeValue({
-        kind: 'producer',
-        identity: producer.identity,
-        producer: { ...producer.producer, placement },
-      });
+      const state = this.#combinators.stateFor(producer);
+      this.#combinators.update(producer, { ...state.descriptor, placement });
+      return producer;
     },
     attachTo: (...args: unknown[]): unknown => {
       const rawSpan = args.at(-1);
       const producer = args[0];
       const values = args.slice(1, -1);
       if (!isRawSpan(rawSpan)) throw new Error('.to(...) is missing provenance.');
-      if (!this.#isProducer(producer)) {
+      if (!this.#isCombinator(producer)) {
         if (
           (typeof producer !== 'object' && typeof producer !== 'function') ||
           producer === null ||
@@ -1078,13 +1135,17 @@ class ElaborationRecorder {
       rawSpan: RawSpan,
     ): unknown => {
       const destination =
-        this.#isNetwork(left) ||
+        this.#rawNetworkFacet(left) !== undefined ||
         this.#isPair(left) ||
         this.#isSelected(left) ||
         this.#isDestination(left);
       if (destination) this.#assertWritableValue(left, rawSpan);
-      if (destination && this.#isProducer(right)) {
-        this.api.attach(left, right, rawSpan);
+      if (destination && this.#isCombinator(right)) {
+        this.api.attach(
+          left as NetworkValue | CombinatorValue | PairValue | SelectedValue | DestinationValue,
+          right,
+          rawSpan,
+        );
         return left;
       }
       if (destination) {
@@ -1092,7 +1153,7 @@ class ElaborationRecorder {
           'Network += requires a combinator producer; constants and Networks are not implicit attachments.',
         );
       }
-      if (this.#isProducer(right)) {
+      if (this.#isCombinator(right)) {
         throw new Error('A combinator producer can only be attached to a Network destination.');
       }
       // The casts affect only TypeScript's checker; emitted JavaScript retains its native `+`
@@ -1102,8 +1163,8 @@ class ElaborationRecorder {
       return result;
     },
     attach: (
-      destination: NetworkValue | PairValue | SelectedValue | DestinationValue,
-      producer: ProducerValue,
+      destination: NetworkValue | CombinatorValue | PairValue | SelectedValue | DestinationValue,
+      producer: CombinatorValue,
       rawSpan: RawSpan,
     ): void => {
       this.#recordDslCall();
@@ -1118,7 +1179,7 @@ class ElaborationRecorder {
         ? destination.networks
         : this.#isSelected(destination)
           ? [destination.network]
-          : [destination];
+          : [this.#rawNetworkFacet(destination)!];
       this.#attachMany(
         destinations,
         producer,
@@ -1142,7 +1203,7 @@ class ElaborationRecorder {
       throw new Error('The elaboration runtime has already been sealed.');
     }
     try {
-      this.#finalizeUnusedProducers();
+      this.#finalizeUnusedCombinators();
       const declarations = new Map(this.#networks.map((network) => [network.name, network]));
       const plan: DirectElaborationPlan = {
         format: 'comblang-direct-plan',
@@ -1151,14 +1212,16 @@ class ElaborationRecorder {
         networkAliases: Object.freeze(
           [...this.#networkAliases.values()].flatMap(({ read, ...alias }) => {
             const value = read();
-            if (!this.#isNetwork(value)) return [];
-            const state = this.#networkState(value);
+            const network = this.#rawNetworkFacet(value);
+            if (network === undefined) return [];
+            const state = this.#networkState(network);
             // Borrowed local views expire with their call frame. Physical declarations
             // remain in the index independently of their original source handles.
             if (state.borrow !== undefined) return [];
-            const declaration = declarations.get(value.name);
+            const declaration = declarations.get(network.name);
             if (
               declaration !== undefined &&
+              declaration.name === alias.name &&
               JSON.stringify(declaration.instancePath) === JSON.stringify(alias.instancePath) &&
               alias.source.start <= declaration.source.start &&
               alias.source.end >= declaration.source.end
@@ -1167,9 +1230,9 @@ class ElaborationRecorder {
             return [
               Object.freeze({
                 ...alias,
-                network: value.name,
+                network: network.name,
                 moved:
-                  value.generation !== state.ownership.generation ||
+                  network.generation !== state.ownership.generation ||
                   state.ownership.consumedAt !== undefined,
               }),
             ];
@@ -1179,7 +1242,9 @@ class ElaborationRecorder {
         networkPairs: Object.freeze([...this.#networkPairs]),
         capabilityUses: Object.freeze([...this.#capabilityUses]),
         debugInstances: Object.freeze([...this.#debugInstances]),
-        producers: Object.freeze([...this.#producers]),
+        producers: Object.freeze(
+          this.#combinators.states().map((state) => this.#combinators.toPlan(state)),
+        ),
         diagnostics: Object.freeze([...this.#diagnostics]),
       };
       this.#status = 'sealed';
@@ -1197,7 +1262,7 @@ class ElaborationRecorder {
         const frame: ExecutionApiFrame = { dslDomain: false };
         this.#executionApiFrames.push(frame);
         const rawSpan =
-          (name === 'network' || name === 'materialize') && typeof args.at(-1) === 'function'
+          (name === 'network' || name === 'bind') && typeof args.at(-1) === 'function'
             ? args.at(-2)
             : args.at(-1);
         try {
@@ -1214,7 +1279,6 @@ class ElaborationRecorder {
             );
           }
           const result = (operation as (...values: unknown[]) => unknown)(...args);
-          if (this.#isProducer(result)) this.#producerLifecycle.register(result);
           return result;
         } catch (error) {
           const domainFailure =
@@ -1288,16 +1352,8 @@ class ElaborationRecorder {
       this.#assertReadableNetwork(value, rawSpan);
       return { kind: 'network', network: value.name };
     }
-    if (this.#isProducer(value)) {
-      const { captureId, attachedPlanIndex } = this.#producerLifecycle.capture(value);
-      if (attachedPlanIndex !== undefined) {
-        const producer = this.#producers[attachedPlanIndex];
-        if (producer === undefined) throw new Error('Captured Producer is missing from the plan.');
-        this.#producers[attachedPlanIndex] = {
-          ...producer,
-          debugCaptureIds: this.#producerLifecycle.captureIds(value)!,
-        };
-      }
+    if (this.#isCombinator(value)) {
+      const { captureId } = this.#combinators.capture(value);
       return { kind: 'producer', captureId };
     }
     if (value === undefined) return { kind: 'undefined' };
@@ -1351,24 +1407,23 @@ class ElaborationRecorder {
     );
   }
 
-  #finalizeUnusedProducers(): void {
-    this.#producerLifecycle.finalizeUnused((producer, ordinal) =>
-      this.#discardProducer(producer, producer.producer.source, ordinal),
-    );
-  }
-
-  #discardProducer(producer: ProducerValue, source: SourceSpan, ordinal: number): void {
-    this.#recordDslCall();
-    const rawSpan = { start: source.start, end: source.end };
-    const sink = this.#network(`$unused:${ordinal}`, rawSpan);
-    this.#attach(sink, producer, rawSpan);
-    this.#diagnostics.push({
-      code: 'CL2001',
-      severity: 'warning',
-      message:
-        'This producer has no destination; its topology is checked, but its output is unused.',
-      span: source,
-    });
+  #finalizeUnusedCombinators(): void {
+    for (const state of this.#combinators.states()) {
+      if (state.descriptor.kind === 'decider' && state.descriptor.output === undefined) {
+        throw new ElaborationExecutionError(
+          'when(condition) must configure at least one .then(...) or .else(...) output.',
+          state.descriptor.source,
+          'RT2022',
+        );
+      }
+      if (state.outputUsed) continue;
+      this.#diagnostics.push({
+        code: 'CL2001',
+        severity: 'warning',
+        message: 'This combinator output is never read or connected.',
+        span: state.descriptor.source,
+      });
+    }
   }
 
   #network(name: string, rawSpan: RawSpan, fixedColor?: 'red' | 'green'): NetworkValue {
@@ -1415,105 +1470,199 @@ class ElaborationRecorder {
     });
   }
 
-  #bindingNetwork(descriptor: BindingDescriptor, rawSpan: RawSpan): NetworkValue {
+  #captureNetworkAliasValue(name: string, network: NetworkValue, rawSpan: RawSpan): void {
+    this.#captureNetworkAlias(name, () => network, rawSpan);
+  }
+
+  #projectCombinatorOutput(
+    value: CombinatorValue,
+    index: number,
+    descriptor: BindingDescriptor,
+    rawSpan: RawSpan,
+  ): NetworkValue | undefined {
     if (
       typeof descriptor !== 'object' ||
       descriptor === null ||
       typeof descriptor.name !== 'string' ||
       (descriptor.color !== undefined && descriptor.color !== 'red' && descriptor.color !== 'green')
     ) {
-      throw new Error('Producer destructuring requires flat Network bindings.');
+      throw new Error('Combinator output projection requires flat Network bindings.');
     }
-    return this.#network(descriptor.name, rawSpan, descriptor.color);
+    if (index > 1) return undefined;
+    const network =
+      index === 0 ? this.#combinators.primary(value) : this.#ensureSecondaryOutput(value, rawSpan);
+    if (descriptor.color !== undefined) {
+      this.#requireNetworkColor(network, 'readonly', descriptor.color, rawSpan);
+    }
+    this.#captureNetworkAliasValue(descriptor.name, network, rawSpan);
+    return network;
   }
 
-  #bindReturnedNetwork(
-    value: NetworkValue,
-    name: string,
-    fixedColor: 'red' | 'green' | undefined,
-    rawSpan: RawSpan,
-  ): NetworkValue {
-    const state = this.#networkState(value);
-    state.returnBindingAvailable = false;
-    const occurrence = (this.#networkNameCounts.get(name) ?? 0) + 1;
-    this.#networkNameCounts.set(name, occurrence);
-    const boundName = occurrence === 1 ? name : `$instance:${occurrence}:${name}`;
-    const declarationIndex = this.#networks.findIndex(
-      ({ name: candidate }) => candidate === value.name,
-    );
-    const declaration = this.#networks[declarationIndex];
-    if (declaration === undefined)
-      throw new Error('Cannot bind a missing function return Network.');
-    this.#networks[declarationIndex] = {
-      ...declaration,
-      name: boundName,
+  #createCombinator(descriptor: CombinatorDescriptor, rawSpan: RawSpan): CombinatorValue {
+    const ordinal = ++this.#combinatorOrdinal;
+    const primary = this.#network(`$combinator:${ordinal}:primary`, rawSpan);
+    const value = this.#runtimeValue<CombinatorValue>({ kind: 'combinator', identity: {} });
+    this.#combinators.register(value, descriptor, primary, {
+      network: primary.name,
       source: this.#span(rawSpan),
-      ...(fixedColor === undefined ? {} : { fixedColor }),
-    };
-    this.#colors.renameNetwork(state.ownership, boundName, this.#span(rawSpan));
-    for (let index = 0; index < this.#producers.length; index += 1) {
-      const producer = this.#producers[index]!;
-      if (!producer.destinations.some(({ network }) => network === value.name)) continue;
-      this.#producers[index] = {
-        ...producer,
-        destinations: producer.destinations.map((destination) =>
-          destination.network === value.name ? { ...destination, network: boundName } : destination,
-        ),
-      };
-    }
-    const rebound = this.#networkValue(
-      { ...value, name: boundName, declaration: this.#span(rawSpan) },
-      { ownership: state.ownership },
-    );
-    if (fixedColor !== undefined)
-      this.#requireNetworkColor(rebound, 'readonly', fixedColor, rawSpan);
-    return rebound;
+      instancePath: this.#path(),
+    });
+    this.#combinatorByOutput.set(this.#networkState(primary).ownership, value);
+    this.#colors.registerCombinatorInputs(value.identity, descriptor);
+    return value;
   }
 
-  #attach(network: NetworkValue, value: ProducerValue, rawSpan: RawSpan): void {
+  #ensureSecondaryOutput(value: CombinatorValue, rawSpan: RawSpan): NetworkValue {
+    const existing = this.#combinators.secondary(value);
+    if (existing !== undefined) return existing;
+    const primary = this.#combinators.primary(value);
+    const name = primary.name.endsWith(':primary')
+      ? `${primary.name.slice(0, -':primary'.length)}:secondary`
+      : `$combinator:${++this.#combinatorOrdinal}:secondary`;
+    const secondary = this.#network(name, rawSpan);
+    const source = this.#span(rawSpan);
+    this.#colors.different(
+      this.#networkState(primary).ownership,
+      this.#networkState(secondary).ownership,
+      source,
+      'Combinator output connector uses both wire colors',
+    );
+    this.#combinators.addSecondary(value, secondary, {
+      network: secondary.name,
+      source,
+      instancePath: this.#path(),
+    });
+    this.#combinatorByOutput.set(this.#networkState(secondary).ownership, value);
+    return secondary;
+  }
+
+  #takeOutputLanes(
+    value: CombinatorValue,
+    count: number,
+    rawSpan: RawSpan,
+  ): readonly NetworkValue[] {
+    if (value.networkFacet !== undefined) {
+      this.#assertConsumableNetwork(value.networkFacet, rawSpan, 'combinator output');
+    }
+    const available = (): NetworkValue[] => {
+      const state = this.#combinators.stateFor(value);
+      return [state.outputPort.primary.network, state.outputPort.secondary?.network].filter(
+        (network): network is NetworkValue =>
+          network !== undefined && this.#networkState(network).ownership.consumedAt === undefined,
+      );
+    };
+    let lanes = available();
+    if (lanes.length < count && this.#combinators.secondary(value) === undefined) {
+      this.#ensureSecondaryOutput(value, rawSpan);
+      lanes = available();
+    }
+    if (lanes.length < count) {
+      const state = this.#combinators.stateFor(value);
+      throw new ElaborationExecutionError(
+        'This combinator output connector already uses both logical Networks.',
+        this.#span(rawSpan),
+        'RT2028',
+        [{ message: 'Physical combinator was created here.', span: state.descriptor.source }],
+      );
+    }
+    return lanes.slice(0, count);
+  }
+
+  #transferNetwork(
+    destination: NetworkValue,
+    sourceNetwork: NetworkValue,
+    rawSpan: RawSpan,
+    sourceRole = 'source',
+    conflictKind: 'transfer' | 'connector' = 'transfer',
+  ): void {
+    this.#assertConsumableNetwork(sourceNetwork, rawSpan, sourceRole);
+    const destinationState = this.#networkState(destination);
+    const sourceState = this.#networkState(sourceNetwork);
+    if (destinationState.ownership === sourceState.ownership) {
+      throw new ElaborationExecutionError(
+        'A Network cannot take itself.',
+        this.#span(rawSpan),
+        'RT2013',
+        [{ message: 'Network declared here.', span: destination.declaration }],
+      );
+    }
+    const provenance = this.#span(rawSpan);
+    const destinationColor = destinationState.ownership.colorRequirement?.color;
+    const sourceColor = sourceState.ownership.colorRequirement?.color;
+    const fixedColorConflict =
+      destinationColor !== undefined &&
+      sourceColor !== undefined &&
+      destinationColor !== sourceColor;
+    this.#colors.same(
+      destinationState.ownership,
+      sourceState.ownership,
+      provenance,
+      '.take(source) unifies both physical Networks',
+      conflictKind === 'connector' ? 'RT2010' : fixedColorConflict ? 'RT2014' : 'RT2020',
+      conflictKind === 'connector'
+        ? 'Combinator connector cannot satisfy the required circuit-wire colors.'
+        : fixedColorConflict
+          ? 'Network transfer unifies contradictory red/green color requirements.'
+          : 'Network transfer collapses Networks required to use opposite wire colors.',
+    );
+    this.#networkTransfers.push({
+      destination: destination.name,
+      source: sourceNetwork.name,
+      provenance,
+      instancePath: this.#path(),
+    });
+    this.#markOutputUsed(destination);
+    this.#markOutputUsed(sourceNetwork);
+    this.#ownership.consume(sourceNetwork, provenance);
+  }
+
+  #attach(network: NetworkValue, value: CombinatorValue, rawSpan: RawSpan): void {
     this.#attachMany([network], value, rawSpan);
   }
 
   #attachMany(
     networks: readonly NetworkValue[],
-    value: ProducerValue,
+    value: CombinatorValue,
     rawSpan: RawSpan,
     outputSignal?: SignalId,
-  ): ProducerValue {
-    if (!networks.every((network) => this.#isNetwork(network)) || !this.#isProducer(value)) {
-      throw new Error('Attachment requires a Network and producer.');
+  ): CombinatorValue {
+    if (!networks.every((network) => this.#isNetwork(network)) || !this.#isCombinator(value)) {
+      throw new Error('Attachment requires a Network and combinator.');
     }
     const source = this.#span(rawSpan);
-    validateProducerAttachment(networks, value, source, {
-      previousAttachment: this.#producerLifecycle.attachmentSource(value),
+    validateCombinatorAttachment(networks, source, {
       assertWritable: (network) => this.#assertWritableNetwork(network, rawSpan, 'destination'),
     });
-    const boundValue = bindProducerOutputSignal(value, outputSignal, source, (producer) =>
-      this.#runtimeValue(producer),
+    const state = this.#combinators.stateFor(value);
+    this.#combinators.update(
+      value,
+      bindCombinatorOutputSignal(state.descriptor, outputSignal, source),
     );
-    this.#colors.constrainConnector(
-      networks.map((network) => this.#networkState(network).ownership),
-      source,
-      'Producer output connector',
-    );
-    const planIndex = this.#producers.length;
-    this.#producers.push({
-      ...boundValue.producer,
-      ...(this.#producerLifecycle.captureIds(value) === undefined
-        ? {}
-        : { debugCaptureIds: this.#producerLifecycle.captureIds(value) }),
-      destinations: networks.map((network) => ({
-        network: network.name,
-        source,
-        instancePath: this.#path(),
-      })),
-    } as unknown as DirectPlanProducer);
-    this.#producerLifecycle.markAttached(boundValue, source, planIndex);
-    return boundValue;
+    const lanes = this.#takeOutputLanes(value, networks.length, rawSpan);
+    for (const [index, network] of networks.entries()) {
+      this.#transferNetwork(network, lanes[index]!, rawSpan, 'combinator output', 'connector');
+    }
+    this.#combinators.markOutputUsed(value);
+    return value;
   }
 
   #isNetwork(value: unknown): value is NetworkValue {
     return this.#hasRuntimeKind(value, 'network');
+  }
+
+  #isCombinator(value: unknown): value is CombinatorValue {
+    return this.#hasRuntimeKind(value, 'combinator');
+  }
+
+  #rawNetworkFacet(value: unknown): NetworkValue | undefined {
+    if (this.#isNetwork(value)) return value;
+    return this.#isCombinator(value)
+      ? (value.networkFacet ?? this.#combinators.primary(value))
+      : undefined;
+  }
+
+  #networkFacet(value: unknown): NetworkValue | undefined {
+    return this.#rawNetworkFacet(value);
   }
 
   #networkValue<T extends NetworkValue>(value: T, state: NetworkRuntimeState): T {
@@ -1528,6 +1677,12 @@ class ElaborationRecorder {
 
   #assertReadableNetwork(network: NetworkValue, rawSpan: RawSpan, role = 'Network'): void {
     this.#ownership.assertReadable(network, this.#span(rawSpan), role);
+    this.#markOutputUsed(network);
+  }
+
+  #markOutputUsed(network: NetworkValue): void {
+    const combinator = this.#combinatorByOutput.get(this.#networkState(network).ownership);
+    if (combinator !== undefined) this.#combinators.markOutputUsed(combinator);
   }
 
   #requireNetworkColor(
@@ -1573,20 +1728,11 @@ class ElaborationRecorder {
         frame: this.#currentFunctionFrame(),
       },
       {
-        isProducer: (candidate): candidate is ProducerValue => this.#isProducer(candidate),
+        networkFacet: (candidate) => this.#networkFacet(candidate),
         isNetwork: (candidate): candidate is NetworkValue => this.#isNetwork(candidate),
         isPair: (candidate): candidate is PairValue => this.#isPair(candidate),
         isPairSelection: (candidate): candidate is PairSelectedValue =>
           this.#isPairSelection(candidate),
-        resolveProducerArgument: (producer, descriptor) =>
-          this.api.networkArgument(
-            producer,
-            descriptor.functionName,
-            descriptor.parameter,
-            descriptor.capability,
-            descriptor.fixedColor,
-            rawSpan,
-          ),
         recordDslCall: () => this.#recordDslCall(),
         stateFor: (network) => this.#networkState(network),
         assertReadable: (network, source) => this.#ownership.assertReadable(network, source),
@@ -1619,31 +1765,79 @@ class ElaborationRecorder {
     const source = this.#span(rawSpan);
     const frame = this.#currentFunctionFrame();
     return returnOwnedValue(value, source, {
-      isProducer: (item): item is ProducerValue => this.#isProducer(item),
+      isCombinator: (item): item is CombinatorValue => this.#isCombinator(item),
       isNetwork: (item): item is NetworkValue => this.#isNetwork(item),
       isPair: (item): item is PairValue => this.#isPair(item),
       isPairSelection: (item): item is PairSelectedValue => this.#isPairSelection(item),
       assertReturnable: (network) => this.#ownership.assertReturnable(network, source, frame),
       ownershipOf: (network) => this.#networkState(network).ownership,
+      combinatorNetworks: (combinator) => {
+        const state = this.#combinators.stateFor(combinator);
+        return [state.outputPort.primary.network, state.outputPort.secondary?.network].filter(
+          (network): network is NetworkValue => network !== undefined,
+        );
+      },
+      normalizeCombinator: (combinator) => combinator.unrestrictedHandle ?? combinator,
+      isConsumed: (network) => this.#networkState(network).ownership.consumedAt !== undefined,
+      isOwnedByReturnFrame: (network) =>
+        frame !== undefined && this.#networkState(network).ownership.owner === frame.owner,
+      updateCombinatorNetwork: (combinator, original, returned) => {
+        const state = this.#combinators.stateFor(combinator);
+        if (state.outputPort.primary.network === original) {
+          this.#combinators.setPrimary(combinator, returned);
+        } else if (state.outputPort.secondary?.network === original) {
+          this.#combinators.setSecondary(combinator, returned);
+        }
+      },
       chargeTransfer: () => this.#recordDslCall(),
       returnNetwork: (network) => this.#returnOwnedNetwork(network, rawSpan, false),
     });
   }
 
-  #producerHandle(
+  #combinatorHandle(
     value: unknown,
     expectedType: unknown,
     rawSpan: RawSpan,
     bindingName?: unknown,
-  ): ProducerValue {
-    return bindProducerHandle(value, expectedType, bindingName, this.#span(rawSpan), {
-      isProducer: (candidate): candidate is ProducerValue => this.#isProducer(candidate),
-      brand: (producer) => this.#runtimeValue(producer),
+  ): CombinatorValue {
+    const combinator = bindCombinatorHandle(value, expectedType, bindingName, this.#span(rawSpan), {
+      isCombinator: (candidate): candidate is CombinatorValue => this.#isCombinator(candidate),
+      kindOf: (candidate) => this.#combinators.stateFor(candidate).descriptor.kind,
+      bindName: (candidate, name) => this.#combinators.bindName(candidate, name),
     });
+    if (typeof bindingName === 'string') {
+      this.#captureNetworkAliasValue(bindingName, this.#rawNetworkFacet(combinator)!, rawSpan);
+    }
+    return combinator;
   }
 
-  #returnOwnedNetwork(value: NetworkValue, rawSpan: RawSpan, recordCall = true): NetworkValue {
+  #returnCombinator(value: CombinatorValue, rawSpan: RawSpan): CombinatorValue {
+    const frame = this.#currentFunctionFrame();
+    if (frame === undefined)
+      throw new Error('Combinator return was created outside a function frame.');
+    const state = this.#combinators.stateFor(value);
+    const transfer = (network: NetworkValue, lane: 'primary' | 'secondary'): void => {
+      const ownership = this.#networkState(network).ownership;
+      if (ownership.consumedAt !== undefined || ownership.owner !== frame.owner) return;
+      const returned = this.#returnOwnedNetwork(network, rawSpan, false, false);
+      if (lane === 'primary') this.#combinators.setPrimary(value, returned);
+      else this.#combinators.setSecondary(value, returned);
+    };
+    transfer(state.outputPort.primary.network, 'primary');
+    if (state.outputPort.secondary !== undefined) {
+      transfer(state.outputPort.secondary.network, 'secondary');
+    }
+    return value.unrestrictedHandle ?? value;
+  }
+
+  #returnOwnedNetwork(
+    value: NetworkValue,
+    rawSpan: RawSpan,
+    recordCall = true,
+    markUsed = true,
+  ): NetworkValue {
     if (recordCall) this.#recordDslCall();
+    if (markUsed) this.#markOutputUsed(value);
     const frame = this.#currentFunctionFrame();
     if (frame === undefined) {
       throw new ElaborationExecutionError(
@@ -1666,7 +1860,6 @@ class ElaborationRecorder {
       },
       {
         ownership: state.ownership,
-        ...(state.returnBindingAvailable ? { returnBindingAvailable: true } : {}),
       },
     );
   }
@@ -1774,11 +1967,12 @@ class ElaborationRecorder {
       }
       return this.#runtimeValue({ ...value, signal: concreteSignal });
     }
-    if (!this.#isNetwork(value) && !this.#isPair(value)) {
+    const readable = this.#rawNetworkFacet(value) ?? value;
+    if (!this.#isNetwork(readable) && !this.#isPair(readable)) {
       throw new Error('Signal selection requires a Network or pair(a, b).');
     }
-    this.#assertReadableValue(value, rawSpan);
-    return this.#selectedValue(value, concreteSignal ?? (selection as WildcardName));
+    this.#assertReadableValue(readable, rawSpan);
+    return this.#selectedValue(readable, concreteSignal ?? (selection as WildcardName));
   }
 
   #selectedValue(
@@ -1841,16 +2035,12 @@ class ElaborationRecorder {
       if (value.selection === 'each') return { kind: 'each', ...this.#planNetworkRef(value) };
       throw new Error('Anything/Everything cannot be arithmetic operands.');
     }
-    if (this.#isProducer(value)) {
-      const temporary = this.#network(`$tmp:${++this.#anonymousOrdinal}`, rawSpan);
-      this.#attach(temporary, value, rawSpan);
-      return { kind: 'each', refKind: 'single', network: temporary.name };
+    if (this.#isCombinator(value)) {
+      const network = this.#combinators.primary(value);
+      this.#assertReadableNetwork(network, rawSpan);
+      return { kind: 'each', refKind: 'single', network: network.name };
     }
     throw new Error('Circuit arithmetic currently requires a Network or numeric operand.');
-  }
-
-  #isProducer(value: unknown): value is ProducerValue {
-    return this.#hasRuntimeKind(value, 'producer');
   }
 
   #isCondition(value: unknown): value is ConditionValue {
@@ -1858,7 +2048,6 @@ class ElaborationRecorder {
   }
 
   #runtimeValue<T extends RuntimeObjectValue>(value: T): T {
-    if (value.kind === 'producer') this.#colors.registerProducerInputs(value);
     return this.#runtimeValues.brand(value);
   }
 
@@ -1895,9 +2084,10 @@ class ElaborationRecorder {
       this.#assertReadableValue(output, rawSpan);
       return { kind: 'each', ...this.#planNetworkRef(output) };
     }
-    if (this.#isNetwork(output)) {
-      this.#assertReadableNetwork(output, rawSpan);
-      return { kind: 'each', refKind: 'single', network: output.name };
+    const network = this.#rawNetworkFacet(output);
+    if (network !== undefined) {
+      this.#assertReadableNetwork(network, rawSpan);
+      return { kind: 'each', refKind: 'single', network: network.name };
     }
     throw new Error('Unsupported decider output specification.');
   }
@@ -1913,7 +2103,7 @@ class ElaborationRecorder {
       this.#isWildcardCount(value) ||
       this.#isSelected(value) ||
       this.#isPair(value) ||
-      this.#isNetwork(value)
+      this.#rawNetworkFacet(value) !== undefined
     ) {
       return [this.#deciderOutput(value, rawSpan)];
     }
@@ -1947,11 +2137,15 @@ class ElaborationRecorder {
       this.#isWildcardToken(value) ||
       this.#isWildcardCount(value) ||
       this.#isCondition(value) ||
-      this.#isProducer(value)
+      this.#isCombinator(value)
     );
   }
 
   #assertReadableValue(value: unknown, rawSpan: RawSpan): void {
+    if (this.#isCombinator(value)) {
+      this.#assertReadableNetwork(this.#combinators.primary(value), rawSpan);
+      return;
+    }
     if (this.#isNetwork(value)) this.#assertReadableNetwork(value, rawSpan);
     if (this.#isPair(value)) {
       for (const network of value.networks) this.#assertReadableNetwork(network, rawSpan);

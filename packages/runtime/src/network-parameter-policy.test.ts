@@ -8,7 +8,7 @@ import type {
   NetworkRuntimeState,
   NetworkValue,
   PairValue,
-  ProducerValue,
+  CombinatorValue,
 } from './elaboration-values.js';
 import {
   bindNetworkParameter,
@@ -39,15 +39,9 @@ const network: NetworkValue = {
   capability: 'owned',
   generation: 0,
 };
-const producer: ProducerValue = {
-  kind: 'producer',
+const producer: CombinatorValue = {
+  kind: 'combinator',
   identity: {},
-  producer: {
-    kind: 'constant',
-    outputs: [],
-    source: declaration,
-    instancePath: [],
-  },
 };
 const pair: PairValue = { kind: 'pair', networks: [network, network], source: declaration };
 
@@ -69,11 +63,10 @@ function makeContext(
   state: NetworkRuntimeState = { ownership, callArgument: argumentSource },
 ): NetworkParameterPolicyContext {
   return {
-    isProducer: (value): value is ProducerValue => value === producer,
+    networkFacet: (value) => (value === producer || value === network ? network : undefined),
     isNetwork: (value): value is NetworkValue => value === network,
     isPair: (value): value is PairValue => value === pair,
     isPairSelection: (_value): _value is never => false,
-    resolveProducerArgument: vi.fn(() => network),
     recordDslCall: vi.fn(),
     stateFor: () => state,
     assertReadable: vi.fn(),
@@ -133,13 +126,12 @@ describe('Network parameter capability policy', () => {
     expect(bound.provenance).toBe(argumentSource);
   });
 
-  test('resolves a Producer through the shared argument policy before borrowing', () => {
+  test('projects a Combinator primary facet before borrowing', () => {
     const context = makeContext();
     const binding = descriptor('readonly', undefined);
 
     bindNetworkParameter(producer, binding, context);
 
-    expect(context.resolveProducerArgument).toHaveBeenCalledWith(producer, binding);
     expect(context.assertReadable).toHaveBeenCalledWith(network, argumentSource);
   });
 

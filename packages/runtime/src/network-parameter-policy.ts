@@ -8,7 +8,6 @@ import type {
   NetworkValue,
   PairSelectedValue,
   PairValue,
-  ProducerValue,
 } from './elaboration-values.js';
 
 export type NetworkParameterCapability = 'readonly' | 'ref' | 'move';
@@ -23,14 +22,10 @@ export interface NetworkParameterDescriptor {
 }
 
 export interface NetworkParameterPolicyContext {
-  isProducer(value: unknown): value is ProducerValue;
+  networkFacet(value: unknown): NetworkValue | undefined;
   isNetwork(value: unknown): value is NetworkValue;
   isPair(value: unknown): value is PairValue;
   isPairSelection(value: unknown): value is PairSelectedValue;
-  resolveProducerArgument(
-    producer: ProducerValue,
-    descriptor: NetworkParameterDescriptor,
-  ): NetworkValue;
   recordDslCall(): void;
   stateFor(network: NetworkValue): NetworkRuntimeState;
   assertReadable(network: NetworkValue, source: SourceSpan): void;
@@ -71,7 +66,7 @@ export function bindNetworkParameter(
   descriptor: NetworkParameterDescriptor,
   context: NetworkParameterPolicyContext,
 ): BoundNetworkParameter {
-  if (context.isProducer(value)) value = context.resolveProducerArgument(value, descriptor);
+  value = context.networkFacet(value) ?? value;
   if (
     descriptor.capability === 'move' &&
     (context.isPair(value) || context.isPairSelection(value))

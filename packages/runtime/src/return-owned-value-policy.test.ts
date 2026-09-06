@@ -6,7 +6,7 @@ import type {
   NetworkValue,
   PairSelectedValue,
   PairValue,
-  ProducerValue,
+  CombinatorValue,
 } from './elaboration-values.js';
 import {
   returnOwnedValue,
@@ -35,10 +35,10 @@ function policy(
   overrides: Partial<ReturnOwnedValuePolicyContext> = {},
 ): ReturnOwnedValuePolicyContext {
   return {
-    isProducer: (value): value is ProducerValue =>
+    isCombinator: (value): value is CombinatorValue =>
       typeof value === 'object' &&
       value !== null &&
-      (value as { kind?: unknown }).kind === 'producer',
+      (value as { kind?: unknown }).kind === 'combinator',
     isNetwork: (value): value is NetworkValue =>
       typeof value === 'object' &&
       value !== null &&
@@ -52,6 +52,11 @@ function policy(
       Array.isArray((value as { networks?: unknown }).networks),
     assertReturnable: vi.fn(),
     ownershipOf: (value) => owners.get(value)!,
+    combinatorNetworks: () => [],
+    normalizeCombinator: (value) => value,
+    isConsumed: () => false,
+    isOwnedByReturnFrame: () => true,
+    updateCombinatorNetwork: vi.fn(),
     chargeTransfer: vi.fn(),
     returnNetwork: (value) => ({ ...value, name: `${value.name}:returned` }),
     ...overrides,
@@ -155,5 +160,46 @@ describe('return-owned value policy', () => {
       ),
     ).toThrow('budget exhausted');
     expect(returnNetwork).not.toHaveBeenCalled();
+  });
+
+  test('preserves a foreign Combinator handle without claiming its output ownership', () => {
+    const primary = network('primary', 1);
+    const combinator: CombinatorValue = { kind: 'combinator', identity: {} };
+    const assertReturnable = vi.fn();
+    const returnNetwork = vi.fn((value: NetworkValue) => value);
+
+    const result = returnOwnedValue(
+      combinator,
+      source,
+      policy(new Map([[primary, ownership()]]), {
+        combinatorNetworks: () => [primary],
+        isOwnedByReturnFrame: () => false,
+        assertReturnable,
+        returnNetwork,
+      }),
+    );
+
+    expect(result).toBe(combinator);
+    expect(assertReturnable).not.toHaveBeenCalled();
+    expect(returnNetwork).not.toHaveBeenCalled();
+  });
+
+  test('restores scoped Combinator handles inside returned containers', () => {
+    const original: CombinatorValue = { kind: 'combinator', identity: {} };
+    const scoped: CombinatorValue = {
+      kind: 'combinator',
+      identity: original.identity,
+      unrestrictedHandle: original,
+    };
+
+    const result = returnOwnedValue(
+      { value: scoped },
+      source,
+      policy(new Map(), {
+        normalizeCombinator: (value) => value.unrestrictedHandle ?? value,
+      }),
+    ) as { value: CombinatorValue };
+
+    expect(result.value).toBe(original);
   });
 });

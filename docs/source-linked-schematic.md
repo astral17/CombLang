@@ -72,8 +72,9 @@ Start with the safe subset:
   is a unique placement call with literal coordinates: replace only the coordinate
   AST ranges, retaining direction, comments, and surrounding formatting.
 - No placement call: offer inserting `.at(x, y, direction?)` only where the
-  receiver is demonstrably the producer/Entity handle. An inferred Network
-  variable is not a safe target for appending a producer placement method.
+  receiver is demonstrably a Combinator/Entity handle. An inferred arithmetic,
+  `CC`, `IF`, or `when` binding is a Combinator and is safe; an explicitly
+  Network-narrowed variable is not a safe target for a placement method.
 - Variables, arithmetic expressions, spread arguments, shared helpers, several
   `.at` calls, loop/repeated-call sites, multiple physical outputs from one source
   expression, or unresolved provenance: disable automatic write-back and explain

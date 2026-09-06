@@ -322,7 +322,7 @@ to(c, d) += a + b;`,
     expect(colors.get('c')).not.toBe(colors.get('d'));
   });
 
-  test('keeps an unbound producer simulatable without exposing its internal sink', () => {
+  test('keeps an unbound producer simulatable without exposing its legacy primary output', () => {
     const parsed = parseFile({
       path: 'unused-producer.factorio.ts',
       text: `const a = new Network();

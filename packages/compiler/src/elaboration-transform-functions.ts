@@ -84,7 +84,7 @@ function parameterBinding(
       factory.createExpressionStatement(
         factory.createAssignment(
           parameter.name,
-          context.dslCall('producerHandle', [
+          context.dslCall('combinatorParameter', [
             parameter.name,
             factory.createStringLiteral(producerType),
             factory.createStringLiteral(parameter.name.text),

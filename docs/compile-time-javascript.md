@@ -14,7 +14,7 @@ CombLang executes a synchronous TypeScript-shaped JavaScript subset during elabo
 
 Control-flow tests remain JavaScript tests; they do not describe circuit branches. A nominal circuit `Condition` such as `input > 0` is therefore rejected with `RT2024` when used directly by `if`, a conditional expression, `while`, `do…while`, or a `for` condition. Use `IF(input > 0, ...)` or `when(input > 0).then(...)` to create a decider. Ordinary values retain exact JavaScript truthiness, including unary `!` for numbers, strings, `null`, arrays, and objects.
 
-Optional element and property-call chains remain native JavaScript and preserve nullish short-circuiting. They are not DSL invocation syntax: use a direct DSL selection or method call when the receiver is a Network or Producer. DSL-sensitive expressions nested in an optional key or argument are still transformed, but native short-circuiting prevents them from executing when the receiver is nullish.
+Optional element and property-call chains remain native JavaScript and preserve nullish short-circuiting. They are not DSL invocation syntax: use a direct DSL selection or method call when the receiver is a Network or Combinator. DSL-sensitive expressions nested in an optional key or argument are still transformed, but native short-circuiting prevents them from executing when the receiver is nullish.
 
 The generated JavaScript calls the elaboration runtime through a compiler-selected parameter name that does not occur anywhere in the source file. User bindings or references named `__dsl`, `__dsl_1`, and similar identifiers remain ordinary JavaScript and force a different bridge name; they neither shadow nor expose the runtime API.
 
@@ -24,7 +24,7 @@ User function signatures are resolved by lexical symbol identity rather than nam
 
 Method lookup happens once, before argument evaluation, including ordinary methods named `.to`, `.take`, `.at`, and `.as`. The runtime selects the circuit operation only for a DSL receiver; ordinary objects retain their own methods, getters, and `this`. Arguments remain in their original lexical environment rather than an injected callback, including a suspended `yield` argument. Computed method calls such as `producer['to'](output)` follow the same dispatch. For DSL calls with spread arguments, arity is validated after expansion: `(input + 0).at(...coordinates).to(...destinations)` does not require a statically known array length.
 
-Default parameter and destructuring initializers pass through the same executed DSL transform as ordinary expressions. A producer default bound to a simple name is contextually materialized under that name, while an explicitly annotated Producer handle remains a handle. JavaScript still decides whether a default runs and preserves left-to-right parameter evaluation, earlier-parameter references, and ordinary side effects. Function declarations, arrows, methods, and nested binding defaults are transformed; the capability contract below remains limited to simple parameters of function declarations.
+Default parameter and destructuring initializers pass through the same executed DSL transform as ordinary expressions. A combinator default remains the same physical handle; a `Network` annotation exposes its primary facet without creating topology. JavaScript still decides whether a default runs and preserves left-to-right parameter evaluation, earlier-parameter references, and ordinary side effects. Function declarations, arrows, methods, and nested binding defaults are transformed; the capability contract below remains limited to simple parameters of function declarations.
 
 Numeric enums fold the side-effect-free constant subset: numeric literals, parentheses, unary `+`/`-`/`~`, arithmetic, exponentiation, shifts, bitwise operators, and references to earlier members of the same enum. Auto-numbering continues from the evaluated value, including negative values. A dynamic initializer may remain an executed expression when that member is explicit, but the following member must also be explicit; otherwise `CL1048` prevents a silently incorrect inferred value.
 
@@ -33,8 +33,9 @@ Numeric enums fold the side-effect-free constant subset: numeric literals, paren
 Function declarations accept both `function f(input)` and
 `function f(input: Network)`. A direct Network value becomes an implicit read-only
 borrow with one `CL2002` warning per executed parameter declaration, while an
-untyped ordinary value keeps JavaScript behavior. Typed Network parameters also
-materialize Producer arguments; generic untyped parameters keep Producer handles.
+untyped ordinary value keeps JavaScript behavior. Typed Network parameters receive
+a Combinator argument's primary Network facet; generic untyped parameters keep the
+complete executed value.
 Writes and consumption require explicit `Ref<Network>` and `Move<Network>`.
 This does not infer contracts for arrows, methods, rest-array contents, or
 destructuring patterns. See [implicit parameters](ownership-and-multi-network.md)

@@ -48,7 +48,7 @@ const combined: Network = pair(first, second)[A] + 0;`,
     expect(plan.networkPairs).toMatchObject([{ networks: ['first', 'second'] }]);
     expect(plan.producers[0]).toMatchObject({
       placement: { x: 1, y: 2 },
-      destinations: [{ network: 'first' }, { network: 'second' }],
+      destinations: [{}, {}],
     });
     expect(elaborateDirectPlan(plan).circuit.graph.producers).toHaveLength(2);
   });

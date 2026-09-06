@@ -29,9 +29,12 @@ const output = Pipeline(input);`);
     expect(plan.diagnostics?.map(({ code }) => code)).toEqual(['CL2002', 'CL2002']);
   });
 
-  test.each(['input', 'input: Network'])(
-    'borrows %s for reads and warns once per declaration',
-    (parameter) => {
+  test.each([
+    { parameter: 'input', expectedUses: 0, warning: false },
+    { parameter: 'input: Network', expectedUses: 3, warning: true },
+  ])(
+    'uses the declared parameter boundary for $parameter',
+    ({ parameter, expectedUses, warning }) => {
       const source = `function Double(${parameter}): Network { return input * 2; }
 const input = CC(5 * Signal('virtual', 'signal-A'));
 for (let i = 0; i < 3; i++) { const output = Double(input); }
@@ -40,13 +43,15 @@ input += CC();`;
       expect(validateDslSemantics(file)).toEqual([]);
       const plan = execute(source);
       expect(plan.producers).toHaveLength(5);
-      expect(plan.capabilityUses).toHaveLength(3);
+      expect(plan.capabilityUses).toHaveLength(expectedUses);
       expect(plan.capabilityUses?.every(({ capability }) => capability === 'readonly')).toBe(true);
-      expect(plan.diagnostics).toEqual([
-        expect.objectContaining({ code: 'CL2002', severity: 'warning' }),
-      ]);
-      const span = plan.diagnostics![0]!.span!;
-      expect(source.slice(span.start, span.end)).toBe(parameter);
+      expect(plan.diagnostics).toEqual(
+        warning ? [expect.objectContaining({ code: 'CL2002', severity: 'warning' })] : [],
+      );
+      if (warning) {
+        const span = plan.diagnostics![0]!.span!;
+        expect(source.slice(span.start, span.end)).toBe(parameter);
+      }
       expect(() => elaborateDirectPlan(plan)).not.toThrow();
     },
   );
@@ -72,7 +77,7 @@ function Unused(other: Network) { return other * 2; }`);
     expect(plan.capabilityUses).toHaveLength(1);
   });
 
-  test('keeps generic Producer handles but contextually materializes an annotated Network argument', () => {
+  test('keeps generic Combinator handles but narrows an annotated Network argument', () => {
     const plan = execute(`function Identity(input) { return input; }
 function Read(input: Network) { return input * 2; }
 const comb: Producer = CC();

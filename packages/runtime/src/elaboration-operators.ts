@@ -9,6 +9,8 @@ import { circuitConstant, type SignalId } from '@comblang/factorio';
 import type { SourceSpan } from '@comblang/shared';
 
 import type {
+  CombinatorDescriptor,
+  CombinatorValue,
   DslValue,
   NetworkValue,
   PairValue,
@@ -25,6 +27,7 @@ export interface ElaborationOperatorDispatchContext<Source> {
   isSignalId(value: unknown): value is SignalId;
   isSelected(value: unknown): value is SelectedValue;
   isNetwork(value: unknown): value is NetworkValue;
+  networkFacet(value: unknown): NetworkValue | undefined;
   isPair(value: unknown): value is PairValue;
   isWildcardToken(value: unknown): value is WildcardTokenValue;
   recordDslCall(): void;
@@ -35,6 +38,7 @@ export interface ElaborationOperatorDispatchContext<Source> {
     readonly source: SourceSpan;
     readonly instancePath: readonly string[];
   };
+  createCombinator(descriptor: CombinatorDescriptor, source: Source): CombinatorValue;
   brand<T extends RuntimeObjectValue>(value: T): T;
 }
 
@@ -226,18 +230,19 @@ function dispatchComparison<Source>(
             },
     });
   }
+  const leftNetwork = context.networkFacet(left);
+  const rightNetwork = context.networkFacet(right);
   const network =
-    context.isNetwork(left) || context.isPair(left)
-      ? left
-      : context.isNetwork(right) || context.isPair(right)
-        ? right
-        : undefined;
+    leftNetwork ??
+    (context.isPair(left) ? left : undefined) ??
+    rightNetwork ??
+    (context.isPair(right) ? right : undefined);
   const constant = typeof left === 'number' ? left : typeof right === 'number' ? right : undefined;
   if (network === undefined || constant === undefined) {
     throw new Error('The executable comparison slice requires Network/pair(a, b) vs number.');
   }
   const normalized =
-    context.isNetwork(left) || context.isPair(left) ? comparator : reverseComparators[comparator];
+    leftNetwork !== undefined || context.isPair(left) ? comparator : reverseComparators[comparator];
   return context.brand({
     kind: 'condition',
     condition: {
@@ -303,10 +308,8 @@ function dispatchBinary<Source>(
       : context.isSelected(right) && context.isSignalId(right.selection)
         ? right.selection
         : undefined;
-  return context.brand({
-    kind: 'producer',
-    identity: {},
-    producer: {
+  return context.createCombinator(
+    {
       kind: 'arithmetic',
       left: context.arithmeticOperand(left as DslValue, source),
       operation,
@@ -317,7 +320,8 @@ function dispatchBinary<Source>(
           : { kind: 'signal', signal: concreteOutput },
       ...context.producerMetadata(source),
     },
-  });
+    source,
+  );
 }
 
 export const elaborationOperatorPolicy: ElaborationOperatorPolicy = Object.freeze({

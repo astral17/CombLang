@@ -85,7 +85,7 @@ const all: Network = IF(Anything(input) > 0, Everything(input));
 
 An `Anything` or `Everything` condition must currently emit a specific signal, for example `IF(Anything(input) > 0, input[A])`. Native `Each` output requires an `Each` condition and is rejected for quantifier conditions.
 
-## Arithmetic producers
+## Arithmetic combinators
 
 ```ts
 const doubled: Network = input * 2;
@@ -96,16 +96,16 @@ out[RESULT] += left[A] + right[B];
 
 Supported operators are addition, subtraction, multiplication, division, modulo, power, shifts, and bitwise AND/OR/XOR. Parentheses and left-associative grouping are preserved. Each circuit operation creates one arithmetic combinator; compile-time-only integer subexpressions are folded.
 
-The transformed module dispatches operators from their executed values. When neither operand is a circuit DSL value, JavaScript coercion, loose/strict equality, relational comparison, and lazy `&&`/`||` short-circuit behavior are preserved. When operands are Networks, selections, producers, or circuit Conditions, the same syntax records physical arithmetic or native decider condition groups.
+The transformed module dispatches operators from their executed values. When neither operand is a circuit DSL value, JavaScript coercion, loose/strict equality, relational comparison, and lazy `&&`/`||` short-circuit behavior are preserved. When operands are Networks, selections, combinators, or circuit Conditions, the same syntax records physical arithmetic or native decider condition groups.
 
 Without an explicit destination signal, arithmetic uses the first concrete input signal from left to right when one exists, otherwise native `Each` output.
 
 Output Signal binding belongs to the attachment: use `out[SIGNAL] += expression`,
-`to(out)[SIGNAL] += expression`, or `expression.to(out, SIGNAL)`. Producer
+`to(out)[SIGNAL] += expression`, or `expression.to(out, SIGNAL)`. Combinator
 `.as(...)` is deliberately not a second spelling and reports `CL1043` (or
 `RT2021` when only the executed receiver proves it is a DSL value).
 
-## Decider producers
+## Decider combinators
 
 Compact and fluent spellings share the same one-decider lowering:
 
@@ -173,107 +173,94 @@ to(first, second) += CC(5 * A, -2 * B);
 
 Each argument is a finite safe-integer value multiplied by a declared Signal value; the count is canonicalized to signed int32. A Signal may occur only once in one `CC` call.
 
-`CC()` is valid and creates one empty physical constant combinator. It emits no signals but can still be placed and attached, for example `CC().at(1, 2).to(out)`. An empty generated list in `CC(...entries)` has the same meaning. Like any other Producer, an unattached standalone `CC()` receives `CL2001`, not an error.
+`CC()` is valid and creates one empty physical constant combinator. It emits no signals but can still be placed and attached, for example `CC().at(1, 2).to(out)`. An empty generated list in `CC(...entries)` has the same meaning. Like any other combinator, an unattached standalone `CC()` receives `CL2001`, not an error.
 
 This implemented form creates one default Factorio 2.1 section. Multiple sections, section `multiplier`/`group`/`active`, and the entity-wide `isOn` switch are planned for the Phase 7 exact Constant surface. Their accepted design is documented in [Native objects, Deciders, and blueprint parameters](native-objects-deciders-and-parameters.md); `CC.section(...)` is not executable syntax yet.
 
-## Materialization and attachment
+## Combinators and output connections
 
-A typed declaration contextually materializes a producer:
-
-```ts
-const out: Network = a + b;
-const gated: Network = IF(out[A] > 0, out[A]);
-```
-
-The annotation is optional when the initializer actually produces hardware at execution time:
+Every hardware-producing expression creates its physical combinator immediately. It also creates a canonical primary output `Network`; there is no later materialization step:
 
 ```ts
-const input = CC(5 * A);
-const gated = IF(input[A] > 0, input[A]);
-const scaled = gated * 2 + 1;
+const input = CC(5 * A); // ConstantCombinator
+const gated = IF(input[A] > 0, input[A]); // DeciderCombinator
+const scaled = gated * 2 + 1; // ArithmeticCombinator
 ```
 
-An explicit combinator-handle annotation suppresses that automatic Network materialization when the producer must be configured or attached later:
+`Combinator` is publicly a subtype of `Network`. Network reads, selections, arithmetic, conditions, `pair`, function Network arguments, and `take` use its primary output facet. A `Network` annotation only narrows the visible API; it creates no entity, wire, or temporary Network:
 
 ```ts
-let comb: DeciderCombinator = when(input > 0).then(input);
-comb.at(10, 4).to(output, RESULT);
+const physical = input * 2;
+const narrowed: Network = physical;
+const reused = physical * physical; // both reads use the same primary output
 ```
 
-`Producer` is the common handle type. The more precise public types are `DeciderCombinator`, `ArithmeticCombinator`, and `ConstantCombinator`; use the precise type when it is known. Declarations, later writes to supported typed slots, function parameters, and function returns check both that the executed value is still an unmaterialized producer and that its physical combinator kind matches the annotation. Passing a handle through a typed parameter preserves its physical identity. A function may return one of these types to preserve the producer handle across its return boundary. Returning `Network` instead materializes a producer expression exactly once and exposes only the resulting logical Network. Producer handles represent one physical entity and remain single-attachment values: storing one does not clone it, `.at(...)` retains the same physical identity, and attaching any alias twice is `RT2006`.
+The precise physical types are `ArithmeticCombinator`, `DeciderCombinator`, and `ConstantCombinator`. `Combinator` accepts any of them. `Producer` is retained only as a deprecated compatibility alias for `Combinator`; new source should not use it. Concrete annotations on declarations, parameters, returns, and supported container slots validate the executed physical kind. A definite mismatch is `CL1044`; a dynamically selected mismatch is `RT2022` at the executed boundary.
 
-A `Network`-returning call is therefore one Network, never implicit fan-out:
+Physical methods remain available on the combinator handle even after one output lane is connected:
 
 ```ts
-function Gate(input: Readonly<Network>): Network {
-  return IF(input > 0, input);
-}
-
-const output = Gate(input);
-// let [a, b] = Gate(input); // CL1046: one Network is not a tuple
+const comb: ArithmeticCombinator = input + 1;
+first += comb; // consumes primary output lane
+comb.at(10, 4); // still configures the same physical entity
+second += comb; // creates and consumes the stable secondary lane
+// third += comb;       // RT2028: both output lanes are already consumed
 ```
 
-To retain attachment/fan-out powers, declare the honest producer return type,
-such as `DeciderCombinator`, and attach that returned handle explicitly. A
-producer expression passed to a `Readonly<Network>`, `Ref<Network>`, or
-`Move<Network>` parameter is contextually materialized at the call argument;
-dynamic type/capability failures point to that argument rather than the callee's
-parameter declaration. This includes aliases, functions stored in arrays/objects,
-and spread calls (which point to the spread expression). Optional calls and native
-callback invocation still use the parameter declaration when no matching call
-provenance is available.
+Primary and secondary are two logical Networks carried by the red and green wires of one physical output connector. They are constrained to opposite colors and carry the same combinator result. The secondary lane is created lazily, at most once. Repeating destructuring or using aliases never clones the entity or creates additional lanes.
 
-Producers may pass through dynamically indexed arrays and ordinary objects. Assignment and ignored expression results are not treated as immediately discarded producers because they may be aliases of a handle attached later. After the executed module finishes, the runtime checks every created physical producer identity: a value later returned or attached has no warning, while a producer still abandoned in a container or expression receives `CL2001` and an internal unused sink so its topology is still validated. `CL1044` reports a statically definite annotation mismatch at a declaration, assignment, argument, or `return`; dynamically determined mismatches use `RT2022` at the executed type boundary.
-
-Flat array and object destructuring may validate handles individually without materializing them:
-
-```ts
-const handles = [arithmetic, gate];
-let [a, d]: [ArithmeticCombinator, DeciderCombinator] = handles;
-
-const record = { producer: d, label: 'gate' };
-let { producer }: { producer: DeciderCombinator } = record;
-```
-
-These annotations validate the executed slot values and retain their original physical identities. Destructuring one bare producer into several producer handles is rejected because that spelling would imply cloning; put independently created handles in an ordinary container first. Network producer-destructuring remains the distinct output-fan-out operation described below.
-
-A direct handle variable, a concrete producer array, or a flat inline typed object property also validates every later assignment:
-
-```ts
-let arithmetic: ArithmeticCombinator;
-arithmetic = input + 0;
-
-let gates: DeciderCombinator[] = [];
-gates[0] = when(input > 0).then(input);
-
-let table: { seed: ConstantCombinator } = {};
-table.seed = CC(1 * A);
-```
-
-A definitely wrong kind is `CL1044`. If the right side comes from a dynamic call or container read, the semantic checker does not guess; the executed assignment validates it and reports `RT2022` on that expression when necessary. Lexical shadowing is respected. This slice recognizes direct annotations, `ProducerType[]`/`Array<ProducerType>`, and flat inline object property annotations; general named TypeScript type resolution remains later language-service work.
-
-The elaboration runtime materializes those producer values under their declaration names. It leaves ordinary numbers, strings, arrays, objects, Signals, and existing Networks unchanged. Likewise, `value[SIGNAL]` is dispatched from the executed receiver, so a Network returned by an ordinary JavaScript function can be selected without repeating `: Network` on the receiving variable. A `Network[]` element read is classified from the value obtained at execution, so `output += networks[i] * 2` works inside compile-time loops. A heterogeneous or otherwise unknown collection is not rejected statically: execution succeeds for Network elements and reports an attachment error if it reaches a non-Network element. Ordinary JavaScript element reads remain reads. For `+=`, identifiers, properties, and array/object elements are classified from their executed value: a Network destination attaches a producer, while non-DSL values retain native JavaScript addition and assignment. A member receiver and computed key are each evaluated exactly once. Other element assignments and updates remain native JavaScript operations.
-
-Existing Networks use `+=`:
+All connection spellings use the same lane allocator:
 
 ```ts
 out += a + b;
-out += IF(a > 0, a);
-```
-
-One producer can attach to two distinct Networks:
-
-```ts
+out[RESULT] += left[A] + right[B];
 to(first, second) += a + b;
 to(first, second)[RESULT] += left[A] + right[B];
 (left + right).to(first[RESULT]);
 (left + right).to(first, second, RESULT);
 ```
 
-A free destination set binds its output Signal as `to(first, second)[SIGNAL]`. The fluent producer form instead uses `.to(first, second, SIGNAL)`, because an element selection after `.to(...)` would occur after that method has already attached the producer. `.to(first[SIGNAL], second[SIGNAL])` remains invalid. The output binding adds no combinator. Two destinations share one physical output connector and therefore receive opposite wire colors. The right side of `Network += value` must be a combinator producer. Constants and `Network += Network` are deliberately rejected rather than invoking JavaScript object coercion.
+The free destination form binds an output Signal as `to(first, second)[SIGNAL]`; fluent syntax uses `.to(first, second, SIGNAL)`. The output binding changes the existing physical configuration and adds no combinator. `.to(first[SIGNAL], second[SIGNAL])` remains invalid. Empty, duplicate, and over-capacity destination lists report `RT2003`, `RT2004`, and `RT2005`. A third sequential lane request reports `RT2028`. Incompatible Signal rebinding reports `RT2023` with creation provenance. `Network += Network` and `Network += number` remain errors: the right side must be a physical `Combinator` handle.
 
-All attachment spellings use one executed validation path. An attachment requires one or two distinct writable Networks: dynamically computed empty, duplicate, and over-capacity destination lists report `RT2003`, `RT2004`, and `RT2005` at the attachment expression. Output Signal binding is also shared by `network[SIGNAL] += producer`, `to(...)[SIGNAL] += producer`, and `producer.to(..., SIGNAL)`. A destination may override an inferred arithmetic output, but it cannot rename constant-combinator filters, collapse a multi-output/branched decider, or replace an incompatible explicit decider output. Those executed conflicts report `RT2023` and retain producer-creation provenance. The third fluent `.to(...)` argument is only an output `Signal`; a statically definite Network or ordinary value there is `CL1021`.
+`when(condition)` also creates its Decider immediately. `.then(...)` and `.else(...)` mutate central state shared by every alias:
+
+```ts
+const gate = when(input > 0);
+const alias = gate;
+gate.then(input);
+alias.else(fallback);
+```
+
+The final object is one physical Decider. Every mutation revalidates its input-connector capacity and color constraints online. A `when` left without either branch is `RT2022` at finalization.
+
+Arrays and objects are ordinary JavaScript containers; the runtime does not recursively convert their contents. This works naturally because each combinator is already a Network value:
+
+```ts
+const stages: Network[] = Array.from({ length: 10 }, (_, i) => input * (i + 1));
+const record: { value: Network } = { value: input + 1 };
+const squared = stages[3] * stages[3];
+```
+
+Container reads are classified when the value is used. A heterogeneous array is accepted until execution reaches an element that is not valid for the requested DSL operation. Storing and retrieving a combinator preserves physical identity and configuration.
+
+Flat typed destructuring of an ordinary container validates its members as combinator handles:
+
+```ts
+const handles = [arithmetic, gate];
+let [a, d]: [ArithmeticCombinator, DeciderCombinator] = handles;
+```
+
+Direct destructuring of one combinator instead projects output lanes:
+
+```ts
+const comb = input + 0;
+let [primary, secondary]: [Network<R>, Network<G>] = comb;
+let [samePrimary, sameSecondary] = comb;
+```
+
+Both pairs refer to the same primary/secondary Network identities. Object destructuring is a compatibility spelling for the same flat projection. More than two Network projections are invalid.
+
+After synchronous execution the runtime warns with `CL2001` when a created combinator output was never read or connected. The physical combinator and its dangling primary output remain in the plan; no `$unused` sink is synthesized. Assignment to a variable or container alone does not suppress the warning because only the completed execution can prove whether the output was used.
 
 ## Explicit Network transfer
 
@@ -308,9 +295,9 @@ The view works as a bare Each input, through `pair(a, b)[SIGNAL]`, and with `Eac
 
 `pair` neither merges nor owns its inputs. It cannot receive a producer, be passed to `.to(...)` or `to(...)`, participate in `.take(...)`, satisfy `Move<Network>`, or escape a function as an ownership carrier. Definite source forms report `CL1042`; dynamically aliased forms report `RT2020`. `pair(a, a)` and aliases of the same Network are invalid. Moving either input invalidates older pair views through the ordinary `RT2012` ownership-generation check.
 
-Output fan-out remains a separate operation: use `producer.to(first, second)`, `to(first, second) += producer`, or contextual tuple/object destructuring. A pair is only an input-side view.
+Output fan-out remains a separate operation: use `combinator.to(first, second)`, `to(first, second) += combinator`, or direct tuple/object lane projection. A pair is only an input-side view.
 
-Array or flat object destructuring provides the contextual fan-out form for a newly created producer:
+Array or flat object destructuring projects the output lanes of one already-created combinator:
 
 ```ts
 let [a, b]: [Network, Network] = input + 0;
@@ -319,20 +306,20 @@ let [left, right] = input + 2;
 let { primary, mirror }: { primary: Network<R>; mirror: Network } = input + 3;
 ```
 
-One physical producer is attached to the two declared Networks, so they must resolve to opposite wire colors. Tuple/object type entries apply independently; omitted annotations are inferred from the executed producer value. The same syntax used with an ordinary JavaScript array or object retains normal destructuring behavior. Producer destructuring is currently flat and limited to one or two Network bindings.
+The two bindings are aliases of its stable primary and secondary Networks, so they must resolve to opposite wire colors. Repeating the destructuring returns the same identities. Tuple/object type entries apply independently; omitted annotations are inferred from the executed combinator value. The same syntax used with an ordinary JavaScript array or object retains normal destructuring behavior. Combinator lane projection is currently flat and limited to one or two Network bindings.
 
-Standalone arithmetic, `IF`, and `when(...).then(...)` expressions produce warning `CL2001`. They are still lowered into an internal unused sink so their input topology and color constraints remain validated.
+Standalone arithmetic, `CC`, `IF`, and `when(...).then(...)` expressions produce warning `CL2001` when their outputs are never read or connected. Their physical entities and dangling primary Networks remain in the plan; no internal sink is created.
 
 ## Explicit preview placement
 
-`.at(x, y, direction?)` records an exact Factorio blueprint position on a combinator producer:
+`.at(x, y, direction?)` records an exact Factorio blueprint position on a combinator:
 
 ```ts
 const placed = (input + 1).at(10.5, -2, 8);
 output += IF(input > 0, input).at(12.5, -2);
 ```
 
-Apply `.at(...)` before `.to(...)` or `+=` attaches the producer. Coordinates must be finite numbers. Direction may be a numeric compile-time constant or a TypeScript enum member and must resolve to an integer from `0` through `15`; omitted direction currently defaults to `4`. Unplaced producers use the deterministic preview row. Physical collision, reach, and relay validation are not part of the Phase 3 preview.
+`.at(...)` may run before or after either output lane is connected because the physical handle remains alive. Coordinates must be finite numbers. Direction may be a numeric compile-time constant or a TypeScript enum member and must resolve to an integer from `0` through `15`; omitted direction currently defaults to `4`. Unplaced combinators use the deterministic preview row. Physical collision, reach, and relay validation are not part of the Phase 3 preview.
 
 ## Functions
 
@@ -399,24 +386,13 @@ const tripled = Triple(input);
 const ordinaryNumber = Double(4); // ordinary JavaScript: 8
 ```
 
-Both forms borrow an actual Network for reading, without consuming it. They emit
-warning `CL2002` once per parameter declaration per compilation, only when that
-parameter actually borrows a Network. Explicit `Readonly<Network>` suppresses the
-warning; writes still require `Ref<Network>`, and consuming ownership requires
-`Move<Network>`. Implicit borrows expire on return/throw and cannot escape through
-return values or captured aliases. The initial default is read-only, not automatic
-writable inference.
+An annotated `Network` parameter borrows the executed value's Network facet for reading without consuming it. It emits warning `CL2002` once per declaration; explicit `Readonly<Network>` suppresses the warning. Writes require `Ref<Network>`, and consuming ownership requires `Move<Network>`. These views expire on return or throw and cannot escape through returned containers or captured aliases.
 
-`input: Network<G>` also constrains the underlying color. A typed Network
-parameter materializes a Producer argument; an untyped parameter preserves a
-Producer as a handle and leaves ordinary numbers, arrays, and objects unchanged.
-This is direct-value dispatch, not recursive conversion of container contents or
-inference for arrows, methods, or destructuring patterns. Bare `Network` in a
-local declaration or return annotation still means an owned Network.
+An untyped parameter receives the actual JavaScript value. Passing a combinator therefore preserves its physical API and identity; passing a number remains ordinary JavaScript. No recursive container conversion occurs. `input: Network<G>` projects the same primary facet and adds a color requirement without creating hardware. A local `: Network` annotation narrows the API, while a `Network` return transfers the existing primary facet to the caller.
 
 Variables, destructuring bindings, arrays, objects, and closures may hold aliases of one Network. They share the same ownership state and generation. Passing `array[i]` or `record.current` to `Move<Network>` invalidates the old slot value and every other old alias; assign the returned owner back with `array[i] = Transform(array[i])` or `record.current = Transform(record.current)`. A closure that retains a `Readonly`/`Ref` view past the call boundary receives `RT2017` when it later tries to use that expired borrow.
 
-A structural function may instead declare local Networks, attach producers to them, and return one of those Networks. Each call receives independent local Networks:
+A structural function may declare local Networks, connect combinator outputs to them, and return one of those Networks. Each call receives independent local Networks:
 
 ```ts
 function MemoCell(input: Readonly<Network>): Network {
@@ -431,11 +407,11 @@ const input = new Network();
 const output: Network = MemoCell(input);
 ```
 
-Returning a producer lets the caller materialize or attach it contextually. Returning an independently owned local Network returns that runtime handle; other local Networks remain private unless returned or otherwise attached. A borrowed parameter cannot be promoted to an owned return. A function that returns an ordinary value remains an ordinary JavaScript function, and an error is reported only if the executed value is later used in an operation that requires a Network, Signal, Condition, or Producer.
+Returning `ArithmeticCombinator`, `DeciderCombinator`, `ConstantCombinator`, or `Combinator` preserves the physical handle and its configuration API. Returning `Network` transfers only its primary Network facet, so the caller cannot recover combinator-specific methods by destructuring or casting. Returning an independently owned local Network returns that handle; other local Networks remain private unless returned or connected. A borrowed parameter cannot be promoted to an owned Network return. A function that returns an ordinary value remains ordinary JavaScript, and an error is reported only if the executed value is later used in an incompatible DSL operation.
 
-Each function declaration call receives an independent provenance scope, so generated Networks, producers, and attachments retain the dynamic function path. Async syntax is rejected before execution; imports and multi-module elaboration are not implemented yet.
+Each function declaration call receives an independent provenance scope, so generated Networks, combinators, and connections retain the dynamic function path. Async syntax is rejected before execution; imports and multi-module elaboration are not implemented yet.
 
-Default parameter and destructuring expressions are executed only when JavaScript selects the default, and DSL operations inside them use the normal runtime bridge. A simple binding such as `function Build(input = CC(...))` or `const [input = CC(...)] = []` materializes the producer as a named Network just like an ordinary inferred declaration. Earlier-parameter references and ordinary side-effect order are preserved. Producers created while evaluating a function default retain that invocation's dynamic function path before the function body begins.
+Default parameter and destructuring expressions are executed only when JavaScript selects the default, and DSL operations inside them use the normal runtime bridge. A binding such as `function Build(input = CC(...))` or `const [input = CC(...)] = []` retains the already-created combinator; Network operations use its primary facet. Earlier-parameter references and ordinary side-effect order are preserved. Combinators created while evaluating a function default retain that invocation's dynamic function path before the body begins.
 
 Static checks resolve user function declarations lexically, including nested declarations. A local binding with the same name does not inherit an outer function's annotations. If the function binding is reassigned, its call signature is treated as uncertain and checked from executed values instead. This uses TypeScript symbol binding only, not TypeScript assignability rules for DSL operators.
 
@@ -447,9 +423,9 @@ All reachable data-member handles are validated before any return transfer. If a
 
 The semantic pass reports only violations it can prove without executing the program. A local parameter or variable whose DSL category is not known stops lookup of an outer binding with the same spelling; it is not assumed to inherit an outer Network fact. The transformed elaboration runtime is authoritative for dynamic operator and method dispatch: the same instrumented syntax may perform ordinary JavaScript work or construct a circuit descriptor depending on the values reached in that execution. The exact supported metaprogramming surface and optional-chain boundary are listed in [Compile-time JavaScript](compile-time-javascript.md).
 
-DSL method arguments may be spread from executed arrays/iterables, for example `producer.at(...coordinates).to(...destinations)` or `destination.take(...sources)`. These calls retain the usual constraints (two or three placement arguments, one or two output Networks with an optional Signal, exactly one source for `take`); argument count is checked after expansion. Computed method names use the same runtime dispatch as dot access. An ordinary JavaScript method with the same name retains its own argument convention and is looked up once before arguments are evaluated.
+DSL method arguments may be spread from executed arrays/iterables, for example `combinator.at(...coordinates).to(...destinations)` or `destination.take(...sources)`. These calls retain the usual constraints (two or three placement arguments, one or two output Networks with an optional Signal, exactly one source for `take`); argument count is checked after expansion. Computed method names use the same runtime dispatch as dot access. An ordinary JavaScript method with the same name retains its own argument convention and is looked up once before arguments are evaluated.
 
-Free DSL identifiers are reserved in v1 and cannot be shadowed by user bindings. This includes constructors/functions and every documented wildcard alias. `CL1045` points at the conflicting declaration. Object property and method names are unaffected: `object.Each`, `{ All() {} }`, `object.to(...)`, and `object.then(...)` retain ordinary JavaScript meaning. A `.then(...)` or `.else(...)` call is statically a Decider producer only when its chain is rooted at the reserved `when(...)` builder; uncertain receivers are checked from their executed values.
+Free DSL identifiers are reserved in v1 and cannot be shadowed by user bindings. This includes constructors/functions and every documented wildcard alias. `CL1045` points at the conflicting declaration. Object property and method names are unaffected: `object.Each`, `{ All() {} }`, `object.to(...)`, and `object.then(...)` retain ordinary JavaScript meaning. A `.then(...)` or `.else(...)` call is statically a Decider combinator mutation only when its chain is rooted at the reserved `when(...)` builder; uncertain receivers are checked from their executed values.
 
 Ordinary functions, `if` branches, arrays, objects, and all JavaScript loop families execute during elaboration. For example, a regular `for` loop can generate compact `IF` attachments:
 
@@ -480,7 +456,7 @@ for (let i = 0; i < 10; i++) {
 }
 ```
 
-This creates ten private `tmp` Networks, ten deciders, and ten arithmetic combinators. Repeated source names receive stable dynamic instance identities instead of aliasing different iterations.
+This creates ten Decider primary output Networks, ten deciders, and ten arithmetic combinators. `tmp` is a source alias for the appropriate eager primary lane in each dynamic iteration; repeated names receive stable instance provenance rather than controlling topology.
 
 Browser compilation reuses one Web Worker across revisions and keeps only the newest queued edit while it is busy. An execution exceeding the current 1000 ms budget terminates and replaces that Worker and reports `EX1002`, so an infinite compile-time loop cannot freeze the interface. This timeout is an availability boundary, not yet the complete untrusted-code sandbox described by the project architecture.
 

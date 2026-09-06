@@ -85,6 +85,13 @@ export class CircuitColorConstraints<Id> {
     return this;
   }
 
+  relation(left: Id, right: Id): 'same' | 'different' | undefined {
+    const leftRoot = this.#find(this.#indexOf(left));
+    const rightRoot = this.#find(this.#indexOf(right));
+    if (leftRoot.index !== rightRoot.index) return undefined;
+    return (leftRoot.parity ^ rightRoot.parity) === 0 ? 'same' : 'different';
+  }
+
   resolve(): Map<Id, CircuitColor> {
     const anchor = this.#find(0);
     const componentOrientations = new Map<number, 0 | 1>();

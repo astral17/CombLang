@@ -2,14 +2,14 @@ import { sameSignal, type SignalId } from '@comblang/factorio';
 import type { SourceSpan } from '@comblang/shared';
 
 import { ElaborationExecutionError } from './elaboration-errors.js';
-import type { ProducerValue } from './elaboration-values.js';
+import type { CombinatorDescriptor } from './elaboration-values.js';
 
-type BrandProducer = (value: ProducerValue) => ProducerValue;
-
-function outputBindingFailure(message: string, value: ProducerValue, source: SourceSpan): never {
-  const related = [
-    { message: 'Physical producer was created here.', span: value.producer.source },
-  ].filter(
+function outputBindingFailure(
+  message: string,
+  value: CombinatorDescriptor,
+  source: SourceSpan,
+): never {
+  const related = [{ message: 'Physical combinator was created here.', span: value.source }].filter(
     (entry, index, entries) =>
       entries.findIndex(
         (candidate) =>
@@ -26,43 +26,41 @@ function outputBindingFailure(message: string, value: ProducerValue, source: Sou
   throw new ElaborationExecutionError(message, source, 'RT2023', related);
 }
 
-/** Applies a destination Signal constraint without changing the physical Producer identity. */
-export function bindProducerOutputSignal(
-  value: ProducerValue,
+/** Mutates a destination Signal constraint for one physical combinator configuration. */
+export function bindCombinatorOutputSignal(
+  value: CombinatorDescriptor,
   signal: SignalId | undefined,
   source: SourceSpan,
-  brand: BrandProducer,
-): ProducerValue {
+): CombinatorDescriptor {
   if (signal === undefined) return value;
-  if (value.producer.kind === 'constant') {
+  if (value.kind === 'constant') {
     outputBindingFailure(
       'A constant combinator output cannot be rebound to another Signal.',
       value,
       source,
     );
   }
-  if (value.producer.kind === 'arithmetic') {
-    return brand({
-      kind: 'producer',
-      identity: value.identity,
-      producer: { ...value.producer, output: { kind: 'signal', signal } },
-    });
+  if (value.kind === 'arithmetic') {
+    return { ...value, output: { kind: 'signal', signal } };
   }
-  if (value.producer.elseOutputs !== undefined) {
+  if (value.elseOutputs !== undefined) {
     outputBindingFailure(
       'A decider with an else branch cannot be rebound to one destination Signal.',
       value,
       source,
     );
   }
-  if ((value.producer.outputs?.length ?? 1) !== 1) {
+  if ((value.outputs?.length ?? 1) !== 1) {
     outputBindingFailure(
       'A multi-output decider cannot be rebound to one destination Signal.',
       value,
       source,
     );
   }
-  const output = value.producer.output;
+  const output = value.output;
+  if (output === undefined) {
+    outputBindingFailure('An incomplete decider has no output Signal to bind yet.', value, source);
+  }
   if (output.kind === 'signal') {
     if (!sameSignal(output.signal, signal)) {
       outputBindingFailure(
@@ -74,30 +72,22 @@ export function bindProducerOutputSignal(
     return value;
   }
   if (output.kind === 'each') {
-    return brand({
-      kind: 'producer',
-      identity: value.identity,
-      producer: {
-        ...value.producer,
-        output: {
-          kind: 'signal',
-          ...(output.refKind === 'single'
-            ? { refKind: 'single' as const, network: output.network }
-            : { refKind: 'pair' as const, networks: output.networks }),
-          signal,
-        },
+    return {
+      ...value,
+      output: {
+        kind: 'signal',
+        ...(output.refKind === 'single'
+          ? { refKind: 'single' as const, network: output.network }
+          : { refKind: 'pair' as const, networks: output.networks }),
+        signal,
       },
-    });
+    };
   }
   if (output.kind === 'each-constant') {
-    return brand({
-      kind: 'producer',
-      identity: value.identity,
-      producer: {
-        ...value.producer,
-        output: { kind: 'signal-constant', signal, value: output.value },
-      },
-    });
+    return {
+      ...value,
+      output: { kind: 'signal-constant', signal, value: output.value },
+    };
   }
   return outputBindingFailure(
     'Wildcard decider output cannot be rebound to a concrete Signal.',

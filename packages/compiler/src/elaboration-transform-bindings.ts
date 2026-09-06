@@ -27,7 +27,7 @@ export interface ElaborationBindingTransform {
   ): ts.Expression | undefined;
 }
 
-/** Creates the recursive binding/default/materialization family for one source transform. */
+/** Creates the recursive binding/default adaptation family for one source transform. */
 export function createElaborationBindingTransform(
   context: BindingTransformContext,
 ): ElaborationBindingTransform {
@@ -105,10 +105,13 @@ export function createElaborationBindingTransform(
     }
     return constructsNetwork
       ? transformed
-      : context.dslCall('materialize', [
+      : context.dslCall('bind', [
           transformed,
           factory.createStringLiteral(name.text),
           colorForType(type),
+          networkTypeFromAnnotation(type, file.ast) === undefined
+            ? factory.createFalse()
+            : factory.createTrue(),
           context.spanLiteral(source),
           bindingReader(name.text),
         ]);
@@ -246,7 +249,7 @@ export function createElaborationBindingTransform(
           property,
         );
       });
-      const initializer = context.dslCall(array ? 'materializeArray' : 'materializeObject', [
+      const initializer = context.dslCall(array ? 'bindArray' : 'bindObject', [
         ts.visitNode(node.initializer, visit) as ts.Expression,
         factory.createArrayLiteralExpression(descriptors),
         context.spanLiteral(node),

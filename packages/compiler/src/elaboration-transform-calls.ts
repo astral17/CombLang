@@ -97,6 +97,7 @@ export function transformCallOrElementNode(
     const mapped = {
       Signal: 'signal',
       CC: 'constant',
+      when: 'deciderStart',
       to: 'destinations',
       pair: 'pair',
     }[node.expression.text];
@@ -129,62 +130,6 @@ export function transformCallOrElementNode(
   if (ts.isCallExpression(node)) {
     const instantiated = context.transformTestInstantiation(node);
     if (instantiated !== undefined) return instantiated;
-  }
-
-  if (
-    ts.isCallExpression(node) &&
-    node.questionDotToken === undefined &&
-    ts.isPropertyAccessExpression(node.expression) &&
-    node.expression.questionDotToken === undefined
-  ) {
-    const method = node.expression.name.text;
-    const receiver = node.expression.expression;
-    if (
-      method === 'else' &&
-      ts.isCallExpression(receiver) &&
-      ts.isPropertyAccessExpression(receiver.expression) &&
-      receiver.expression.name.text === 'then' &&
-      ts.isCallExpression(receiver.expression.expression) &&
-      ts.isIdentifier(receiver.expression.expression.expression) &&
-      receiver.expression.expression.expression.text === 'when' &&
-      receiver.expression.expression.arguments.length === 1 &&
-      node.arguments.length >= 1
-    ) {
-      const whenCall = receiver.expression.expression;
-      return context.dslCall('deciderBranches', [
-        ts.visitNode(whenCall.arguments[0]!, visit) as ts.Expression,
-        factory.createArrayLiteralExpression(
-          receiver.arguments.map((argument) => ts.visitNode(argument, visit) as ts.Expression),
-        ),
-        factory.createArrayLiteralExpression(
-          node.arguments.map((argument) => ts.visitNode(argument, visit) as ts.Expression),
-        ),
-        context.spanLiteral(node),
-      ]);
-    }
-    if (
-      (method === 'then' || method === 'else') &&
-      ts.isCallExpression(receiver) &&
-      ts.isIdentifier(receiver.expression) &&
-      receiver.expression.text === 'when' &&
-      receiver.arguments.length === 1 &&
-      node.arguments.length >= 1
-    ) {
-      return context.dslCall('deciderBranches', [
-        ts.visitNode(receiver.arguments[0]!, visit) as ts.Expression,
-        method === 'then'
-          ? factory.createArrayLiteralExpression(
-              node.arguments.map((argument) => ts.visitNode(argument, visit) as ts.Expression),
-            )
-          : factory.createVoidZero(),
-        method === 'else'
-          ? factory.createArrayLiteralExpression(
-              node.arguments.map((argument) => ts.visitNode(argument, visit) as ts.Expression),
-            )
-          : factory.createVoidZero(),
-        context.spanLiteral(node),
-      ]);
-    }
   }
 
   if (

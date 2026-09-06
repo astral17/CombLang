@@ -1,7 +1,7 @@
 import type { SourceSpan } from '@comblang/shared';
 
 import { ElaborationExecutionError } from './elaboration-errors.js';
-import type { NetworkRuntimeState, NetworkValue, ProducerValue } from './elaboration-values.js';
+import type { NetworkRuntimeState, NetworkValue } from './elaboration-values.js';
 
 export type NetworkReturnCapability = 'owned' | 'readonly';
 
@@ -12,12 +12,7 @@ export interface NetworkReturnDescriptor {
 }
 
 export interface NetworkReturnPolicyContext {
-  isProducer(value: unknown): value is ProducerValue;
-  isNetwork(value: unknown): value is NetworkValue;
-  materializeProducer(
-    producer: ProducerValue,
-    fixedColor: 'red' | 'green' | undefined,
-  ): NetworkValue;
+  networkFacet(value: unknown): NetworkValue | undefined;
   requireColor(
     network: NetworkValue,
     capability: 'readonly' | 'move',
@@ -29,30 +24,26 @@ export interface NetworkReturnPolicyContext {
   brandNetwork(value: NetworkValue, state: NetworkRuntimeState): NetworkValue;
 }
 
-/** Materializes and transfers one explicitly typed Network function return. */
+/** Projects and transfers one explicitly typed Network function return. */
 export function returnNetworkValue(
   value: unknown,
   descriptor: NetworkReturnDescriptor,
   context: NetworkReturnPolicyContext,
 ): NetworkValue {
-  let network: NetworkValue;
-  if (context.isProducer(value)) {
-    network = context.materializeProducer(value, descriptor.fixedColor);
-  } else if (context.isNetwork(value)) {
-    network = value;
-    if (descriptor.fixedColor !== undefined) {
-      context.requireColor(
-        network,
-        descriptor.capability === 'readonly' ? 'readonly' : 'move',
-        descriptor.fixedColor,
-        descriptor.source,
-      );
-    }
-  } else {
+  const network = context.networkFacet(value);
+  if (network === undefined) {
     throw new ElaborationExecutionError(
       'A function declared to return Network must return a Network or a combinator expression.',
       descriptor.source,
       'RT2022',
+    );
+  }
+  if (descriptor.fixedColor !== undefined) {
+    context.requireColor(
+      network,
+      descriptor.capability === 'readonly' ? 'readonly' : 'move',
+      descriptor.fixedColor,
+      descriptor.source,
     );
   }
 

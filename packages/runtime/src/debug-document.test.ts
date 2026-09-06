@@ -57,6 +57,8 @@ const second = Stage(input);`;
     expect(inspectDebugNetwork(document, caller.id).bindings.map(({ name }) => name)).toEqual([
       'first',
       'output',
+      '$combinator:1:primary',
+      'copy',
     ]);
   });
 
@@ -75,6 +77,7 @@ const output: Network = destination * 2;`),
     expect(inspected.bindings.map(({ name, moved }) => ({ name, moved }))).toEqual([
       { name: 'destination', moved: false },
       { name: 'source', moved: true },
+      { name: '$combinator:1:primary', moved: true },
     ]);
     expect(inspected.producers).toHaveLength(2);
     expect(inspected.producers[0]!.outputs).toContain(id);

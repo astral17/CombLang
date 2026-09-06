@@ -131,7 +131,7 @@ const delayed = Delay(input);`,
     expect(validateDslSemantics(parsed)).toEqual([]);
   });
 
-  test('rejects .as on DSL producers and materialized Networks', () => {
+  test('rejects .as on DSL combinators and Network-narrowed values', () => {
     const call = 'IF(input > 0, input).as(A)';
     const parsed = parseFile({
       path: 'function-return-as.ts',
@@ -207,7 +207,7 @@ const contextual = Read(input * 2);`,
     );
   });
 
-  test('accepts stored Producer handles and rejects definite non-producer initializers', () => {
+  test('accepts stored Combinator handles and rejects definite non-combinator initializers', () => {
     const valid = parseFile({
       path: 'stored-producer.ts',
       text: `const input = new Network();
@@ -226,12 +226,24 @@ output += comb;`,
     );
   });
 
-  test('reports a materialized Network at its incompatible combinator return', () => {
-    const returned = 'return tmp;';
+  test('preserves an inferred combinator handle across a local binding', () => {
     const parsed = parseFile({
-      path: 'materialized-producer-return.ts',
+      path: 'inferred-combinator-return.ts',
       text: `function test(input: Readonly<Network>): ArithmeticCombinator {
   let tmp = input + 0;
+  return tmp;
+}`,
+    });
+
+    expect(validateDslSemantics(parsed)).toEqual([]);
+  });
+
+  test('reports an explicitly narrowed Network at its incompatible combinator return', () => {
+    const returned = 'return tmp;';
+    const parsed = parseFile({
+      path: 'narrowed-network-return.ts',
+      text: `function test(input: Readonly<Network>): ArithmeticCombinator {
+  let tmp: Network = input + 0;
   ${returned}
 }`,
     });
@@ -279,6 +291,20 @@ const output = Configure();`,
     });
     expect(validateDslSemantics(missing)).toContainEqual(
       expect.objectContaining({ code: 'CL1044', severity: 'error' }),
+    );
+  });
+
+  test('treats a typed Combinator parameter as a readonly Network subtype', () => {
+    const parsed = parseFile({
+      path: 'readonly-combinator-parameter.factorio.ts',
+      text: `function Inspect(comb: ArithmeticCombinator) {
+  const doubled = comb * 2;
+  comb += doubled;
+}`,
+    });
+
+    expect(validateDslSemantics(parsed)).toContainEqual(
+      expect.objectContaining({ code: 'CL1038', severity: 'error' }),
     );
   });
 
@@ -378,6 +404,16 @@ const second = new Network();
       'CL1021',
       'CL1014',
     ]);
+  });
+
+  test('checks a standalone mutable when constructor arity', () => {
+    const parsed = parseFile({
+      path: 'invalid-when-start.ts',
+      text: `when();
+when(new Network() > 0, new Network() > 1);`,
+    });
+
+    expect(validateDslSemantics(parsed).map(({ code }) => code)).toEqual(['CL1014', 'CL1014']);
   });
 
   test('does not claim ordinary JavaScript methods with DSL-like names', () => {

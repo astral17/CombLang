@@ -10,7 +10,7 @@ import type {
 import type { SourceSpan } from '@comblang/shared';
 
 import { ElaborationExecutionError } from './elaboration-errors.js';
-import type { NetworkOwnershipState, ProducerValue } from './elaboration-values.js';
+import type { CombinatorDescriptor, NetworkOwnershipState } from './elaboration-values.js';
 
 function networkNames(
   value:
@@ -20,7 +20,7 @@ function networkNames(
   return value.refKind === 'single' ? [value.network] : value.networks;
 }
 
-function producerInputNames(producer: ProducerValue['producer']): readonly string[] {
+function combinatorInputNames(combinator: CombinatorDescriptor): readonly string[] {
   const names: string[] = [];
   const addRef = (value: Parameters<typeof networkNames>[0]) => names.push(...networkNames(value));
   const addOperand = (value: PlanArithmeticOperand) => {
@@ -40,13 +40,16 @@ function producerInputNames(producer: ProducerValue['producer']): readonly strin
     if ('refKind' in output) addRef(output);
   };
 
-  if (producer.kind === 'arithmetic') {
-    addOperand(producer.left);
-    addOperand(producer.right);
-  } else if (producer.kind === 'decider') {
-    addCondition(producer.condition);
-    for (const output of producer.outputs ?? [producer.output]) addOutput(output);
-    for (const output of producer.elseOutputs ?? []) addOutput(output);
+  if (combinator.kind === 'arithmetic') {
+    addOperand(combinator.left);
+    addOperand(combinator.right);
+  } else if (combinator.kind === 'decider') {
+    addCondition(combinator.condition);
+    for (const output of combinator.outputs ??
+      (combinator.output === undefined ? [] : [combinator.output])) {
+      addOutput(output);
+    }
+    for (const output of combinator.elseOutputs ?? []) addOutput(output);
   }
   return Object.freeze(names);
 }
@@ -56,7 +59,8 @@ export class ElaborationColorConstraints {
   readonly #constraints = new CircuitColorConstraints<NetworkOwnershipState>();
   readonly #identities = new Map<string, NetworkOwnershipState>();
   readonly #declarations = new Map<NetworkOwnershipState, { name: string; source: SourceSpan }>();
-  readonly #registeredProducers = new WeakSet<object>();
+  readonly #combinatorInputs = new WeakMap<object, Set<NetworkOwnershipState>>();
+  readonly #logicalParents = new WeakMap<NetworkOwnershipState, NetworkOwnershipState>();
 
   registerNetwork(
     identity: NetworkOwnershipState,
@@ -65,6 +69,7 @@ export class ElaborationColorConstraints {
     fixedColor?: 'red' | 'green',
   ): void {
     this.#constraints.add(identity);
+    this.#logicalParents.set(identity, identity);
     this.renameNetwork(identity, name, source);
     if (fixedColor !== undefined) {
       this.#constraints.fix(identity, fixedColor, {
@@ -105,6 +110,7 @@ export class ElaborationColorConstraints {
   ): void {
     try {
       this.#constraints.same(left, right, { reason, provenance: source });
+      this.#unifyLogicalNetworks(left, right);
     } catch (error) {
       this.#fail(error, source, code, message);
     }
@@ -128,7 +134,16 @@ export class ElaborationColorConstraints {
     source: SourceSpan,
     label: string,
   ): void {
-    const distinct = [...new Set(identities)];
+    const distinct: NetworkOwnershipState[] = [];
+    for (const identity of identities) {
+      if (
+        !distinct.some(
+          (candidate) => this.#logicalNetworkRoot(candidate) === this.#logicalNetworkRoot(identity),
+        )
+      ) {
+        distinct.push(identity);
+      }
+    }
     if (distinct.length > 2) {
       throw new ElaborationExecutionError(
         `${label} needs ${distinct.length} logical networks on two wires.`,
@@ -141,21 +156,27 @@ export class ElaborationColorConstraints {
     }
   }
 
-  registerProducerInputs(value: ProducerValue): void {
-    if (this.#registeredProducers.has(value.identity)) return;
-    const identities = producerInputNames(value.producer).map((name) => {
+  registerCombinatorInputs(
+    identity: object,
+    descriptor: CombinatorDescriptor,
+    source: SourceSpan = descriptor.source,
+  ): void {
+    const identities = combinatorInputNames(descriptor).map((name) => {
       const identity = this.#identities.get(name);
       if (identity === undefined) {
         throw new ElaborationExecutionError(
-          `Producer input references an unknown Network: ${name}.`,
-          value.producer.source,
+          `Combinator input references an unknown Network: ${name}.`,
+          source,
           'RT2001',
         );
       }
       return identity;
     });
-    this.constrainConnector(identities, value.producer.source, 'Producer input connector');
-    this.#registeredProducers.add(value.identity);
+    const registered = this.#combinatorInputs.get(identity) ?? new Set<NetworkOwnershipState>();
+    const combined = [...new Set([...registered, ...identities])];
+    this.constrainConnector(combined, source, 'Combinator input connector');
+    for (const network of identities) registered.add(network);
+    this.#combinatorInputs.set(identity, registered);
   }
 
   #fail(error: unknown, source: SourceSpan, code = 'RT2010', message?: string): never {
@@ -176,5 +197,19 @@ export class ElaborationColorConstraints {
     throw new ElaborationExecutionError(message ?? error.message, source, code, related, {
       cause: error,
     });
+  }
+
+  #logicalNetworkRoot(identity: NetworkOwnershipState): NetworkOwnershipState {
+    const parent = this.#logicalParents.get(identity);
+    if (parent === undefined || parent === identity) return identity;
+    const root = this.#logicalNetworkRoot(parent);
+    this.#logicalParents.set(identity, root);
+    return root;
+  }
+
+  #unifyLogicalNetworks(left: NetworkOwnershipState, right: NetworkOwnershipState): void {
+    const leftRoot = this.#logicalNetworkRoot(left);
+    const rightRoot = this.#logicalNetworkRoot(right);
+    if (leftRoot !== rightRoot) this.#logicalParents.set(rightRoot, leftRoot);
   }
 }

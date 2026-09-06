@@ -30,7 +30,7 @@ describe('browser compiler Worker prototype profile', () => {
         capabilities: prototypes.capabilities,
       },
       result: {
-        compilerDiagnostics: [],
+        compilerDiagnostics: [{ code: 'CL2001', severity: 'warning' }],
         plan: { producers: [{ kind: 'constant', outputs: [{ value: 100 }] }] },
       },
     });
@@ -73,7 +73,7 @@ describe('browser compiler Worker prototype profile', () => {
           prototypeProfile: { source },
         })
       ).result.compilerDiagnostics,
-    ).toEqual([]);
+    ).toEqual([expect.objectContaining({ code: 'CL2001', severity: 'warning' })]);
     expect(
       (
         await handleCompilerWorkerRequest({
@@ -103,7 +103,7 @@ describe('browser compiler Worker prototype profile', () => {
           prototypeProfile: structuredClone({ identity }),
         })
       ).result.compilerDiagnostics,
-    ).toEqual([]);
+    ).toEqual([expect.objectContaining({ code: 'CL2001', severity: 'warning' })]);
     const missing = await new CompilerWorkerRuntime().handle({
       kind: 'parse',
       revision: 3,

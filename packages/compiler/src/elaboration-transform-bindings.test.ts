@@ -62,25 +62,25 @@ describe('elaboration binding transform', () => {
 const nested = keep(new Network<G>());`);
 
     expect(code).toContain('__dsl.network("direct", "red"');
-    expect(code).toContain('__dsl.materialize(keep(__dsl.network(void 0, "green"');
+    expect(code).toContain('__dsl.bind(keep(__dsl.network(void 0, "green"');
     expect(code).toContain('() => direct');
     expect(code).not.toContain('() => nested, () => nested');
   });
 
-  test('carries tuple and object member types into materialization descriptors and defaults', () => {
+  test('carries tuple and object member types into binding descriptors and defaults', () => {
     const code =
       transformBindings(`let [first, , third = fallback]: [Network<G>, Network, ArithmeticCombinator] = source;
 let { gate: renamed, output = fallback }: { gate: DeciderCombinator; output: Network<R> } = record;`);
 
-    expect(code).toContain('__dsl.materializeArray(source');
+    expect(code).toContain('__dsl.bindArray(source');
     expect(code).toContain('{ name: "first", color: "green" }');
     expect(code).toContain('producerType: "ArithmeticCombinator"');
-    expect(code).toContain('__dsl.materializeObject(record');
+    expect(code).toContain('__dsl.bindObject(record');
     expect(code).toContain('name: "renamed", property: "gate"');
     expect(code).toContain('producerType: "DeciderCombinator"');
     expect(code).toContain('name: "output", property: "output", color: "red"');
     expect(code).toContain('__dsl.producerHandle(fallback, "ArithmeticCombinator", "third"');
-    expect(code).toContain('__dsl.materialize(fallback, "output", "red"');
+    expect(code).toContain('__dsl.bind(fallback, "output", "red"');
   });
 
   test('gives bound test instances a stable name and unbound calls a source identity', () => {
@@ -100,7 +100,7 @@ use(t.instantiate(Build, input));`,
   [fallback = source]: [fallback?: Network<R>] = []
 ) {}`);
 
-    expect(code).toContain('input: Network<G> = __dsl.materialize(source, "input", "green"');
-    expect(code).toContain('fallback = __dsl.materialize(source, "fallback", "red"');
+    expect(code).toContain('input: Network<G> = __dsl.bind(source, "input", "green"');
+    expect(code).toContain('fallback = __dsl.bind(source, "fallback", "red"');
   });
 });

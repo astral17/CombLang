@@ -78,11 +78,11 @@ function Triple(input: Network): Network {
 }
 ```
 
-`input: Network` requires a Network (or materializable Producer) and borrows it as
-`Readonly<Network>`; `Network<R>`/`Network<G>` preserve their color requirements.
-Without an annotation, only an actual direct Network argument becomes a borrow.
-Numbers, strings, null/undefined, arrays, ordinary objects, and unmaterialized
-Producer handles retain their executed JavaScript categories and identities.
+`input: Network` requires a Network or the primary Network facet of a Combinator
+and borrows it as `Readonly<Network>`; `Network<R>`/`Network<G>` preserve their
+color requirements. Without an annotation, a direct Network or Combinator argument
+becomes a borrow through that same facet. Numbers, strings, null/undefined, arrays,
+and ordinary objects retain their executed JavaScript categories and identities.
 There is no recursive coercion of Networks stored inside containers, and no new
 parameter inference for arrows, methods, or destructuring patterns in this slice.
 
@@ -94,8 +94,8 @@ runtime argument failures still point to the argument where available. Explicit
 
 The executed argument-category boundary is shared by all explicit capabilities.
 An existing Network keeps its physical ownership and active outer-borrow state;
-a Producer is materialized once as a named argument Network without adding an
-extra combinator. The resulting callee view records the actual argument-expression
+a Combinator contributes its already-existing primary Network without adding
+topology. The resulting callee view records the actual argument-expression
 span, including dynamic indexing, aliases, and spread calls, so a later
 readability or capability failure is attributed to the call site rather than the
 function declaration. Non-Network values fail with `RT2015` before a view is
@@ -129,7 +129,7 @@ let alias = a;
 const values = [a];
 ```
 
-`a`, `alias`, and `values[0]` may all be read or used as topology destinations while that generation is current. Moving or consuming the Network through any one of them invalidates every stale alias. A genuinely independent Network requires `new Network()` or contextual materialization from another producer.
+`a`, `alias`, and `values[0]` may all be read or used as topology destinations while that generation is current. Moving or consuming the Network through any one of them invalidates every stale alias. A genuinely independent Network requires `new Network()` or a distinct combinator output connection.
 
 Executed Network values are frozen nominal handles. Mutable ownership and borrow state is stored in a session-local `WeakMap`, not as an `ownership` or `borrow` property on the source-visible object. Consequently reflection cannot replace the owner, generation snapshot, capability, or borrow lifecycle, and copying visible fields cannot forge a valid handle. Plans and diagnostics still retain the same Network names and declaration provenance.
 
@@ -158,9 +158,9 @@ state.current = Advance(state.current);
 
 JavaScript evaluates the right side before storing the returned fresh owner in the target. Any alias captured before the call remains stale and reports `RT2012`; if the callee drops ownership instead of returning it, later stale use reports `RT2019`. A computed target follows ordinary JavaScript evaluation rules, so save a side-effectful index in a local variable when it must be evaluated once.
 
-Producer destructuring is not a Network copy. Forms such as `let [a, b] = input + 0` attach one physical producer output to two fresh logical destination Networks. Those Networks receive independent ownership and the existing opposite-color output constraint.
+Combinator destructuring is not a Network copy. Forms such as `let [a, b] = input + 0` project the physical output port's stable primary and secondary logical Networks. Those Networks receive independent ownership and the opposite-color output constraint. Repeating the destructuring yields aliases of the same two Networks.
 
-Producer handles have their own affine physical identity. `Producer` is the common annotation; `ArithmeticCombinator`, `DeciderCombinator`, and `ConstantCombinator` additionally validate the native entity kind at declarations, function parameters, returns, flat array/object destructuring, and later writes to direct, array, or flat inline object slots carrying those annotations. Passing through a parameter, container slot, destructuring binding, or `.at(...)` creates no entity and does not change identity. Exactly one attachment operation may consume that identity; physical fan-out must name both destinations in that one operation. Only the completed execution can decide whether a dynamically stored value was later attached, so `CL2001` is emitted during finalization for identities that remain unused rather than at the slot assignment.
+Combinator handles have persistent physical identity. `Combinator` is the common annotation; `Producer` is its deprecated alias. `ArithmeticCombinator`, `DeciderCombinator`, and `ConstantCombinator` additionally validate the native entity kind at declarations, function parameters, returns, flat array/object destructuring, and later writes to direct, array, or flat inline object slots carrying those annotations. Passing through a parameter, container slot, destructuring binding, or `.at(...)` creates no entity and does not change identity. Output attachment consumes the next available primary/secondary connection, while Network reads use primary. Only completed execution can prove whether an output was used, so `CL2001` is emitted during finalization rather than at slot assignment.
 
 ## Explicit consuming transfer
 
@@ -177,7 +177,7 @@ After the call, `destination` owns the unified Network and `source` is moved. Th
 This form is invalid:
 
 ```ts
-destination += source; // Network is not a Producer
+destination += source; // Network is not a Combinator
 ```
 
 `let alias = source` is valid, but it aliases the same ownership token rather than copying it. After `destination.take(source)`, both `source` and `alias` are stale.
@@ -212,11 +212,11 @@ destination.take(pair(a, b)); // CL1042
 | attach one producer to one selected Network | `producer.to(output[SIGNAL_A])`           |
 | attach one producer to two output Networks  | `producer.to(first, second, SIGNAL_A)`    |
 | free two-Network selected destination       | `to(first, second)[SIGNAL_A] += producer` |
-| contextually create two output Networks     | `let [first, second] = producer`          |
+| project the two stable output Networks      | `let [first, second] = combinator`        |
 
 `pair(a, b)[SIGNAL]` is a read selection. Forms such as `.to(pair(a, b))` or `to(pair(a, b)[SIGNAL]) += producer` mix input and output concepts and are rejected. Dynamically aliased misuse receives `RT2020`. The serialized plan and NCIR retain both input Networks, the simulator sums both buses, and blueprint generation wires both resolved colors.
 
-Every implemented output spelling now converges before plan serialization: contextual Network materialization and tuple/object fan-out, `Network +=`, free `to(...)[SIGNAL] +=`, and fluent `.to(..., SIGNAL)` share producer identity, one/two-destination cardinality, duplicate checks, writability checks, output binding, attachment provenance, and the downstream opposite-color constraint. Dynamic destination cardinality failures use `RT2003` through `RT2005`; incompatible executed output binding uses `RT2023` with producer and destination provenance.
+Every implemented output spelling now converges before plan serialization: stable lane projection, `Network +=`, free `to(...)[SIGNAL] +=`, and fluent `.to(..., SIGNAL)` share combinator identity, one/two-destination cardinality, duplicate checks, writability checks, output binding, attachment provenance, and the downstream opposite-color constraint. Dynamic destination cardinality failures use `RT2003` through `RT2005`; a third sequential lane request uses `RT2028`; incompatible executed output binding uses `RT2023` with creation and destination provenance.
 
 ## Static and runtime enforcement
 

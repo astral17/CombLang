@@ -511,7 +511,7 @@ IF(a > 0, d);`,
       expect.objectContaining({ code: 'CL2001', severity: 'warning' }),
     );
     expect(result.plan?.producers).toMatchObject([
-      { kind: 'decider', destinations: [{ network: '$unused:1' }] },
+      { kind: 'decider', destinations: [{ network: '$output:1' }] },
     ]);
   });
 
@@ -543,7 +543,7 @@ when(a > 0 && b > 0).then(c);`,
         kind: 'decider',
         condition: { kind: 'and' },
         output: { kind: 'each', network: 'c' },
-        destinations: [{ network: '$unused:1' }],
+        destinations: [{ network: '$output:1' }],
       },
     ]);
   });
@@ -561,7 +561,7 @@ a + b;`,
       expect.objectContaining({ code: 'CL2001', severity: 'warning' }),
     );
     expect(result.plan?.producers).toMatchObject([
-      { kind: 'arithmetic', destinations: [{ network: '$unused:1' }] },
+      { kind: 'arithmetic', destinations: [{ network: '$output:1' }] },
     ]);
   });
 

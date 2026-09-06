@@ -51,10 +51,7 @@ const input = CC(); const a = Double(input); const b = Double(input); const c = 
     expect(await run(['check', '--json', path])).toBe(0);
     expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
       producerCount: 4,
-      diagnostics: [
-        { code: 'CL2002', severity: 'warning' },
-        { code: 'CL2002', severity: 'warning' },
-      ],
+      diagnostics: [{ code: 'CL2002', severity: 'warning' }],
     });
   });
 
@@ -87,7 +84,7 @@ const output = CC(prototypes.item['iron-plate'].stackSize * PLATE);`,
     ];
     expect(await run(['check', source, ...options])).toBe(0);
     expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
-      diagnostics: [],
+      diagnostics: [{ code: 'CL2001', severity: 'warning' }],
       producerCount: 1,
       prototypeEnvironment: {
         identity: prototypes.identity,
@@ -98,7 +95,7 @@ const output = CC(prototypes.item['iron-plate'].stackSize * PLATE);`,
     log.mockClear();
     expect(await run(['test', ...options, source, tests])).toBe(0);
     expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
-      diagnostics: [],
+      diagnostics: [{ code: 'CL2001', severity: 'warning' }],
       tests: { passed: 1, failed: 0 },
       prototypeEnvironment: { identity: prototypes.identity },
     });
@@ -232,7 +229,7 @@ const source = CC(prototypes.item['iron-plate'].stackSize * PLATE);`);
 
     expect(await run(['check', '--json', path], { prototypes })).toBe(0);
     expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
-      diagnostics: [],
+      diagnostics: [{ code: 'CL2001', severity: 'warning' }],
       producerCount: 1,
     });
   });
@@ -257,7 +254,7 @@ const input = CC(5 * CHEST);`);
 
     expect(await run(['check', '--json', path])).toBe(0);
     expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
-      diagnostics: [],
+      diagnostics: [{ code: 'CL2001', severity: 'warning' }],
       producerCount: 1,
     });
   });
@@ -374,7 +371,7 @@ const output: Network = pair(red, green)[A] + 0;`);
 
     expect(await run(['check', '--json', path])).toBe(0);
     expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
-      diagnostics: [],
+      diagnostics: [{ code: 'CL2001', severity: 'warning' }],
       producerCount: 3,
     });
   });
@@ -395,9 +392,9 @@ to(first, second)[A] += comb;`);
     });
   });
 
-  test('reports a materialized Network at its combinator return statement', async () => {
+  test('reports an explicitly narrowed Network at its combinator return statement', async () => {
     const path = await sourceFile(`function test(input: Readonly<Network>): ArithmeticCombinator {
-  let tmp = input + 0;
+  let tmp: Network = input + 0;
   return tmp;
 }
 const input = new Network();
@@ -422,25 +419,27 @@ const output: Network = test(input);`);
 
     expect(await run(['check', '--json', path])).toBe(0);
     expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
-      diagnostics: [],
+      diagnostics: [{ code: 'CL2001', severity: 'warning' }],
       producerCount: 1,
     });
   });
 
-  test('reports repeated Producer attachment through a fluent alias', async () => {
+  test('reports a third Combinator attachment through a fluent alias', async () => {
     const path = await sourceFile(`const A = Signal('virtual', 'signal-A');
 const input = new Network();
 const producer: ArithmeticCombinator = input + 0;
 const configured: ArithmeticCombinator = producer.at(1, 2);
 const first = new Network();
 const second = new Network();
+const third = new Network();
 first += producer;
-second += configured;`);
+second += configured;
+third += configured;`);
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
 
     expect(await run(['check', '--json', path])).toBe(1);
     expect(JSON.parse(String(log.mock.calls[0]?.[0])).diagnostics).toEqual([
-      expect.objectContaining({ code: 'RT2006', related: expect.any(Array) }),
+      expect.objectContaining({ code: 'RT2028', related: expect.any(Array) }),
     ]);
   });
 
@@ -457,7 +456,8 @@ tmp[1] = input + 0;`);
   });
 
   test('passes a stored Producer through a concrete function parameter', async () => {
-    const path = await sourceFile(`function Identity(value: ArithmeticCombinator): Producer {
+    const path =
+      await sourceFile(`function Identity(value: ArithmeticCombinator): ArithmeticCombinator {
   return value;
 }
 const input = new Network();
@@ -467,7 +467,7 @@ const output: Network = Identity(producer);`);
 
     expect(await run(['check', '--json', path])).toBe(0);
     expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
-      diagnostics: [],
+      diagnostics: [{ code: 'CL2001', severity: 'warning' }],
       producerCount: 1,
     });
   });
@@ -536,7 +536,7 @@ const output: Network = stages[0] + 1;`);
 
     expect(await run(['check', '--json', path])).toBe(0);
     expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
-      diagnostics: [],
+      diagnostics: [{ code: 'CL2001', severity: 'warning' }],
       producerCount: 2,
     });
   });
@@ -643,7 +643,9 @@ test("debug failure", ({ execution }) => {
 
     expect(await run(['test', '--json', sourcePath, testPath])).toBe(1);
     const result = JSON.parse(String(log.mock.calls[0]?.[0]));
-    expect(result.diagnostics).toEqual([]);
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: 'CL2001', severity: 'warning' }),
+    ]);
     expect(result.tests).toMatchObject({ passed: 1, failed: 1 });
     expect(result.tests.results[0]).toMatchObject({
       name: 'traced pass',

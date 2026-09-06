@@ -37,6 +37,10 @@ export interface SourcePlanDemo {
   readonly timeline: readonly CircuitTimelineSample[];
 }
 
+function isLegacyUnboundOutput(name: string | undefined): boolean {
+  return name?.startsWith('$output:') === true;
+}
+
 export function captureTimeline(
   snapshot: SimulationSnapshot,
   networks: readonly {
@@ -49,7 +53,7 @@ export function captureTimeline(
   return {
     tick,
     networks: networks
-      .filter((network) => !network.name?.startsWith('$unused:'))
+      .filter((network) => !isLegacyUnboundOutput(network.name))
       .map((network) => ({
         id: network.id,
         name: network.name ?? network.id,
@@ -64,6 +68,28 @@ export function captureTimeline(
 
 type DirectExecution = ReturnType<typeof elaborateDirectPlan>;
 type ConcreteSimulation = ReturnType<DirectExecution['circuit']['createSimulation']>;
+
+function sourceFacingColors(
+  plan: DirectElaborationPlan,
+  executed: DirectExecution,
+): SourcePlanDemo['colors'] {
+  const aliasesById = new Map<NetworkId, string>();
+  for (const alias of plan.networkAliases ?? []) {
+    if (alias.instancePath.length !== 0 || alias.moved) continue;
+    try {
+      const network = executed.network(alias.name);
+      if (!aliasesById.has(network.id)) aliasesById.set(network.id, alias.name);
+    } catch {
+      // Debug-only or expired aliases are deliberately absent from the source-facing preview.
+    }
+  }
+  return executed.circuit.ir.networks
+    .filter((network) => !isLegacyUnboundOutput(network.name))
+    .map((network) => ({
+      name: aliasesById.get(network.id) ?? network.name ?? network.id,
+      color: network.color,
+    }));
+}
 
 /** Mutable browser-only controller over immutable captured circuit snapshots. */
 export class SourceSimulationController {
@@ -172,7 +198,7 @@ export class SourceSimulationController {
 
     this.#execution = elaborateDirectPlan(this.#plan);
     const initial = this.#execution.circuit.ir.networks.flatMap((network) => {
-      if (network.name === undefined || network.name.startsWith('$unused:')) return [];
+      if (network.name === undefined || isLegacyUnboundOutput(network.name)) return [];
       const values = buses.get(network.name);
       return values === undefined
         ? []
@@ -269,12 +295,7 @@ export function runSourcePlanDemo(
       combinators: 0,
       attachments: 0,
       stages: 0,
-      colors: executed.circuit.ir.networks
-        .filter((network) => !network.name?.startsWith('$unused:'))
-        .map((network) => ({
-          name: network.name ?? network.id,
-          color: network.color,
-        })),
+      colors: sourceFacingColors(plan, executed),
       waveform: [],
       timeline: [captureTimeline(simulation.snapshot, executed.circuit.ir.networks)],
     };
@@ -343,12 +364,7 @@ export function runSourcePlanDemo(
     ...(inputName === undefined ? {} : { inputNetwork: inputName, inputValue }),
     outputNetwork: survivingOutputName,
     outputValue: snapshot.read(output.id).get(A),
-    colors: executed.circuit.ir.networks
-      .filter((network) => !network.name?.startsWith('$unused:'))
-      .map((network) => ({
-        name: network.name ?? network.id,
-        color: network.color,
-      })),
+    colors: sourceFacingColors(plan, executed),
     waveform,
     timeline,
   };

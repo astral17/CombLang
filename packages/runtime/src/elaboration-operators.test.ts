@@ -6,7 +6,12 @@ import {
   elaborationOperatorPolicy as operators,
   type ElaborationOperatorDispatchContext,
 } from './elaboration-operators.js';
-import { RuntimeValueRegistry, type DslValue, type NetworkValue } from './elaboration-values.js';
+import {
+  RuntimeValueRegistry,
+  type CombinatorDescriptor,
+  type DslValue,
+  type NetworkValue,
+} from './elaboration-values.js';
 
 function dispatchFixture() {
   const registry = new RuntimeValueRegistry();
@@ -29,6 +34,7 @@ function dispatchFixture() {
   );
   const signal = registry.brandSignal(Signal('virtual', 'signal-A'));
   let calls = 0;
+  let lastDescriptor: CombinatorDescriptor | undefined;
   const isSignal = (value: unknown): value is SignalId => registry.hasSignal(value);
   const context: ElaborationOperatorDispatchContext<number> = {
     isCircuitDslValue: (value): value is DslValue =>
@@ -41,12 +47,13 @@ function dispatchFixture() {
       registry.hasKind(value, 'wildcard-token') ||
       registry.hasKind(value, 'wildcard-count') ||
       registry.hasKind(value, 'condition') ||
-      registry.hasKind(value, 'producer'),
+      registry.hasKind(value, 'combinator'),
     isSignal,
     isSignalId: (value): value is SignalId =>
       typeof value === 'object' && value !== null && 'type' in value && 'name' in value,
     isSelected: (value) => registry.hasKind(value, 'selected'),
     isNetwork: (value): value is NetworkValue => registry.hasKind(value, 'network'),
+    networkFacet: (value) => (registry.hasKind(value, 'network') ? value : undefined),
     isPair: (value) => registry.hasKind(value, 'pair'),
     isWildcardToken: (value) => registry.hasKind(value, 'wildcard-token'),
     recordDslCall: () => {
@@ -79,9 +86,13 @@ function dispatchFixture() {
               throw new Error('Unexpected fixture operand.');
             })(),
     producerMetadata: () => ({ source, instancePath: [] }),
+    createCombinator: (descriptor) => {
+      lastDescriptor = descriptor;
+      return registry.brand({ kind: 'combinator', identity: {} });
+    },
     brand: (value) => registry.brand(value),
   };
-  return { context, network, signal, calls: () => calls };
+  return { context, network, signal, calls: () => calls, descriptor: () => lastDescriptor };
 }
 
 describe('elaboration operator policy', () => {
@@ -151,12 +162,12 @@ describe('elaboration operator policy', () => {
     expect(fixture.calls()).toBe(1);
 
     expect(operators.dispatchBinary('*', fixture.network, 2, 0, fixture.context)).toMatchObject({
-      kind: 'producer',
-      producer: {
-        kind: 'arithmetic',
-        left: { kind: 'each', refKind: 'single', network: 'input' },
-        operation: 'multiply',
-      },
+      kind: 'combinator',
+    });
+    expect(fixture.descriptor()).toMatchObject({
+      kind: 'arithmetic',
+      left: { kind: 'each', refKind: 'single', network: 'input' },
+      operation: 'multiply',
     });
     expect(fixture.calls()).toBe(2);
     expect(operators.dispatchComparison('<', 0, fixture.network, 0, fixture.context)).toMatchObject(

@@ -15,9 +15,9 @@ The prepass owns facts that require whole-file or lexical lookup:
 - unsupported async syntax, including async modifiers, `await`, and `for await...of`;
 - definitely declared Signal and Network bindings;
 - destructured bindings whose initializer is known to contain a Network;
-- typed Producer slots and their lexical scope, declaration position, array element type, or flat object property type.
+- typed Combinator slots and their lexical scope, declaration position, array element type, or flat object property type.
 
-`producerTypeForAssignment(target, assignment)` resolves the nearest declaration that is both visible at the assignment and declared before it. An outer Producer annotation must not leak through a same-named block/function/loop/catch binding. Property and element assignments are classified only when their declared container type proves a concrete Producer category.
+`producerTypeForAssignment(target, assignment)` resolves the nearest declaration that is both visible at the assignment and declared before it. An outer Combinator annotation must not leak through a same-named block/function/loop/catch binding. Property and element assignments are classified only when their declared container type proves a concrete Combinator category.
 
 The prepass intentionally records positive facts, not a general TypeScript type system. Ambiguous values remain ordinary JavaScript until an executed DSL boundary can classify them.
 
@@ -41,15 +41,15 @@ Each actually entered loop body opens a provenance instance and closes it in `fi
 
 ### Function boundaries
 
-`elaboration-transform-functions.ts` owns instrumented function declarations and their direct return statements. Its prologue maps executed identifier parameters to the appropriate implicit Network, `Readonly`, `Ref`, `Move`, or concrete Producer runtime boundary using the original argument span. The body opens one function provenance/ownership frame and closes it in `finally`, including exceptional exits.
+`elaboration-transform-functions.ts` owns instrumented function declarations and their direct return statements. Its prologue maps executed identifier parameters to the appropriate implicit Network, `Readonly`, `Ref`, `Move`, or concrete Combinator runtime boundary using the original argument span. The body opens one function provenance/ownership frame and closes it in `finally`, including exceptional exits.
 
-Only a return whose nearest function-like ancestor is that declaration receives its declared Network or Producer return contract. Returns inside nested arrows, callbacks, methods, or function expressions remain owned by those JavaScript functions and cannot accidentally transfer the outer function's ownership. Parameter-default and binding-pattern rewriting is supplied as an explicit callback; the function family does not duplicate binding logic.
+Only a return whose nearest function-like ancestor is that declaration receives its declared Network or Combinator return contract. Returns inside nested arrows, callbacks, methods, or function expressions remain owned by those JavaScript functions and cannot accidentally transfer the outer function's ownership. Parameter-default and binding-pattern rewriting is supplied as an explicit callback; the function family does not duplicate binding logic.
 
 ### Bindings and defaults
 
-`elaboration-transform-bindings.ts` owns identifier, tuple, object, and parameter binding materialization. A direct `new Network<R/G>()` binding receives its stable source name and late alias reader; a nested construction remains anonymous. Other executed initializers pass through contextual Network materialization unless an explicit Producer annotation retains and validates the physical handle.
+`elaboration-transform-bindings.ts` owns identifier, tuple, object, and parameter binding adaptation. A direct `new Network<R/G>()` binding receives its stable source name and late alias reader; a nested construction remains anonymous. Other executed initializers keep their runtime identity. An explicit Network annotation narrows a Combinator to its primary facet, while an explicit Combinator annotation validates and retains the physical handle.
 
-Tuple and object destructuring emit runtime descriptors for each supported flat destination, including property mapping, color, and concrete Producer kind. Defaults recurse through the same policy, so parameters, destructuring elements, and loop bindings do not gain a separate DSL expression path. Test-only `t.instantiate` also enters here because a direct binding supplies its stable debug instance name; an unbound call instead receives a source-offset identity. Function instrumentation consumes `transformParameter` as an explicit dependency.
+Tuple and object destructuring emit runtime descriptors for each supported flat destination, including property mapping, color, and concrete Combinator kind. Direct Combinator destructuring projects stable primary/secondary output connections; ordinary containers retain JavaScript destructuring. Defaults recurse through the same policy, so parameters, destructuring elements, and loop bindings do not gain a separate DSL expression path. Test-only `t.instantiate` also enters here because a direct binding supplies its stable debug instance name; an unbound call instead receives a source-offset identity. Function instrumentation consumes `transformParameter` as an explicit dependency.
 
 ### Calls and element access
 

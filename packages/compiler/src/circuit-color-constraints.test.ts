@@ -146,6 +146,16 @@ describe('stateful circuit color constraints', () => {
     );
   });
 
+  test('reports the current relation without changing the constraint graph', () => {
+    const engine = new CircuitColorConstraints<string>();
+    engine.add('a').add('b').add('c').same('a', 'b').different('b', 'c');
+
+    expect(engine.relation('a', 'b')).toBe('same');
+    expect(engine.relation('a', 'c')).toBe('different');
+    engine.add('isolated');
+    expect(engine.relation('a', 'isolated')).toBeUndefined();
+  });
+
   test('uses registration order rather than union order for free component orientation', () => {
     const first = evaluate(
       ['a', 'b', 'c'],

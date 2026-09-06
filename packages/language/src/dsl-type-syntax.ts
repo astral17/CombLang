@@ -3,7 +3,7 @@ import ts from 'typescript';
 export type NetworkCapability = 'owned' | 'readonly' | 'ref' | 'move';
 export type NetworkColorRequirement = 'red' | 'green';
 export type ProducerHandleType =
-  'Producer' | 'DeciderCombinator' | 'ArithmeticCombinator' | 'ConstantCombinator';
+  'Combinator' | 'Producer' | 'DeciderCombinator' | 'ArithmeticCombinator' | 'ConstantCombinator';
 
 export type DslTypeSyntax =
   | {
@@ -17,6 +17,7 @@ export type DslTypeSyntax =
 export type NetworkTypeSyntax = Extract<DslTypeSyntax, { readonly kind: 'network' }>;
 
 const producerTypes = new Set<ProducerHandleType>([
+  'Combinator',
   'Producer',
   'DeciderCombinator',
   'ArithmeticCombinator',

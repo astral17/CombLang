@@ -8,18 +8,18 @@ Executed functions may return ordinary JavaScript values containing owned Networ
 
 `returnOwnedValue` applies the ownership policy to that graph:
 
-1. Treat Producer, Network, pair, and pair-selection values as opaque handles rather than traversable objects.
+1. Treat Combinator, Network, pair, and pair-selection values as opaque handles rather than traversable objects.
 2. Reject pair views with `RT2020`; they are read-only connector selections and cannot carry ownership.
 3. Validate every Network through the current function ownership frame.
 4. Reject two handles backed by one `NetworkOwnershipState` as an `RT2012` double move.
 5. Charge every planned Network transfer against the DSL budget.
 6. Only after every charge succeeds, move ownership and rebuild the affected containers.
 
-The ordering is intentional. A caught validation or budget failure cannot leave the caller with a partially moved return value. Producer handles remain unchanged; their affine attachment lifecycle is independent from Network ownership transfer.
+The ordering is intentional. A caught validation or budget failure cannot leave the caller with a partially moved return value. Combinator handles remain unchanged; their primary/secondary output connections have independent Network ownership state.
 
 ## Explicitly typed Network returns
 
-An explicit `Network` or `Readonly<Network>` return uses a narrower front-end policy before the same ownership transfer. An executed Network is checked against an optional `R`/`G` requirement; an executed Producer is first materialized into the reserved `$return` Network and remains one physical combinator. Every other value reports `RT2022` at the return expression.
+An explicit `Network` or `Readonly<Network>` return uses a narrower front-end policy before the same ownership transfer. An executed Network is checked against an optional `R`/`G` requirement; an executed Combinator supplies its existing primary Network facet. No reserved return Network or extra topology is created. Every other value reports `RT2022` at the return expression.
 
 The ownership layer then verifies that the current function owns the Network and transfers it to the caller with a fresh generation. `Network` exposes that owned handle directly. `Readonly<Network>` creates a read-only caller view only after the transfer succeeds, so a failed transfer cannot publish a partially prepared wrapper. This path does not recursively traverse containers; unannotated graph returns use the algorithm below.
 

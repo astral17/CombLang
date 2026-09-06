@@ -17,7 +17,11 @@ const green: Network<G> = CC(2 * A, 2 * B);
 const difference = red[A] - green[A];
 const result = when((red[A] > 0 && green[A] > 0) || (red[B] > 0 && green[B] > 0)).then(green[A]).else(red[A]);`,
     });
-    expect(result.compilerDiagnostics).toEqual([]);
+    expect(result.compilerDiagnostics).toEqual(
+      Array.from({ length: 2 }, () =>
+        expect.objectContaining({ code: 'CL2001', severity: 'warning' }),
+      ),
+    );
     const entities = blueprintJsonForPlan(result.plan!).blueprint.entities;
     const arithmetic = entities.find(({ name }) => name === 'arithmetic-combinator')!;
     expect(arithmetic).toMatchObject({

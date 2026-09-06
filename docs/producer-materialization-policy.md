@@ -1,110 +1,88 @@
-# Producer and Entity materialization policy
+# Combinator and Entity value policy
 
-This document closes the Phase 4.5 design gate for default declaration materialization. It compares the six representative programs requested by the architecture review and fixes the rule that Phase 6 typed objects must follow. Object constructor and testbench spellings below remain provisional; the value-category decision is not.
+This document records the Phase 4 migration from transient producers to physical combinator values. The filename is retained so older links keep working; the previous declaration-materialization policy is superseded.
 
 ## Decision
 
-CombLang uses separate nominal categories for transient combinator producers and persistent Entity handles:
+Arithmetic expressions, `CC`, `IF`, and `when` create physical combinators immediately. A public `Combinator` is also readable as a `Network`: its Network facet is its primary output connection. An explicit `Network` annotation narrows the visible API but neither creates a network nor clones or erases the combinator.
 
-| Executed initializer                            | Inferred declaration             | Explicit context                                                                                                                  |
-| ----------------------------------------------- | -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| arithmetic, `IF`, `when`, or `CC` producer      | materialize one output `Network` | `Producer` or a concrete combinator annotation preserves the unmaterialized handle                                                |
-| future typed object constructor                 | preserve the Entity handle       | `Network` may project one schema-declared default circuit view; classes without exactly one default view require an explicit port |
-| existing `Network` or ordinary JavaScript value | preserve the executed value      | validate only when the explicit DSL context requires a particular category                                                        |
+| Executed initializer              | Inferred declaration                  | Explicit context                                                                                                            |
+| --------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| arithmetic, `IF`, `when`, or `CC` | the precise physical combinator value | `Network` exposes the same value's primary Network facet; `Combinator` or a concrete combinator type retains the handle API |
+| existing `Network`                | the same logical network              | compatible Network contexts preserve its identity                                                                           |
+| future typed object constructor   | a persistent Entity handle            | a schema may expose explicit circuit ports; Entity identity is never inferred from a Network                                |
+| ordinary JavaScript value         | the executed value                    | validation occurs only at a DSL boundary                                                                                    |
 
-An Entity handle is not reclassified as a combinator `Producer` merely because the entity can source signals or accept circuit connections. It has persistent physical identity for placement, inspection, test mocks, and debug hierarchy. Both categories use session-local nominal branding, but they have different materialization rules.
+`Producer` remains a deprecated compatibility spelling for `Combinator`. New APIs, documentation, and diagnostics use `Combinator`.
 
-This is option C from the review: combinator expressions retain the current value-oriented default, while typed objects retain identity by default. The apparent asymmetry is intentional because the lifetimes differ. A combinator producer is an unattached construction value that must eventually acquire an output destination; an Entity constructor already denotes the physical object itself.
+## Output connections
 
-## Why not change every declaration to Producer
+Every combinator owns one physical output port and up to two stable logical output connections:
 
-Option B would make `const dx = x1 - x2` retain an `ArithmeticCombinator`. Every later arithmetic use would then need contextual projection and a cache ensuring that repeated uses of the same producer attach it once. It changes current inference, makes simple mathematical code depend more heavily on language-service hovers, and provides no benefit to typed objects once Entity identity is represented as its own nominal category.
+1. the primary connection exists eagerly and is the Network facet used by ordinary reads;
+2. the secondary connection is created lazily when a second distinct destination is requested;
+3. the two connections use opposite wire colors when both exist;
+4. a third distinct output attachment fails immediately.
 
-Option A, applying automatic Network materialization to every future object, preserves current implementation uniformity but loses the value needed by `test.mock(entity)`, placement, and structural inspection. Requiring an explicit entity type on nearly every object declaration would make inference actively harmful.
-
-## Representative programs
-
-### 1. Scale
+These are two connections of one physical output, not two combinators and not two different computed values. Destructuring projects the same stable pair:
 
 ```ts
-function Scale(input: Readonly<Network>): Network {
-  const scaled = input * 10;
-  return scaled;
-}
-
-const input = new Network();
-const output = Scale(input);
+const [primary, secondary] = input + 0;
 ```
 
-`scaled` is one materialized Network backed by one arithmetic combinator. No Producer annotation is needed.
-
-### 2. Distance calculation
+Sequential attachment consumes the same pair:
 
 ```ts
-const dx = x1 - x2;
-const dy = y1 - y2;
-const squaredX = dx * dx;
-const squaredY = dy * dy;
-const distanceSquared = squaredX + squaredY;
+out += input + 0;
+mirror += input + 0;
 ```
 
-Each named intermediate is a Network and repeated `dx`/`dy` reads fan out without cloning their producers. An eventual integer square-root implementation composes on `distanceSquared`; it does not change declaration materialization.
+## Binding and container invariants
 
-### 3. MemoCell
+- Naming a combinator adds provenance only. It does not materialize, attach, or clone anything.
+- Repeated reads use the primary Network facet and never duplicate hardware.
+- Arrays, objects, closures, and function returns contain ordinary runtime values. The compiler does not recursively rewrite their contents into Networks.
+- An explicit `Network`, `Readonly<Network>`, or `Network[]` annotation narrows the source API at that boundary; it does not change runtime identity.
+- Output use is tracked dynamically against the central combinator registry. A combinator left without any destination produces `CL2001`; no hidden `$unused` network is synthesized.
+- Logical-network identity and red/green color parity are separate relations. Equal colors do not merge independent networks.
+
+For example, this creates ten arithmetic combinators in the callback and ten more in the loop. The array stores their Network-facing values without contextual materialization:
 
 ```ts
-function MemoCell(input: Readonly<Network>): Network {
-  const out = new Network();
-  const memory = new Network();
-  to(out, memory) += input + 0;
-  to(out, memory) += IF(input == 0 && memory != 0, memory);
-  return out;
+const base = CC(5 * SIGNAL_A);
+const values: Network[] = Array.from({ length: 10 }, (_, index) => base * (index + 1));
+
+const out = new Network();
+for (let index = 0; index < values.length; index++) {
+  out += values[index] * values[index];
 }
 ```
 
-Explicit topology destinations stay Networks. The two producer expressions are consumed immediately by their fan-out attachments.
+## Functions
 
-### 4. RGB indicator
+A `Network` or `Readonly<Network>` parameter receives the primary facet of a combinator argument. A concrete combinator parameter retains physical configuration methods while its inherited Network facet remains read-only inside the function. Returning a combinator type preserves its handle; returning `Network` deliberately exposes only the primary facet to the caller.
 
-```ts
-const red = IF(level[A] > 0, 1 * RED);
-const green = IF(level[A] > 1, 1 * GREEN);
-const blue = IF(level[A] > 2, 1 * BLUE);
-```
+Untyped parameters remain ordinary JavaScript parameters and are checked dynamically when their values reach a DSL operation.
 
-The three inferred bindings are Network values. If exact placement or delayed attachment is required, the user opts into handles with `DeciderCombinator` annotations.
+## Mutable decider builder
 
-### 5. Requester chest and test mock
+`when(condition)` creates a `DeciderCombinator` immediately. `.then(...)` and `.else(...)` mutate that registered physical object and return the same handle. Either branch may be configured first. Repeated calls replace that branch rather than creating another combinator.
 
-```ts
-const chest = RequesterChest({ requestFromBuffers: true })(filters);
-const contents: Network = chest;
+## Future Entity values
 
-test.mock(chest).output(contentsFixture);
-```
+Phase 6 typed objects must use a separately branded `EntityValue`. An Entity has persistent physical identity for placement, inspection, mocks, and circuit ports; it must not inherit from `Network` merely because it can read or emit signals. Any Entity-to-Network view is an explicit, schema-owned port projection and creates no extra entity, combinator, or tick.
 
-The inferred `chest` binding remains an Entity handle, so mocking and inspection retain physical identity. The explicit `Network` context projects the class's one schema-declared default circuit output without replacing `chest`. If the final schema uses a named port instead, the equivalent spelling will be `chest.contents`; the identity rule is unchanged.
+## Implementation ownership
 
-### 6. Assembler and test mock
+- `CombinatorRegistry` owns physical identity, descriptors, branch mutation, provenance, primary/secondary output connections, and attachment cardinality.
+- `combinator-handle-policy` validates public and concrete combinator annotations.
+- `combinator-attachment-policy` selects and attaches an output connection.
+- `combinator-output-policy` applies output-signal restrictions without changing physical identity.
+- Network argument, parameter, and return policies project or narrow the primary facet without deep traversal.
+- The color constraint solver keeps logical-network union separate from red/green parity.
 
-```ts
-const assembler = Assembler({ setRecipe: true, readContents: true })(recipe, control);
-test.mock(assembler).crafting({ recipe: IRON_GEAR_WHEEL, progress: 0.5 });
-```
+The static direct-plan compiler remains a legacy structural oracle while the executed runtime is authoritative for JavaScript control flow and value identity. New behavior must not depend on its old temporary-network model.
 
-The declaration keeps the Entity handle even though the object consumes circuit Networks and may expose status signals. Because an assembler may have several semantic circuit views, no implicit Network projection is allowed unless its schema designates exactly one default. Otherwise source must select an explicit port.
+## Acceptance boundary
 
-## Implementation constraints for Phase 6
-
-1. Add a separately branded `EntityValue`; do not encode it as `{ kind: "producer" }` or infer it from user-visible fields.
-2. The declaration materializer must preserve `EntityValue` in inferred contexts and keep the existing combinator behavior.
-3. A contextual Entity-to-Network projection creates no combinator, tick, or second physical entity.
-4. Projection must be schema-driven. Zero or several candidate default circuit views produce a source-aware ambiguity error.
-5. Entity aliases retain one physical identity across mocks, placement, inspection, and any projected Networks.
-6. Explicit combinator annotations continue to preserve affine Producer identity and the single-attachment rule.
-
-The executable runtime benchmark fixes the first four programs today. RequesterChest and Assembler become executable acceptance cases when their typed schemas and the Phase 5 testbench exist.
-
-## Current lifecycle boundary
-
-`ProducerLifecycle` is the executed recorder's identity authority for transient combinators. Registration may observe several wrapper values with the same opaque identity, but attachment state, debug captures, and unused finalization remain shared. It records the direct-plan index at attachment so a later `t.instantiate(...)` capture can amend the existing descriptor rather than clone the entity or leave a dangling capture ID. `producer-handle-policy` validates explicit generic/concrete combinator annotations and adds debug binding names without changing that identity. `producer-attachment-policy` owns output-connector cardinality, duplicate/reattachment diagnostics, and the ordered writable-capability gate; the recorder provides the concrete lifecycle lookup and capability callback. Output-Signal compatibility is isolated in `producer-output-policy`; it transforms a wrapper without changing physical identity and retains creation/binding provenance in `RT2023`.
+The migration is complete when immediate combinator identity, stable two-connection fan-out, container storage, function parameter/return narrowing, mutable `when`, source-linked diagnostics, online color validation, and unused-output warnings all agree in the CLI and browser worker. There must be no contextual deep materialization, affine single-attachment lifecycle, or runtime `$unused` sink.

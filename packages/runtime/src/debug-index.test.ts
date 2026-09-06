@@ -27,6 +27,12 @@ const secondOutput = Cell();`,
 
     expect(plan.networkAliases).toMatchObject([
       { name: 'output', network: 'out', instancePath: [], moved: false },
+      {
+        name: 'out',
+        network: '$instance:2:out',
+        instancePath: ['function Cell #2'],
+        moved: true,
+      },
       { name: 'secondOutput', network: '$instance:2:out', instancePath: [], moved: false },
     ]);
     expect(execution.network('output').id).toBe(firstOut.id);
@@ -207,10 +213,13 @@ const second = Stage(input);`,
     const stage = execution.debug.root.child('function Stage');
     const repeatedStage = execution.debug.root.child('function Stage #2');
 
-    expect(stage.network('local')).toMatchObject({ name: 'local', planName: 'local' });
+    expect(stage.network('local')).toMatchObject({
+      name: 'local',
+      planName: '$combinator:1:primary',
+    });
     expect(repeatedStage.network('local')).toMatchObject({
       name: 'local',
-      planName: '$instance:2:local',
+      planName: '$combinator:2:primary',
     });
     expect(stage.network('local').id).not.toBe(repeatedStage.network('local').id);
     expect(() => stage.network('missing')).toThrowError(
