@@ -94,4 +94,16 @@ Completed ingress foundation:
 
 Validation: **964 tests in 87 files**, format check, and typecheck pass.
 
-Next task: F07, introduce one shared compilation artifact/service and remove repeated web preview lowering.
+## F07 — Shared compilation artifact and host service
+
+Status: **in progress; repeated browser preview lowering removed**.
+
+- The browser main thread creates one immutable `SourceCircuitArtifact` for each accepted Direct Plan.
+- The source proof, interactive controller, and blueprint JSON preview share its executed circuit instead of independently calling `elaborateDirectPlan`.
+- Simulation reset, tick editing, and history rebasing now create fresh simulation kernels over the same immutable circuit. They no longer replay the Direct Plan, while still discarding stale trace state.
+- Plan-only compatibility entry points remain for focused callers and tests; the production UI uses the artifact-taking APIs.
+- The compiler Worker transport remains structured-clone-safe: runtime handles, functions, and maps are constructed only on the receiving main thread and never cross the Worker boundary.
+
+Validation for this slice: **965 tests in 88 files**, format check, typecheck, and complete CLI/web production builds pass. The existing Vite large-chunk warning remains.
+
+Still required: move parse/preflight/transform/execute/lower orchestration into a host-neutral runtime compilation service, make the CLI and Worker thin adapters, carry prototype identity in its artifact, and add explicit CLI/web diagnostic-parity plus one-lowering instrumentation coverage.

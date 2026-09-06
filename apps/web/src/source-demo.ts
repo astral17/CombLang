@@ -4,9 +4,13 @@ import type {
   PlanNetworkRef,
 } from '@comblang/compiler/direct-plan-schema';
 import { signal, SparseBus, type SignalId } from '@comblang/factorio';
-import { elaborateDirectPlan } from '@comblang/runtime';
 import type { NetworkId } from '@comblang/shared';
 import type { SimulationSnapshot } from '@comblang/simulator';
+
+import {
+  createSourceCircuitArtifact,
+  type SourceCircuitArtifact,
+} from './source-circuit-artifact.js';
 
 export interface NetworkTimelineSample {
   readonly id: NetworkId;
@@ -66,7 +70,7 @@ export function captureTimeline(
   };
 }
 
-type DirectExecution = ReturnType<typeof elaborateDirectPlan>;
+type DirectExecution = SourceCircuitArtifact['execution'];
 type ConcreteSimulation = ReturnType<DirectExecution['circuit']['createSimulation']>;
 
 function sourceFacingColors(
@@ -93,14 +97,15 @@ function sourceFacingColors(
 
 /** Mutable browser-only controller over immutable captured circuit snapshots. */
 export class SourceSimulationController {
-  readonly #plan: DirectElaborationPlan;
-  #execution!: DirectExecution;
+  readonly #execution: DirectExecution;
   #simulation!: ConcreteSimulation;
   #tickOffset = 0;
   #timeline: CircuitTimelineSample[] = [];
 
-  constructor(plan: DirectElaborationPlan) {
-    this.#plan = plan;
+  constructor(source: DirectElaborationPlan | SourceCircuitArtifact) {
+    this.#execution = isSourceCircuitArtifact(source)
+      ? source.execution
+      : createSourceCircuitArtifact(source).execution;
     this.reset();
   }
 
@@ -113,7 +118,6 @@ export class SourceSimulationController {
   }
 
   reset(): void {
-    this.#execution = elaborateDirectPlan(this.#plan);
     this.#simulation = this.#execution.circuit.createSimulation();
     this.#tickOffset = 0;
     this.#timeline = [
@@ -196,7 +200,6 @@ export class SourceSimulationController {
       edit(buses, network.name);
     }
 
-    this.#execution = elaborateDirectPlan(this.#plan);
     const initial = this.#execution.circuit.ir.networks.flatMap((network) => {
       if (network.name === undefined || isLegacyUnboundOutput(network.name)) return [];
       const values = buses.get(network.name);
@@ -212,6 +215,12 @@ export class SourceSimulationController {
       captureTimeline(this.#simulation.snapshot, this.#execution.circuit.ir.networks, tick),
     ];
   }
+}
+
+function isSourceCircuitArtifact(
+  source: DirectElaborationPlan | SourceCircuitArtifact,
+): source is SourceCircuitArtifact {
+  return 'execution' in source;
 }
 
 function networkRefNames(reference: PlanNetworkRef): readonly string[] {
@@ -281,15 +290,15 @@ function criticalPathStages(plan: DirectElaborationPlan): number {
   return finalDepth;
 }
 
-export function runSourcePlanDemo(
-  plan: DirectElaborationPlan,
+export function runSourceCircuitDemo(
+  artifact: SourceCircuitArtifact,
   inputValue = 7,
   tickCount?: number,
 ): SourcePlanDemo {
+  const { plan, execution: executed } = artifact;
   const firstProducer = plan.producers[0];
   const lastProducer = plan.producers.at(-1);
   if (firstProducer === undefined || lastProducer === undefined) {
-    const executed = elaborateDirectPlan(plan);
     const simulation = executed.circuit.createSimulation();
     return {
       combinators: 0,
@@ -318,7 +327,6 @@ export function runSourcePlanDemo(
     throw new Error('The first source producer does not expose an input and output Network.');
   }
 
-  const executed = elaborateDirectPlan(plan);
   // Producer descriptors retain pre-take names. Preview the surviving physical
   // Network via the shared debug mapping, not a consumed source-level handle.
   const physicalNames = new Map(executed.circuit.ir.networks.map(({ id, name }) => [id, name]));
@@ -368,4 +376,13 @@ export function runSourcePlanDemo(
     waveform,
     timeline,
   };
+}
+
+/** Compatibility entry point for callers that do not already own an artifact. */
+export function runSourcePlanDemo(
+  plan: DirectElaborationPlan,
+  inputValue = 7,
+  tickCount?: number,
+): SourcePlanDemo {
+  return runSourceCircuitDemo(createSourceCircuitArtifact(plan), inputValue, tickCount);
 }

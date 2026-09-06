@@ -2,7 +2,7 @@ import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schem
 import { signal, type SignalId, type SignalType } from '@comblang/factorio';
 import { offsetToPosition, sourceFileId, sourceSpan, type Diagnostic } from '@comblang/shared';
 
-import { blueprintJsonForPlan } from './blueprint-demo.js';
+import { blueprintJsonForArtifact } from './blueprint-demo.js';
 import { createSourceEditor, type SourceEditorKind } from './code-editor.js';
 import { registerOfflineSupport, warmOfflineCache } from './offline.js';
 import {
@@ -13,11 +13,12 @@ import { loadSourceDraft, saveSourceDraft, type SourceDraftStorage } from './sou
 import { formatSourceDiagnostic, sourcePreviewDiagnostic } from './source-diagnostics.js';
 import { sourceNavigationRange, testFailureRange } from './source-navigation.js';
 import {
-  runSourcePlanDemo,
+  runSourceCircuitDemo,
   SourceSimulationController,
   type CircuitTimelineSample,
   type SourcePlanDemo,
 } from './source-demo.js';
+import { createSourceCircuitArtifact } from './source-circuit-artifact.js';
 import { loadTestDraft, saveTestDraft } from './test-draft.js';
 import { TestTracePanel } from './test-trace-panel.js';
 import type { TestWorkerRequest, TestWorkerResponse } from './test-worker-protocol.js';
@@ -719,10 +720,11 @@ function renderSourceProof(
   foldedOperations: number,
 ): void {
   pauseSimulation();
-  const controller = new SourceSimulationController(plan);
+  const artifact = createSourceCircuitArtifact(plan);
+  const controller = new SourceSimulationController(artifact);
   sourceSimulation = controller;
   selectedSimulationTick = 0;
-  const demo = { ...runSourcePlanDemo(plan, 0, 0), timeline: controller.timeline };
+  const demo = { ...runSourceCircuitDemo(artifact, 0, 0), timeline: controller.timeline };
   currentDemo = demo;
   proof.dataset.state = 'valid';
   proof.setAttribute('aria-busy', 'false');
@@ -762,7 +764,7 @@ function renderSourceProof(
       return item;
     }),
   );
-  const generated = blueprintJsonForPlan(plan);
+  const generated = blueprintJsonForArtifact(artifact);
   blueprintStatus.textContent = `${generated.blueprint.entities.length} entities · ${generated.blueprint.wires.length} wires`;
   blueprintStatus.dataset.state = 'valid';
   currentBlueprintJson = JSON.stringify(generated, null, 2);
