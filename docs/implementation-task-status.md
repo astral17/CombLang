@@ -75,7 +75,7 @@ Next task: F06, strict Direct Plan payload ingress and replay color validation.
 
 ## F06 — Strict Direct Plan payload ingress
 
-Status: **in progress**.
+Status: **complete**.
 
 Completed ingress foundation:
 
@@ -86,9 +86,12 @@ Completed ingress foundation:
 - Arithmetic producers now validate both operand unions, signed-int32 constants, SignalIDs, operations, output unions, and single/pair input Network references before replay. Unknown inputs retain `RT1003`; malformed fields identify their JSON path.
 - Decider producers now validate bounded condition trees, every comparator/leaf/reference, compatibility and native output rows, and both normal/else output arrays. Condition depth is capped before recursive lowering.
 - Constant outputs and common producer metadata now validate SignalIDs, int32 counts, binding/capture strings, globally unique capture IDs, and finite placement with a native direction range.
+- Debug-instance value graphs and embedded diagnostics are validated recursively with reference, shape, size, and depth checks before debug reconstruction.
+- Successful ingress rebuilds a known-field-only, deeply frozen canonical plan. Legacy Deciders without `outputs` receive a canonical ordered list, while explicit empty normal-output lists remain intact for else-only configurations.
+- Replay, debug indexing, and capability reporting consume only that canonical plan; mutation of or extra fields on the caller payload cannot alter execution after validation.
 - New malformed-payload diagnostics include JSON-style paths such as `$.producers[0].destinations[0]`.
 - Regression coverage includes `producers: [null]`, an unknown Producer tag, a malformed pair, an unknown attachment Network, and malformed arithmetic operands/operations/outputs.
 
-Validation: **954 tests in 87 files**, format check, and typecheck pass.
+Validation: **964 tests in 87 files**, format check, and typecheck pass.
 
-Still required to complete F06: canonical frozen reconstruction without the remaining plan cast; exhaustive debug/diagnostic validation with depth limits; `output`/`outputs` normalization; and making replay consume only the canonical result.
+Next task: F07, introduce one shared compilation artifact/service and remove repeated web preview lowering.

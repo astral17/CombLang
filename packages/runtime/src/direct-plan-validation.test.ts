@@ -16,8 +16,11 @@ describe('direct plan envelope validation', () => {
     const result = validateDirectPlanEnvelope(plan);
 
     expect(result.diagnostics).toEqual([]);
-    expect(result.value?.plan).toBe(plan);
-    expect(result.value?.declarations.get('input')).toBe(plan.networks[0]);
+    expect(result.value?.plan).not.toBe(plan);
+    expect(result.value?.declarations.get('input')).toBe(result.value?.plan.networks[0]);
+    expect(Object.isFrozen(result.value?.plan)).toBe(true);
+    expect(Object.isFrozen(result.value?.plan.networks)).toBe(true);
+    expect(Object.isFrozen(result.value?.plan.networks[0])).toBe(true);
   });
 
   test.each([
@@ -496,6 +499,218 @@ describe('direct plan envelope validation', () => {
         code: 'RT1001',
         message: expect.stringContaining('$.producers[1].debugCaptureIds[0]'),
       },
+    ]);
+  });
+
+  test('canonicalizes legacy Decider output and freezes only known payload fields', () => {
+    const output = { kind: 'each', refKind: 'single', network: 'input', ignored: true };
+    const plan = {
+      format: 'comblang-direct-plan',
+      version: 2,
+      ignored: { mutable: true },
+      networks: [
+        { name: 'input', source: span, instancePath: [], ignored: true },
+        { name: 'output', source: span, instancePath: [] },
+      ],
+      producers: [
+        {
+          kind: 'decider',
+          condition: {
+            kind: 'compare-each',
+            comparator: '>',
+            constant: 0,
+            refKind: 'single',
+            network: 'input',
+          },
+          output,
+          destinations: [{ network: 'output', source: span, instancePath: [] }],
+          source: span,
+          instancePath: [],
+          ignored: true,
+        },
+      ],
+    };
+
+    const canonical = validateDirectPlanEnvelope(plan).value?.plan;
+    expect(canonical).toBeDefined();
+    expect(canonical).not.toHaveProperty('ignored');
+    expect(canonical?.networks[0]).not.toHaveProperty('ignored');
+    expect(canonical?.producers[0]).not.toHaveProperty('ignored');
+    expect(canonical?.producers[0]).toMatchObject({
+      kind: 'decider',
+      outputs: [{ kind: 'each', network: 'input' }],
+    });
+    expect(Object.isFrozen(canonical?.producers[0])).toBe(true);
+    expect(
+      Object.isFrozen(
+        canonical?.producers[0]?.kind === 'decider' ? canonical.producers[0].condition : undefined,
+      ),
+    ).toBe(true);
+
+    output.network = 'mutated';
+    expect(canonical?.producers[0]).toMatchObject({
+      kind: 'decider',
+      output: { network: 'input' },
+    });
+  });
+
+  test('accepts and freezes nested debug values and related diagnostics', () => {
+    const plan = {
+      format: 'comblang-direct-plan',
+      version: 2,
+      networks: [{ name: 'output', source: span, instancePath: [] }],
+      producers: [
+        {
+          kind: 'constant',
+          outputs: [],
+          destinations: [{ network: 'output', source: span, instancePath: [] }],
+          source: span,
+          instancePath: [],
+          debugCaptureIds: ['constant'],
+        },
+      ],
+      debugInstances: [
+        {
+          name: 'fixture',
+          path: ['test fixture'],
+          source: span,
+          value: {
+            kind: 'object',
+            entries: [
+              { key: 'network', value: { kind: 'network', network: 'output' } },
+              {
+                key: 'values',
+                value: {
+                  kind: 'array',
+                  values: [
+                    { kind: 'producer', captureId: 'constant' },
+                    { kind: 'literal', value: 2 },
+                    { kind: 'undefined' },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      ],
+      diagnostics: [
+        {
+          code: 'CL2001',
+          severity: 'warning',
+          message: 'Example warning.',
+          span,
+          related: [{ message: 'Created here.', span }],
+        },
+      ],
+    };
+
+    const canonical = validateDirectPlanEnvelope(plan).value?.plan;
+    expect(canonical).toBeDefined();
+    expect(Object.isFrozen(canonical?.debugInstances?.[0]?.value)).toBe(true);
+    expect(Object.isFrozen(canonical?.diagnostics?.[0]?.related)).toBe(true);
+  });
+
+  test.each([
+    {
+      name: 'unknown debug Network',
+      value: { kind: 'network', network: 'missing' },
+      path: '$.debugInstances[0].value.network',
+      code: 'RT1003',
+    },
+    {
+      name: 'unknown Producer capture',
+      value: { kind: 'producer', captureId: 'missing' },
+      path: '$.debugInstances[0].value.captureId',
+      code: 'RT1001',
+    },
+    {
+      name: 'non-finite debug literal',
+      value: { kind: 'literal', value: Number.NaN },
+      path: '$.debugInstances[0].value.value',
+      code: 'RT1001',
+    },
+    {
+      name: 'duplicate debug object key',
+      value: {
+        kind: 'object',
+        entries: [
+          { key: 'same', value: { kind: 'undefined' } },
+          { key: 'same', value: { kind: 'undefined' } },
+        ],
+      },
+      path: '$.debugInstances[0].value.entries[1].key',
+      code: 'RT1001',
+    },
+  ])('rejects $name before debug reconstruction', ({ value, path, code }) => {
+    const plan = {
+      format: 'comblang-direct-plan',
+      version: 2,
+      networks: [{ name: 'output', source: span, instancePath: [] }],
+      producers: [],
+      debugInstances: [{ name: 'fixture', path: [], source: span, value }],
+    };
+
+    expect(validateDirectPlanEnvelope(plan).diagnostics).toMatchObject([
+      { code, message: expect.stringContaining(path) },
+    ]);
+  });
+
+  test('rejects excessively nested debug values before reconstruction', () => {
+    let value: Record<string, unknown> = { kind: 'undefined' };
+    for (let depth = 0; depth < 130; depth += 1) value = { kind: 'array', values: [value] };
+    const plan = {
+      format: 'comblang-direct-plan',
+      version: 2,
+      networks: [],
+      producers: [],
+      debugInstances: [{ name: 'fixture', path: [], source: span, value }],
+    };
+
+    expect(validateDirectPlanEnvelope(plan).diagnostics).toMatchObject([
+      {
+        code: 'RT1001',
+        message: expect.stringContaining('debug value nesting exceeds'),
+      },
+    ]);
+  });
+
+  test.each([
+    {
+      name: 'unknown severity',
+      diagnostic: { code: 'X', severity: 'fatal', message: 'Failure.' },
+      path: '$.diagnostics[0]',
+    },
+    {
+      name: 'invalid primary span',
+      diagnostic: {
+        code: 'X',
+        severity: 'error',
+        message: 'Failure.',
+        span: { fileId: '', start: 0, end: 1 },
+      },
+      path: '$.diagnostics[0].span',
+    },
+    {
+      name: 'invalid related information',
+      diagnostic: {
+        code: 'X',
+        severity: 'error',
+        message: 'Failure.',
+        related: [{ message: 1, span }],
+      },
+      path: '$.diagnostics[0].related[0]',
+    },
+  ])('rejects diagnostic $name', ({ diagnostic, path }) => {
+    const plan = {
+      format: 'comblang-direct-plan',
+      version: 2,
+      networks: [],
+      producers: [],
+      diagnostics: [diagnostic],
+    };
+
+    expect(validateDirectPlanEnvelope(plan).diagnostics).toMatchObject([
+      { code: 'RT1001', message: expect.stringContaining(path) },
     ]);
   });
 });

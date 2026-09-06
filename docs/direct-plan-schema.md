@@ -26,7 +26,11 @@ interface DirectElaborationPlan {
 
 The runtime remains the authoritative validator: `tryElaborateDirectPlan()` returns structured diagnostics, while `elaborateDirectPlan()` throws the same diagnostic for exception-oriented callers. A TypeScript type assertion or deserialized JSON is not proof that a plan is valid.
 
-`validateDirectPlanEnvelope(value)` is the transport-facing first stage. It accepts `unknown`, checks the format/version envelope, Network declarations, duplicate names, optional descriptor collections, aliases, and capability metadata before a runtime graph is allocated. A successful result contains the narrowed plan and prepared declaration lookup. Topology, ownership, circuit configuration, and color checks still belong to elaboration because they require resolving relationships across descriptors.
+`validateDirectPlanEnvelope(value)` is the transport-facing first stage. It accepts `unknown` and exhaustively checks the format/version envelope, Network declarations, Producer unions and references, bounded Decider/debug trees, optional metadata, and embedded diagnostics before a runtime graph is allocated. A successful result contains a known-field-only, deeply frozen canonical plan plus prepared declaration/alias/capability lookups. Runtime replay consumes that canonical copy, never the caller-owned payload.
+
+For version 2 Deciders, ingress normalizes an absent `outputs` list to `[output]` and makes the first ordered row the compatibility `output` view. An explicitly present empty `outputs` list remains empty so an else-only configuration does not acquire a normal output. Repeated rows retain their order and multiplicity.
+
+Resolved topology, ownership transitions, native mode compatibility, and color consistency still belong to elaboration because they require relationships across otherwise valid descriptors.
 
 ## Descriptor groups
 

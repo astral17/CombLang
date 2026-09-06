@@ -1,9 +1,18 @@
 import type {
   DirectElaborationPlan,
   DirectPlanCapabilityUse,
+  DirectPlanDebugInstance,
+  DirectPlanDebugValue,
   DirectPlanNetwork,
   DirectPlanNetworkAlias,
+  DirectPlanProducer,
+  PlanArithmeticOperand,
+  PlanAttachment,
+  PlanDeciderCondition,
+  PlanNetworkRef,
 } from '@comblang/compiler/direct-plan-schema';
+import type { ArithmeticOperation, LogicalArithmeticOutput } from '@comblang/compiler';
+import type { SignalId, SignalType } from '@comblang/factorio';
 import type { Diagnostic, SourceSpan } from '@comblang/shared';
 
 export interface ValidatedDirectPlanEnvelope {
@@ -88,6 +97,7 @@ const arithmeticOperations = new Set([
 
 const comparators = new Set(['>', '<', '=', '>=', '<=', '!=']);
 const maximumNestedConditionDepth = 128;
+const maximumNestedDebugDepth = 128;
 
 function isCircuitValue(value: unknown): value is number {
   return (
@@ -363,6 +373,476 @@ function validateProducerMetadata(
   return undefined;
 }
 
+function validateDebugValue(
+  value: unknown,
+  path: string,
+  declarations: ReadonlyMap<string, DirectPlanNetwork>,
+  captureIds: ReadonlySet<string>,
+  span: SourceSpan,
+  depth = 0,
+  budget = { remaining: 100_000 },
+): DirectPlanEnvelopeValidationResult | undefined {
+  if (depth > maximumNestedDebugDepth)
+    return payloadFailure(
+      path,
+      `debug value nesting exceeds the ${maximumNestedDebugDepth} level limit.`,
+      span,
+    );
+  budget.remaining -= 1;
+  if (budget.remaining < 0)
+    return payloadFailure(path, 'debug value exceeds the 100000 node limit.', span);
+  if (!isRecord(value)) return payloadFailure(path, 'expected a debug value.', span);
+  if (value.kind === 'network')
+    return typeof value.network === 'string' && declarations.has(value.network)
+      ? undefined
+      : failure('RT1003', `${path}.network: unknown debug Network.`, span);
+  if (value.kind === 'producer')
+    return typeof value.captureId === 'string' && captureIds.has(value.captureId)
+      ? undefined
+      : payloadFailure(`${path}.captureId`, 'unknown Producer debug capture.', span);
+  if (value.kind === 'undefined') return undefined;
+  if (value.kind === 'literal') {
+    const literal = value.value;
+    return literal === null ||
+      typeof literal === 'string' ||
+      typeof literal === 'boolean' ||
+      (typeof literal === 'number' && Number.isFinite(literal))
+      ? undefined
+      : payloadFailure(`${path}.value`, 'invalid debug literal.', span);
+  }
+  if (value.kind === 'array') {
+    if (!Array.isArray(value.values) || exceedsLimit(value.values))
+      return payloadFailure(`${path}.values`, 'expected a bounded debug value array.', span);
+    for (const [index, item] of value.values.entries()) {
+      const invalid = validateDebugValue(
+        item,
+        `${path}.values[${index}]`,
+        declarations,
+        captureIds,
+        span,
+        depth + 1,
+        budget,
+      );
+      if (invalid !== undefined) return invalid;
+    }
+    return undefined;
+  }
+  if (value.kind === 'object') {
+    if (!Array.isArray(value.entries) || exceedsLimit(value.entries))
+      return payloadFailure(`${path}.entries`, 'expected a bounded debug entry array.', span);
+    const keys = new Set<string>();
+    for (const [index, entry] of value.entries.entries()) {
+      const entryPath = `${path}.entries[${index}]`;
+      if (!isRecord(entry) || typeof entry.key !== 'string')
+        return payloadFailure(entryPath, 'expected a named debug entry.', span);
+      if (keys.has(entry.key))
+        return payloadFailure(`${entryPath}.key`, 'duplicate debug object key.', span);
+      keys.add(entry.key);
+      const invalid = validateDebugValue(
+        entry.value,
+        `${entryPath}.value`,
+        declarations,
+        captureIds,
+        span,
+        depth + 1,
+        budget,
+      );
+      if (invalid !== undefined) return invalid;
+    }
+    return undefined;
+  }
+  return payloadFailure(`${path}.kind`, 'unknown debug value tag.', span);
+}
+
+function validateDiagnostic(
+  value: unknown,
+  path: string,
+): DirectPlanEnvelopeValidationResult | undefined {
+  if (
+    !isRecord(value) ||
+    typeof value.code !== 'string' ||
+    value.code.length === 0 ||
+    (value.severity !== 'error' && value.severity !== 'warning' && value.severity !== 'info') ||
+    typeof value.message !== 'string'
+  )
+    return payloadFailure(path, 'invalid diagnostic.');
+  if (value.span !== undefined && descriptorSpan({ source: value.span }, 'source') === undefined)
+    return payloadFailure(`${path}.span`, 'invalid source span.');
+  if (value.related !== undefined) {
+    if (!Array.isArray(value.related) || exceedsLimit(value.related))
+      return payloadFailure(`${path}.related`, 'expected a bounded related-information array.');
+    for (const [index, related] of value.related.entries()) {
+      const relatedPath = `${path}.related[${index}]`;
+      if (
+        !isRecord(related) ||
+        typeof related.message !== 'string' ||
+        descriptorSpan({ source: related.span }, 'source') === undefined
+      )
+        return payloadFailure(relatedPath, 'invalid related diagnostic information.');
+    }
+  }
+  return undefined;
+}
+
+function canonicalSpan(value: unknown): SourceSpan {
+  const span = value as Record<string, unknown>;
+  return Object.freeze({
+    fileId: span.fileId as SourceSpan['fileId'],
+    start: span.start as number,
+    end: span.end as number,
+  });
+}
+
+function canonicalPath(value: unknown): readonly string[] {
+  return Object.freeze([...(value as string[])]);
+}
+
+function canonicalSignal(value: unknown): SignalId {
+  const signal = value as Record<string, unknown>;
+  return Object.freeze({
+    type: signal.type as SignalType,
+    name: signal.name as string,
+    ...(signal.quality === undefined ? {} : { quality: signal.quality as string }),
+  });
+}
+
+function canonicalNetworkRef(value: Record<string, unknown>): PlanNetworkRef {
+  return value.refKind === 'single'
+    ? Object.freeze({ refKind: 'single', network: value.network as string })
+    : Object.freeze({
+        refKind: 'pair',
+        networks: Object.freeze([...(value.networks as [string, string])]) as readonly [
+          string,
+          string,
+        ],
+      });
+}
+
+function canonicalArithmeticOperand(value: unknown): PlanArithmeticOperand {
+  const operand = value as Record<string, unknown>;
+  if (operand.kind === 'constant')
+    return Object.freeze({ kind: 'constant', value: operand.value as number });
+  return Object.freeze({
+    kind: operand.kind as 'signal' | 'each',
+    ...(operand.kind === 'signal' ? { signal: canonicalSignal(operand.signal) } : {}),
+    ...canonicalNetworkRef(operand),
+  }) as PlanArithmeticOperand;
+}
+
+function canonicalArithmeticOutput(value: unknown): LogicalArithmeticOutput {
+  const output = value as Record<string, unknown>;
+  return output.kind === 'each'
+    ? Object.freeze({ kind: 'each' })
+    : Object.freeze({ kind: 'signal', signal: canonicalSignal(output.signal) });
+}
+
+function canonicalCondition(value: unknown): PlanDeciderCondition {
+  const condition = value as Record<string, unknown>;
+  if (condition.kind === 'and' || condition.kind === 'or')
+    return Object.freeze({
+      kind: condition.kind,
+      conditions: Object.freeze(
+        (condition.conditions as unknown[]).map((child) => canonicalCondition(child)),
+      ),
+    });
+  if (condition.kind === 'compare-signals') {
+    const side = (operand: unknown) => {
+      const record = operand as Record<string, unknown>;
+      return Object.freeze({
+        signal: canonicalSignal(record.signal),
+        ...canonicalNetworkRef(record),
+      });
+    };
+    return Object.freeze({
+      kind: 'compare-signals',
+      left: side(condition.left),
+      comparator: condition.comparator as '>' | '<' | '=' | '>=' | '<=' | '!=',
+      right: side(condition.right),
+    });
+  }
+  return Object.freeze({
+    kind: condition.kind as 'compare-each' | 'compare-signal' | 'compare-wildcard',
+    ...(condition.kind === 'compare-signal'
+      ? { signal: canonicalSignal(condition.signal) }
+      : condition.kind === 'compare-wildcard'
+        ? { wildcard: condition.wildcard as 'anything' | 'everything' }
+        : {}),
+    comparator: condition.comparator as '>' | '<' | '=' | '>=' | '<=' | '!=',
+    constant: condition.constant as number,
+    ...canonicalNetworkRef(condition),
+  }) as PlanDeciderCondition;
+}
+
+type PlanDeciderOutput = Extract<DirectPlanProducer, { kind: 'decider' }>['output'];
+
+function canonicalDeciderOutput(value: unknown): PlanDeciderOutput {
+  const output = value as Record<string, unknown>;
+  if (output.kind === 'each-constant')
+    return Object.freeze({ kind: 'each-constant', value: output.value as number });
+  if (output.kind === 'signal-constant')
+    return Object.freeze({
+      kind: 'signal-constant',
+      signal: canonicalSignal(output.signal),
+      value: output.value as number,
+    });
+  return Object.freeze({
+    kind: output.kind as 'each' | 'signal' | 'wildcard',
+    ...(output.kind === 'signal'
+      ? { signal: canonicalSignal(output.signal) }
+      : output.kind === 'wildcard'
+        ? { wildcard: output.wildcard as 'anything' | 'everything' }
+        : {}),
+    ...canonicalNetworkRef(output),
+  }) as PlanDeciderOutput;
+}
+
+function canonicalAttachment(value: unknown): PlanAttachment {
+  const attachment = value as Record<string, unknown>;
+  return Object.freeze({
+    network: attachment.network as string,
+    source: canonicalSpan(attachment.source),
+    instancePath: canonicalPath(attachment.instancePath),
+  });
+}
+
+function canonicalProducer(value: unknown): DirectPlanProducer {
+  const producer = value as Record<string, unknown>;
+  const common = {
+    ...(producer.bindingName === undefined ? {} : { bindingName: producer.bindingName as string }),
+    ...(producer.debugCaptureIds === undefined
+      ? {}
+      : { debugCaptureIds: canonicalPath(producer.debugCaptureIds) }),
+    destinations: Object.freeze(
+      (producer.destinations as unknown[]).map((destination) => canonicalAttachment(destination)),
+    ),
+    source: canonicalSpan(producer.source),
+    instancePath: canonicalPath(producer.instancePath),
+    ...(producer.placement === undefined
+      ? {}
+      : {
+          placement: Object.freeze({
+            x: (producer.placement as Record<string, unknown>).x as number,
+            y: (producer.placement as Record<string, unknown>).y as number,
+            ...((producer.placement as Record<string, unknown>).direction === undefined
+              ? {}
+              : {
+                  direction: (producer.placement as Record<string, unknown>).direction as number,
+                }),
+          }),
+        }),
+  };
+  if (producer.kind === 'arithmetic')
+    return Object.freeze({
+      kind: 'arithmetic',
+      ...common,
+      left: canonicalArithmeticOperand(producer.left),
+      operation: producer.operation as ArithmeticOperation,
+      right: canonicalArithmeticOperand(producer.right),
+      output: canonicalArithmeticOutput(producer.output),
+    });
+  if (producer.kind === 'constant')
+    return Object.freeze({
+      kind: 'constant',
+      ...common,
+      outputs: Object.freeze(
+        (producer.outputs as unknown[]).map((output) => {
+          const record = output as Record<string, unknown>;
+          return Object.freeze({
+            signal: canonicalSignal(record.signal),
+            value: record.value as number,
+          });
+        }),
+      ),
+    });
+  const compatibilityOutput = canonicalDeciderOutput(producer.output);
+  const outputs = Object.freeze(
+    (producer.outputs === undefined ? [producer.output] : (producer.outputs as unknown[])).map(
+      (output) => canonicalDeciderOutput(output),
+    ),
+  );
+  return Object.freeze({
+    kind: 'decider',
+    ...common,
+    condition: canonicalCondition(producer.condition),
+    output: outputs[0] ?? compatibilityOutput,
+    outputs,
+    ...(producer.elseOutputs === undefined
+      ? {}
+      : {
+          elseOutputs: Object.freeze(
+            (producer.elseOutputs as unknown[]).map((output) => canonicalDeciderOutput(output)),
+          ),
+        }),
+  });
+}
+
+function canonicalDebugValue(value: unknown): DirectPlanDebugValue {
+  const debug = value as Record<string, unknown>;
+  if (debug.kind === 'network')
+    return Object.freeze({ kind: 'network', network: debug.network as string });
+  if (debug.kind === 'producer')
+    return Object.freeze({ kind: 'producer', captureId: debug.captureId as string });
+  if (debug.kind === 'undefined') return Object.freeze({ kind: 'undefined' });
+  if (debug.kind === 'literal')
+    return Object.freeze({
+      kind: 'literal',
+      value: debug.value as string | number | boolean | null,
+    });
+  if (debug.kind === 'array')
+    return Object.freeze({
+      kind: 'array',
+      values: Object.freeze((debug.values as unknown[]).map((item) => canonicalDebugValue(item))),
+    });
+  return Object.freeze({
+    kind: 'object',
+    entries: Object.freeze(
+      (debug.entries as unknown[]).map((entry) => {
+        const record = entry as Record<string, unknown>;
+        return Object.freeze({
+          key: record.key as string,
+          value: canonicalDebugValue(record.value),
+        });
+      }),
+    ),
+  });
+}
+
+function canonicalDiagnostic(value: unknown): Diagnostic {
+  const diagnostic = value as Record<string, unknown>;
+  return Object.freeze({
+    code: diagnostic.code as string,
+    severity: diagnostic.severity as Diagnostic['severity'],
+    message: diagnostic.message as string,
+    ...(diagnostic.span === undefined ? {} : { span: canonicalSpan(diagnostic.span) }),
+    ...(diagnostic.related === undefined
+      ? {}
+      : {
+          related: Object.freeze(
+            (diagnostic.related as unknown[]).map((item) => {
+              const related = item as Record<string, unknown>;
+              return Object.freeze({
+                message: related.message as string,
+                span: canonicalSpan(related.span),
+              });
+            }),
+          ),
+        }),
+  });
+}
+
+function canonicalPlanFromValidated(value: Record<string, unknown>): DirectElaborationPlan {
+  const networks = Object.freeze(
+    (value.networks as unknown[]).map((item) => {
+      const network = item as Record<string, unknown>;
+      return Object.freeze({
+        name: network.name as string,
+        ...(network.fixedColor === undefined
+          ? {}
+          : { fixedColor: network.fixedColor as 'red' | 'green' }),
+        source: canonicalSpan(network.source),
+        instancePath: canonicalPath(network.instancePath),
+      });
+    }),
+  );
+  return Object.freeze({
+    format: 'comblang-direct-plan',
+    version: 2,
+    networks,
+    ...(value.networkAliases === undefined
+      ? {}
+      : {
+          networkAliases: Object.freeze(
+            (value.networkAliases as unknown[]).map((item) => {
+              const alias = item as Record<string, unknown>;
+              return Object.freeze({
+                name: alias.name as string,
+                network: alias.network as string,
+                source: canonicalSpan(alias.source),
+                instancePath: canonicalPath(alias.instancePath),
+                moved: alias.moved as boolean,
+              });
+            }),
+          ),
+        }),
+    ...(value.networkTransfers === undefined
+      ? {}
+      : {
+          networkTransfers: Object.freeze(
+            (value.networkTransfers as unknown[]).map((item) => {
+              const transfer = item as Record<string, unknown>;
+              return Object.freeze({
+                destination: transfer.destination as string,
+                source: transfer.source as string,
+                provenance: canonicalSpan(transfer.provenance),
+                instancePath: canonicalPath(transfer.instancePath),
+              });
+            }),
+          ),
+        }),
+    ...(value.networkPairs === undefined
+      ? {}
+      : {
+          networkPairs: Object.freeze(
+            (value.networkPairs as unknown[]).map((item) => {
+              const pair = item as Record<string, unknown>;
+              return Object.freeze({
+                networks: Object.freeze([...(pair.networks as [string, string])]) as readonly [
+                  string,
+                  string,
+                ],
+                provenance: canonicalSpan(pair.provenance),
+                instancePath: canonicalPath(pair.instancePath),
+              });
+            }),
+          ),
+        }),
+    ...(value.capabilityUses === undefined
+      ? {}
+      : {
+          capabilityUses: Object.freeze(
+            (value.capabilityUses as unknown[]).map((item) => {
+              const use = item as Record<string, unknown>;
+              return Object.freeze({
+                network: use.network as string,
+                capability: use.capability as 'readonly' | 'ref' | 'move',
+                parameter: use.parameter as string,
+                ...(use.fixedColor === undefined
+                  ? {}
+                  : { fixedColor: use.fixedColor as 'red' | 'green' }),
+                provenance: canonicalSpan(use.provenance),
+                instancePath: canonicalPath(use.instancePath),
+              });
+            }),
+          ),
+        }),
+    ...(value.debugInstances === undefined
+      ? {}
+      : {
+          debugInstances: Object.freeze(
+            (value.debugInstances as unknown[]).map((item): DirectPlanDebugInstance => {
+              const instance = item as Record<string, unknown>;
+              return Object.freeze({
+                name: instance.name as string,
+                path: canonicalPath(instance.path),
+                source: canonicalSpan(instance.source),
+                value: canonicalDebugValue(instance.value),
+              });
+            }),
+          ),
+        }),
+    producers: Object.freeze(
+      (value.producers as unknown[]).map((producer) => canonicalProducer(producer)),
+    ),
+    ...(value.diagnostics === undefined
+      ? {}
+      : {
+          diagnostics: Object.freeze(
+            (value.diagnostics as unknown[]).map((diagnostic) => canonicalDiagnostic(diagnostic)),
+          ),
+        }),
+  });
+}
+
 /** Validates the versioned transport envelope before any runtime graph is allocated. */
 export function validateDirectPlanEnvelope(plan: unknown): DirectPlanEnvelopeValidationResult {
   if (!isRecord(plan) || plan.format !== 'comblang-direct-plan' || plan.version !== 2)
@@ -406,9 +886,12 @@ export function validateDirectPlanEnvelope(plan: unknown): DirectPlanEnvelopeVal
     'debugInstances',
     'diagnostics',
   ] as const;
-  for (const key of optionalDescriptorArrays)
+  for (const key of optionalDescriptorArrays) {
     if (plan[key] !== undefined && !Array.isArray(plan[key]))
       return failure('RT1001', `Invalid ${key} collection in direct plan.`);
+    if (Array.isArray(plan[key]) && exceedsLimit(plan[key]))
+      return failure('RT1001', `Oversized ${key} collection in direct plan.`);
+  }
 
   for (const [index, transfer] of ((plan.networkTransfers ?? []) as unknown[]).entries()) {
     const path = `$.networkTransfers[${index}]`;
@@ -533,12 +1016,43 @@ export function validateDirectPlanEnvelope(plan: unknown): DirectPlanEnvelopeVal
       );
   }
 
+  for (const [index, instance] of ((plan.debugInstances ?? []) as unknown[]).entries()) {
+    const path = `$.debugInstances[${index}]`;
+    if (
+      !isRecord(instance) ||
+      typeof instance.name !== 'string' ||
+      instance.name.length === 0 ||
+      !isInstancePath(instance.path) ||
+      descriptorSpan(instance, 'source') === undefined
+    )
+      return payloadFailure(path, 'invalid debug instance.', descriptorSpan(instance, 'source'));
+    const invalid = validateDebugValue(
+      instance.value,
+      `${path}.value`,
+      declarations,
+      captureIds,
+      instance.source as SourceSpan,
+    );
+    if (invalid !== undefined) return invalid;
+  }
+
+  for (const [index, diagnostic] of ((plan.diagnostics ?? []) as unknown[]).entries()) {
+    const invalid = validateDiagnostic(diagnostic, `$.diagnostics[${index}]`);
+    if (invalid !== undefined) return invalid;
+  }
+
+  const canonicalPlan = canonicalPlanFromValidated(plan);
+  const canonicalDeclarations = new Map(
+    canonicalPlan.networks.map((network) => [network.name, network]),
+  );
+  const canonicalAliases = canonicalPlan.networkAliases ?? Object.freeze([]);
+  const canonicalCapabilityUses = canonicalPlan.capabilityUses ?? Object.freeze([]);
   return {
     value: {
-      plan: plan as unknown as DirectElaborationPlan,
-      declarations,
-      aliases: Object.freeze([...(aliases as unknown as DirectPlanNetworkAlias[])]),
-      capabilityUses: Object.freeze([...(capabilityUses as unknown as DirectPlanCapabilityUse[])]),
+      plan: canonicalPlan,
+      declarations: canonicalDeclarations,
+      aliases: canonicalAliases,
+      capabilityUses: canonicalCapabilityUses,
     },
     diagnostics: [],
   };

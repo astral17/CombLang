@@ -236,12 +236,12 @@ function lowerCondition(
 }
 
 /** Executes compiler-owned descriptors only; it never evaluates source text. */
-function executeDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
-  const validation = validateDirectPlanEnvelope(plan);
+function executeDirectPlan(inputPlan: DirectElaborationPlan): ExecutedDirectPlan {
+  const validation = validateDirectPlanEnvelope(inputPlan);
   if (validation.value === undefined) {
     throw new RuntimeDiagnosticError(validation.diagnostics[0]!);
   }
-  const { declarations, aliases, capabilityUses } = validation.value;
+  const { plan, declarations, aliases, capabilityUses } = validation.value;
   const runtime = new DslRuntime();
 
   const parent = new Map(plan.networks.map(({ name }) => [name, name]));
