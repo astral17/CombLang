@@ -1,6 +1,14 @@
 import { transformElaborationModule } from '@comblang/compiler/elaboration-transform';
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
 import {
+  cloneEntityReplayContextTransport,
+  entityReplayContextIdentity,
+  entityReplayContextTransport,
+  EntityReplayContextError,
+  type EntityReplayContextTransport,
+  type TrustedEntityReplayContext,
+} from '@comblang/compiler/entity-replay-context';
+import {
   classifyDslSemantics,
   parseFile,
   summarizeTopLevel,
@@ -18,6 +26,10 @@ import { executionFailureDiagnostic } from './execution-diagnostic.js';
 
 export interface SourceCompilationEnvironment {
   readonly prototypes?: PrototypeProvider;
+  /** Identity-only, cloneable v3 context; host providers and Entity handles stay local. */
+  readonly entityReplayContext?: EntityReplayContextTransport;
+  /** Host-only profile set used to validate a provider context before transport. */
+  readonly trustedEntityReplayContext?: TrustedEntityReplayContext;
 }
 
 /** Serializable result safe to send through a browser Worker boundary. */
@@ -28,6 +40,9 @@ export interface SourceCompilationArtifact extends ParseWorkerResult {
   readonly compilerDiagnostics: readonly Diagnostic[];
   readonly executionMode: 'executed-javascript';
   readonly prototypeIdentity?: string;
+  readonly entityReplayContext?: EntityReplayContextTransport;
+  /** Future result-cache identity; no compilation-result cache consumes it yet. */
+  readonly entityReplayIdentity?: string;
   readonly elaborationJavaScript?: string;
   readonly plan?: DirectElaborationPlan;
 }
@@ -41,12 +56,56 @@ export type SourceCompilationStage = 'parse' | 'semantic' | 'transform' | 'execu
 
 export type SourceCompilationObserver = (stage: SourceCompilationStage) => void;
 
+function replayTransport(
+  environment: SourceCompilationEnvironment,
+): EntityReplayContextTransport | undefined {
+  const transport =
+    environment.entityReplayContext === undefined
+      ? environment.trustedEntityReplayContext === undefined
+        ? undefined
+        : entityReplayContextTransport(environment.trustedEntityReplayContext)
+      : cloneEntityReplayContextTransport(environment.entityReplayContext);
+  if (transport === undefined) return undefined;
+
+  if (environment.trustedEntityReplayContext !== undefined) {
+    const expected = entityReplayContextTransport(environment.trustedEntityReplayContext);
+    if (entityReplayContextIdentity(transport) !== entityReplayContextIdentity(expected)) {
+      throw new EntityReplayContextError(
+        'ER1001',
+        '$.entityReplayContext',
+        'transport does not match the trusted profile-set context.',
+      );
+    }
+  }
+  if (transport.source === 'provider' && environment.trustedEntityReplayContext === undefined) {
+    throw new EntityReplayContextError(
+      'ER1001',
+      '$.entityReplayContext.profileSetIdentity',
+      'provider replay contexts require a host-bound trusted profile set.',
+    );
+  }
+  if (environment.prototypes !== undefined) {
+    if (
+      environment.prototypes.schemaVersion !== transport.database.schemaVersion ||
+      environment.prototypes.identity !== transport.database.identity
+    ) {
+      throw new EntityReplayContextError(
+        'ER1001',
+        '$.entityReplayContext.database',
+        'transport database does not match the selected prototype provider.',
+      );
+    }
+  }
+  return transport;
+}
+
 function compileParsedSource(
   parsed: ParsedSourceFile,
   environment: SourceCompilationEnvironment,
   preflightDiagnostics: readonly Diagnostic[],
   observe?: SourceCompilationObserver,
 ): LocalSourceCompilation {
+  const entityReplayContext = replayTransport(environment);
   let plan: DirectElaborationPlan | undefined;
   let execution: ExecutedDirectPlan | undefined;
   let elaborationJavaScript: string | undefined;
@@ -95,6 +154,12 @@ function compileParsedSource(
     ...(environment.prototypes === undefined
       ? {}
       : { prototypeIdentity: environment.prototypes.identity }),
+    ...(entityReplayContext === undefined
+      ? {}
+      : {
+          entityReplayContext,
+          entityReplayIdentity: entityReplayContextIdentity(entityReplayContext),
+        }),
     ...(elaborationJavaScript === undefined ? {} : { elaborationJavaScript }),
     ...(plan === undefined ? {} : { plan }),
     ...(execution === undefined ? {} : { execution }),

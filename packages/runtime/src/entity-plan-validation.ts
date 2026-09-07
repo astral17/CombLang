@@ -1,0 +1,489 @@
+import type {
+  DirectElaborationPlanV3,
+  EntityConnectorBinding,
+  EntityConnectorKey,
+  EntityId,
+  EntityLaneEndpoint,
+  EntityLaneKey,
+  EntityProfileRef,
+  EntityRecord,
+} from '@comblang/compiler/entity';
+import {
+  entityReplayContextRef,
+  resolveEntityReplayContext,
+  resolveEntityReplayProfile,
+  type TrustedEntityReplayContext,
+} from '@comblang/compiler/entity-replay-context';
+import { canonicalizeEntityRawJson, EntityRawJsonError } from '@comblang/compiler/entity-raw';
+import type { EntityPlacement } from '@comblang/compiler/ir';
+import type { Diagnostic, NetworkId, SourceSpan } from '@comblang/shared';
+
+import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
+import { validateDirectPlanEnvelope } from './direct-plan-validation.js';
+
+type DataRecord = Record<string, unknown>;
+
+export class EntityPlanValidationError extends Error {
+  readonly code: string;
+  readonly path: string;
+
+  constructor(code: string, path: string, message: string) {
+    super(`${path}: ${message}`);
+    this.name = 'EntityPlanValidationError';
+    this.code = code;
+    this.path = path;
+  }
+}
+
+export interface ValidatedEntityPlanV3 {
+  readonly plan: DirectElaborationPlanV3;
+  readonly context: TrustedEntityReplayContext;
+}
+
+export interface EntityPlanValidationResult {
+  readonly value?: ValidatedEntityPlanV3;
+  readonly diagnostics: readonly Diagnostic[];
+}
+
+function invalid(code: string, path: string, message: string): never {
+  throw new EntityPlanValidationError(code, path, message);
+}
+
+function dataRecord(value: unknown, path: string): DataRecord {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    invalid('RT3000', path, 'expected a plain data record.');
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    invalid('RT3000', path, 'expected a plain object or null-prototype record.');
+  }
+  const output = Object.create(null) as DataRecord;
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string')
+      invalid('RT3000', `${path}[${String(key)}]`, 'symbol keys are not allowed.');
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+    if (!('value' in descriptor)) invalid('RT3000', `${path}.${key}`, 'accessors are not allowed.');
+    output[key] = descriptor.value;
+  }
+  return output;
+}
+
+function dataArray(value: unknown, path: string): readonly unknown[] {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+    invalid('RT3000', path, 'expected a plain array.');
+  }
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+  if (lengthDescriptor === undefined || !('value' in lengthDescriptor)) {
+    invalid('RT3000', `${path}.length`, 'array length must be data-only.');
+  }
+  const length = lengthDescriptor.value;
+  if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0) {
+    invalid('RT3000', `${path}.length`, 'array length must be a non-negative safe integer.');
+  }
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string')
+      invalid('RT3000', `${path}[${String(key)}]`, 'symbol keys are not allowed.');
+    if (key === 'length') continue;
+    if (!/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= length) {
+      invalid('RT3000', `${path}.${key}`, 'unknown array field.');
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+    if (!('value' in descriptor))
+      invalid('RT3000', `${path}[${key}]`, 'accessors are not allowed.');
+  }
+  const output: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor === undefined)
+      invalid('RT3000', `${path}[${index}]`, 'array holes are not allowed.');
+    if (!('value' in descriptor))
+      invalid('RT3000', `${path}[${index}]`, 'accessors are not allowed.');
+    output.push(descriptor.value);
+  }
+  return output;
+}
+
+function exactKeys(record: DataRecord, allowed: readonly string[], path: string): void {
+  const allowedSet = new Set(allowed);
+  for (const key of Object.keys(record)) {
+    if (!allowedSet.has(key)) invalid('RT3000', `${path}.${key}`, 'unknown Entity plan field.');
+  }
+}
+
+function text(value: unknown, path: string): string {
+  if (typeof value !== 'string' || value.length === 0)
+    invalid('RT3000', path, 'expected a non-empty string.');
+  return value;
+}
+
+function positive(value: unknown, path: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
+    invalid('RT3000', path, 'expected a positive safe integer.');
+  }
+  return value;
+}
+
+function finite(value: unknown, path: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    invalid('RT3000', path, 'expected a finite number.');
+  }
+  return value;
+}
+
+function stringArray(value: unknown, path: string): readonly string[] {
+  return Object.freeze(
+    dataArray(value, path).map((entry, index) => text(entry, `${path}[${index}]`)),
+  );
+}
+
+function parseSource(value: unknown, path: string): SourceSpan {
+  const record = dataRecord(value, path);
+  exactKeys(record, ['fileId', 'start', 'end'], path);
+  const start = finite(record.start, `${path}.start`);
+  const end = finite(record.end, `${path}.end`);
+  if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start) {
+    invalid('RT3000', path, 'source span must use a valid half-open range.');
+  }
+  return Object.freeze({
+    fileId: text(record.fileId, `${path}.fileId`) as SourceSpan['fileId'],
+    start,
+    end,
+  });
+}
+
+function parsePlacement(value: unknown, path: string): EntityPlacement {
+  const record = dataRecord(value, path);
+  exactKeys(record, ['x', 'y', 'direction'], path);
+  if (!('x' in record) || !('y' in record)) invalid('RT3000', path, 'placement requires x and y.');
+  return Object.freeze({
+    x: finite(record.x, `${path}.x`),
+    y: finite(record.y, `${path}.y`),
+    ...('direction' in record ? { direction: finite(record.direction, `${path}.direction`) } : {}),
+  });
+}
+
+function parseContextReference(
+  value: unknown,
+  path: string,
+): ReturnType<typeof entityReplayContextRef> {
+  const record = dataRecord(value, path);
+  exactKeys(record, ['database', 'evidenceIdentity', 'policyIdentity', 'profileSetIdentity'], path);
+  const database = dataRecord(record.database, `${path}.database`);
+  exactKeys(database, ['schemaVersion', 'identity'], `${path}.database`);
+  return Object.freeze({
+    database: Object.freeze({
+      schemaVersion: positive(database.schemaVersion, `${path}.database.schemaVersion`),
+      identity: text(database.identity, `${path}.database.identity`),
+    }),
+    evidenceIdentity: text(record.evidenceIdentity, `${path}.evidenceIdentity`),
+    policyIdentity: text(record.policyIdentity, `${path}.policyIdentity`),
+    profileSetIdentity: text(record.profileSetIdentity, `${path}.profileSetIdentity`) as ReturnType<
+      typeof entityReplayContextRef
+    >['profileSetIdentity'],
+  });
+}
+
+function parseProfileRef(
+  value: unknown,
+  path: string,
+  context: TrustedEntityReplayContext,
+): {
+  readonly ref: EntityProfileRef;
+  readonly profile: ReturnType<typeof resolveEntityReplayProfile>;
+} {
+  const record = dataRecord(value, path);
+  exactKeys(record, ['prototypeKey', 'database', 'profileId'], path);
+  const database = dataRecord(record.database, `${path}.database`);
+  exactKeys(database, ['schemaVersion', 'identity'], `${path}.database`);
+  const ref: EntityProfileRef = Object.freeze({
+    prototypeKey: text(record.prototypeKey, `${path}.prototypeKey`),
+    database: Object.freeze({
+      schemaVersion: positive(database.schemaVersion, `${path}.database.schemaVersion`),
+      identity: text(database.identity, `${path}.database.identity`),
+    }),
+    profileId: text(record.profileId, `${path}.profileId`) as EntityProfileRef['profileId'],
+  });
+  let profile: ReturnType<typeof resolveEntityReplayProfile>;
+  try {
+    profile = resolveEntityReplayProfile(ref, context);
+  } catch (error) {
+    const errorPath =
+      error instanceof Error && 'path' in error && typeof error.path === 'string'
+        ? error.path === '$'
+          ? path
+          : `${path}${error.path.slice(1)}`
+        : path;
+    invalid(
+      error instanceof Error && 'code' in error && error.code === 'ER1001' ? 'RT3001' : 'RT3002',
+      errorPath,
+      error instanceof Error ? error.message : 'profile is unavailable.',
+    );
+  }
+  return { ref, profile };
+}
+
+function parseEndpoint(value: unknown, path: string): EntityLaneEndpoint {
+  const record = dataRecord(value, path);
+  exactKeys(record, ['connector', 'lane', 'color'], path);
+  const color = record.color;
+  if (color !== 'red' && color !== 'green')
+    invalid('RT3000', `${path}.color`, 'expected red or green.');
+  return {
+    connector: text(record.connector, `${path}.connector`) as EntityConnectorKey,
+    lane: text(record.lane, `${path}.lane`) as EntityLaneKey,
+    color,
+  };
+}
+
+function parseBindings(
+  value: unknown,
+  path: string,
+  networkNames: ReadonlySet<string>,
+  profile: ReturnType<typeof resolveEntityReplayProfile>,
+): readonly EntityConnectorBinding[] {
+  const bindings = dataArray(value, path).map((entry, index) => {
+    const bindingPath = `${path}[${index}]`;
+    const record = dataRecord(entry, bindingPath);
+    exactKeys(record, ['endpoint', 'network'], bindingPath);
+    const endpoint = parseEndpoint(record.endpoint, `${bindingPath}.endpoint`);
+    const connector = profile.connectors.find(({ key }) => key === endpoint.connector);
+    if (connector === undefined)
+      invalid('RT3002', `${bindingPath}.endpoint.connector`, 'unknown connector key.');
+    const lane = connector.lanes.find(({ key }) => key === endpoint.lane);
+    if (lane === undefined || lane.color !== endpoint.color) {
+      invalid(
+        'RT3002',
+        `${bindingPath}.endpoint.lane`,
+        'endpoint does not match the trusted profile.',
+      );
+    }
+    const network =
+      'network' in record
+        ? (text(record.network, `${bindingPath}.network`) as NetworkId)
+        : undefined;
+    if (network !== undefined && !networkNames.has(network)) {
+      invalid('RT3002', `${bindingPath}.network`, 'connector references an unknown Network.');
+    }
+    return Object.freeze({
+      endpoint,
+      ...(network === undefined ? {} : { network }),
+    });
+  });
+  const endpointKeys = bindings.map(
+    ({ endpoint }) => `${endpoint.connector}/${endpoint.lane}/${endpoint.color}`,
+  );
+  if (new Set(endpointKeys).size !== endpointKeys.length) {
+    invalid('RT3003', path, 'connector endpoint is repeated.');
+  }
+  return Object.freeze(
+    [...bindings].sort((left, right) => {
+      const leftKey = `${left.endpoint.connector}/${left.endpoint.lane}`;
+      const rightKey = `${right.endpoint.connector}/${right.endpoint.lane}`;
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+    }),
+  );
+}
+
+function parseConfiguration(value: unknown, path: string): EntityRecord['configuration'] {
+  const record = dataRecord(value, path);
+  exactKeys(record, ['mode', 'payload'], path);
+  if (record.mode !== 'raw' && record.mode !== 'typed') {
+    invalid('RT3000', `${path}.mode`, 'expected raw or typed configuration.');
+  }
+  try {
+    return Object.freeze({ mode: record.mode, payload: canonicalizeEntityRawJson(record.payload) });
+  } catch (error) {
+    if (error instanceof EntityRawJsonError) {
+      const suffix = error.path === '$' ? '' : error.path.slice(1);
+      invalid('RT3003', `${path}.payload${suffix}`, error.message);
+    }
+    throw error;
+  }
+}
+
+function parseEntity(
+  value: unknown,
+  path: string,
+  context: TrustedEntityReplayContext,
+  networkNames: ReadonlySet<string>,
+): EntityRecord {
+  const record = dataRecord(value, path);
+  exactKeys(
+    record,
+    ['id', 'profile', 'configuration', 'connectorBindings', 'placement', 'provenance', 'ordinal'],
+    path,
+  );
+  const profile = parseProfileRef(record.profile, `${path}.profile`, context);
+  const configuration =
+    'configuration' in record
+      ? parseConfiguration(record.configuration, `${path}.configuration`)
+      : undefined;
+  const placement =
+    'placement' in record ? parsePlacement(record.placement, `${path}.placement`) : undefined;
+  const provenanceRecord = dataRecord(record.provenance, `${path}.provenance`);
+  exactKeys(
+    provenanceRecord,
+    ['source', 'instancePath', 'expansionStack', 'creationRevision'],
+    `${path}.provenance`,
+  );
+  const provenance = Object.freeze({
+    source: parseSource(provenanceRecord.source, `${path}.provenance.source`),
+    instancePath: stringArray(provenanceRecord.instancePath, `${path}.provenance.instancePath`),
+    expansionStack: stringArray(
+      provenanceRecord.expansionStack,
+      `${path}.provenance.expansionStack`,
+    ),
+    creationRevision: positive(
+      provenanceRecord.creationRevision,
+      `${path}.provenance.creationRevision`,
+    ),
+  });
+  const connectorBindings = parseBindings(
+    record.connectorBindings,
+    `${path}.connectorBindings`,
+    networkNames,
+    profile.profile,
+  );
+  return Object.freeze({
+    id: text(record.id, `${path}.id`) as EntityId,
+    profile: profile.ref,
+    ...(configuration === undefined ? {} : { configuration }),
+    connectorBindings,
+    ...(placement === undefined ? {} : { placement }),
+    provenance,
+    ordinal: positive(record.ordinal, `${path}.ordinal`),
+  });
+}
+
+function deepFreeze<T>(value: T): T {
+  if (value !== null && typeof value === 'object') {
+    for (const child of Object.values(value as Record<string, unknown>)) deepFreeze(child);
+    if (!Object.isFrozen(value)) Object.freeze(value);
+  }
+  return value;
+}
+
+function basePlan(value: DataRecord): DirectElaborationPlan {
+  const projected: Record<string, unknown> = {
+    format: value.format,
+    version: 2,
+    networks: value.networks,
+    producers: value.producers,
+  };
+  for (const key of [
+    'networkAliases',
+    'networkTransfers',
+    'networkPairs',
+    'capabilityUses',
+    'debugInstances',
+    'diagnostics',
+  ]) {
+    if (key in value) projected[key] = value[key];
+  }
+  const result = validateDirectPlanEnvelope(projected);
+  if (result.value === undefined) {
+    const diagnostic = result.diagnostics[0];
+    invalid(
+      diagnostic?.code ?? 'RT1001',
+      '$',
+      diagnostic?.message ?? 'invalid producer-only v2 data.',
+    );
+  }
+  return result.value.plan;
+}
+
+function validateValue(value: unknown, context: TrustedEntityReplayContext): ValidatedEntityPlanV3 {
+  const record = dataRecord(value, '$');
+  exactKeys(
+    record,
+    [
+      'format',
+      'version',
+      'context',
+      'networks',
+      'networkAliases',
+      'networkTransfers',
+      'networkPairs',
+      'capabilityUses',
+      'debugInstances',
+      'producers',
+      'entities',
+      'diagnostics',
+    ],
+    '$',
+  );
+  if (record.format !== 'comblang-direct-plan')
+    invalid('RT1001', '$.format', 'unsupported direct plan format.');
+  if (record.version !== 3)
+    invalid('RT1001', '$.version', 'Entity semantic plans require version 3.');
+  const contextReference = parseContextReference(record.context, '$.context');
+  try {
+    resolveEntityReplayContext(contextReference, context);
+  } catch (error) {
+    invalid(
+      'RT3001',
+      '$.context',
+      error instanceof Error ? error.message : 'replay context mismatch.',
+    );
+  }
+  const plan = basePlan(record);
+  const networkNames = new Set(plan.networks.map(({ name }) => name));
+  const entities = dataArray(record.entities, '$.entities').map((entry, index) =>
+    parseEntity(entry, `$.entities[${index}]`, context, networkNames),
+  );
+  const ids = entities.map(({ id }) => id);
+  if (new Set(ids).size !== ids.length)
+    invalid('RT3003', '$.entities', 'Entity IDs must be unique.');
+  const ordinals = entities.map(({ ordinal }) => ordinal);
+  if (new Set(ordinals).size !== ordinals.length)
+    invalid('RT3003', '$.entities', 'Entity ordinals must be unique.');
+  const canonical: DirectElaborationPlanV3 = deepFreeze({
+    ...plan,
+    version: 3,
+    context: contextReference,
+    entities: Object.freeze([...entities].sort((left, right) => left.ordinal - right.ordinal)),
+  });
+  return { plan: canonical, context };
+}
+
+/** Validates v3 Entity semantics and the embedded producer-only v2 subset before allocation. */
+export function validateEntityDirectPlan(
+  value: unknown,
+  context: TrustedEntityReplayContext,
+): EntityPlanValidationResult {
+  try {
+    return { value: validateValue(value, context), diagnostics: [] };
+  } catch (error) {
+    if (error instanceof EntityPlanValidationError) {
+      return {
+        diagnostics: [
+          {
+            code: error.code,
+            severity: 'error',
+            message: error.message,
+          },
+        ],
+      };
+    }
+    throw error;
+  }
+}
+
+/** Explicitly upgrades a validated producer-only v2 plan without inventing Entity capabilities. */
+export function adaptProducerOnlyPlanV2ToV3(
+  value: unknown,
+  context: TrustedEntityReplayContext,
+): DirectElaborationPlanV3 {
+  const record = dataRecord(value, '$');
+  if (record.format !== 'comblang-direct-plan' || record.version !== 2) {
+    invalid('RT1001', '$.version', 'only producer-only Direct Plan v2 can be adapted.');
+  }
+  const plan = basePlan(record);
+  const reference = entityReplayContextRef(context);
+  return deepFreeze({
+    ...plan,
+    version: 3,
+    context: reference,
+    entities: Object.freeze([]),
+  });
+}

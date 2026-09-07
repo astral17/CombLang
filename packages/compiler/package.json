@@ -11,6 +11,11 @@
     "./color-solver": "./src/color-solver.ts",
     "./direct-plan": "./src/direct-plan.ts",
     "./direct-plan-schema": "./src/direct-plan-schema.ts",
+    "./entity": "./src/entity.ts",
+    "./entity-fixtures": "./src/entity-fixtures.ts",
+    "./entity-profile": "./src/entity-profile.ts",
+    "./entity-replay-context": "./src/entity-replay-context.ts",
+    "./entity-raw": "./src/entity-raw.ts",
     "./elaboration-transform": "./src/elaboration-transform.ts",
     "./ir": "./src/ir.ts",
     "./producer-network-references": "./src/producer-network-references.ts"

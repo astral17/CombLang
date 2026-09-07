@@ -1,4 +1,8 @@
 import {
+  cloneEntityReplayContextTransport,
+  EntityReplayContextError,
+} from '@comblang/compiler/entity-replay-context';
+import {
   loadPrototypeDatabaseJson,
   PrototypeValidationError,
   type LoadedPrototypeEnvironment,
@@ -28,7 +32,9 @@ function profileFailure(error: unknown): Diagnostic {
         : error instanceof BrowserPrototypeSelectionError ||
             error instanceof BrowserPrototypeCacheMissError
           ? error.code
-          : 'WP1003',
+          : error instanceof EntityReplayContextError
+            ? error.code
+            : 'WP1003',
     severity: 'error',
     message: error instanceof Error ? error.message : 'Unable to load the prototype profile.',
   };
@@ -38,12 +44,35 @@ export class CompilerWorkerRuntime {
   readonly #profiles = new Map<string, LoadedPrototypeEnvironment>();
 
   async handle(request: CompilerWorkerRequest): Promise<CompilerWorkerResponse> {
-    if (request.prototypeProfile === undefined) {
+    let entityReplayContext;
+    try {
+      entityReplayContext =
+        request.entityReplayContext === undefined
+          ? undefined
+          : cloneEntityReplayContextTransport(request.entityReplayContext);
+    } catch (error) {
       return {
         kind: 'parsed',
         revision: request.revision,
-        result: compileSource(request.file),
+        result: compileSource(request.file, {}, [profileFailure(error)]),
       };
+    }
+    if (request.prototypeProfile === undefined) {
+      try {
+        return {
+          kind: 'parsed',
+          revision: request.revision,
+          result: compileSource(request.file, {
+            ...(entityReplayContext === undefined ? {} : { entityReplayContext }),
+          }),
+        };
+      } catch (error) {
+        return {
+          kind: 'parsed',
+          revision: request.revision,
+          result: compileSource(request.file, {}, [profileFailure(error)]),
+        };
+      }
     }
     try {
       const profile = request.prototypeProfile;
@@ -78,7 +107,10 @@ export class CompilerWorkerRuntime {
       return {
         kind: 'parsed',
         revision: request.revision,
-        result: compileSource(request.file, { prototypes: loaded.prototypes }),
+        result: compileSource(request.file, {
+          prototypes: loaded.prototypes,
+          ...(entityReplayContext === undefined ? {} : { entityReplayContext }),
+        }),
         prototypeEnvironment: environment,
       };
     } catch (error) {

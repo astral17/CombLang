@@ -9,6 +9,11 @@ import {
   syntheticPrototypeDatabase,
   validatePrototypeDatabase,
 } from '@comblang/prototypes';
+import { syntheticZeroPortEntityProfile } from '@comblang/compiler/entity-fixtures';
+import {
+  createTrustedEntityReplayContext,
+  entityReplayContextTransport,
+} from '@comblang/compiler/entity-replay-context';
 import {
   compileSourceProgram,
   sourceCompilationArtifact,
@@ -85,6 +90,57 @@ const input = CC(); const a = Double(input); const b = Double(input); const c = 
       producerCount: 4,
       diagnostics: [{ code: 'CL2002', severity: 'warning' }],
     });
+  });
+
+  test('threads the cloneable v3 context through programmatic CLI compilation', async () => {
+    const path = await sourceFile('const output = new Network();');
+    const trusted = createTrustedEntityReplayContext({
+      database: syntheticZeroPortEntityProfile.ref.database,
+      source: 'synthetic',
+      evidenceIdentity: 'comblang-synthetic-evidence-v1',
+      policyIdentity: 'comblang-entity-policy-v1',
+      profiles: [syntheticZeroPortEntityProfile],
+    });
+    const entityReplayContext = entityReplayContextTransport(trusted);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path], { entityReplayContext })).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      entityReplayContext,
+      entityReplayIdentity: expect.stringContaining('comblang-synthetic-evidence-v1'),
+    });
+  });
+
+  test('rejects an unbound provider replay context before CLI source execution', async () => {
+    const path = await sourceFile(`throw new Error('source executed');`);
+    const { prototypes } = await loadPrototypeDatabase(syntheticPrototypeDatabase());
+    const trusted = createTrustedEntityReplayContext({
+      database: { schemaVersion: prototypes.schemaVersion, identity: prototypes.identity },
+      source: 'provider',
+      evidenceIdentity: 'provider-evidence-v1',
+      policyIdentity: 'provider-policy-v1',
+      profiles: [
+        {
+          ...structuredClone(syntheticZeroPortEntityProfile),
+          ref: {
+            ...syntheticZeroPortEntityProfile.ref,
+            database: { schemaVersion: prototypes.schemaVersion, identity: prototypes.identity },
+          },
+        },
+      ],
+    });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(
+      await run(['check', '--json', path], {
+        prototypes,
+        entityReplayContext: entityReplayContextTransport(trusted),
+      }),
+    ).toBe(2);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'ER1001' })],
+    });
+    expect(String(log.mock.calls[0]?.[0])).not.toContain('source executed');
   });
 
   test('reports a recursive union parameter mismatch at the executed call site', async () => {

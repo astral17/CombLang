@@ -3,6 +3,8 @@ export * from './direct-plan-validation.js';
 export * from './debug-index.js';
 export * from './debug-document.js';
 export * from './debug-structure.js';
+export * from './entity-registry.js';
+export * from './entity-plan-validation.js';
 export * from './constant-signal-values.js';
 export * from './elaboration-program.js';
 export * from './elaboration.js';

@@ -1,4 +1,5 @@
 import type { CompiledSourceResult } from './compile-source.js';
+import type { EntityReplayContextTransport } from '@comblang/compiler/entity-replay-context';
 import type { PrototypeDatabaseCapabilities, PrototypeEnvironment } from '@comblang/prototypes';
 
 export interface BrowserPrototypeProfileSource {
@@ -20,6 +21,7 @@ export interface CompilerWorkerRequest {
   readonly revision: number;
   readonly file: { readonly path: string; readonly text: string };
   readonly prototypeProfile?: BrowserPrototypeProfile;
+  readonly entityReplayContext?: EntityReplayContextTransport;
 }
 
 export interface BrowserPrototypeEnvironmentReport {

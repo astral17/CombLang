@@ -5,6 +5,8 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./entity-plan-validation": "./src/entity-plan-validation.ts",
+    "./entity-registry": "./src/entity-registry.ts",
     "./source-compilation": "./src/source-compilation.ts"
   },
   "dependencies": {

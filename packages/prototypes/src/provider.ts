@@ -40,6 +40,7 @@ export interface PrototypeCollections {
 /** Immutable compilation environment modelled after Factorio's `prototypes` global. */
 export interface PrototypeProvider {
   readonly identity: string;
+  readonly schemaVersion: PrototypeDatabaseV1['schemaVersion'];
   readonly environment: PrototypeEnvironment;
   readonly capabilities: PrototypeDatabaseCapabilities;
   readonly item: PrototypeTable<ItemPrototype>;
@@ -183,6 +184,7 @@ function createPrototypeProvider(
 
   return Object.freeze({
     identity,
+    schemaVersion: database.schemaVersion,
     environment: database.environment,
     capabilities: database.capabilities,
     item,

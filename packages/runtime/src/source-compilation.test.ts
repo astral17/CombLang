@@ -1,5 +1,10 @@
 import { loadPrototypeDatabase, syntheticPrototypeDatabase } from '@comblang/prototypes';
 import { sourceFileId, sourceSpan, type Diagnostic } from '@comblang/shared';
+import { syntheticZeroPortEntityProfile } from '@comblang/compiler/entity-fixtures';
+import {
+  createTrustedEntityReplayContext,
+  entityReplayContextTransport,
+} from '@comblang/compiler/entity-replay-context';
 import { describe, expect, test } from 'vitest';
 
 import {
@@ -90,6 +95,79 @@ output += CC(
     expect(compilation.execution).toBeDefined();
     expect(artifact).not.toHaveProperty('execution');
     expect(structuredClone(artifact)).toEqual(artifact);
+  });
+
+  test('threads only the cloneable v3 replay context through the source artifact', () => {
+    const trusted = createTrustedEntityReplayContext({
+      database: syntheticZeroPortEntityProfile.ref.database,
+      source: 'synthetic',
+      evidenceIdentity: 'comblang-synthetic-evidence-v1',
+      policyIdentity: 'comblang-entity-policy-v1',
+      profiles: [syntheticZeroPortEntityProfile],
+    });
+    const entityReplayContext = entityReplayContextTransport(trusted);
+    const compilation = compileSourceProgram(
+      { path: 'transport-v3.factorio.ts', text: 'const output = new Network();' },
+      { entityReplayContext },
+    );
+    const artifact = sourceCompilationArtifact(compilation);
+
+    expect(artifact.entityReplayContext).toEqual(entityReplayContext);
+    expect(artifact.entityReplayIdentity).toContain('comblang-synthetic-evidence-v1');
+    expect(structuredClone(artifact)).toEqual(artifact);
+    expect(compilation).not.toHaveProperty('entityRegistry');
+  });
+
+  test('requires trusted profile-set binding for provider contexts and verifies provider identity/schema', async () => {
+    const loaded = await loadPrototypeDatabase(syntheticPrototypeDatabase());
+    const profile = JSON.parse(JSON.stringify(syntheticZeroPortEntityProfile)) as any;
+    profile.ref.database = {
+      schemaVersion: loaded.database.schemaVersion,
+      identity: loaded.prototypes.identity,
+    };
+    const trusted = createTrustedEntityReplayContext({
+      database: profile.ref.database,
+      source: 'provider',
+      evidenceIdentity: 'provider-evidence-v1',
+      policyIdentity: 'provider-policy-v1',
+      profiles: [profile],
+    });
+    const source = { path: 'provider-context.factorio.ts', text: 'const output = new Network();' };
+
+    expect(
+      compileSourceProgram(source, {
+        prototypes: loaded.prototypes,
+        trustedEntityReplayContext: trusted,
+      }).entityReplayContext,
+    ).toEqual(entityReplayContextTransport(trusted));
+    expect(() =>
+      compileSourceProgram(source, {
+        prototypes: loaded.prototypes,
+        entityReplayContext: entityReplayContextTransport(trusted),
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'ER1001' }));
+
+    const wrongProviderContext = createTrustedEntityReplayContext({
+      database: { schemaVersion: loaded.database.schemaVersion, identity: 'database-other' },
+      source: 'provider',
+      evidenceIdentity: 'provider-evidence-v1',
+      policyIdentity: 'provider-policy-v1',
+      profiles: [
+        {
+          ...profile,
+          ref: {
+            ...profile.ref,
+            database: { schemaVersion: loaded.database.schemaVersion, identity: 'database-other' },
+          },
+        },
+      ],
+    });
+    expect(() =>
+      compileSourceProgram(source, {
+        prototypes: loaded.prototypes,
+        trustedEntityReplayContext: wrongProviderContext,
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'ER1001' }));
   });
 
   test('retains prototype identity and earlier warnings when execution fails', async () => {

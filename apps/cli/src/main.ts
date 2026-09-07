@@ -10,6 +10,13 @@ import type {
   DirectPlanNetworkPair,
   DirectPlanNetworkTransfer,
 } from '@comblang/compiler/direct-plan-schema';
+import {
+  EntityReplayContextError,
+  entityReplayContextIdentity,
+  entityReplayContextTransport,
+  type EntityReplayContextTransport,
+  type TrustedEntityReplayContext,
+} from '@comblang/compiler/entity-replay-context';
 import { parseProject } from '@comblang/language';
 import {
   applyEntityCircuitSupplement,
@@ -61,18 +68,36 @@ interface LoadedSource {
 
 export interface CliCompilationEnvironment {
   readonly prototypes?: PrototypeProvider;
+  readonly entityReplayContext?: EntityReplayContextTransport;
+  readonly trustedEntityReplayContext?: TrustedEntityReplayContext;
 }
 
 function environmentReport(environment: CliCompilationEnvironment) {
   const provider = environment.prototypes;
+  const entityReplayContext =
+    environment.entityReplayContext ??
+    (environment.trustedEntityReplayContext === undefined
+      ? undefined
+      : entityReplayContextTransport(environment.trustedEntityReplayContext));
   return provider === undefined
-    ? {}
+    ? entityReplayContext === undefined
+      ? {}
+      : {
+          entityReplayContext,
+          entityReplayIdentity: entityReplayContextIdentity(entityReplayContext),
+        }
     : {
         prototypeEnvironment: {
           identity: provider.identity,
           ...provider.environment,
           capabilities: provider.capabilities,
         },
+        ...(entityReplayContext === undefined
+          ? {}
+          : {
+              entityReplayContext,
+              entityReplayIdentity: entityReplayContextIdentity(entityReplayContext),
+            }),
       };
 }
 
@@ -450,7 +475,7 @@ export async function run(
       );
     }
     const prototypes = await selectPrototypeProvider(options, environment.prototypes);
-    const selected = prototypes === undefined ? {} : { prototypes };
+    const selected = prototypes === undefined ? environment : { ...environment, prototypes };
     if (!json && prototypes !== undefined) {
       console.log(
         `Prototype environment: ${prototypes.identity} (Factorio ${prototypes.environment.factorioVersion}).`,
@@ -465,7 +490,9 @@ export async function run(
     if (command !== 'prototypes') {
       const diagnostic = {
         code:
-          error instanceof CliInputError || error instanceof PrototypeValidationError
+          error instanceof CliInputError ||
+          error instanceof PrototypeValidationError ||
+          error instanceof EntityReplayContextError
             ? error.code
             : 'CLI1004',
         severity: 'error',
