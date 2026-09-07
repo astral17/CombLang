@@ -52,12 +52,49 @@ export interface BoundNetworkParameter {
   readonly provenance: SourceSpan;
 }
 
+export interface NetworkReferenceParameterDescriptor {
+  readonly functionName: string;
+  readonly parameter: string;
+  readonly requiredType: string;
+  readonly fixedColor?: 'red' | 'green';
+  readonly source: SourceSpan;
+}
+
+export interface NetworkReferenceParameterPolicyContext {
+  networkFacet(value: unknown): NetworkValue | undefined;
+  recordDslCall(): void;
+  acceptUnrestricted(network: NetworkValue): void;
+  requireColor(network: NetworkValue, color: 'red' | 'green', source: SourceSpan): void;
+}
+
 function capabilityName(capability: NetworkParameterCapability): string {
   return capability === 'readonly'
     ? 'Readonly<Network>'
     : capability === 'ref'
       ? 'Ref<Network>'
       : 'Move<Network>';
+}
+
+/** Resolves a bare Network parameter without borrowing, moving, or changing ownership. */
+export function bindNetworkReferenceParameter(
+  value: unknown,
+  descriptor: NetworkReferenceParameterDescriptor,
+  context: NetworkReferenceParameterPolicyContext,
+): NetworkValue {
+  const network = context.networkFacet(value);
+  if (network === undefined) {
+    throw new ElaborationExecutionError(
+      `${descriptor.requiredType} parameter ${descriptor.parameter} received a non-Network value.`,
+      descriptor.source,
+      'RT2015',
+    );
+  }
+  context.recordDslCall();
+  if (descriptor.fixedColor !== undefined) {
+    context.requireColor(network, descriptor.fixedColor, descriptor.source);
+  }
+  context.acceptUnrestricted(network);
+  return network;
 }
 
 /** Applies one executed borrow/move parameter boundary to an already evaluated argument. */

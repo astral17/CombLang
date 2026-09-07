@@ -20,6 +20,9 @@ export interface NetworkReturnPolicyContext {
     source: SourceSpan,
   ): void;
   transferToCaller(network: NetworkValue): NetworkValue;
+  assertReadable(network: NetworkValue, source: SourceSpan): void;
+  isTransparentAlias?(network: NetworkValue): boolean;
+  returnTransparent?(network: NetworkValue): NetworkValue;
   stateFor(network: NetworkValue): NetworkRuntimeState;
   brandNetwork(value: NetworkValue, state: NetworkRuntimeState): NetworkValue;
 }
@@ -38,6 +41,7 @@ export function returnNetworkValue(
       'RT2022',
     );
   }
+  context.assertReadable(network, descriptor.source);
   if (descriptor.fixedColor !== undefined) {
     context.requireColor(
       network,
@@ -47,7 +51,10 @@ export function returnNetworkValue(
     );
   }
 
-  const returned = context.transferToCaller(network);
+  const returned =
+    context.isTransparentAlias?.(network) === true
+      ? (context.returnTransparent?.(network) ?? network)
+      : context.transferToCaller(network);
   if (descriptor.capability === 'owned') return returned;
   return context.brandNetwork(
     { ...returned, capability: 'readonly' },

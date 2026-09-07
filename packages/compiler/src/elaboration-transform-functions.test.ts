@@ -83,6 +83,35 @@ const callback = () => { return input; };
     expect(code).toContain('const callback = () => { return input; };');
   });
 
+  test('passes a variable-bound arrow identity to its function boundary', () => {
+    const code = transformFunctions(`const read = (input: Network | number) => input;`);
+
+    expect(code).toContain('__dsl.enterFunction("read", read,');
+  });
+
+  test('instruments untyped identifier parameters without wrapping typed primitive callbacks', () => {
+    const code = transformFunctions(`
+const generic = (input) => input;
+const native = (value: number) => value + 1;
+`);
+
+    expect(code).toContain('__dsl.enterFunction("generic", generic,');
+    expect(code).toContain('const native = (value: number) => value + 1;');
+  });
+
+  test('applies recursive parameter contracts to typed arrows and function expressions', () => {
+    const code = transformFunctions(`
+const arrow = (input: Network | number) => input;
+const expression = function (input: Readonly<Network> | number) { return input; };
+const native = (value: number) => value + 1;
+`);
+
+    expect(code.match(/__dsl\.parameterContract/g)).toHaveLength(2);
+    expect(code).toContain('const native = (value: number) => value + 1;');
+    expect(code.match(/__dsl\.enterFunction/g)).toHaveLength(2);
+    expect(code.match(/__dsl\.returnValue/g)).toHaveLength(2);
+  });
+
   test('closes function frames after both a normal return and an exception', () => {
     const code = transformFunctions(`function Identity(value) { return value; }
 function Fail() { throw new Error('failure'); }

@@ -697,10 +697,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
           scope.networks.add(parameter.name.text);
           const capability =
             networkTypeFromAnnotation(parameter.type, file.ast)?.capability ?? 'owned';
-          scope.capabilities.set(
-            parameter.name.text,
-            capability === 'owned' ? 'readonly' : capability,
-          );
+          scope.capabilities.set(parameter.name.text, capability);
         }
         if (ts.isIdentifier(parameter.name) && isNetworkArrayType(parameter.type)) {
           scope.networkArrays.add(parameter.name.text);

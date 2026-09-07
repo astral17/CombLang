@@ -16,11 +16,13 @@ export interface ReturnOwnedValuePolicyContext {
   isPair(value: unknown): value is PairValue;
   isPairSelection(value: unknown): value is PairSelectedValue;
   assertReturnable(network: NetworkValue): void;
+  assertReadable(network: NetworkValue): void;
   ownershipOf(network: NetworkValue): NetworkOwnershipState;
   combinatorNetworks(value: CombinatorValue): readonly NetworkValue[];
   normalizeCombinator(value: CombinatorValue): CombinatorValue;
   isConsumed(network: NetworkValue): boolean;
   isOwnedByReturnFrame(network: NetworkValue): boolean;
+  isTransparentAlias?(network: NetworkValue): boolean;
   updateCombinatorNetwork(
     combinator: CombinatorValue,
     original: NetworkValue,
@@ -50,6 +52,8 @@ export function returnOwnedValue(
   const combinatorReplacements = new Map<object, CombinatorValue>();
   const seenCombinators = new Set<object>();
   const addNetwork = (network: NetworkValue, combinator?: CombinatorValue): void => {
+    context.assertReadable(network);
+    if (context.isTransparentAlias?.(network) === true) return;
     context.assertReturnable(network);
     const owner = context.ownershipOf(network);
     if (owners.has(owner)) {

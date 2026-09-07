@@ -6,6 +6,7 @@ import {
   type SignalId,
 } from '@comblang/factorio';
 import type { ElaborationJavaScript } from '@comblang/compiler';
+import type { DslParameterContract } from '@comblang/language';
 import type {
   DirectElaborationPlan,
   DirectPlanDebugValue,
@@ -52,8 +53,10 @@ import { createElaborationOwnershipPolicy } from './elaboration-ownership.js';
 import { resolveNetworkArgument } from './network-argument-policy.js';
 import {
   bindNetworkParameter,
+  bindNetworkReferenceParameter,
   type NetworkParameterCapability,
 } from './network-parameter-policy.js';
+import { bindParameterContract } from './parameter-contract-policy.js';
 import { returnNetworkValue } from './network-return-policy.js';
 import { validateCombinatorAttachment } from './combinator-attachment-policy.js';
 import { bindCombinatorHandle } from './combinator-handle-policy.js';
@@ -73,6 +76,7 @@ interface Invocation {
   readonly callable: unknown;
   readonly arguments: readonly CallArgument[];
   readonly source: RawSpan;
+  readonly defaultNetworks: Set<NetworkOwnershipState>;
   entered: boolean;
   segment?: string;
 }
@@ -139,6 +143,10 @@ class ElaborationRecorder {
   readonly #networks: DirectElaborationPlan['networks'][number][] = [];
   readonly #networkTransfers: NonNullable<DirectElaborationPlan['networkTransfers']>[number][] = [];
   readonly #networkAliases = new Map<string, PendingNetworkAlias>();
+  readonly #transparentNetworkParameters = new WeakMap<
+    FunctionOwnershipFrame,
+    Set<NetworkOwnershipState>
+  >();
   readonly #networkPairs: NonNullable<DirectElaborationPlan['networkPairs']>[number][] = [];
   readonly #capabilityUses: NonNullable<DirectElaborationPlan['capabilityUses']>[number][] = [];
   readonly #debugInstances: NonNullable<DirectElaborationPlan['debugInstances']>[number][] = [];
@@ -288,6 +296,13 @@ class ElaborationRecorder {
         borrows: [],
         moves: [],
       };
+      if (matches) {
+        for (const ownership of invocation.defaultNetworks) {
+          if (ownership.consumedAt === undefined && ownership.owner !== 'lost') {
+            ownership.owner = frame.owner;
+          }
+        }
+      }
       this.#ownershipFrames.push(frame);
       if (matches) {
         invocation.entered = true;
@@ -501,24 +516,87 @@ class ElaborationRecorder {
       // Untyped functions remain ordinary JavaScript for non-Network values.
       // In particular, do not turn generic Producer arguments into Networks.
       if (!requiresNetwork && !this.#isNetwork(value)) return value;
-      const borrowed = this.api.borrowParameter(
+      const network = bindNetworkReferenceParameter(
         value,
-        'readonly',
-        parameter,
-        fixedColor,
-        argumentSpan,
+        {
+          functionName: this.#currentFunctionName(),
+          parameter,
+          requiredType: 'Network',
+          ...(fixedColor === undefined ? {} : { fixedColor }),
+          source: this.#span(argumentSpan),
+        },
+        {
+          networkFacet: (candidate) => this.#networkFacet(candidate),
+          recordDslCall: () => this.#recordDslCall(),
+          acceptUnrestricted: (candidate) =>
+            this.#acceptUnrestrictedNetwork(candidate, declarationSpan, parameter),
+          requireColor: (candidate, color, source) =>
+            this.#requireNetworkColor(candidate, 'readonly', color, {
+              start: source.start,
+              end: source.end,
+            }),
+        },
       );
-      const key = `${declarationSpan.start}:${declarationSpan.end}`;
-      if (!this.#implicitBorrowWarnings.has(key)) {
-        this.#implicitBorrowWarnings.add(key);
-        this.#diagnostics.push({
-          code: 'CL2002',
-          severity: 'warning',
-          message: `Parameter ${parameter} implicitly borrows a Network for reading. Use Readonly<Network> to make this explicit, Ref<Network> for writes, or Move<Network> for ownership transfer.`,
-          span: this.#span(declarationSpan),
-        });
+      this.#recordUnrestrictedReferenceWarning(declarationSpan, parameter);
+      return network;
+    },
+    parameterContract: (
+      value: unknown,
+      contract: DslParameterContract,
+      parameter: string,
+      declarationSpan: RawSpan,
+      argumentSpan: RawSpan,
+    ): unknown => {
+      if (
+        !isRawSpan(declarationSpan) ||
+        !isRawSpan(argumentSpan) ||
+        typeof parameter !== 'string'
+      ) {
+        throw new Error('Invalid executed parameter contract.');
       }
-      return borrowed;
+      const result = bindParameterContract(
+        value,
+        contract,
+        {
+          functionName: this.#currentFunctionName(),
+          parameter,
+          source: this.#span(argumentSpan),
+          frame: this.#currentFunctionFrame(),
+        },
+        {
+          networkFacet: (candidate) => this.#networkFacet(candidate),
+          isNetwork: (candidate): candidate is NetworkValue => this.#isNetwork(candidate),
+          isPair: (candidate): candidate is PairValue => this.#isPair(candidate),
+          isPairSelection: (candidate): candidate is PairSelectedValue =>
+            this.#isPairSelection(candidate),
+          recordDslCall: () => this.#recordDslCall(),
+          stateFor: (network) => this.#networkState(network),
+          assertReadable: (network, source) => this.#ownership.assertReadable(network, source),
+          assertConsumable: (network, source, role) =>
+            this.#ownership.assertConsumable(network, source, role),
+          requireColor: (network, capability, color, source) =>
+            this.#requireNetworkColor(network, capability, color, {
+              start: source.start,
+              end: source.end,
+            }),
+          borrow: (network, capability, name, source, frame) =>
+            this.#ownership.borrow(network, capability, name, source, frame),
+          moveToFrame: (network, source, frame) =>
+            this.#ownership.moveToFrame(network, source, frame),
+          brandNetwork: (network, state) => this.#networkValue(network, state),
+          isCombinator: (candidate): candidate is CombinatorValue => this.#isCombinator(candidate),
+          bindCombinator: (candidate, producerType, _name, source) =>
+            this.#combinatorHandle(candidate, producerType, source),
+          bindNetwork: (candidate, capability, name, color, source) =>
+            this.#networkParameter(candidate, capability, name, color, {
+              start: source.start,
+              end: source.end,
+            }),
+          acceptUnrestricted: (network) =>
+            this.#acceptUnrestrictedNetwork(network, declarationSpan, parameter),
+        },
+      );
+      return result;
     },
     borrowParameter: (
       value: unknown,
@@ -607,6 +685,9 @@ class ElaborationRecorder {
           requireColor: (network, requiredCapability, color) =>
             this.#requireNetworkColor(network, requiredCapability, color, rawSpan),
           transferToCaller: (network) => this.#returnOwnedNetwork(network, rawSpan),
+          assertReadable: (network, source) => this.#ownership.assertReadable(network, source),
+          isTransparentAlias: (network) => this.#isTransparentNetwork(network),
+          returnTransparent: (network) => network,
           stateFor: (network) => this.#networkState(network),
           brandNetwork: (network, state) => this.#networkValue(network, state),
         },
@@ -1370,7 +1451,13 @@ class ElaborationRecorder {
     rawSpan: RawSpan,
   ): unknown {
     if (typeof callable !== 'function') throw new TypeError('Called value is not a function.');
-    const invocation: Invocation = { callable, arguments: args, source: rawSpan, entered: false };
+    const invocation: Invocation = {
+      callable,
+      arguments: args,
+      source: rawSpan,
+      defaultNetworks: new Set(),
+      entered: false,
+    };
     this.#invocations.push(invocation);
     try {
       return Reflect.apply(
@@ -1482,6 +1569,10 @@ class ElaborationRecorder {
         ? {}
         : { colorRequirement: { color: fixedColor, source: declaration } }),
     };
+    const invocation = this.#invocations.at(-1);
+    if (invocation !== undefined && !invocation.entered) {
+      invocation.defaultNetworks.add(ownership);
+    }
     this.#colors.registerNetwork(ownership, instanceName, declaration, fixedColor);
     return this.#networkValue(
       {
@@ -1508,6 +1599,45 @@ class ElaborationRecorder {
 
   #captureNetworkAliasValue(name: string, network: NetworkValue, rawSpan: RawSpan): void {
     this.#captureNetworkAlias(name, () => network, rawSpan);
+  }
+
+  #acceptUnrestrictedNetwork(
+    network: NetworkValue,
+    declarationSpan: RawSpan,
+    parameter: string,
+  ): void {
+    const frame = this.#currentFunctionFrame();
+    if (frame === undefined) {
+      throw new Error('An unrestricted Network reference was created outside a function frame.');
+    }
+    const ownership = this.#networkState(network).ownership;
+    if (ownership.owner !== frame.owner) {
+      const references = this.#transparentNetworkParameters.get(frame) ?? new Set();
+      references.add(ownership);
+      this.#transparentNetworkParameters.set(frame, references);
+    }
+    this.#recordUnrestrictedReferenceWarning(declarationSpan, parameter);
+  }
+
+  #isTransparentNetwork(network: NetworkValue, frame = this.#currentFunctionFrame()): boolean {
+    const ownership = this.#networkState(network).ownership;
+    return (
+      frame !== undefined &&
+      ownership.owner !== frame.owner &&
+      this.#transparentNetworkParameters.get(frame)?.has(ownership) === true
+    );
+  }
+
+  #recordUnrestrictedReferenceWarning(declarationSpan: RawSpan, parameter: string): void {
+    const key = `${declarationSpan.start}:${declarationSpan.end}`;
+    if (this.#implicitBorrowWarnings.has(key)) return;
+    this.#implicitBorrowWarnings.add(key);
+    this.#diagnostics.push({
+      code: 'CL2002',
+      severity: 'warning',
+      message: `Parameter ${parameter} uses an unrestricted Network reference. Use Readonly<Network> for read-only access, Ref<Network> for mutable borrowing, or Move<Network> for ownership transfer.`,
+      span: this.#span(declarationSpan),
+    });
   }
 
   #projectCombinatorOutput(
@@ -1803,6 +1933,7 @@ class ElaborationRecorder {
       isPair: (item): item is PairValue => this.#isPair(item),
       isPairSelection: (item): item is PairSelectedValue => this.#isPairSelection(item),
       assertReturnable: (network) => this.#ownership.assertReturnable(network, source, frame),
+      assertReadable: (network) => this.#ownership.assertReadable(network, source),
       ownershipOf: (network) => this.#networkState(network).ownership,
       combinatorNetworks: (combinator) => {
         const state = this.#combinators.stateFor(combinator);
@@ -1814,6 +1945,7 @@ class ElaborationRecorder {
       isConsumed: (network) => this.#networkState(network).ownership.consumedAt !== undefined,
       isOwnedByReturnFrame: (network) =>
         frame !== undefined && this.#networkState(network).ownership.owner === frame.owner,
+      isTransparentAlias: (network) => this.#isTransparentNetwork(network, frame),
       updateCombinatorNetwork: (combinator, original, returned) => {
         const state = this.#combinators.stateFor(combinator);
         if (state.outputPort.primary.network === original) {

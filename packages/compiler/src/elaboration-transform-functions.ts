@@ -1,6 +1,11 @@
 import ts from 'typescript';
 
-import { networkTypeFromAnnotation, type ParsedSourceFile } from '@comblang/language';
+import {
+  networkTypeFromAnnotation,
+  parseDslParameterContract,
+  type DslParameterContract,
+  type ParsedSourceFile,
+} from '@comblang/language';
 
 import { producerHandleTypeName } from './elaboration-transform-analysis.js';
 
@@ -14,6 +19,60 @@ export interface FunctionBoundaryTransformContext {
 }
 
 type TransformableFunction = ts.FunctionDeclaration | ts.FunctionExpression | ts.ArrowFunction;
+
+function contractNeedsBoundary(contract: DslParameterContract): boolean {
+  if (contract.kind === 'network' || contract.kind === 'producer') return true;
+  if (contract.kind === 'union') return contract.members.some(contractNeedsBoundary);
+  return (
+    contract.kind === 'dynamic' &&
+    (contract.text === '<untyped>' || contract.text === 'any' || contract.text === 'unknown')
+  );
+}
+
+function parameterContractExpression(
+  contract: DslParameterContract,
+  factory: ts.NodeFactory,
+): ts.ObjectLiteralExpression {
+  const properties: ts.ObjectLiteralElementLike[] = [
+    factory.createPropertyAssignment('kind', factory.createStringLiteral(contract.kind)),
+    factory.createPropertyAssignment('text', factory.createStringLiteral(contract.text)),
+  ];
+  if (contract.kind === 'network') {
+    properties.push(
+      factory.createPropertyAssignment(
+        'capability',
+        factory.createStringLiteral(contract.capability),
+      ),
+      factory.createPropertyAssignment(
+        'color',
+        contract.color === undefined
+          ? factory.createVoidZero()
+          : factory.createStringLiteral(contract.color),
+      ),
+    );
+  } else if (contract.kind === 'producer') {
+    properties.push(
+      factory.createPropertyAssignment(
+        'producerType',
+        factory.createStringLiteral(contract.producerType),
+      ),
+    );
+  } else if (contract.kind === 'primitive') {
+    properties.push(
+      factory.createPropertyAssignment('value', factory.createStringLiteral(contract.value)),
+    );
+  } else if (contract.kind === 'union') {
+    properties.push(
+      factory.createPropertyAssignment(
+        'members',
+        factory.createArrayLiteralExpression(
+          contract.members.map((member) => parameterContractExpression(member, factory)),
+        ),
+      ),
+    );
+  }
+  return factory.createObjectLiteralExpression(properties);
+}
 
 function enclosingTransformableFunction(node: ts.Node): TransformableFunction | undefined {
   for (let parent = node.parent; parent !== undefined; parent = parent.parent) {
@@ -80,7 +139,16 @@ function hasExplicitBoundary(
   return (
     ts.isFunctionDeclaration(owner) ||
     networkTypeFromAnnotation(owner.type, context.file.ast) !== undefined ||
-    producerHandleTypeName(context.file, owner.type) !== undefined
+    producerHandleTypeName(context.file, owner.type) !== undefined ||
+    owner.parameters.some((parameter) =>
+      contractNeedsBoundary(
+        parseDslParameterContract(
+          parameter.type,
+          context.file.ast,
+          parameter.questionToken !== undefined,
+        ),
+      ),
+    )
   );
 }
 
@@ -113,6 +181,32 @@ function parameterBinding(
   }
   const descriptor = borrowDescriptorForType(parameter.type, file.ast);
   const networkType = networkTypeFromAnnotation(parameter.type, file.ast);
+  const contract = parseDslParameterContract(
+    parameter.type,
+    file.ast,
+    parameter.questionToken !== undefined,
+  );
+  const usesContractBoundary =
+    contractNeedsBoundary(contract) &&
+    (contract.kind === 'union' ||
+      (contract.kind === 'dynamic' && (contract.text === 'any' || contract.text === 'unknown')) ||
+      (contract.kind === 'network' && networkType === undefined));
+  if (usesContractBoundary) {
+    return [
+      factory.createExpressionStatement(
+        factory.createAssignment(
+          parameter.name,
+          context.dslCall('parameterContract', [
+            parameter.name,
+            parameterContractExpression(contract, factory),
+            factory.createStringLiteral(parameter.name.text),
+            context.spanLiteral(parameter),
+            source,
+          ]),
+        ),
+      ),
+    ];
+  }
   if (parameter.type === undefined || networkType?.capability === 'owned') {
     return [
       factory.createExpressionStatement(
@@ -164,12 +258,20 @@ function functionNameAndCallable(
   owner: TransformableFunction,
   context: FunctionBoundaryTransformContext,
 ): readonly [ts.StringLiteral, ts.Expression, ts.Expression?] {
-  const named =
+  const declared =
     ts.isFunctionDeclaration(owner) || ts.isFunctionExpression(owner) ? owner.name : undefined;
-  const name = named?.text ?? '<anonymous>';
-  return named === undefined
+  const bound =
+    declared === undefined &&
+    ts.isVariableDeclaration(owner.parent) &&
+    owner.parent.initializer === owner &&
+    ts.isIdentifier(owner.parent.name)
+      ? owner.parent.name
+      : undefined;
+  const callable = declared ?? bound;
+  const name = callable?.text ?? '<anonymous>';
+  return callable === undefined
     ? [context.factory.createStringLiteral(name), context.spanLiteral(owner)]
-    : [context.factory.createStringLiteral(name), named, context.spanLiteral(owner)];
+    : [context.factory.createStringLiteral(name), callable, context.spanLiteral(owner)];
 }
 
 function returnedExpression(

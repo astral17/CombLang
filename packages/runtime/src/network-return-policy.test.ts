@@ -51,6 +51,7 @@ function makeContext(state: NetworkRuntimeState = { ownership }): NetworkReturnP
     networkFacet: (value) => (value === producer || value === network ? network : undefined),
     requireColor: vi.fn(),
     transferToCaller: vi.fn(() => returned),
+    assertReadable: vi.fn(),
     stateFor: () => state,
     brandNetwork: vi.fn((value: NetworkValue) => value),
   };
@@ -63,6 +64,7 @@ describe('typed Network return policy', () => {
     const value = returnNetworkValue(producer, descriptor('owned'), context);
 
     expect(context.requireColor).toHaveBeenCalledWith(network, 'move', 'green', source);
+    expect(context.assertReadable).toHaveBeenCalledWith(network, source);
     expect(context.transferToCaller).toHaveBeenCalledWith(network);
     expect(context.brandNetwork).not.toHaveBeenCalled();
     expect(value).toBe(returned);

@@ -51,6 +51,7 @@ function policy(
       (value as { kind?: unknown }).kind === 'selected' &&
       Array.isArray((value as { networks?: unknown }).networks),
     assertReturnable: vi.fn(),
+    assertReadable: vi.fn(),
     ownershipOf: (value) => owners.get(value)!,
     combinatorNetworks: () => [],
     normalizeCombinator: (value) => value,

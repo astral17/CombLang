@@ -1,7 +1,11 @@
 import ts from 'typescript';
 import { describe, expect, test } from 'vitest';
 
-import { parseDslTypeAnnotation, parseDslTypeText } from './dsl-type-syntax.js';
+import {
+  parseDslParameterContract,
+  parseDslTypeAnnotation,
+  parseDslTypeText,
+} from './dsl-type-syntax.js';
 
 describe('DSL type annotation syntax', () => {
   test.each([
@@ -46,6 +50,29 @@ describe('DSL type annotation syntax', () => {
       kind: 'network',
       capability: 'ref',
       color: 'green',
+    });
+  });
+
+  test('parses recursive executed parameter contracts without erasing member order', () => {
+    const source = ts.createSourceFile(
+      'parameter.ts',
+      'function f(value?: (Readonly<Network<R>> | number)) {}',
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TS,
+    );
+    const parameter = (source.statements[0] as ts.FunctionDeclaration).parameters[0]!;
+
+    expect(
+      parseDslParameterContract(parameter.type, source, parameter.questionToken !== undefined),
+    ).toEqual({
+      kind: 'union',
+      text: '(Readonly<Network<R>> | number) | undefined',
+      members: [
+        { kind: 'network', capability: 'readonly', color: 'red', text: 'Readonly<Network<R>>' },
+        { kind: 'primitive', value: 'number', text: 'number' },
+        { kind: 'primitive', value: 'undefined', text: 'undefined' },
+      ],
     });
   });
 });

@@ -182,6 +182,12 @@ function dispatchComparison<Source>(
   if (!context.isCircuitDslValue(left) && !context.isCircuitDslValue(right)) {
     return evaluateJavaScriptComparison(operator, left, right);
   }
+  if (
+    (operator === '==' || operator === '===' || operator === '!=' || operator === '!==') &&
+    (left === null || left === undefined) !== (right === null || right === undefined)
+  ) {
+    return evaluateJavaScriptComparison(operator, left, right);
+  }
   context.recordDslCall();
   context.assertReadable(left, source);
   context.assertReadable(right, source);

@@ -115,6 +115,22 @@ const input = CC(); const a = Double(input); const b = Double(input); const c = 
     ).toEqual(['input: Network']);
   });
 
+  test('links a recursive union parameter mismatch to the executed call argument', () => {
+    const argument = "'wrong'";
+    const text = `const read = (input: Readonly<Network> | number) => input;
+const result = read(${argument});`;
+    const result = compileSource({ path: 'union-parameter.factorio.ts', text });
+    const diagnostic = result.compilerDiagnostics.find(({ code }) => code === 'RT2015');
+
+    expect(result.plan).toBeUndefined();
+    expect(diagnostic).toMatchObject({
+      code: 'RT2015',
+      severity: 'error',
+      span: expect.any(Object),
+    });
+    expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(argument);
+  });
+
   test('compiles spread placement and attachment through the shared runtime', () => {
     const result = compileSource({
       path: 'main.factorio.ts',

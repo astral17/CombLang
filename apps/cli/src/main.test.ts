@@ -87,6 +87,22 @@ const input = CC(); const a = Double(input); const b = Double(input); const c = 
     });
   });
 
+  test('reports a recursive union parameter mismatch at the executed call site', async () => {
+    const argument = "'wrong'";
+    const text = `function Read(input: Readonly<Network> | number) { return input; }
+const result = Read(${argument});`;
+    const path = await sourceFile(text);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path])).toBe(1);
+    const report = JSON.parse(String(log.mock.calls[0]?.[0])) as {
+      readonly diagnostics: readonly { code: string; span?: { start: number; end: number } }[];
+    };
+    const diagnostic = report.diagnostics.find(({ code }) => code === 'RT2015');
+    expect(diagnostic?.span).toBeDefined();
+    expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(argument);
+  });
+
   async function profileFile(text = JSON.stringify(syntheticPrototypeDatabase())) {
     const directory = await mkdtemp(join(tmpdir(), 'comblang-prototypes-'));
     temporaryDirectories.push(directory);

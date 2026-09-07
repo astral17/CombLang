@@ -66,8 +66,8 @@ A read-only parameter may feed arithmetic, conditions, selections, and typed Fac
 
 Container returns are checked as a graph before transferring any owner. A rejected member does not partially invalidate earlier members. Cycles and shared containers are preserved (the same container is inspected once), along with sparse indices, own-property descriptors, and frozen/sealed/non-extensible state. Containers that do not lead to transferred Networks retain their identity. Getters are not invoked, and Maps/class instances are not traversed; this boundary does not roll back effects from evaluating the return expression.
 
-Simple identifier parameters in function declarations now also support an implicit
-read-only borrow:
+Simple identifier parameters in function declarations, arrows, and function
+expressions support an executed Network boundary:
 
 ```ts
 function Double(input) {
@@ -78,19 +78,22 @@ function Triple(input: Network): Network {
 }
 ```
 
-`input: Network` requires a Network or the primary Network facet of a Combinator
-and borrows it as `Readonly<Network>`; `Network<R>`/`Network<G>` preserve their
-color requirements. Without an annotation, a direct Network or Combinator argument
-becomes a borrow through that same facet. Numbers, strings, null/undefined, arrays,
-and ordinary objects retain their executed JavaScript categories and identities.
-There is no recursive coercion of Networks stored inside containers, and no new
-parameter inference for arrows, methods, or destructuring patterns in this slice.
+`input: Network` requires a Network or the primary Network facet of a Combinator and
+keeps the same ownership generation without creating a borrow or move;
+`Network<R>`/`Network<G>` preserve their color requirements. Without an annotation,
+an `input` or `input: any` parameter keeps the exact executed value: a direct
+Network may be used as an unrestricted transparent reference, while a Combinator
+remains a Combinator. Supported recursive unions select Network, explicit
+`Readonly`/`Ref`/`Move`, primitive, `null`, `undefined`, or dynamic branches at
+runtime. Unsupported type aliases and container element contracts remain outside
+this boundary.
 
-The runtime emits `CL2002` once per parameter declaration per compilation when
-that parameter first successfully borrows a Network. Ordinary calls and uncalled
-declarations do not emit it. The warning points to the parameter declaration;
-runtime argument failures still point to the argument where available. Explicit
-`Readonly`, `Ref`, and `Move` parameters do not emit this warning.
+The runtime emits `CL2002` once per parameter declaration per compilation when that
+parameter first successfully receives an unrestricted Network reference. Ordinary
+branches, ordinary values, and uncalled declarations do not emit it. The warning
+points to the parameter declaration; runtime argument failures still point to the
+argument where available. Explicit `Readonly`, `Ref`, and `Move` parameters do not
+emit this warning.
 
 The executed argument-category boundary is shared by all explicit capabilities.
 An existing Network keeps its physical ownership and active outer-borrow state;
@@ -109,13 +112,14 @@ Color requirements use the same call-site provenance. Only a successful
 boundary produces capability-audit metadata, and its dynamic instance path is
 recorded by the elaboration recorder rather than the ownership policy.
 
-The initial implicit policy is deliberately read-only, not inferred writable
-borrowing. Use `Ref<Network>` to attach outputs and `Move<Network>` to consume or
-return the caller's ownership. Borrow expiry, overlap checks, and escape checks
-are the same as for explicit `Readonly`; callers regain access on return or throw.
-Returning the argument itself (including inside a container) does not implicitly
-transfer ownership. Bare `Network` still means owned for local bindings and
-return annotations; this default applies only at the parameter boundary.
+The initial bare-parameter policy is deliberately unrestricted and transparent:
+passing a Network reference alone does not borrow, move, or invalidate caller
+aliases. Reads, writes, and explicit consuming operations still consult the shared
+runtime ownership state. Use `Readonly<Network>`, `Ref<Network>`, or `Move<Network>`
+when a narrower contract is intended. Returning the unchanged transparent argument,
+directly or through an executed array/plain-object path, preserves the same
+ownership generation; a Network created by the current frame still transfers on
+return. Explicit borrowed values cannot escape.
 
 Borrowed values must not outlive their owner. The checker should reject a definite borrow escape. If ordinary JavaScript control flow or a dynamically selected container element prevents proof, the runtime must validate the actual handle state instead of the checker guessing.
 
