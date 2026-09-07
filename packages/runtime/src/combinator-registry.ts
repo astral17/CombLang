@@ -1,6 +1,9 @@
+import { sameSignal, type SignalId } from '@comblang/factorio';
 import type { DirectPlanProducer, PlanAttachment } from '@comblang/compiler/direct-plan-schema';
 import type { SourceSpan } from '@comblang/shared';
 
+import { ElaborationExecutionError } from './elaboration-errors.js';
+import { bindCombinatorOutputSignal } from './combinator-output-policy.js';
 import type { CombinatorDescriptor, CombinatorValue, NetworkValue } from './elaboration-values.js';
 
 export interface OutputLaneState {
@@ -13,12 +16,18 @@ export interface OutputPortState {
   secondary?: OutputLaneState;
 }
 
+export interface CombinatorOutputBinding {
+  readonly signal: SignalId;
+  readonly source: SourceSpan;
+}
+
 /** Mutable execution state for one physical combinator. */
 export interface CombinatorRuntimeState {
   readonly identity: object;
   descriptor: CombinatorDescriptor;
   readonly outputPort: OutputPortState;
   readonly debugCaptureIds: string[];
+  outputBinding?: CombinatorOutputBinding;
   outputUsed: boolean;
 }
 
@@ -89,12 +98,39 @@ export class CombinatorRegistry {
     return state.outputPort.secondary.network;
   }
 
-  update(value: CombinatorValue, descriptor: CombinatorDescriptor): void {
+  update(
+    value: CombinatorValue,
+    descriptor: CombinatorDescriptor,
+    source = descriptor.source,
+  ): void {
     const state = this.stateFor(value);
     if (descriptor.kind !== state.descriptor.kind) {
       throw new Error('A physical combinator cannot change its native kind.');
     }
-    state.descriptor = descriptor;
+    const rebound =
+      state.outputBinding === undefined
+        ? descriptor
+        : bindCombinatorOutputSignal(descriptor, state.outputBinding.signal, source);
+    state.descriptor = rebound;
+  }
+
+  bindOutput(value: CombinatorValue, signal: SignalId, source: SourceSpan): void {
+    const state = this.stateFor(value);
+    const binding = state.outputBinding;
+    if (binding !== undefined && !sameSignal(binding.signal, signal)) {
+      throw new ElaborationExecutionError(
+        'Combinator output Signal conflicts with its first destination binding.',
+        source,
+        'RT2023',
+        [
+          { message: 'Combinator output Signal was first bound here.', span: binding.source },
+          { message: 'Physical combinator was created here.', span: state.descriptor.source },
+        ],
+      );
+    }
+    const rebound = bindCombinatorOutputSignal(state.descriptor, signal, source);
+    state.descriptor = rebound;
+    if (binding === undefined) state.outputBinding = { signal, source };
   }
 
   bindName(value: CombinatorValue, bindingName: string): void {

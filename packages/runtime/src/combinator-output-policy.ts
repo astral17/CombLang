@@ -43,55 +43,58 @@ export function bindCombinatorOutputSignal(
   if (value.kind === 'arithmetic') {
     return { ...value, output: { kind: 'signal', signal } };
   }
-  if (value.elseOutputs !== undefined) {
+  const thenOutputs =
+    value.outputs ??
+    (value.elseOutputs === undefined && value.output !== undefined ? [value.output] : []);
+  const elseOutputs = value.elseOutputs ?? [];
+  if (thenOutputs.length > 1 || elseOutputs.length > 1) {
     outputBindingFailure(
-      'A decider with an else branch cannot be rebound to one destination Signal.',
-      value,
-      source,
-    );
-  }
-  if ((value.outputs?.length ?? 1) !== 1) {
-    outputBindingFailure(
-      'A multi-output decider cannot be rebound to one destination Signal.',
+      'A multi-output decider branch cannot be rebound to one destination Signal.',
       value,
       source,
     );
   }
   const output = value.output;
   if (output === undefined) {
-    outputBindingFailure('An incomplete decider has no output Signal to bind yet.', value, source);
-  }
-  if (output.kind === 'signal') {
-    if (!sameSignal(output.signal, signal)) {
-      outputBindingFailure(
-        'Decider output Signal conflicts with its destination binding.',
-        value,
-        source,
-      );
-    }
+    // Keep the binding in the registry until a later .then/.else mutation supplies
+    // the output descriptor.
     return value;
   }
-  if (output.kind === 'each') {
-    return {
-      ...value,
-      output: {
+  const bindOutput = (candidate: typeof output): typeof output => {
+    if (candidate.kind === 'signal') {
+      if (!sameSignal(candidate.signal, signal)) {
+        outputBindingFailure(
+          'Decider output Signal conflicts with its destination binding.',
+          value,
+          source,
+        );
+      }
+      return candidate;
+    }
+    if (candidate.kind === 'each') {
+      return {
         kind: 'signal',
-        ...(output.refKind === 'single'
-          ? { refKind: 'single' as const, network: output.network }
-          : { refKind: 'pair' as const, networks: output.networks }),
+        ...(candidate.refKind === 'single'
+          ? { refKind: 'single', network: candidate.network }
+          : { refKind: 'pair', networks: candidate.networks }),
         signal,
-      },
-    };
-  }
-  if (output.kind === 'each-constant') {
-    return {
-      ...value,
-      output: { kind: 'signal-constant', signal, value: output.value },
-    };
-  }
-  return outputBindingFailure(
-    'Wildcard decider output cannot be rebound to a concrete Signal.',
-    value,
-    source,
-  );
+      };
+    }
+    if (candidate.kind === 'each-constant') {
+      return { kind: 'signal-constant', signal, value: candidate.value };
+    }
+    return outputBindingFailure(
+      'Wildcard decider output cannot be rebound to a concrete Signal.',
+      value,
+      source,
+    );
+  };
+  const boundThen = thenOutputs.map(bindOutput);
+  const boundElse = elseOutputs.map(bindOutput);
+  return {
+    ...value,
+    output: boundThen[0] ?? boundElse[0]!,
+    ...(value.outputs === undefined ? {} : { outputs: boundThen }),
+    ...(value.elseOutputs === undefined ? {} : { elseOutputs: boundElse }),
+  };
 }

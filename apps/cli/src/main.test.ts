@@ -556,6 +556,32 @@ IF(input[A] > 0, input[A]).to(output, B);`);
     ]);
   });
 
+  test('reports the second physical output binding with both source locations', async () => {
+    const secondBinding = 'second[B] += comb';
+    const text = `const input = new Network();
+const first = new Network();
+const second = new Network();
+const comb = input + 1;
+const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+first[A] += comb;
+${secondBinding};`;
+    const path = await sourceFile(text);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path])).toBe(1);
+    const diagnostic = JSON.parse(String(log.mock.calls[0]?.[0])).diagnostics.find(
+      ({ code }: { code: string }) => code === 'RT2023',
+    );
+    expect(diagnostic).toMatchObject({ code: 'RT2023', severity: 'error' });
+    expect(text.slice(diagnostic.span.start, diagnostic.span.end)).toBe(secondBinding);
+    expect(diagnostic.related).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ message: 'Combinator output Signal was first bound here.' }),
+      ]),
+    );
+  });
+
   test('accepts ordinary assignment as moved container-slot replacement', async () => {
     const path = await sourceFile(`function Advance(input: Move<Network>): Network {
   input += input + 1;

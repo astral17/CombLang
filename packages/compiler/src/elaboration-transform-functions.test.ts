@@ -71,6 +71,18 @@ describe('elaboration function-boundary transform', () => {
     expect(code).toContain('return input;');
   });
 
+  test('applies explicit Network return boundaries to arrows and function expressions', () => {
+    const code = transformFunctions(`
+const arrow = (input: Network): Network => input;
+const expression = function (input: Network): Network { return input; };
+const callback = () => { return input; };
+`);
+
+    expect(code.match(/__dsl\.returnNetwork/g)).toHaveLength(2);
+    expect(code.match(/__dsl\.enterFunction/g)).toHaveLength(2);
+    expect(code).toContain('const callback = () => { return input; };');
+  });
+
   test('closes function frames after both a normal return and an exception', () => {
     const code = transformFunctions(`function Identity(value) { return value; }
 function Fail() { throw new Error('failure'); }

@@ -274,7 +274,7 @@ to(first, second)[RESULT] += left[A] + right[B];
 (left + right).to(first, second, RESULT);
 ```
 
-The free destination form binds an output Signal as `to(first, second)[SIGNAL]`; fluent syntax uses `.to(first, second, SIGNAL)`. The output binding changes the existing physical configuration and adds no combinator. `.to(first[SIGNAL], second[SIGNAL])` remains invalid. Empty, duplicate, and over-capacity destination lists report `RT2003`, `RT2004`, and `RT2005`. A third sequential lane request reports `RT2028`. Incompatible Signal rebinding reports `RT2023` with creation provenance. `Network += Network` and `Network += number` remain errors: the right side must be a physical `Combinator` handle.
+The free destination form binds an output Signal as `to(first, second)[SIGNAL]`; fluent syntax uses `.to(first, second, SIGNAL)`. The output binding changes the existing physical configuration and adds no combinator. A destination may be an ordinary Network or a Combinator's primary Network facet; pair views and multi-output destinations must be selected explicitly. `.to(first[SIGNAL], second[SIGNAL])` remains invalid. Empty, duplicate, and over-capacity destination lists report `RT2003`, `RT2004`, and `RT2005`. A third sequential lane request reports `RT2028`. The first output binding is retained for the physical combinator: an incompatible later binding reports `RT2023` at the later operation with both binding and creation provenance. `Network += Network` and `Network += number` remain errors: the right side must be a physical `Combinator` handle.
 
 `when(condition)` also creates its Decider immediately. `.then(...)` and `.else(...)` mutate central state shared by every alias:
 
@@ -285,7 +285,7 @@ gate.then(input);
 alias.else(fallback);
 ```
 
-The final object is one physical Decider. Every mutation revalidates its input-connector capacity and color constraints online. A `when` left without either branch is `RT2022` at finalization.
+The final object is one physical Decider. Every mutation revalidates its input-connector capacity and color constraints online, and a destination Signal bound before `.then/.else` is reapplied when the output descriptor becomes complete. One output in each mutually exclusive `then` and `else` branch may share that binding; adding multiple outputs to either branch reports `RT2023` at that mutation. A `when` left without either branch is `RT2022` at finalization.
 
 Arrays and objects are ordinary JavaScript containers; the runtime does not recursively convert their contents. This works naturally because each combinator is already a Network value:
 
@@ -461,9 +461,9 @@ const input = new Network();
 const output: Network = MemoCell(input);
 ```
 
-Returning `ArithmeticCombinator`, `DeciderCombinator`, `ConstantCombinator`, or `Combinator` preserves the physical handle and its configuration API. Returning `Network` transfers only its primary Network facet, so the caller cannot recover combinator-specific methods by destructuring or casting. Returning an independently owned local Network returns that handle; other local Networks remain private unless returned or connected. A borrowed parameter cannot be promoted to an owned Network return. A function that returns an ordinary value remains ordinary JavaScript, and an error is reported only if the executed value is later used in an incompatible DSL operation.
+Returning `ArithmeticCombinator`, `DeciderCombinator`, `ConstantCombinator`, or `Combinator` preserves the physical handle and its configuration API. Returning `Network` transfers only its primary Network facet, so the caller cannot recover combinator-specific methods by destructuring or casting. This narrowing is enforced for function declarations and explicitly typed arrow/function expressions as well. Returning an independently owned local Network returns that handle; other local Networks remain private unless returned or connected. A borrowed parameter cannot be promoted to an owned Network return. A function that returns an ordinary value remains ordinary JavaScript, and an error is reported only if the executed value is later used in an incompatible DSL operation.
 
-Each function declaration call receives an independent provenance scope, so generated Networks, combinators, and connections retain the dynamic function path. Async syntax is rejected before execution; imports and multi-module elaboration are not implemented yet.
+Each instrumented function boundary receives an independent provenance scope, so generated Networks, combinators, and connections retain the dynamic function path. Async syntax is rejected before execution; imports and multi-module elaboration are not implemented yet.
 
 Default parameter and destructuring expressions are executed only when JavaScript selects the default, and DSL operations inside them use the normal runtime bridge. A binding such as `function Build(input = CC(...))` or `const [input = CC(...)] = []` retains the already-created combinator; Network operations use its primary facet. Earlier-parameter references and ordinary side-effect order are preserved. Combinators created while evaluating a function default retain that invocation's dynamic function path before the body begins.
 

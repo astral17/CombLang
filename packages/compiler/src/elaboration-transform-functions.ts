@@ -13,10 +13,16 @@ export interface FunctionBoundaryTransformContext {
   transformParameter(parameter: ts.ParameterDeclaration): ts.ParameterDeclaration;
 }
 
-function enclosingFunctionDeclaration(node: ts.Node): ts.FunctionDeclaration | undefined {
+type TransformableFunction = ts.FunctionDeclaration | ts.FunctionExpression | ts.ArrowFunction;
+
+function enclosingTransformableFunction(node: ts.Node): TransformableFunction | undefined {
   for (let parent = node.parent; parent !== undefined; parent = parent.parent) {
     if (ts.isFunctionLike(parent)) {
-      return ts.isFunctionDeclaration(parent) ? parent : undefined;
+      return ts.isFunctionDeclaration(parent) ||
+        ts.isFunctionExpression(parent) ||
+        ts.isArrowFunction(parent)
+        ? parent
+        : undefined;
     }
   }
   return undefined;
@@ -41,7 +47,7 @@ function borrowDescriptorForType(
 
 function transformReturnStatement(
   node: ts.ReturnStatement,
-  owner: ts.FunctionDeclaration,
+  owner: TransformableFunction,
   context: FunctionBoundaryTransformContext,
 ): ts.ReturnStatement {
   const { factory, file, visit } = context;
@@ -64,6 +70,17 @@ function transformReturnStatement(
             : factory.createStringLiteral(networkReturn.color),
           context.spanLiteral(node),
         ]),
+  );
+}
+
+function hasExplicitBoundary(
+  owner: TransformableFunction,
+  context: FunctionBoundaryTransformContext,
+): boolean {
+  return (
+    ts.isFunctionDeclaration(owner) ||
+    networkTypeFromAnnotation(owner.type, context.file.ast) !== undefined ||
+    producerHandleTypeName(context.file, owner.type) !== undefined
   );
 }
 
@@ -143,32 +160,66 @@ function parameterBinding(
   ];
 }
 
-function transformFunctionDeclaration(
-  node: ts.FunctionDeclaration,
+function functionNameAndCallable(
+  owner: TransformableFunction,
   context: FunctionBoundaryTransformContext,
-): ts.FunctionDeclaration {
+): readonly [ts.StringLiteral, ts.Expression, ts.Expression?] {
+  const named =
+    ts.isFunctionDeclaration(owner) || ts.isFunctionExpression(owner) ? owner.name : undefined;
+  const name = named?.text ?? '<anonymous>';
+  return named === undefined
+    ? [context.factory.createStringLiteral(name), context.spanLiteral(owner)]
+    : [context.factory.createStringLiteral(name), named, context.spanLiteral(owner)];
+}
+
+function returnedExpression(
+  expression: ts.Expression,
+  source: ts.Node,
+  owner: TransformableFunction,
+  context: FunctionBoundaryTransformContext,
+): ts.Expression {
+  const { factory, file } = context;
+  const networkReturn = networkTypeFromAnnotation(owner.type, file.ast);
+  return networkReturn === undefined
+    ? context.dslCall('returnValue', [
+        expression,
+        context.spanLiteral(source),
+        producerHandleTypeName(file, owner.type) === undefined
+          ? factory.createVoidZero()
+          : factory.createStringLiteral(producerHandleTypeName(file, owner.type)!),
+      ])
+    : context.dslCall('returnNetwork', [
+        expression,
+        factory.createStringLiteral(networkReturn.capability),
+        networkReturn.color === undefined
+          ? factory.createVoidZero()
+          : factory.createStringLiteral(networkReturn.color),
+        context.spanLiteral(source),
+      ]);
+}
+
+function transformFunctionBody(
+  owner: TransformableFunction,
+  body: ts.Block,
+  context: FunctionBoundaryTransformContext,
+  transformStatements = true,
+): ts.Block {
   const { factory, visit } = context;
-  const name = node.name?.text ?? '<anonymous>';
-  const parameters = node.parameters.map(context.transformParameter);
-  const parameterBindings = node.parameters.flatMap((parameter, index) =>
+  const [name, callable, source] = functionNameAndCallable(owner, context);
+  const enterArguments = [name, callable, ...(source === undefined ? [] : [source])];
+  const parameterBindings = owner.parameters.flatMap((parameter, index) =>
     parameterBinding(parameter, index, context),
   );
-  const body = factory.createBlock(
+  return factory.createBlock(
     [
-      factory.createExpressionStatement(
-        context.dslCall('enterFunction', [
-          factory.createStringLiteral(name),
-          node.name ?? factory.createVoidZero(),
-          context.spanLiteral(node),
-        ]),
-      ),
+      factory.createExpressionStatement(context.dslCall('enterFunction', enterArguments)),
       factory.createTryStatement(
         factory.createBlock(
           [
             ...parameterBindings,
-            ...node.body!.statements.map(
-              (statement) => ts.visitNode(statement, visit) as ts.Statement,
-            ),
+            ...(transformStatements
+              ? body.statements.map((statement) => ts.visitNode(statement, visit) as ts.Statement)
+              : body.statements),
           ],
           true,
         ),
@@ -176,7 +227,7 @@ function transformFunctionDeclaration(
         factory.createBlock(
           [
             factory.createExpressionStatement(
-              context.dslCall('exitInstance', [context.spanLiteral(node)]),
+              context.dslCall('exitInstance', [source ?? context.spanLiteral(owner)]),
             ),
           ],
           true,
@@ -185,6 +236,15 @@ function transformFunctionDeclaration(
     ],
     true,
   );
+}
+
+function transformFunctionDeclaration(
+  node: ts.FunctionDeclaration,
+  context: FunctionBoundaryTransformContext,
+): ts.FunctionDeclaration {
+  const { factory } = context;
+  const parameters = node.parameters.map(context.transformParameter);
+  const body = transformFunctionBody(node, node.body!, context);
   return factory.updateFunctionDeclaration(
     node,
     node.modifiers,
@@ -197,17 +257,83 @@ function transformFunctionDeclaration(
   );
 }
 
+function transformFunctionExpression(
+  node: ts.FunctionExpression,
+  context: FunctionBoundaryTransformContext,
+): ts.FunctionExpression {
+  const { factory } = context;
+  const parameters = node.parameters.map(context.transformParameter);
+  const body = transformFunctionBody(node, node.body as ts.Block, context);
+  return factory.updateFunctionExpression(
+    node,
+    node.modifiers,
+    node.asteriskToken,
+    node.name,
+    node.typeParameters,
+    parameters,
+    node.type,
+    body,
+  );
+}
+
+function transformArrowFunction(
+  node: ts.ArrowFunction,
+  context: FunctionBoundaryTransformContext,
+): ts.ArrowFunction {
+  const { factory, visit } = context;
+  const parameters = node.parameters.map(context.transformParameter);
+  const body = ts.isBlock(node.body)
+    ? transformFunctionBody(node, node.body, context)
+    : transformFunctionBody(
+        node,
+        factory.createBlock(
+          [
+            factory.createReturnStatement(
+              returnedExpression(
+                ts.visitNode(node.body, visit) as ts.Expression,
+                node.body,
+                node,
+                context,
+              ),
+            ),
+          ],
+          true,
+        ),
+        context,
+        false,
+      );
+  return factory.updateArrowFunction(
+    node,
+    node.modifiers,
+    node.typeParameters,
+    parameters,
+    node.type,
+    node.equalsGreaterThanToken,
+    body,
+  );
+}
+
 /** Rewrites one function declaration/return boundary, or leaves other nodes to the caller. */
 export function transformFunctionBoundaryNode(
   node: ts.Node,
   context: FunctionBoundaryTransformContext,
 ): ts.Node | undefined {
   if (ts.isReturnStatement(node) && node.expression !== undefined) {
-    const owner = enclosingFunctionDeclaration(node);
-    if (owner !== undefined) return transformReturnStatement(node, owner, context);
+    const owner = enclosingTransformableFunction(node);
+    if (owner !== undefined && hasExplicitBoundary(owner, context)) {
+      return transformReturnStatement(node, owner, context);
+    }
   }
   if (ts.isFunctionDeclaration(node) && node.body !== undefined) {
     return transformFunctionDeclaration(node, context);
+  }
+  if (ts.isFunctionExpression(node) && node.body !== undefined) {
+    return hasExplicitBoundary(node, context)
+      ? transformFunctionExpression(node, context)
+      : undefined;
+  }
+  if (ts.isArrowFunction(node)) {
+    return hasExplicitBoundary(node, context) ? transformArrowFunction(node, context) : undefined;
   }
   return undefined;
 }

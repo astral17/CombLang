@@ -7,6 +7,177 @@ import { elaborateDirectPlan } from './direct-plan.js';
 import { ElaborationExecutionError, executeElaborationProgram } from './elaboration-program.js';
 
 describe('Combinator Network facet migration', () => {
+  test('rejects a conflicting arithmetic output binding at the second source operation', () => {
+    const parsed = parseFile({
+      path: 'arithmetic-conflicting-binding.factorio.ts',
+      text: `const input = new Network();
+const first = new Network();
+const second = new Network();
+const comb = input * 2;
+const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+first[A] += comb;
+second[B] += comb;`,
+    });
+    const line = 'second[B] += comb';
+
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('expected the second incompatible output binding to fail');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'RT2023' });
+      const failure = error as ElaborationExecutionError;
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(line);
+    }
+  });
+
+  test('allows repeated identical arithmetic output bindings', () => {
+    const parsed = parseFile({
+      path: 'arithmetic-identical-binding.factorio.ts',
+      text: `const input = new Network();
+const first = new Network();
+const second = new Network();
+const comb = input * 2;
+const A = Signal('virtual', 'signal-A');
+first[A] += comb;
+second[A] += comb;`,
+    });
+
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).not.toThrow();
+  });
+
+  test('rejects a mutable when reconfiguration that conflicts with its bound output', () => {
+    const parsed = parseFile({
+      path: 'when-conflicting-binding.factorio.ts',
+      text: `const input = new Network();
+const other = new Network();
+const destination = new Network();
+const A = Signal('virtual', 'signal-A');
+const decider = when(input > 0).then(input);
+decider.to(destination, A);
+decider.then(other);`,
+    });
+    const line = 'decider.then(other)';
+
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('expected the conflicting mutable when reconfiguration to fail');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'RT2023' });
+      const failure = error as ElaborationExecutionError;
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(line);
+    }
+  });
+
+  test('reapplies one output binding across then-before-to, to-before-then, and else-only orders', () => {
+    const cases = [
+      {
+        path: 'when-then-before-to.factorio.ts',
+        text: `const input = new Network();
+const destination = new Network();
+const A = Signal('virtual', 'signal-A');
+const decider = when(input > 0).then(input);
+decider.to(destination, A);`,
+      },
+      {
+        path: 'when-to-before-then.factorio.ts',
+        text: `const input = new Network();
+const destination = new Network();
+const A = Signal('virtual', 'signal-A');
+const decider = when(input > 0);
+decider.to(destination, A);
+decider.then(input);`,
+      },
+      {
+        path: 'when-else-only-binding.factorio.ts',
+        text: `const input = new Network();
+const destination = new Network();
+const A = Signal('virtual', 'signal-A');
+const decider = when(input > 0);
+decider.to(destination, A);
+decider.else(input);`,
+      },
+    ];
+
+    for (const parsed of cases.map(({ path, text }) => parseFile({ path, text }))) {
+      const plan = executeElaborationProgram(transformElaborationModule(parsed));
+      expect(plan.producers[0]).toMatchObject({
+        kind: 'decider',
+        output: { kind: 'signal', signal: { type: 'virtual', name: 'signal-A' } },
+      });
+    }
+  });
+
+  test('reapplies one output binding to both mutually exclusive decider branches', () => {
+    const parsed = parseFile({
+      path: 'when-then-else-binding.factorio.ts',
+      text: `const input = new Network();
+const destination = new Network();
+const A = Signal('virtual', 'signal-A');
+const decider = when(input > 0);
+decider.to(destination, A);
+decider.then(input).else(input);`,
+    });
+
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    expect(plan.producers[0]).toMatchObject({
+      kind: 'decider',
+      output: { kind: 'signal', signal: { type: 'virtual', name: 'signal-A' } },
+      outputs: [{ kind: 'signal', signal: { type: 'virtual', name: 'signal-A' } }],
+      elseOutputs: [{ kind: 'signal', signal: { type: 'virtual', name: 'signal-A' } }],
+    });
+  });
+
+  test('keeps explicit Network returns narrowed when created by arrows or function expressions', () => {
+    const narrowed = parseFile({
+      path: 'network-narrowed-arrow.factorio.ts',
+      text: `const input = new Network();
+const output = new Network();
+const make = (value: Network): Network => value + 1;
+const values = [make(input)];
+const result = values[0];
+result.to(output);`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(narrowed))).toThrow(
+      'combinator producer or an ordinary .to method',
+    );
+
+    const expression = parseFile({
+      path: 'network-narrowed-expression.factorio.ts',
+      text: `const input = new Network();
+const output = new Network();
+const make = function (value: Network): Network { return value + 1; };
+const result = make(input);
+result.at(1, 2);`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(expression))).toThrow(
+      'combinator producer or an ordinary .at method',
+    );
+  });
+
+  test('resolves the primary Network facet at every writable boundary', () => {
+    const cases = [
+      `const input = new Network();
+const destination = input + 1;
+(input + 2).to(destination);`,
+      `const input = new Network();
+const destination = input + 1;
+to(destination) += input + 2;`,
+      `const input = new Network();
+const source = new Network();
+const destination = input + 1;
+destination.take(source);`,
+      `const input = new Network();
+const destination = input + 1;
+destination += input + 2;`,
+    ];
+
+    for (const [index, text] of cases.entries()) {
+      const parsed = parseFile({ path: `combinator-facet-boundary-${index}.factorio.ts`, text });
+      expect(() => executeElaborationProgram(transformElaborationModule(parsed))).not.toThrow();
+    }
+  });
+
   test('keeps combinators inside Network[] containers and permits repeated primary reads', () => {
     const parsed = parseFile({
       path: 'combinator-array.factorio.ts',

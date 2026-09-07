@@ -355,6 +355,25 @@ ${expression};`;
     expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(expression);
   });
 
+  test('links a narrowed arrow return misuse to the executed receiver operation', () => {
+    const expression = 'result.to(output)';
+    const text = `const input = new Network();
+const output = new Network();
+const make = (value: Network): Network => value + 1;
+const result = make(input);
+${expression};`;
+    const result = compileSource({ path: 'narrowed-arrow.factorio.ts', text });
+    const diagnostic = result.compilerDiagnostics.find(({ code }) => code === 'EX1001');
+
+    expect(result.plan).toBeUndefined();
+    expect(diagnostic).toMatchObject({
+      code: 'EX1001',
+      severity: 'error',
+      span: expect.any(Object),
+    });
+    expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(expression);
+  });
+
   test('reports stale ownership through an alias of a replaced container slot', () => {
     const staleUse = 'alias + 1';
     const text = `function Pass(input: Move<Network>): Network { return input; }

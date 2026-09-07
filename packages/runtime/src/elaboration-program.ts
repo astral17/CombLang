@@ -57,7 +57,6 @@ import {
 import { returnNetworkValue } from './network-return-policy.js';
 import { validateCombinatorAttachment } from './combinator-attachment-policy.js';
 import { bindCombinatorHandle } from './combinator-handle-policy.js';
-import { bindCombinatorOutputSignal } from './combinator-output-policy.js';
 import { returnOwnedValue } from './return-owned-value-policy.js';
 
 interface RawSpan {
@@ -664,7 +663,7 @@ class ElaborationRecorder {
           'RT2020',
         );
       }
-      const destinationNetwork = this.#rawNetworkFacet(destination);
+      const destinationNetwork = this.#resolveNetworkFacet(destination, rawSpan, 'destination');
       if (destinationNetwork === undefined) {
         if (
           (typeof destination !== 'object' && typeof destination !== 'function') ||
@@ -682,7 +681,7 @@ class ElaborationRecorder {
         throw new Error('.take(source) requires exactly one source Network.');
       }
       const source = values[0];
-      const sourceNetwork = this.#rawNetworkFacet(source);
+      const sourceNetwork = this.#resolveNetworkFacet(source, rawSpan, 'source');
       if (sourceNetwork === undefined) {
         throw new Error('.take(source) requires a source Network.');
       }
@@ -914,8 +913,12 @@ class ElaborationRecorder {
         outputs: nextThen,
         ...(nextElse.length === 0 ? {} : { elseOutputs: nextElse }),
       };
-      this.#colors.registerCombinatorInputs(value.identity, descriptor, this.#span(rawSpan));
-      this.#combinators.update(value, descriptor);
+      this.#combinators.update(value, descriptor, this.#span(rawSpan));
+      this.#colors.registerCombinatorInputs(
+        value.identity,
+        this.#combinators.stateFor(value).descriptor,
+        this.#span(rawSpan),
+      );
       return value;
     },
     deciderBranches: (
@@ -985,13 +988,29 @@ class ElaborationRecorder {
           'RT2020',
         );
       }
-      if (!values.every((value): value is NetworkValue => this.#isNetwork(value))) {
+      const selected = values.length === 1 && this.#isSelected(values[0]) ? values[0] : undefined;
+      const selectedSignal =
+        selected === undefined || !isSignalId(selected.selection) ? undefined : selected.selection;
+      if (values.some((value) => this.#isSelected(value)) && selectedSignal === undefined) {
+        throw new Error(
+          '.to(...) permits Network[SIGNAL] only for one destination; use .to(first, second, SIGNAL) for fan-out.',
+        );
+      }
+      const selectedNetwork =
+        selected === undefined
+          ? undefined
+          : this.#resolveWritableNetwork(selected, rawSpan, 'destination');
+      const networks =
+        selectedNetwork === undefined
+          ? values.map((value) => this.#resolveWritableNetwork(value, rawSpan, 'destination'))
+          : [selectedNetwork];
+      if (!networks.every((value): value is NetworkValue => value !== undefined)) {
         throw new Error('to(...) destinations must be Networks.');
       }
-      for (const network of values) this.#assertWritableNetwork(network, rawSpan, 'destination');
       return this.#runtimeValue({
         kind: 'destinations',
-        networks: values,
+        networks,
+        ...(selectedSignal === undefined ? {} : { signal: selectedSignal }),
       });
     },
     select: (
@@ -1115,9 +1134,9 @@ class ElaborationRecorder {
           throw new Error('A selected .to(...) destination must bind exactly one concrete Signal.');
         }
         outputSignal = selected.selection;
-        destinations = [selected.network];
-      } else if (values.every((value): value is NetworkValue => this.#isNetwork(value))) {
-        destinations = values;
+        const destination = this.#resolveWritableNetwork(selected, rawSpan, 'destination');
+        if (destination === undefined) throw new Error('.to(...) destination must be a Network.');
+        destinations = [destination];
       } else {
         if (values.some((value) => this.#isPair(value))) {
           throw new ElaborationExecutionError(
@@ -1126,9 +1145,20 @@ class ElaborationRecorder {
             'RT2020',
           );
         }
-        throw new Error(
-          '.to(...) permits Network[SIGNAL] only for one destination; use .to(first, second, SIGNAL) for fan-out.',
+        if (values.some((value) => this.#isSelected(value))) {
+          throw new Error(
+            '.to(...) permits Network[SIGNAL] only for one destination; use .to(first, second, SIGNAL) for fan-out.',
+          );
+        }
+        const resolved = values.map((value) =>
+          this.#resolveWritableNetwork(value, rawSpan, 'destination'),
         );
+        if (!resolved.every((value): value is NetworkValue => value !== undefined)) {
+          throw new Error(
+            '.to(...) permits Network[SIGNAL] only for one destination; use .to(first, second, SIGNAL) for fan-out.',
+          );
+        }
+        destinations = resolved;
       }
       return this.#attachMany(destinations, producer, rawSpan, outputSignal);
     },
@@ -1142,7 +1172,8 @@ class ElaborationRecorder {
       rawSpan: RawSpan,
     ): unknown => {
       const destination =
-        this.#rawNetworkFacet(left) !== undefined ||
+        this.#isNetwork(left) ||
+        this.#isCombinator(left) ||
         this.#isPair(left) ||
         this.#isSelected(left) ||
         this.#isDestination(left);
@@ -1184,9 +1215,7 @@ class ElaborationRecorder {
       }
       const destinations = this.#isDestination(destination)
         ? destination.networks
-        : this.#isSelected(destination)
-          ? [destination.network]
-          : [this.#rawNetworkFacet(destination)!];
+        : [this.#resolveWritableNetwork(destination, rawSpan, 'destination')!];
       this.#attachMany(
         destinations,
         producer,
@@ -1641,10 +1670,7 @@ class ElaborationRecorder {
       assertWritable: (network) => this.#assertWritableNetwork(network, rawSpan, 'destination'),
     });
     const state = this.#combinators.stateFor(value);
-    this.#combinators.update(
-      value,
-      bindCombinatorOutputSignal(state.descriptor, outputSignal, source),
-    );
+    if (outputSignal !== undefined) this.#combinators.bindOutput(value, outputSignal, source);
     const lanes = this.#takeOutputLanes(value, networks.length, rawSpan);
     for (const [index, network] of networks.entries()) {
       this.#transferNetwork(network, lanes[index]!, rawSpan, 'combinator output', 'connector');
@@ -2061,7 +2087,10 @@ class ElaborationRecorder {
       throw new Error('Anything/Everything cannot be arithmetic operands.');
     }
     if (this.#isCombinator(value)) {
-      const network = this.#combinators.primary(value);
+      const network = this.#resolveNetworkFacet(value, rawSpan, 'arithmetic operand');
+      if (network === undefined) {
+        throw new Error('Circuit arithmetic currently requires a Network or numeric operand.');
+      }
       this.#assertReadableNetwork(network, rawSpan);
       return { kind: 'each', refKind: 'single', network: network.name };
     }
@@ -2167,11 +2196,10 @@ class ElaborationRecorder {
   }
 
   #assertReadableValue(value: unknown, rawSpan: RawSpan): void {
-    if (this.#isCombinator(value)) {
-      this.#assertReadableNetwork(this.#combinators.primary(value), rawSpan);
-      return;
+    const network = this.#resolveNetworkFacet(value, rawSpan);
+    if (network !== undefined && !this.#isSelected(value)) {
+      this.#assertReadableNetwork(network, rawSpan);
     }
-    if (this.#isNetwork(value)) this.#assertReadableNetwork(value, rawSpan);
     if (this.#isPair(value)) {
       for (const network of value.networks) this.#assertReadableNetwork(network, rawSpan);
     }
@@ -2185,7 +2213,6 @@ class ElaborationRecorder {
   }
 
   #assertWritableValue(value: unknown, rawSpan: RawSpan): void {
-    if (this.#isNetwork(value)) this.#assertWritableNetwork(value, rawSpan);
     if (this.#isPair(value) || this.#isPairSelection(value)) {
       throw new ElaborationExecutionError(
         'pair(a, b) is a read-only input view and cannot receive producer attachments.',
@@ -2193,10 +2220,39 @@ class ElaborationRecorder {
         'RT2020',
       );
     }
-    if (this.#isSelected(value)) this.#assertWritableNetwork(value.network, rawSpan);
     if (this.#isDestination(value)) {
       for (const network of value.networks) this.#assertWritableNetwork(network, rawSpan);
+      return;
     }
+    const network = this.#resolveNetworkFacet(value, rawSpan);
+    if (network !== undefined) this.#assertWritableNetwork(network, rawSpan);
+  }
+
+  #resolveNetworkFacet(
+    value: unknown,
+    _rawSpan: RawSpan,
+    _role = 'Network',
+  ): NetworkValue | undefined {
+    if (this.#isPair(value) || this.#isPairSelection(value)) return undefined;
+    if (this.#isSelected(value)) return value.network;
+    return this.#rawNetworkFacet(value);
+  }
+
+  #resolveWritableNetwork(
+    value: unknown,
+    rawSpan: RawSpan,
+    role = 'Network',
+  ): NetworkValue | undefined {
+    if (this.#isPair(value) || this.#isPairSelection(value)) {
+      throw new ElaborationExecutionError(
+        'pair(a, b) is a read-only input view and cannot receive producer attachments.',
+        this.#span(rawSpan),
+        'RT2020',
+      );
+    }
+    const network = this.#resolveNetworkFacet(value, rawSpan, role);
+    if (network !== undefined) this.#assertWritableNetwork(network, rawSpan, role);
+    return network;
   }
 
   #recordDslCall(): void {
