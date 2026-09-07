@@ -23,6 +23,13 @@ available data rather than evidence quality. The speculative runtime exporter
 transport was removed because no captured runtime fact was shown to add required
 structural information unavailable from the final dump plus the pinned schema.
 
+The separate identity-bound evidence manifest now records this distinction without
+promoting data into the normalized database. A raw or runtime source can support
+structural references, while only a reviewed native behavior source can back a
+matching circuit claim. Synthetic manifests are useful contract/format fixtures
+only; the repository contains no reviewed native behavior artifact yet. Source
+digests identify captured bytes but do not establish their truth by themselves.
+
 ## Extraction plan
 
 The extraction path normalizes the final dump's item stack sizes, typed recipe
@@ -68,7 +75,9 @@ Gate for a bundled first-run database: checked-in reproducible dump plus metadat
 inputs from base, Space Age, and a modded override, and native conformance for the
 behavior capabilities claimed. A runtime structural capture is optional unless a
 concrete divergence makes it necessary. The observation mod still needs execution
-in Factorio for behavior evidence.
+in Factorio for behavior evidence. The evidence-manifest loader and CLI inspection
+are implemented, but this gate remains open until reviewed native artifacts are
+actually produced and checked against the matching database identity.
 
 ## Runtime structural exporter decision
 

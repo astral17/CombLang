@@ -18,10 +18,13 @@ import {
   parseCircuitObservationsJsonl,
   compareCircuitObservationEnvironment,
   FactorioDumpError,
+  loadPrototypeEvidence,
   loadPrototypeDatabase,
   loadPrototypeDatabaseJson,
   normalizeFactorioDataDump,
+  PrototypeEvidenceError,
   PrototypeValidationError,
+  prototypeCircuitFactFields,
   type FactorioDumpMetadata,
   type PrototypeProvider,
 } from '@comblang/prototypes';
@@ -47,8 +50,9 @@ Usage:
   factorio-dsl prototypes supplement [--json] <database.json> <circuit.json> <output.json>
   factorio-dsl prototypes observations [--json] <circuit-observations.jsonl>
   factorio-dsl prototypes compare-observations [--json] <database.json> <circuit-observations.jsonl>
+  factorio-dsl prototypes evidence [--json] <database.json> <evidence.json>
 
-Checks circuits, executes browser/Node-neutral JavaScript test files, and processes prototype dumps, circuit supplements, or raw observations.`;
+Checks circuits, executes browser/Node-neutral JavaScript test files, and processes prototype dumps, circuit supplements, raw observations, or evidence manifests.`;
 
 interface LoadedSource {
   readonly path: string;
@@ -364,6 +368,47 @@ async function compareObservations(fileNames: readonly string[], json: boolean):
   return report.status === 'match' ? 0 : 1;
 }
 
+async function inspectPrototypeEvidence(
+  fileNames: readonly string[],
+  json: boolean,
+): Promise<number> {
+  if (fileNames.length !== 3) {
+    console.error(usage);
+    return 2;
+  }
+  const [databaseSource, evidenceSource] = await Promise.all([
+    readFile(resolve(fileNames[1]!), 'utf8'),
+    readFile(resolve(fileNames[2]!), 'utf8'),
+  ]);
+  const loaded = await loadPrototypeEvidence(
+    JSON.parse(databaseSource) as unknown,
+    JSON.parse(evidenceSource) as unknown,
+  );
+  const circuitFacts = { verified: 0, unverified: 0, unknown: 0 };
+  for (const entity of loaded.database.entities) {
+    for (const field of prototypeCircuitFactFields) {
+      circuitFacts[loaded.index.circuit(entity.key, field).status] += 1;
+    }
+  }
+  const report = {
+    databaseIdentity: loaded.databaseIdentity,
+    evidenceIdentity: loaded.evidenceIdentity,
+    structuralSourceCount: loaded.index.structuralSources.length,
+    circuitFacts,
+  };
+  if (json) console.log(JSON.stringify(report, null, 2));
+  else {
+    console.log(`Database identity: ${report.databaseIdentity}`);
+    console.log(`Evidence identity: ${report.evidenceIdentity}`);
+    console.log(`Structural evidence sources: ${report.structuralSourceCount}.`);
+    console.log(
+      `Circuit facts: ${report.circuitFacts.verified} verified, ${report.circuitFacts.unverified} unverified, ${report.circuitFacts.unknown} unknown.`,
+    );
+    console.log('Unverified values are not native-confirmed.');
+  }
+  return 0;
+}
+
 export async function run(
   args: readonly string[],
   environment: CliCompilationEnvironment = {},
@@ -387,6 +432,7 @@ export async function run(
       const files = rest.filter((argument) => argument !== '--json');
       if (files[0] === 'observations') return await inspectCircuitObservations(files, json);
       if (files[0] === 'compare-observations') return await compareObservations(files, json);
+      if (files[0] === 'evidence') return await inspectPrototypeEvidence(files, json);
       return files[0] === 'supplement'
         ? await supplementPrototypes(files, json)
         : await normalizePrototypes(files);
@@ -438,6 +484,7 @@ export async function run(
         code:
           error instanceof CircuitSupplementError ||
           error instanceof CircuitObservationError ||
+          error instanceof PrototypeEvidenceError ||
           error instanceof PrototypeValidationError ||
           error instanceof FactorioDumpError
             ? error.code
@@ -446,6 +493,7 @@ export async function run(
         message,
         ...(error instanceof CircuitSupplementError ||
         error instanceof CircuitObservationError ||
+        error instanceof PrototypeEvidenceError ||
         error instanceof PrototypeValidationError ||
         error instanceof FactorioDumpError
           ? { path: error.path }

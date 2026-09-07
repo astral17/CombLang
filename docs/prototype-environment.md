@@ -391,7 +391,7 @@ The identity check prevents accidental cross-database mixing; it does not certif
 the truth of manually supplied assertions. A read-only observation collector now
 ships under `tools/comblang-circuit-probe_0.1.0`, but it has not yet been executed in
 Factorio and is not a capability inference probe or verified table. The local
-The 2.1.17 runtime API provides
+2.1.17 runtime API provides
 `LuaEntity.get_control_behavior()` / `get_or_create_control_behavior()` and distinct
 control-behavior classes, but `LuaEntityPrototype` does not directly expose the
 nine normalized booleans. A future fixture/probe must test the corresponding native
@@ -399,6 +399,32 @@ behavior on actual entities, including type-specific restrictions and modded
 overrides. A missing property or failed entity creation must remain unknown,
 not become a negative capability result. Native probes should run in a disposable
 test save, not mutate the user's working save.
+
+### Identity-bound evidence manifests
+
+Evidence is a separate `comblang-prototype-evidence` schema-v1 artifact. It binds
+to the exact `comblang-prototypes-v1-sha256:...` identity but does not change the
+database schema, provider identity, or compiler cache keys. Inspect a manifest with:
+
+```powershell
+npm run cli -- prototypes evidence --json prototypes.json evidence.json
+```
+
+Each source has only a stable ID, one of `data-raw-structure`,
+`runtime-structure`, `reviewed-native-behavior`, or `synthetic`, and a
+`sha256:<64 lowercase hex>` artifact digest. The digest identifies bytes; it is
+not proof that those bytes are correct. Structural evidence may reference only
+raw/runtime sources. A circuit claim must match an existing database boolean and
+may be verified only by a `reviewed-native-behavior` source. Synthetic, raw and
+runtime sources cannot certify circuit behavior.
+
+The loaded index distinguishes `unknown` (no database circuit fact),
+`unverified` (a stored boolean without a reviewed claim), and `verified` (a
+matching reviewed claim). `verified: false` remains a verified false value; it is
+not converted to unknown or omitted. The checked-in
+[`evidence.synthetic.json`](../examples/prototype-stack/evidence.synthetic.json)
+is a format-only example bound to the synthetic prototype profile. It contains
+no reviewed native evidence and proves no Factorio behavior.
 
 ### Collecting raw native observations
 

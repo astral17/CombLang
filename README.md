@@ -68,7 +68,7 @@ The current repository implements the Phase 3 source compiler, the complete Phas
   - [ ] Finish the F01 browser cache schema/version upgrade gate; compilation cache isolation itself is implemented.
   - [x] Complete F02-F09 foundation audit slices: preserve diagnostics, unify graph traversal/metrics, enforce online color and replay validation boundaries, share compilation artifacts, and pin the offline Factorio 2.1.17 API inventory.
   - [x] Reject and remove the speculative F10 runtime-wide prototype exporter after the final `--dump-data` output and pinned schema showed no required additional structural facts.
-  - [ ] Complete F11 evidence-aware normalized prototype roles, native behavior fixtures, and the bundled first-run database; successful structural normalization alone is not native conformance.
+  - [ ] Complete F11 evidence-aware normalized prototype roles, identity-bound evidence manifests, reviewed native behavior fixtures, and the bundled first-run database; structural normalization and synthetic format examples alone are not native conformance.
   - [x] Complete F13 canonical Signal property-key encoding and F14 ordered `CC` source normalization.
   - [x] Add a versioned normalized Prototype DB, structural/referential/index validator, immutable LuaPrototypes-shaped `prototypes.*` tables plus derived collections/query helpers, deterministic environment identity, browser/Node JSON boundary, and synthetic base/modded fixtures in a dedicated package.
   - [x] Inject the provider explicitly into compiler consumers; keep prototype facts out of the simulator and avoid a global mutable registry.

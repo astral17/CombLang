@@ -235,6 +235,27 @@ validation failure, without writing the output file. Successful output reports
 the new identity and partial/complete circuit coverage. Neither a valid supplement
 nor complete structural coverage establishes that native game behavior was tested.
 
+Identity-bound evidence manifests use `PrototypeEvidenceError` and return exit
+code 2 from `prototypes evidence --json` on validation failure:
+
+| Code     | Meaning                                                                              |
+| -------- | ------------------------------------------------------------------------------------ |
+| `PE1000` | unsupported evidence schema/kind or unknown source/circuit enum                      |
+| `PE1001` | malformed manifest field, ID, hash, identity, or object/array shape                  |
+| `PE1002` | duplicate source ID, circuit fact, structural reference, or claim evidence reference |
+| `PE1003` | evidence reference names a source absent from the manifest                           |
+| `PE1004` | manifest database identity does not match the selected normalized database           |
+| `PE1005` | source authority, entity, circuit record, or circuit field cannot support the claim  |
+| `PE1006` | claimed boolean differs from the selected database's stored boolean                  |
+
+The loader accepts no path or URL authority metadata. Raw/runtime sources may be
+structural evidence; only reviewed native behavior sources can verify circuit
+claims. A valid manifest may contain no claim. Query results keep missing facts as
+`unknown` and stored facts without a reviewed claim as `unverified`; neither is a
+native conformance result. The repository's synthetic evidence example proves only
+the manifest format, not Factorio behavior, and no reviewed native evidence is
+checked in yet.
+
 Raw circuit observation JSONL uses `CircuitObservationError` / `PO1001` for
 malformed JSON, unsupported observation schema/kind, invalid fields, inconsistent
 mod-version metadata, duplicate named entries or contradictory observation states.
