@@ -21,3 +21,8 @@ export class ElaborationExecutionError extends Error {
     this.name = 'ElaborationExecutionError';
   }
 }
+
+/** A topology operation was rejected before commit and may be caught by source code. */
+export class RecoverableElaborationExecutionError extends ElaborationExecutionError {
+  readonly recoverable = true;
+}

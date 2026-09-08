@@ -35,6 +35,20 @@ export interface CombinatorCapture {
   readonly captureId: string;
 }
 
+export interface CombinatorRegistrySnapshot {
+  readonly states: ReadonlyMap<
+    object,
+    {
+      readonly descriptor: CombinatorDescriptor;
+      readonly primary: OutputLaneState;
+      readonly secondary?: OutputLaneState;
+      readonly outputBinding?: CombinatorOutputBinding;
+      readonly debugCaptureIds: readonly string[];
+      readonly outputUsed: boolean;
+    }
+  >;
+}
+
 /** Owns physical combinator identity independently from either output Network lane. */
 export class CombinatorRegistry {
   readonly #states = new Map<object, CombinatorRuntimeState>();
@@ -68,6 +82,43 @@ export class CombinatorRegistry {
 
   states(): readonly CombinatorRuntimeState[] {
     return [...this.#states.values()];
+  }
+
+  snapshot(): CombinatorRegistrySnapshot {
+    return {
+      states: new Map(
+        [...this.#states.entries()].map(([identity, state]) => [
+          identity,
+          {
+            descriptor: state.descriptor,
+            primary: { ...state.outputPort.primary },
+            ...(state.outputPort.secondary === undefined
+              ? {}
+              : { secondary: { ...state.outputPort.secondary } }),
+            ...(state.outputBinding === undefined ? {} : { outputBinding: state.outputBinding }),
+            debugCaptureIds: [...state.debugCaptureIds],
+            outputUsed: state.outputUsed,
+          },
+        ]),
+      ),
+    };
+  }
+
+  restore(snapshot: CombinatorRegistrySnapshot): void {
+    this.#states.clear();
+    for (const [identity, saved] of snapshot.states) {
+      this.#states.set(identity, {
+        identity,
+        descriptor: saved.descriptor,
+        outputPort: {
+          primary: { ...saved.primary },
+          ...(saved.secondary === undefined ? {} : { secondary: { ...saved.secondary } }),
+        },
+        debugCaptureIds: [...saved.debugCaptureIds],
+        ...(saved.outputBinding === undefined ? {} : { outputBinding: saved.outputBinding }),
+        outputUsed: saved.outputUsed,
+      });
+    }
   }
 
   primary(value: CombinatorValue): NetworkValue {
@@ -131,6 +182,23 @@ export class CombinatorRegistry {
     const rebound = bindCombinatorOutputSignal(state.descriptor, signal, source);
     state.descriptor = rebound;
     if (binding === undefined) state.outputBinding = { signal, source };
+  }
+
+  validateOutput(value: CombinatorValue, signal: SignalId, source: SourceSpan): void {
+    const state = this.stateFor(value);
+    const binding = state.outputBinding;
+    if (binding !== undefined && !sameSignal(binding.signal, signal)) {
+      throw new ElaborationExecutionError(
+        'Combinator output Signal conflicts with its first destination binding.',
+        source,
+        'RT2023',
+        [
+          { message: 'Combinator output Signal was first bound here.', span: binding.source },
+          { message: 'Physical combinator was created here.', span: state.descriptor.source },
+        ],
+      );
+    }
+    bindCombinatorOutputSignal(state.descriptor, signal, source);
   }
 
   bindName(value: CombinatorValue, bindingName: string): void {

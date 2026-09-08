@@ -1,6 +1,10 @@
 import ts from 'typescript';
 
-import { wildcardDslNames, type ParsedSourceFile } from '@comblang/language';
+import {
+  networkTypeFromAnnotation,
+  wildcardDslNames,
+  type ParsedSourceFile,
+} from '@comblang/language';
 
 import { analyzeElaborationTransform } from './elaboration-transform-analysis.js';
 import {
@@ -179,6 +183,19 @@ export function transformElaborationModule(
       }
       if (ts.isVariableDeclaration(node)) {
         return bindingTransform.transformVariableDeclaration(node);
+      }
+
+      if (ts.isAsExpression(node) || ts.isTypeAssertionExpression(node)) {
+        const network = networkTypeFromAnnotation(node.type, file.ast);
+        if (network?.capability === 'owned') {
+          return dslCall(factory, 'narrowNetwork', [
+            ts.visitNode(node.expression, visit) as ts.Expression,
+            network.color === undefined
+              ? factory.createVoidZero()
+              : factory.createStringLiteral(network.color),
+            spanLiteral(factory, node),
+          ]);
+        }
       }
 
       if (

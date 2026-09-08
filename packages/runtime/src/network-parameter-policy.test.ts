@@ -65,6 +65,8 @@ function makeContext(
   return {
     networkFacet: (value) => (value === producer || value === network ? network : undefined),
     isNetwork: (value): value is NetworkValue => value === network,
+    isCombinator: (value): value is CombinatorValue => value === producer,
+    selectCombinatorMove: (_value, _source) => network,
     isPair: (value): value is PairValue => value === pair,
     isPairSelection: (_value): _value is never => false,
     recordDslCall: vi.fn(),

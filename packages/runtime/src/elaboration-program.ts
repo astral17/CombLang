@@ -30,10 +30,14 @@ import type {
 import type { PrototypeProvider } from '@comblang/prototypes';
 import type { Diagnostic, NetworkId, SourceFileId, SourceSpan } from '@comblang/shared';
 
-import { ElaborationExecutionError, ElaborationOperationLimitError } from './elaboration-errors.js';
+import {
+  ElaborationExecutionError,
+  ElaborationOperationLimitError,
+  RecoverableElaborationExecutionError,
+} from './elaboration-errors.js';
 import { ElaborationColorConstraints } from './elaboration-color-constraints.js';
 import { ElaborationProvenanceFormatter } from './elaboration-provenance.js';
-import { CombinatorRegistry } from './combinator-registry.js';
+import { CombinatorRegistry, type CombinatorRegistrySnapshot } from './combinator-registry.js';
 import { normalizeSignalValueSources } from './constant-signal-values.js';
 import {
   RuntimeValueRegistry,
@@ -43,6 +47,7 @@ import {
   type DestinationValue,
   type DslValue,
   type FunctionOwnershipFrame,
+  type NetworkBorrow,
   type NetworkOwnershipState,
   type NetworkRuntimeState,
   type NetworkValue,
@@ -63,6 +68,7 @@ import {
 } from './elaboration-operators.js';
 import { createElaborationOwnershipPolicy } from './elaboration-ownership.js';
 import { resolveNetworkArgument } from './network-argument-policy.js';
+import { selectCombinatorMoveLanes, selectCombinatorMoveNetwork } from './network-move-policy.js';
 import {
   bindNetworkParameter,
   bindNetworkReferenceParameter,
@@ -132,6 +138,29 @@ interface PendingNetworkAlias {
 
 interface ExecutionApiFrame {
   dslDomain: boolean;
+}
+
+interface NetworkOwnershipSnapshot {
+  readonly state: NetworkOwnershipState;
+  readonly generation: number;
+  readonly owner: NetworkOwnershipState['owner'];
+  readonly consumedAt?: SourceSpan;
+  readonly lastMove?: NetworkOwnershipState['lastMove'];
+  readonly colorRequirement?: NetworkOwnershipState['colorRequirement'];
+  readonly readonlyBorrows: readonly NetworkBorrow[];
+  readonly mutableBorrow?: NetworkOwnershipState['mutableBorrow'];
+}
+
+interface TopologySnapshot {
+  readonly networksLength: number;
+  readonly networkStates: ReadonlyMap<string, NetworkRuntimeState>;
+  readonly networkNameCounts: ReadonlyMap<string, number>;
+  readonly networkTransfersLength: number;
+  readonly combinatorOrdinal: number;
+  readonly combinatorByOutput: ReadonlyMap<NetworkOwnershipState, CombinatorValue>;
+  readonly combinators: CombinatorRegistrySnapshot;
+  readonly ownership: readonly NetworkOwnershipSnapshot[];
+  readonly colors: ElaborationColorConstraints;
 }
 
 interface EntityFacetAuthority {
@@ -585,6 +614,14 @@ class ElaborationRecorder {
       });
       return pair;
     },
+    join: (...args: unknown[]): NetworkValue => {
+      this.#recordDslCall();
+      const rawSpan = args.at(-1);
+      if (!isRawSpan(rawSpan)) throw new Error('join(...) is missing provenance.');
+      return this.#withTopologyTransaction(rawSpan, () =>
+        this.#joinNetworks(args.slice(0, -1), rawSpan),
+      );
+    },
     implicitNetworkParameter: (
       value: unknown,
       parameter: string,
@@ -648,6 +685,9 @@ class ElaborationRecorder {
           readableNetworkFacet: (candidate, source) =>
             this.#readableNetworkFacet(candidate, source),
           isNetwork: (candidate): candidate is NetworkValue => this.#isNetwork(candidate),
+          isCombinator: (candidate): candidate is CombinatorValue => this.#isCombinator(candidate),
+          selectCombinatorMove: (candidate, source) =>
+            this.#selectCombinatorMove(candidate, source),
           isPair: (candidate): candidate is PairValue => this.#isPair(candidate),
           isPairSelection: (candidate): candidate is PairSelectedValue =>
             this.#isPairSelection(candidate),
@@ -666,7 +706,6 @@ class ElaborationRecorder {
           moveToFrame: (network, source, frame) =>
             this.#ownership.moveToFrame(network, source, frame),
           brandNetwork: (network, state) => this.#networkValue(network, state),
-          isCombinator: (candidate): candidate is CombinatorValue => this.#isCombinator(candidate),
           bindCombinator: (candidate, producerType, _name, source) =>
             this.#combinatorHandle(candidate, producerType, source),
           bindNetwork: (candidate, capability, name, color, source) =>
@@ -879,6 +918,30 @@ class ElaborationRecorder {
       }
       if (readBinding !== undefined) this.#captureNetworkAlias(name, readBinding, rawSpan);
       return result;
+    },
+    narrowNetwork: (
+      value: unknown,
+      fixedColor: 'red' | 'green' | undefined,
+      rawSpan: RawSpan,
+    ): NetworkValue => {
+      this.#recordDslCall();
+      if (
+        !isRawSpan(rawSpan) ||
+        (fixedColor !== undefined && !['red', 'green'].includes(fixedColor))
+      ) {
+        throw new Error('Invalid explicit Network narrowing descriptor.');
+      }
+      const network = this.#networkFacet(value);
+      if (network === undefined) {
+        throw new ElaborationExecutionError(
+          'A Network assertion requires a Network or physical Combinator value.',
+          this.#span(rawSpan),
+          'RT2015',
+        );
+      }
+      if (fixedColor !== undefined)
+        this.#requireNetworkColor(network, 'readonly', fixedColor, rawSpan);
+      return network;
     },
     bindArray: (
       value: unknown,
@@ -1143,40 +1206,51 @@ class ElaborationRecorder {
       });
     },
     destinations: (...args: unknown[]): DestinationValue => {
-      this.#recordDslCall();
       const rawSpan = args.at(-1);
       if (!isRawSpan(rawSpan)) throw new Error('to(...) is missing provenance.');
-      const values = args.slice(0, -1);
-      if (values.some((value) => this.#isPair(value) || this.#isPairSelection(value))) {
-        throw new ElaborationExecutionError(
-          'pair(a, b) is a read-only input view and cannot be a to(...) destination.',
-          this.#span(rawSpan),
-          'RT2020',
-        );
-      }
-      const selected = values.length === 1 && this.#isSelected(values[0]) ? values[0] : undefined;
-      const selectedSignal =
-        selected === undefined || !isSignalId(selected.selection) ? undefined : selected.selection;
-      if (values.some((value) => this.#isSelected(value)) && selectedSignal === undefined) {
-        throw new Error(
-          '.to(...) permits Network[SIGNAL] only for one destination; use .to(first, second, SIGNAL) for fan-out.',
-        );
-      }
-      const selectedNetwork =
-        selected === undefined
-          ? undefined
-          : this.#resolveWritableNetwork(selected, rawSpan, 'destination');
-      const networks =
-        selectedNetwork === undefined
-          ? values.map((value) => this.#resolveWritableNetwork(value, rawSpan, 'destination'))
-          : [selectedNetwork];
-      if (!networks.every((value): value is NetworkValue => value !== undefined)) {
-        throw new Error('to(...) destinations must be Networks.');
-      }
-      return this.#runtimeValue({
-        kind: 'destinations',
-        networks,
-        ...(selectedSignal === undefined ? {} : { signal: selectedSignal }),
+      return this.#withTopologyTransaction(rawSpan, () => {
+        this.#recordDslCall();
+        const values = args.slice(0, -1);
+        const source = this.#span(rawSpan);
+        if (values.some((value) => this.#isPair(value) || this.#isPairSelection(value))) {
+          throw new ElaborationExecutionError(
+            'pair(a, b) is a read-only input view and cannot be a to(...) destination.',
+            source,
+            'RT2020',
+          );
+        }
+        const selected = values.length === 1 && this.#isSelected(values[0]) ? values[0] : undefined;
+        const selectedSignal =
+          selected === undefined || !isSignalId(selected.selection)
+            ? undefined
+            : selected.selection;
+        if (values.some((value) => this.#isSelected(value)) && selectedSignal === undefined) {
+          throw new ElaborationExecutionError(
+            '.to(...) permits Network[SIGNAL] only for one destination; use .to(first, second, SIGNAL) for fan-out.',
+            source,
+            'RT2003',
+          );
+        }
+        const selectedNetwork =
+          selected === undefined
+            ? undefined
+            : this.#resolveWritableNetwork(selected, rawSpan, 'destination');
+        const networks =
+          selectedNetwork === undefined
+            ? values.map((value) => this.#resolveWritableNetwork(value, rawSpan, 'destination'))
+            : [selectedNetwork];
+        if (!networks.every((value): value is NetworkValue => value !== undefined)) {
+          throw new ElaborationExecutionError(
+            'to(...) destinations must be Networks.',
+            source,
+            'RT2015',
+          );
+        }
+        return this.#runtimeValue({
+          kind: 'destinations',
+          networks,
+          ...(selectedSignal === undefined ? {} : { signal: selectedSignal }),
+        });
       });
     },
     select: (
@@ -1284,49 +1358,10 @@ class ElaborationRecorder {
         }
         return (producer as { to: (...items: unknown[]) => unknown }).to(...values);
       }
-      this.#recordDslCall();
-      let outputSignal = this.#isSignal(values.at(-1)) ? (values.pop() as SignalHandle) : undefined;
-      let destinations: readonly NetworkValue[];
-      if (values.length === 1 && this.#isSelected(values[0])) {
-        const selected = values[0];
-        if (this.#isPairSelection(selected)) {
-          throw new ElaborationExecutionError(
-            'pair(a, b) is a read-only input view and cannot be a .to(...) destination.',
-            this.#span(rawSpan),
-            'RT2020',
-          );
-        }
-        if (outputSignal !== undefined || !isSignalId(selected.selection)) {
-          throw new Error('A selected .to(...) destination must bind exactly one concrete Signal.');
-        }
-        outputSignal = selected.selection;
-        const destination = this.#resolveWritableNetwork(selected, rawSpan, 'destination');
-        if (destination === undefined) throw new Error('.to(...) destination must be a Network.');
-        destinations = [destination];
-      } else {
-        if (values.some((value) => this.#isPair(value))) {
-          throw new ElaborationExecutionError(
-            'pair(a, b) is a read-only input view and cannot be a .to(...) destination.',
-            this.#span(rawSpan),
-            'RT2020',
-          );
-        }
-        if (values.some((value) => this.#isSelected(value))) {
-          throw new Error(
-            '.to(...) permits Network[SIGNAL] only for one destination; use .to(first, second, SIGNAL) for fan-out.',
-          );
-        }
-        const resolved = values.map((value) =>
-          this.#resolveWritableNetwork(value, rawSpan, 'destination'),
-        );
-        if (!resolved.every((value): value is NetworkValue => value !== undefined)) {
-          throw new Error(
-            '.to(...) permits Network[SIGNAL] only for one destination; use .to(first, second, SIGNAL) for fan-out.',
-          );
-        }
-        destinations = resolved;
-      }
-      return this.#attachMany(destinations, producer, rawSpan, outputSignal);
+      return this.#withTopologyTransaction(rawSpan, () => {
+        this.#recordDslCall();
+        return this.#attachToCombinator(producer, values, rawSpan);
+      });
     },
     binary: (operator: string, left: unknown, right: unknown, rawSpan: RawSpan): unknown => {
       return operators.dispatchBinary(operator, left, right, rawSpan, this.#operatorContext);
@@ -1343,59 +1378,50 @@ class ElaborationRecorder {
         this.#isPair(left) ||
         this.#isSelected(left) ||
         this.#isDestination(left);
-      if (destination) this.#assertWritableValue(left, rawSpan);
-      if (destination && this.#isCombinator(right)) {
-        this.api.attach(
-          left as NetworkValue | CombinatorValue | PairValue | SelectedValue | DestinationValue,
-          right,
-          rawSpan,
-        );
-        return left;
-      }
-      if (destination) {
-        throw new Error(
-          'Network += requires a combinator producer; constants and Networks are not implicit attachments.',
-        );
-      }
-      if (this.#isCombinator(right)) {
-        throw new Error('A combinator producer can only be attached to a Network destination.');
-      }
-      // The casts affect only TypeScript's checker; emitted JavaScript retains its native `+`
-      // coercion rules for non-DSL values.
-      const result = (left as number) + (right as number);
-      assign(result);
-      return result;
+      const operation = (): unknown => {
+        if (destination) this.#assertWritableValue(left, rawSpan);
+        if (destination && this.#isCombinator(right)) {
+          this.#recordDslCall();
+          this.#attachDestination(
+            left as NetworkValue | CombinatorValue | PairValue | SelectedValue | DestinationValue,
+            right,
+            rawSpan,
+          );
+          return left;
+        }
+        if (destination) {
+          throw new ElaborationExecutionError(
+            'Network += requires a combinator producer; constants and Networks are not implicit attachments.',
+            this.#span(rawSpan),
+            'RT2015',
+          );
+        }
+        if (this.#isCombinator(right)) {
+          throw new ElaborationExecutionError(
+            'A combinator producer can only be attached to a Network destination.',
+            this.#span(rawSpan),
+            'RT2015',
+          );
+        }
+        // The casts affect only TypeScript's checker; emitted JavaScript retains its native `+`
+        // coercion rules for non-DSL values.
+        const result = (left as number) + (right as number);
+        assign(result);
+        return result;
+      };
+      return destination || this.#isCombinator(right)
+        ? this.#withTopologyTransaction(rawSpan, operation)
+        : operation();
     },
     attach: (
       destination: NetworkValue | CombinatorValue | PairValue | SelectedValue | DestinationValue,
       producer: CombinatorValue,
       rawSpan: RawSpan,
     ): void => {
-      this.#recordDslCall();
-      if (this.#isPair(destination) || this.#isPairSelection(destination)) {
-        throw new ElaborationExecutionError(
-          'pair(a, b) is a read-only input view and cannot receive a producer attachment.',
-          this.#span(rawSpan),
-          'RT2020',
-        );
-      }
-      const destinations = this.#isDestination(destination)
-        ? destination.networks
-        : [this.#resolveWritableNetwork(destination, rawSpan, 'destination')!];
-      this.#attachMany(
-        destinations,
-        producer,
-        rawSpan,
-        this.#isDestination(destination)
-          ? destination.signal
-          : this.#isSelected(destination)
-            ? isSignalId(destination.selection)
-              ? destination.selection
-              : (() => {
-                  throw new Error('A destination can bind only a concrete Signal.');
-                })()
-            : undefined,
-      );
+      this.#withTopologyTransaction(rawSpan, () => {
+        this.#recordDslCall();
+        this.#attachDestination(destination, producer, rawSpan);
+      });
     },
   });
 
@@ -1518,10 +1544,12 @@ class ElaborationRecorder {
           const result = (operation as (...values: unknown[]) => unknown)(...args);
           return result;
         } catch (error) {
+          const recoverable = error instanceof RecoverableElaborationExecutionError;
           const domainFailure =
-            frame.dslDomain ||
-            error instanceof ElaborationOperationLimitError ||
-            error instanceof ElaborationExecutionError;
+            !recoverable &&
+            (frame.dslDomain ||
+              error instanceof ElaborationOperationLimitError ||
+              error instanceof ElaborationExecutionError);
           let normalized: unknown = error;
           if (
             !(error instanceof ElaborationExecutionError) &&
@@ -1843,28 +1871,52 @@ class ElaborationRecorder {
     if (value.networkFacet !== undefined) {
       this.#assertConsumableNetwork(value.networkFacet, rawSpan, 'combinator output');
     }
-    const available = (): NetworkValue[] => {
-      const state = this.#combinators.stateFor(value);
-      return [state.outputPort.primary.network, state.outputPort.secondary?.network].filter(
-        (network): network is NetworkValue =>
-          network !== undefined && this.#networkState(network).ownership.consumedAt === undefined,
-      );
-    };
-    let lanes = available();
-    if (lanes.length < count && this.#combinators.secondary(value) === undefined) {
-      this.#ensureSecondaryOutput(value, rawSpan);
-      lanes = available();
-    }
-    if (lanes.length < count) {
-      const state = this.#combinators.stateFor(value);
-      throw new ElaborationExecutionError(
-        'This combinator output connector already uses both logical Networks.',
-        this.#span(rawSpan),
-        'RT2028',
-        [{ message: 'Physical combinator was created here.', span: state.descriptor.source }],
-      );
-    }
-    return lanes.slice(0, count);
+    return selectCombinatorMoveLanes(value, count, this.#span(rawSpan), {
+      lanes: (candidate) => {
+        const state = this.#combinators.stateFor(candidate);
+        return [state.outputPort.primary.network, state.outputPort.secondary?.network].filter(
+          (network): network is NetworkValue => network !== undefined,
+        );
+      },
+      ensureSecondary: (candidate) => this.#ensureSecondaryOutput(candidate, rawSpan),
+      assertConsumable: (network, source) =>
+        this.#ownership.assertConsumable(network, source, 'combinator output'),
+      exhausted: (candidate, source) => {
+        const state = this.#combinators.stateFor(candidate);
+        throw new ElaborationExecutionError(
+          'This combinator output connector already uses both logical Networks.',
+          source,
+          'RT2028',
+          [{ message: 'Physical combinator was created here.', span: state.descriptor.source }],
+        );
+      },
+    });
+  }
+
+  #selectCombinatorMove(value: CombinatorValue, source: SourceSpan): NetworkValue {
+    return this.#withTopologyTransaction({ start: source.start, end: source.end }, () =>
+      selectCombinatorMoveNetwork(value, source, {
+        lanes: (candidate) => {
+          const state = this.#combinators.stateFor(candidate);
+          return [state.outputPort.primary.network, state.outputPort.secondary?.network].filter(
+            (network): network is NetworkValue => network !== undefined,
+          );
+        },
+        ensureSecondary: (candidate) =>
+          this.#ensureSecondaryOutput(candidate, { start: source.start, end: source.end }),
+        assertConsumable: (network, candidateSource) =>
+          this.#ownership.assertConsumable(network, candidateSource, 'combinator output'),
+        exhausted: (candidate, candidateSource) => {
+          const state = this.#combinators.stateFor(candidate);
+          throw new ElaborationExecutionError(
+            'This combinator output connector already uses both logical Networks.',
+            candidateSource,
+            'RT2028',
+            [{ message: 'Physical combinator was created here.', span: state.descriptor.source }],
+          );
+        },
+      }),
+    );
   }
 
   #transferNetwork(
@@ -1915,8 +1967,172 @@ class ElaborationRecorder {
     this.#ownership.consume(sourceNetwork, provenance);
   }
 
+  #preflightNetworkTransfers(
+    destinations: readonly NetworkValue[],
+    sources: readonly NetworkValue[],
+    rawSpan: RawSpan,
+    sourceRole: string,
+    conflictKind: 'transfer' | 'connector',
+  ): void {
+    if (destinations.length !== 1 && destinations.length !== sources.length) {
+      throw new Error('Network transfer preflight requires matching destinations and sources.');
+    }
+    const colors = this.#colors.clone();
+    const provenance = this.#span(rawSpan);
+    let broadcastColor =
+      destinations.length === 1
+        ? this.#networkState(destinations[0]!).ownership.colorRequirement?.color
+        : undefined;
+    for (const [index, sourceNetwork] of sources.entries()) {
+      const destination = destinations.length === 1 ? destinations[0]! : destinations[index]!;
+      this.#assertConsumableNetwork(sourceNetwork, rawSpan, sourceRole);
+      const destinationState = this.#networkState(destination);
+      const sourceState = this.#networkState(sourceNetwork);
+      if (destinationState.ownership === sourceState.ownership) {
+        throw new ElaborationExecutionError('A Network cannot take itself.', provenance, 'RT2013', [
+          { message: 'Network declared here.', span: destination.declaration },
+        ]);
+      }
+      const destinationColor = destinationState.ownership.colorRequirement?.color;
+      const sourceColor = sourceState.ownership.colorRequirement?.color;
+      const fixedColorConflict =
+        destinationColor !== undefined &&
+        sourceColor !== undefined &&
+        destinationColor !== sourceColor;
+      if (conflictKind !== 'connector' && destinations.length === 1) {
+        if (
+          broadcastColor !== undefined &&
+          sourceColor !== undefined &&
+          broadcastColor !== sourceColor
+        ) {
+          throw new ElaborationExecutionError(
+            'Network transfer unifies contradictory red/green color requirements.',
+            provenance,
+            'RT2014',
+          );
+        }
+        broadcastColor ??= sourceColor;
+      }
+      colors.same(
+        destinationState.ownership,
+        sourceState.ownership,
+        provenance,
+        '.take(source) unifies both physical Networks',
+        conflictKind === 'connector' ? 'RT2010' : fixedColorConflict ? 'RT2014' : 'RT2020',
+        conflictKind === 'connector'
+          ? 'Combinator connector cannot satisfy the required circuit-wire colors.'
+          : fixedColorConflict
+            ? 'Network transfer unifies contradictory red/green color requirements.'
+            : 'Network transfer collapses Networks required to use opposite wire colors.',
+      );
+    }
+  }
+
   #attach(network: NetworkValue, value: CombinatorValue, rawSpan: RawSpan): void {
     this.#attachMany([network], value, rawSpan);
+  }
+
+  #attachToCombinator(
+    producer: CombinatorValue,
+    values: unknown[],
+    rawSpan: RawSpan,
+  ): CombinatorValue {
+    const source = this.#span(rawSpan);
+    let outputSignal = this.#isSignal(values.at(-1)) ? (values.pop() as SignalHandle) : undefined;
+    let destinations: readonly NetworkValue[];
+    if (values.length === 1 && this.#isSelected(values[0])) {
+      const selected = values[0];
+      if (this.#isPairSelection(selected)) {
+        throw new ElaborationExecutionError(
+          'pair(a, b) is a read-only input view and cannot be a .to(...) destination.',
+          source,
+          'RT2020',
+        );
+      }
+      if (outputSignal !== undefined || !isSignalId(selected.selection)) {
+        throw new ElaborationExecutionError(
+          'A selected .to(...) destination must bind exactly one concrete Signal.',
+          source,
+          'RT2003',
+        );
+      }
+      outputSignal = selected.selection;
+      const destination = this.#resolveWritableNetwork(selected, rawSpan, 'destination');
+      if (destination === undefined) {
+        throw new ElaborationExecutionError(
+          '.to(...) destination must be a Network.',
+          source,
+          'RT2015',
+        );
+      }
+      destinations = [destination];
+    } else {
+      if (values.some((value) => this.#isPair(value))) {
+        throw new ElaborationExecutionError(
+          'pair(a, b) is a read-only input view and cannot be a .to(...) destination.',
+          source,
+          'RT2020',
+        );
+      }
+      if (values.some((value) => this.#isSelected(value))) {
+        throw new ElaborationExecutionError(
+          '.to(...) permits Network[SIGNAL] only for one destination; use .to(first, second, SIGNAL) for fan-out.',
+          source,
+          'RT2003',
+        );
+      }
+      const resolved = values.map((value) =>
+        this.#resolveWritableNetwork(value, rawSpan, 'destination'),
+      );
+      if (!resolved.every((value): value is NetworkValue => value !== undefined)) {
+        throw new ElaborationExecutionError(
+          '.to(...) permits Network[SIGNAL] only for one destination; use .to(first, second, SIGNAL) for fan-out.',
+          source,
+          'RT2015',
+        );
+      }
+      destinations = resolved;
+    }
+    return this.#attachMany(destinations, producer, rawSpan, outputSignal);
+  }
+
+  #attachDestination(
+    destination: NetworkValue | CombinatorValue | PairValue | SelectedValue | DestinationValue,
+    producer: CombinatorValue,
+    rawSpan: RawSpan,
+  ): void {
+    const source = this.#span(rawSpan);
+    if (this.#isPair(destination) || this.#isPairSelection(destination)) {
+      throw new ElaborationExecutionError(
+        'pair(a, b) is a read-only input view and cannot receive a producer attachment.',
+        source,
+        'RT2020',
+      );
+    }
+    const destinations = this.#isDestination(destination)
+      ? destination.networks
+      : [this.#resolveWritableNetwork(destination, rawSpan, 'destination')];
+    if (!destinations.every((value): value is NetworkValue => value !== undefined)) {
+      throw new ElaborationExecutionError(
+        'A combinator producer can only be attached to a Network destination.',
+        source,
+        'RT2015',
+      );
+    }
+    const outputSignal = this.#isDestination(destination)
+      ? destination.signal
+      : this.#isSelected(destination)
+        ? isSignalId(destination.selection)
+          ? destination.selection
+          : (() => {
+              throw new ElaborationExecutionError(
+                'A destination can bind only a concrete Signal.',
+                source,
+                'RT2003',
+              );
+            })()
+        : undefined;
+    this.#attachMany(destinations, producer, rawSpan, outputSignal);
   }
 
   #attachMany(
@@ -1925,21 +2141,173 @@ class ElaborationRecorder {
     rawSpan: RawSpan,
     outputSignal?: SignalId,
   ): CombinatorValue {
-    if (!networks.every((network) => this.#isNetwork(network)) || !this.#isCombinator(value)) {
-      throw new Error('Attachment requires a Network and combinator.');
-    }
-    const source = this.#span(rawSpan);
-    validateCombinatorAttachment(networks, source, {
-      assertWritable: (network) => this.#assertWritableNetwork(network, rawSpan, 'destination'),
+    return this.#withTopologyTransaction(rawSpan, () => {
+      if (!networks.every((network) => this.#isNetwork(network)) || !this.#isCombinator(value)) {
+        throw new Error('Attachment requires a Network and combinator.');
+      }
+      const source = this.#span(rawSpan);
+      validateCombinatorAttachment(networks, source, {
+        assertWritable: (network) => this.#assertWritableNetwork(network, rawSpan, 'destination'),
+      });
+      if (outputSignal !== undefined) {
+        this.#combinators.validateOutput(value, outputSignal, source);
+      }
+      const lanes = this.#takeOutputLanes(value, networks.length, rawSpan);
+      this.#preflightNetworkTransfers(networks, lanes, rawSpan, 'combinator output', 'connector');
+      for (const [index, network] of networks.entries()) {
+        this.#transferNetwork(network, lanes[index]!, rawSpan, 'combinator output', 'connector');
+      }
+      if (outputSignal !== undefined) this.#combinators.bindOutput(value, outputSignal, source);
+      this.#combinators.markOutputUsed(value);
+      return value;
     });
-    const state = this.#combinators.stateFor(value);
-    if (outputSignal !== undefined) this.#combinators.bindOutput(value, outputSignal, source);
-    const lanes = this.#takeOutputLanes(value, networks.length, rawSpan);
-    for (const [index, network] of networks.entries()) {
-      this.#transferNetwork(network, lanes[index]!, rawSpan, 'combinator output', 'connector');
+  }
+
+  #joinNetworks(values: readonly unknown[], rawSpan: RawSpan): NetworkValue {
+    const source = this.#span(rawSpan);
+    if (values.length === 0) {
+      throw new ElaborationExecutionError(
+        'join(...) requires at least one input.',
+        source,
+        'RT2003',
+      );
     }
-    this.#combinators.markOutputUsed(value);
-    return value;
+    const combinatorCounts = new Map<CombinatorValue, number>();
+    const networkNames = new Set<string>();
+    for (const value of values) {
+      if (this.#isNetwork(value)) {
+        if (networkNames.has(value.name)) {
+          throw new ElaborationExecutionError(
+            'join(...) repeats the same exact Network input.',
+            source,
+            'RT2004',
+            [{ message: 'Network was first supplied here.', span: value.declaration }],
+          );
+        }
+        networkNames.add(value.name);
+        this.#assertConsumableNetwork(value, rawSpan, 'join input');
+        continue;
+      }
+      if (this.#isCombinator(value)) {
+        combinatorCounts.set(value, (combinatorCounts.get(value) ?? 0) + 1);
+        continue;
+      }
+      if (this.#isPair(value) || this.#isPairSelection(value) || this.#isSelected(value)) {
+        throw new ElaborationExecutionError(
+          'join(...) accepts owned Networks and physical Combinators, not pair or selection views.',
+          source,
+          'RT2020',
+        );
+      }
+      throw new ElaborationExecutionError(
+        'join(...) accepts owned Networks and physical Combinators only.',
+        source,
+        'RT2015',
+      );
+    }
+
+    const selected = new Map<CombinatorValue, readonly NetworkValue[]>();
+    for (const [combinator, count] of combinatorCounts) {
+      selected.set(combinator, this.#takeOutputLanes(combinator, count, rawSpan));
+    }
+    const cursors = new Map<CombinatorValue, number>();
+    const inputs = values.map((value) => {
+      if (this.#isNetwork(value)) return value;
+      const lanes = selected.get(value as CombinatorValue)!;
+      const index = cursors.get(value as CombinatorValue) ?? 0;
+      cursors.set(value as CombinatorValue, index + 1);
+      return lanes[index]!;
+    });
+    const result = this.#network('$join', rawSpan);
+    this.#preflightNetworkTransfers([result], inputs, rawSpan, 'join input', 'transfer');
+    for (const input of inputs) {
+      this.#transferNetwork(result, input, rawSpan, 'join input');
+    }
+    return result;
+  }
+
+  #topologySnapshot(): TopologySnapshot {
+    const ownership = new Map<NetworkOwnershipState, NetworkOwnershipSnapshot>();
+    for (const state of this.#networkStates.values()) {
+      const current = state.ownership;
+      if (ownership.has(current)) continue;
+      ownership.set(current, {
+        state: current,
+        generation: current.generation,
+        owner: current.owner,
+        ...(current.consumedAt === undefined ? {} : { consumedAt: current.consumedAt }),
+        ...(current.lastMove === undefined ? {} : { lastMove: current.lastMove }),
+        ...(current.colorRequirement === undefined
+          ? {}
+          : { colorRequirement: current.colorRequirement }),
+        readonlyBorrows: [...current.readonlyBorrows],
+        ...(current.mutableBorrow === undefined ? {} : { mutableBorrow: current.mutableBorrow }),
+      });
+    }
+    return {
+      networksLength: this.#networks.length,
+      networkStates: new Map(this.#networkStates),
+      networkNameCounts: new Map(this.#networkNameCounts),
+      networkTransfersLength: this.#networkTransfers.length,
+      combinatorOrdinal: this.#combinatorOrdinal,
+      combinatorByOutput: new Map(this.#combinatorByOutput),
+      combinators: this.#combinators.snapshot(),
+      ownership: [...ownership.values()],
+      colors: this.#colors.clone(),
+    };
+  }
+
+  #restoreTopology(snapshot: TopologySnapshot): void {
+    this.#networks.length = snapshot.networksLength;
+    this.#networkTransfers.length = snapshot.networkTransfersLength;
+    this.#networkStates.clear();
+    for (const [name, state] of snapshot.networkStates) this.#networkStates.set(name, state);
+    this.#networkNameCounts.clear();
+    for (const [name, count] of snapshot.networkNameCounts)
+      this.#networkNameCounts.set(name, count);
+    this.#combinatorOrdinal = snapshot.combinatorOrdinal;
+    this.#combinatorByOutput.clear();
+    for (const [ownership, combinator] of snapshot.combinatorByOutput) {
+      this.#combinatorByOutput.set(ownership, combinator);
+    }
+    this.#combinators.restore(snapshot.combinators);
+    for (const saved of snapshot.ownership) {
+      const state = saved.state;
+      state.generation = saved.generation;
+      state.owner = saved.owner;
+      if (saved.consumedAt === undefined) delete state.consumedAt;
+      else state.consumedAt = saved.consumedAt;
+      if (saved.lastMove === undefined) delete state.lastMove;
+      else state.lastMove = saved.lastMove;
+      if (saved.colorRequirement === undefined) delete state.colorRequirement;
+      else state.colorRequirement = saved.colorRequirement;
+      state.readonlyBorrows.clear();
+      for (const borrow of saved.readonlyBorrows) state.readonlyBorrows.add(borrow);
+      if (saved.mutableBorrow === undefined) delete state.mutableBorrow;
+      else state.mutableBorrow = saved.mutableBorrow;
+    }
+    this.#colors.restore(snapshot.colors);
+  }
+
+  #withTopologyTransaction<T>(rawSpan: RawSpan, operation: () => T): T {
+    const snapshot = this.#topologySnapshot();
+    try {
+      return operation();
+    } catch (error) {
+      this.#restoreTopology(snapshot);
+      if (error instanceof ElaborationOperationLimitError) throw error;
+      if (error instanceof RecoverableElaborationExecutionError) throw error;
+      if (error instanceof ElaborationExecutionError) {
+        throw new RecoverableElaborationExecutionError(
+          error.message,
+          error.span,
+          error.code,
+          error.related,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
   }
 
   #isNetwork(value: unknown): value is NetworkValue {
@@ -2022,42 +2390,47 @@ class ElaborationRecorder {
     fixedColor: 'red' | 'green' | undefined,
     rawSpan: RawSpan,
   ): NetworkValue {
-    const bound = bindNetworkParameter(
-      value,
-      {
-        functionName: this.#currentFunctionName(),
-        parameter,
-        capability,
-        ...(fixedColor === undefined ? {} : { fixedColor }),
-        source: this.#span(rawSpan),
-        frame: this.#currentFunctionFrame(),
-      },
-      {
-        networkFacet: (candidate) =>
-          capability === 'readonly'
-            ? this.#readableNetworkFacet(candidate, rawSpan)
-            : this.#networkFacet(candidate),
-        isNetwork: (candidate): candidate is NetworkValue => this.#isNetwork(candidate),
-        isPair: (candidate): candidate is PairValue => this.#isPair(candidate),
-        isPairSelection: (candidate): candidate is PairSelectedValue =>
-          this.#isPairSelection(candidate),
-        recordDslCall: () => this.#recordDslCall(),
-        stateFor: (network) => this.#networkState(network),
-        assertReadable: (network, source) => this.#ownership.assertReadable(network, source),
-        assertConsumable: (network, source, role) =>
-          this.#ownership.assertConsumable(network, source, role),
-        requireColor: (network, requiredCapability, color, source) =>
-          this.#requireNetworkColor(network, requiredCapability, color, {
-            start: source.start,
-            end: source.end,
-          }),
-        borrow: (network, borrowCapability, name, source, frame) =>
-          this.#ownership.borrow(network, borrowCapability, name, source, frame),
-        moveToFrame: (network, source, frame) =>
-          this.#ownership.moveToFrame(network, source, frame),
-        brandNetwork: (network, state) => this.#networkValue(network, state),
-      },
-    );
+    const bind = () =>
+      bindNetworkParameter(
+        value,
+        {
+          functionName: this.#currentFunctionName(),
+          parameter,
+          capability,
+          ...(fixedColor === undefined ? {} : { fixedColor }),
+          source: this.#span(rawSpan),
+          frame: this.#currentFunctionFrame(),
+        },
+        {
+          networkFacet: (candidate) =>
+            capability === 'readonly'
+              ? this.#readableNetworkFacet(candidate, rawSpan)
+              : this.#networkFacet(candidate),
+          isNetwork: (candidate): candidate is NetworkValue => this.#isNetwork(candidate),
+          isCombinator: (candidate): candidate is CombinatorValue => this.#isCombinator(candidate),
+          selectCombinatorMove: (candidate, source) =>
+            this.#selectCombinatorMove(candidate, source),
+          isPair: (candidate): candidate is PairValue => this.#isPair(candidate),
+          isPairSelection: (candidate): candidate is PairSelectedValue =>
+            this.#isPairSelection(candidate),
+          recordDslCall: () => this.#recordDslCall(),
+          stateFor: (network) => this.#networkState(network),
+          assertReadable: (network, source) => this.#ownership.assertReadable(network, source),
+          assertConsumable: (network, source, role) =>
+            this.#ownership.assertConsumable(network, source, role),
+          requireColor: (network, requiredCapability, color, source) =>
+            this.#requireNetworkColor(network, requiredCapability, color, {
+              start: source.start,
+              end: source.end,
+            }),
+          borrow: (network, borrowCapability, name, source, frame) =>
+            this.#ownership.borrow(network, borrowCapability, name, source, frame),
+          moveToFrame: (network, source, frame) =>
+            this.#ownership.moveToFrame(network, source, frame),
+          brandNetwork: (network, state) => this.#networkValue(network, state),
+        },
+      );
+    const bound = capability === 'move' ? this.#withTopologyTransaction(rawSpan, bind) : bind();
     this.#capabilityUses.push({
       network: bound.value.name,
       capability,

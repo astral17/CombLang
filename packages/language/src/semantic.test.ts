@@ -455,6 +455,7 @@ for (let i = 0; i < arr.length; i++) output += arr[i] * 2;`,
       path: 'reserved-builtins.ts',
       text: `function Signal(value: string) { return value; }
 function CC() { return 1; }
+function join() { return 1; }
 class Network { constructor(value: number) {} }
 Signal("ordinary");
 CC();
@@ -466,12 +467,30 @@ const prototypes = {};`,
     });
 
     const reserved = validateDslSemantics(parsed).filter(({ code }) => code === 'CL1045');
-    expect(reserved).toHaveLength(7);
+    expect(reserved).toHaveLength(8);
     expect(
       reserved.map(({ span }) =>
         span === undefined ? undefined : parsed.text.slice(span.start, span.end),
       ),
-    ).toEqual(['Signal', 'CC', 'Network', 'Any', 'All', 'EACH', 'prototypes']);
+    ).toEqual(['Signal', 'CC', 'join', 'Network', 'Any', 'All', 'EACH', 'prototypes']);
+  });
+
+  test('validates join arity and rejects borrowed or pair inputs statically', () => {
+    const parsed = parseFile({
+      path: 'join-validation.ts',
+      text: `const first = new Network();
+const second = new Network();
+join();
+join(pair(first, second));
+join(1);
+join(first, second);`,
+    });
+
+    expect(validateDslSemantics(parsed).map(({ code }) => code)).toEqual([
+      'CL1049',
+      'CL1049',
+      'CL1049',
+    ]);
   });
 
   test('separates invalid Network selections from collection indexing', () => {

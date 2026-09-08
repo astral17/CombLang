@@ -21,6 +21,7 @@ export const freeDslFunctionNames = Object.freeze([
   'to',
   'when',
   'pair',
+  'join',
 ] as const);
 
 /** Free value-space identifiers reserved by the v1 source language. */

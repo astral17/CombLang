@@ -60,6 +60,25 @@ const green = new Network<G>();
 
 `R` and `G` are hard wire-color requirements. Networks without a fixed color are assigned deterministically by the topology solver. Two distinct logical Networks used on the same physical connector must receive opposite colors; three distinct Networks on one connector are invalid.
 
+An explicit `Network` assertion or annotation narrows a Combinator to its exact primary output Network:
+
+```ts
+const producer = input + 1;
+const primary: Network = producer;
+const alsoPrimary = producer as Network;
+```
+
+This creates no hardware and does not expose Combinator attachment methods. It also never falls back to the secondary output lane. Use `Move<Network>` when a function should acquire the next available Combinator output lane.
+
+To unite one or more owned inputs without hardware, use the reserved `join` helper:
+
+```ts
+const merged = join(first, second);
+const fromArray = join(...networks);
+```
+
+`join` returns a new owned Network and records zero-tick transfers only. Combinator inputs acquire primary and then a lazily created secondary lane; a third occurrence is `RT2028`. The complete operation is failure-atomic, including fixed-color validation and secondary-lane creation. `Readonly`/`Ref` values, `pair(...)`, selections, duplicate exact Networks, and empty calls are invalid.
+
 ## Network selections
 
 A bare Network means native `Each` in supported arithmetic and decider contexts. These forms are equivalent:

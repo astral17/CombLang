@@ -64,6 +64,17 @@ export class CircuitColorConstraints<Id> {
     return this;
   }
 
+  /** Creates an isolated preflight copy without exposing the mutable DSU state. */
+  clone(): CircuitColorConstraints<Id> {
+    const copy = new CircuitColorConstraints<Id>();
+    copy.#ids.push(...this.#ids);
+    for (const [id, index] of this.#indexes) copy.#indexes.set(id, index);
+    copy.#parent.push(...this.#parent.slice(1));
+    copy.#rank.push(...this.#rank.slice(1));
+    copy.#parity.push(...this.#parity.slice(1));
+    return copy;
+  }
+
   same(left: Id, right: Id, details: ColorConstraintDetails = {}): this {
     return this.#constrain(Object.freeze({ ...details, left, right, relation: 'same' as const }));
   }

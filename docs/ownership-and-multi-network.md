@@ -64,6 +64,8 @@ A read-only parameter may feed arithmetic, conditions, selections, and typed Fac
 
 `Move<Network>` is the only owned parameter mode. It invalidates all caller aliases at entry, permits reads, writes, and consuming transfer, and gives returned ownership a new runtime generation. Arrays and plain objects recursively transfer owned members on return. A duplicated member such as `[input, input]` is a double move. If the callee neither returns the moved owner nor consumes it with `.take(...)`, the value is dropped; stale caller aliases remain invalid. Returning a Network owned by an outer caller without first accepting it through `Move` is rejected as an implicit steal.
 
+When a `Combinator` enters a `Move<Network>` parameter, the runtime acquires its next available output lane: the eager primary lane first, then one lazily materialized secondary lane. A third acquisition fails with `RT2028`. This is distinct from an explicit or static `Network` narrowing (`producer as Network`, a typed binding, or a typed return), which exposes the exact primary Network view and never falls through to the secondary lane.
+
 Container returns are checked as a graph before transferring any owner. A rejected member does not partially invalidate earlier members. Cycles and shared containers are preserved (the same container is inspected once), along with sparse indices, own-property descriptors, and frozen/sealed/non-extensible state. Containers that do not lead to transferred Networks retain their identity. Getters are not invoked, and Maps/class instances are not traversed; this boundary does not roll back effects from evaluating the return expression.
 
 Simple identifier parameters in function declarations, arrows, and function
@@ -177,6 +179,15 @@ destination.take(source);
 ```
 
 After the call, `destination` owns the unified Network and `source` is moved. The transformed runtime tracks the actual handle through aliases and containers, the direct plan records an ordered transfer, and EG/NCIR lowering collapses both identities without adding hardware or a tick. The method name itself communicates consumption; the older `destination.merge(move(source))` draft is intentionally not the documented target.
+
+For more than two inputs, use the reserved `join` value:
+
+```ts
+const merged = join(first, second, producer);
+const fromArray = join(...networks);
+```
+
+`join` requires at least one owned Network or Combinator and returns a newly owned Network. It performs all transfers at zero ticks and adds no Producer. A Combinator occurrence consumes the next output lane, so repeated occurrences use primary and then lazy secondary. Duplicate exact Networks, `Readonly`/`Ref` views, `pair(...)`, selections, and exhausted third lanes fail atomically: a caught failure does not consume inputs or leave a secondary lane, color constraint, or partial transfer behind.
 
 This form is invalid:
 

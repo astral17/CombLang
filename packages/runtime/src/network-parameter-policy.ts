@@ -2,6 +2,7 @@ import type { SourceSpan } from '@comblang/shared';
 
 import { ElaborationExecutionError } from './elaboration-errors.js';
 import type {
+  CombinatorValue,
   FunctionOwnershipFrame,
   NetworkBorrow,
   NetworkRuntimeState,
@@ -24,6 +25,8 @@ export interface NetworkParameterDescriptor {
 export interface NetworkParameterPolicyContext {
   networkFacet(value: unknown): NetworkValue | undefined;
   isNetwork(value: unknown): value is NetworkValue;
+  isCombinator(value: unknown): value is CombinatorValue;
+  selectCombinatorMove(value: CombinatorValue, source: SourceSpan): NetworkValue;
   isPair(value: unknown): value is PairValue;
   isPairSelection(value: unknown): value is PairSelectedValue;
   recordDslCall(): void;
@@ -103,7 +106,11 @@ export function bindNetworkParameter(
   descriptor: NetworkParameterDescriptor,
   context: NetworkParameterPolicyContext,
 ): BoundNetworkParameter {
-  value = context.networkFacet(value) ?? value;
+  if (descriptor.capability === 'move' && context.isCombinator(value)) {
+    value = context.selectCombinatorMove(value, descriptor.source);
+  } else {
+    value = context.networkFacet(value) ?? value;
+  }
   if (
     descriptor.capability === 'move' &&
     (context.isPair(value) || context.isPairSelection(value))

@@ -56,11 +56,12 @@ function combinatorInputNames(combinator: CombinatorDescriptor): readonly string
 
 /** Online color validation owned by one executed-source recorder session. */
 export class ElaborationColorConstraints {
-  readonly #constraints = new CircuitColorConstraints<NetworkOwnershipState>();
+  #constraints = new CircuitColorConstraints<NetworkOwnershipState>();
   readonly #identities = new Map<string, NetworkOwnershipState>();
   readonly #declarations = new Map<NetworkOwnershipState, { name: string; source: SourceSpan }>();
   readonly #combinatorInputs = new WeakMap<object, Set<NetworkOwnershipState>>();
-  readonly #logicalParents = new WeakMap<NetworkOwnershipState, NetworkOwnershipState>();
+  #logicalParents = new WeakMap<NetworkOwnershipState, NetworkOwnershipState>();
+  readonly #registeredNetworks = new Set<NetworkOwnershipState>();
 
   registerNetwork(
     identity: NetworkOwnershipState,
@@ -68,6 +69,7 @@ export class ElaborationColorConstraints {
     source: SourceSpan,
     fixedColor?: 'red' | 'green',
   ): void {
+    this.#registeredNetworks.add(identity);
     this.#constraints.add(identity);
     this.#logicalParents.set(identity, identity);
     this.renameNetwork(identity, name, source);
@@ -76,6 +78,40 @@ export class ElaborationColorConstraints {
         reason: `Network ${name} has a fixed color`,
         provenance: source,
       });
+    }
+  }
+
+  /** Returns an isolated copy for topology preflight and rollback snapshots. */
+  clone(): ElaborationColorConstraints {
+    const copy = new ElaborationColorConstraints();
+    copy.#constraints = this.#constraints.clone();
+    copy.#identities.clear();
+    for (const [name, identity] of this.#identities) copy.#identities.set(name, identity);
+    copy.#declarations.clear();
+    for (const [identity, declaration] of this.#declarations) {
+      copy.#declarations.set(identity, declaration);
+    }
+    for (const identity of this.#registeredNetworks) {
+      copy.#registeredNetworks.add(identity);
+      copy.#logicalParents.set(identity, this.#logicalNetworkRoot(identity));
+    }
+    return copy;
+  }
+
+  /** Restores a preflight snapshot without replacing the recorder-owned object. */
+  restore(snapshot: ElaborationColorConstraints): void {
+    this.#constraints = snapshot.#constraints.clone();
+    this.#identities.clear();
+    for (const [name, identity] of snapshot.#identities) this.#identities.set(name, identity);
+    this.#declarations.clear();
+    for (const [identity, declaration] of snapshot.#declarations) {
+      this.#declarations.set(identity, declaration);
+    }
+    this.#registeredNetworks.clear();
+    this.#logicalParents = new WeakMap();
+    for (const identity of snapshot.#registeredNetworks) {
+      this.#registeredNetworks.add(identity);
+      this.#logicalParents.set(identity, snapshot.#logicalNetworkRoot(identity));
     }
   }
 

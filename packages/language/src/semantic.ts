@@ -1120,6 +1120,20 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       ) {
         report('CL1042', 'pair(a, b) requires two distinct logical Networks.', node);
       }
+      if (name === 'join' && isDslBuiltin(name)) {
+        if (node.arguments.length === 0) {
+          report('CL1049', 'join(...) requires at least one Network or Combinator input.', node);
+        }
+        for (const argument of node.arguments) {
+          if (isPairViewExpression(argument) || isDefinitelyInvalidNetworkArgument(argument)) {
+            report(
+              'CL1049',
+              'join(...) accepts owned Networks and physical Combinators only.',
+              argument,
+            );
+          }
+        }
+      }
       if (name === 'to' && isDslBuiltin(name) && node.arguments.some(isPairViewExpression)) {
         report('CL1042', 'pair(a, b) cannot be a to(...) destination.', node);
       }

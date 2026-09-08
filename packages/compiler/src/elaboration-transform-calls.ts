@@ -100,6 +100,7 @@ export function transformCallOrElementNode(
       when: 'deciderStart',
       to: 'destinations',
       pair: 'pair',
+      join: 'join',
     }[node.expression.text];
     if (node.expression.text === 'IF' && node.arguments.length >= 2) {
       return context.dslCall('deciderBranches', [
