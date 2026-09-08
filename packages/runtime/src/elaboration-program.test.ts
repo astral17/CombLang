@@ -1,15 +1,28 @@
-import { generateBlueprintJson, transformElaborationModule } from '@comblang/compiler';
+import {
+  createTrustedEntityReplayContext,
+  generateBlueprintJson,
+  syntheticSharedTwoColorEntityProfile,
+  syntheticZeroPortEntityProfile,
+  transformElaborationModule,
+} from '@comblang/compiler';
 import { signal, SparseBus } from '@comblang/factorio';
 import { parseFile, validateDslSemantics } from '@comblang/language';
-import { loadPrototypeDatabase, syntheticPrototypeDatabase } from '@comblang/prototypes';
+import {
+  loadPrototypeDatabase,
+  syntheticPrototypeDatabase,
+  type EntityPrototype,
+} from '@comblang/prototypes';
+import { sourceFileId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
 import { elaborateDirectPlan, tryElaborateDirectPlan } from './direct-plan.js';
+import { validateEntityDirectPlan } from './entity-plan-validation.js';
 import { RuntimeDiagnosticError } from './elaboration.js';
 import {
   ElaborationExecutionError,
   ElaborationOperationLimitError,
   executeElaborationProgram,
+  executeElaborationProgramV3,
 } from './elaboration-program.js';
 
 const loopSource = `const SIGNAL_A = Signal("virtual", "signal-A");
@@ -19,6 +32,37 @@ let output = new Network();
 for (let i = 0; i < 10; i++) {
   output += IF(input < i, 1 * SIGNAL_A);
 }`;
+
+function syntheticEntityExecutionContext() {
+  return createTrustedEntityReplayContext({
+    database: syntheticZeroPortEntityProfile.ref.database,
+    source: 'synthetic',
+    evidenceIdentity: 'comblang-synthetic-evidence-v1',
+    policyIdentity: 'comblang-entity-policy-v1',
+    profiles: [syntheticZeroPortEntityProfile, syntheticSharedTwoColorEntityProfile],
+  });
+}
+
+function syntheticEntityResolver() {
+  const database = syntheticZeroPortEntityProfile.ref.database;
+  const prototypeKeys = new Set([
+    syntheticZeroPortEntityProfile.ref.prototypeKey,
+    syntheticSharedTwoColorEntityProfile.ref.prototypeKey,
+  ]);
+  return {
+    database,
+    getEntity(nameOrKey: string): EntityPrototype | undefined {
+      if (!prototypeKeys.has(nameOrKey)) return undefined;
+      return {
+        key: nameOrKey as EntityPrototype['key'],
+        name: nameOrKey.replace('entity:', ''),
+        type: 'container',
+        tileWidth: 1,
+        tileHeight: 1,
+      };
+    },
+  };
+}
 
 describe('executed elaboration program', () => {
   test('executes DSL parameter and destructuring defaults through the runtime bridge', () => {
@@ -563,6 +607,413 @@ const source = CC(prototypes.item['iron-plate'].stackSize * PLATE);`,
         outputs: [{ signal: { type: 'item', name: 'iron-plate' }, value: 100 }],
       },
     ]);
+  });
+
+  test('finalizes executed Entity constructions from one session-local registry', () => {
+    const context = createTrustedEntityReplayContext({
+      database: syntheticZeroPortEntityProfile.ref.database,
+      source: 'synthetic',
+      evidenceIdentity: 'comblang-synthetic-evidence-v1',
+      policyIdentity: 'comblang-entity-policy-v1',
+      profiles: [syntheticZeroPortEntityProfile, syntheticSharedTwoColorEntityProfile],
+    });
+    const resolver = {
+      database: context.database,
+      getEntity(nameOrKey: string): EntityPrototype | undefined {
+        if (
+          nameOrKey !== syntheticZeroPortEntityProfile.ref.prototypeKey &&
+          nameOrKey !== syntheticSharedTwoColorEntityProfile.ref.prototypeKey
+        ) {
+          return undefined;
+        }
+        return {
+          key: nameOrKey as EntityPrototype['key'],
+          name: nameOrKey.replace('entity:', ''),
+          type: 'container',
+          tileWidth: 1,
+          tileHeight: 1,
+        };
+      },
+    };
+    const program = {
+      format: 'comblang-elaboration-js' as const,
+      version: 2 as const,
+      fileId: sourceFileId('entity-execution.factorio.ts'),
+      runtimeParameter: 't',
+      containsUnsupportedAsync: false,
+      code: `
+const first = t.entity(${JSON.stringify(syntheticZeroPortEntityProfile.ref)}, undefined, undefined, { start: 1, end: 8 });
+const alias = first;
+const second = t.entity(${JSON.stringify(syntheticSharedTwoColorEntityProfile.ref)}, undefined, undefined, { start: 9, end: 18 });
+if (alias !== first || first === second) throw new Error('Entity identity was not session-local');
+`,
+    };
+
+    const plan = executeElaborationProgramV3(program, {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: resolver,
+    });
+
+    expect(plan.version).toBe(3);
+    if (plan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(plan.context.profileSetIdentity).toBe(context.profileSetIdentity);
+    expect(plan.entities).toHaveLength(2);
+    expect(plan.entities.map(({ profile }) => profile.profileId)).toEqual([
+      syntheticZeroPortEntityProfile.ref.profileId,
+      syntheticSharedTwoColorEntityProfile.ref.profileId,
+    ]);
+    expect(plan.entities.every(({ connectorBindings }) => connectorBindings.length === 0)).toBe(
+      true,
+    );
+  });
+
+  test('caches explicit Entity facets and preserves endpoint bindings', () => {
+    const context = syntheticEntityExecutionContext();
+    const program = {
+      format: 'comblang-elaboration-js' as const,
+      version: 2 as const,
+      fileId: sourceFileId('entity-facet-execution.factorio.ts'),
+      runtimeParameter: 't',
+      containsUnsupportedAsync: false,
+      code: `
+const entity = t.entity(${JSON.stringify(syntheticSharedTwoColorEntityProfile.ref)}, undefined, undefined, { start: 1, end: 8 });
+const first = t.entityFacet(entity, 'shared', 'shared-red', { start: 9, end: 20 });
+const second = t.entityFacet(entity, 'shared', 'shared-red', { start: 21, end: 32 });
+if (first !== second) throw new Error('Entity facet was not cached on its authority view');
+`,
+    };
+
+    const plan = executeElaborationProgramV3(program, {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: syntheticEntityResolver(),
+    });
+
+    expect(plan.version).toBe(3);
+    if (plan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(plan.networks).toHaveLength(1);
+    expect(plan.networks[0]?.fixedColor).toBe('red');
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.entities[0]?.connectorBindings).toEqual([
+      {
+        endpoint: { connector: 'shared', lane: 'shared-red', color: 'red' },
+        network: plan.networks[0]?.name,
+        generation: 0,
+        direction: 'input',
+        provenance: {
+          source: { fileId: sourceFileId('entity-facet-execution.factorio.ts'), start: 9, end: 20 },
+          instancePath: [],
+          operationOrdinal: 1,
+        },
+      },
+    ]);
+    const replay = validateEntityDirectPlan(plan, context);
+    expect(replay.diagnostics).toEqual([]);
+    expect(replay.value?.plan.entities[0]?.connectorBindings[0]?.generation).toBe(0);
+  });
+
+  test('adopts a readable external Network once and rejects a conflicting rebind', () => {
+    const context = syntheticEntityExecutionContext();
+    const program = {
+      format: 'comblang-elaboration-js' as const,
+      version: 2 as const,
+      fileId: sourceFileId('entity-bind-execution.factorio.ts'),
+      runtimeParameter: 't',
+      containsUnsupportedAsync: false,
+      code: `
+const entity = t.entity(${JSON.stringify(syntheticSharedTwoColorEntityProfile.ref)}, undefined, undefined, { start: 1, end: 8 });
+const external = t.network('external', undefined, { start: 9, end: 17 });
+t.bindEntity(entity, 'shared', 'shared-red', external, 'input', { start: 18, end: 48 });
+t.bindEntity(entity, 'shared', 'shared-red', external, 'input', { start: 49, end: 79 });
+const facet = t.entityFacet(entity, 'shared', 'shared-red', { start: 80, end: 111 });
+if (facet.name !== external.name) throw new Error('external Network was not adopted');
+const other = t.network('other', undefined, { start: 112, end: 117 });
+t.bindEntity(entity, 'shared', 'shared-red', other, 'input', { start: 118, end: 149 });
+`,
+    };
+
+    expect(() =>
+      executeElaborationProgramV3(program, {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: syntheticEntityResolver(),
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'RT2030' }));
+  });
+
+  test('constrains bound Networks to endpoint colors before recording a facet', () => {
+    const context = syntheticEntityExecutionContext();
+    const program = {
+      format: 'comblang-elaboration-js' as const,
+      version: 2 as const,
+      fileId: sourceFileId('entity-color-bind.factorio.ts'),
+      runtimeParameter: 't',
+      containsUnsupportedAsync: false,
+      code: `
+const entity = t.entity(${JSON.stringify(syntheticSharedTwoColorEntityProfile.ref)}, undefined, undefined, { start: 1, end: 8 });
+const external = t.network('external', undefined, { start: 9, end: 17 });
+t.bindEntity(entity, 'shared', 'shared-red', external, 'input', { start: 18, end: 49 });
+t.bindEntity(entity, 'shared', 'shared-green', external, 'input', { start: 50, end: 83 });
+`,
+    };
+    expect(() =>
+      executeElaborationProgramV3(program, {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: syntheticEntityResolver(),
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'RT2018' }));
+  });
+
+  test('serializes binding direction and rejects a same-Network direction change', () => {
+    const context = syntheticEntityExecutionContext();
+    const outputProgram = {
+      format: 'comblang-elaboration-js' as const,
+      version: 2 as const,
+      fileId: sourceFileId('entity-output-bind.factorio.ts'),
+      runtimeParameter: 't',
+      containsUnsupportedAsync: false,
+      code: `
+const entity = t.entity(${JSON.stringify(syntheticSharedTwoColorEntityProfile.ref)}, undefined, undefined, { start: 1, end: 8 });
+const external = t.network('external', undefined, { start: 9, end: 17 });
+t.bindEntity(entity, 'shared', 'shared-red', external, 'output', { start: 18, end: 49 });
+`,
+    };
+    const outputPlan = executeElaborationProgramV3(outputProgram, {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: syntheticEntityResolver(),
+    });
+    expect(outputPlan.version).toBe(3);
+    if (outputPlan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(outputPlan.entities[0]?.connectorBindings[0]?.direction).toBe('output');
+
+    const mismatchProgram = {
+      ...outputProgram,
+      fileId: sourceFileId('entity-direction-conflict.factorio.ts'),
+      code: outputProgram.code.replace(
+        "t.bindEntity(entity, 'shared', 'shared-red', external, 'output', { start: 18, end: 49 });",
+        "t.bindEntity(entity, 'shared', 'shared-red', external, 'input', { start: 18, end: 49 });\nt.bindEntity(entity, 'shared', 'shared-red', external, 'output', { start: 50, end: 81 });",
+      ),
+    };
+    expect(() =>
+      executeElaborationProgramV3(mismatchProgram, {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: syntheticEntityResolver(),
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'RT2030' }));
+  });
+
+  test('does not refresh a consumed Entity facet from physical identity', () => {
+    const context = syntheticEntityExecutionContext();
+    const program = {
+      format: 'comblang-elaboration-js' as const,
+      version: 2 as const,
+      fileId: sourceFileId('entity-stale-facet.factorio.ts'),
+      runtimeParameter: 't',
+      containsUnsupportedAsync: false,
+      code: `
+const entity = t.entity(${JSON.stringify(syntheticSharedTwoColorEntityProfile.ref)}, undefined, undefined, { start: 1, end: 8 });
+const facet = t.entityFacet(entity, 'shared', 'shared-red', { start: 9, end: 20 });
+const sink = t.network('sink', undefined, { start: 21, end: 27 });
+t.take(sink, facet, { start: 28, end: 46 });
+t.entityFacet(entity, 'shared', 'shared-red', { start: 47, end: 78 });
+`,
+    };
+
+    expect(() =>
+      executeElaborationProgramV3(program, {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: syntheticEntityResolver(),
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'RT2012' }));
+  });
+
+  test('uses only the explicit default projection for readable Entity contexts', () => {
+    const context = syntheticEntityExecutionContext();
+    const program = {
+      format: 'comblang-elaboration-js' as const,
+      version: 2 as const,
+      fileId: sourceFileId('entity-read-projection.factorio.ts'),
+      runtimeParameter: 't',
+      containsUnsupportedAsync: false,
+      code: `
+const entity = t.entity(${JSON.stringify(syntheticSharedTwoColorEntityProfile.ref)}, undefined, undefined, { start: 1, end: 8 });
+const input = t.networkArgument(entity, 'Read', 'input', 'readonly', undefined, { start: 9, end: 25 });
+const output = t.binary('+', entity, 1, { start: 26, end: 43 });
+if (input.name !== output.networks?.[0] && output.kind !== 'combinator') throw new Error('read projection failed');
+`,
+    };
+
+    const plan = executeElaborationProgramV3(program, {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: syntheticEntityResolver(),
+    });
+    expect(plan.version).toBe(3);
+    if (plan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(plan.producers).toHaveLength(1);
+    expect(plan.entities[0]?.connectorBindings).toHaveLength(1);
+
+    const noDefault = createTrustedEntityReplayContext({
+      database: syntheticSharedTwoColorEntityProfile.ref.database,
+      source: 'synthetic',
+      evidenceIdentity: 'comblang-synthetic-evidence-v1',
+      policyIdentity: 'comblang-entity-policy-v1',
+      profiles: [
+        syntheticZeroPortEntityProfile,
+        { ...syntheticSharedTwoColorEntityProfile, defaultReadProjection: null },
+      ],
+    });
+    const noDefaultProgram = {
+      ...program,
+      fileId: sourceFileId('entity-no-default-read.factorio.ts'),
+      code: `
+const entity = t.entity(${JSON.stringify(syntheticSharedTwoColorEntityProfile.ref)}, undefined, undefined, { start: 1, end: 8 });
+t.networkArgument(entity, 'Read', 'input', 'readonly', undefined, { start: 9, end: 25 });
+`,
+    };
+    expect(() =>
+      executeElaborationProgramV3(noDefaultProgram, {
+        trustedEntityReplayContext: noDefault,
+        entityPrototypeResolver: syntheticEntityResolver(),
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'RT2032' }));
+
+    const writableProgram = {
+      ...program,
+      fileId: sourceFileId('entity-writable-no-implicit-read.factorio.ts'),
+      code: `
+const entity = t.entity(${JSON.stringify(syntheticSharedTwoColorEntityProfile.ref)}, undefined, undefined, { start: 1, end: 8 });
+t.networkArgument(entity, 'Write', 'destination', 'ref', undefined, { start: 9, end: 28 });
+`,
+    };
+    expect(() =>
+      executeElaborationProgramV3(writableProgram, {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: syntheticEntityResolver(),
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'RT2015' }));
+  });
+
+  test('transfers locally owned Entity facets and preserves safe external connections', () => {
+    const context = syntheticEntityExecutionContext();
+    const program = {
+      format: 'comblang-elaboration-js' as const,
+      version: 2 as const,
+      fileId: sourceFileId('entity-return-ownership.factorio.ts'),
+      runtimeParameter: 't',
+      containsUnsupportedAsync: false,
+      code: `
+t.enterFunction('Make', { start: 1, end: 5 });
+const local = t.entity(${JSON.stringify(syntheticSharedTwoColorEntityProfile.ref)}, undefined, undefined, { start: 6, end: 13 });
+const localFacet = t.entityFacet(local, 'shared', 'shared-red', { start: 14, end: 25 });
+const returned = t.returnValue(local, { start: 26, end: 33 });
+t.exitInstance({ start: 34, end: 35 });
+const returnedFacet = t.entityFacet(returned, 'shared', 'shared-red', { start: 36, end: 49 });
+if (returnedFacet.name !== localFacet.name) throw new Error('local Entity facet was not preserved');
+`,
+    };
+    const plan = executeElaborationProgramV3(program, {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: syntheticEntityResolver(),
+    });
+    expect(plan.version).toBe(3);
+
+    const externalProgram = {
+      ...program,
+      fileId: sourceFileId('entity-external-return.factorio.ts'),
+      code: `
+const external = t.network('external', undefined, { start: 1, end: 9 });
+t.enterFunction('Make', { start: 10, end: 14 });
+const local = t.entity(${JSON.stringify(syntheticSharedTwoColorEntityProfile.ref)}, undefined, undefined, { start: 15, end: 22 });
+t.bindEntity(local, 'shared', 'shared-red', external, 'input', { start: 23, end: 54 });
+t.returnValue(local, { start: 55, end: 67 });
+`,
+    };
+    const externalPlan = executeElaborationProgramV3(externalProgram, {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: syntheticEntityResolver(),
+    });
+    expect(externalPlan.version).toBe(3);
+    if (externalPlan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(externalPlan.entities[0]?.connectorBindings[0]?.network).toBe('external');
+
+    const borrowedProgram = {
+      ...program,
+      fileId: sourceFileId('entity-borrowed-return.factorio.ts'),
+      code: `
+const external = t.network('external', undefined, { start: 1, end: 9 });
+t.enterFunction('Make', { start: 10, end: 14 });
+const borrowed = t.borrowParameter(external, 'readonly', 'input', undefined, { start: 15, end: 36 });
+const local = t.entity(${JSON.stringify(syntheticSharedTwoColorEntityProfile.ref)}, undefined, undefined, { start: 37, end: 44 });
+t.bindEntity(local, 'shared', 'shared-red', borrowed, 'input', { start: 45, end: 76 });
+t.returnValue(local, { start: 77, end: 89 });
+`,
+    };
+    expect(() =>
+      executeElaborationProgramV3(borrowedProgram, {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: syntheticEntityResolver(),
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'RT2017' }));
+
+    const mixedReturnProgram = {
+      ...program,
+      fileId: sourceFileId('entity-mixed-return.factorio.ts'),
+      code: `
+t.enterFunction('Make', { start: 1, end: 5 });
+const local = t.entity(${JSON.stringify(syntheticSharedTwoColorEntityProfile.ref)}, undefined, undefined, { start: 6, end: 13 });
+const localFacet = t.entityFacet(local, 'shared', 'shared-red', { start: 14, end: 25 });
+t.returnValue([local, localFacet], { start: 26, end: 39 });
+`,
+    };
+    expect(() =>
+      executeElaborationProgramV3(mixedReturnProgram, {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: syntheticEntityResolver(),
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'RT2012' }));
+  });
+
+  test('retires the pre-return Entity view and preserves duplicate aliases in a return graph', () => {
+    const context = syntheticEntityExecutionContext();
+    const staleProgram = {
+      format: 'comblang-elaboration-js' as const,
+      version: 2 as const,
+      fileId: sourceFileId('entity-stale-view.factorio.ts'),
+      runtimeParameter: 't',
+      containsUnsupportedAsync: false,
+      code: `
+t.enterFunction('Make', { start: 1, end: 5 });
+const local = t.entity(${JSON.stringify(syntheticSharedTwoColorEntityProfile.ref)}, undefined, undefined, { start: 6, end: 13 });
+const oldAlias = local;
+t.returnValue(local, { start: 14, end: 25 });
+t.entityFacet(oldAlias, 'shared', 'shared-red', { start: 26, end: 57 });
+`,
+    };
+    expect(() =>
+      executeElaborationProgramV3(staleProgram, {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: syntheticEntityResolver(),
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'RT2012' }));
+
+    const aliasProgram = {
+      ...staleProgram,
+      fileId: sourceFileId('entity-alias-return.factorio.ts'),
+      code: `
+t.enterFunction('Make', { start: 1, end: 5 });
+const local = t.entity(${JSON.stringify(syntheticSharedTwoColorEntityProfile.ref)}, undefined, undefined, { start: 6, end: 13 });
+const facet = t.entityFacet(local, 'shared', 'shared-red', { start: 14, end: 25 });
+const result = t.returnValue({ a: local, b: local }, { start: 26, end: 39 });
+t.exitInstance({ start: 40, end: 41 });
+if (result.a !== result.b) throw new Error('duplicate Entity aliases were not preserved');
+if (t.entityFacet(result.a, 'shared', 'shared-red', { start: 42, end: 73 }).name !== facet.name) throw new Error('returned Entity lost its facet');
+`,
+    };
+    const plan = executeElaborationProgramV3(aliasProgram, {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: syntheticEntityResolver(),
+    });
+    expect(plan.version).toBe(3);
+    if (plan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(plan.entities).toHaveLength(1);
   });
 
   test('reports source-linked failure when prototypes are used without an environment', () => {

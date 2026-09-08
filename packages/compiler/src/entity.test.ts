@@ -4,8 +4,13 @@ import {
   entityRawJsonLimits,
   entitySemanticVersion,
   type DirectElaborationPlanV3,
+  type EntityConnectorKey,
+  type EntityPhysicalConnectorBinding,
+  type EntityPhysicalRecord,
   type EntityId,
-  type EntityRecord,
+  type EntityLaneKey,
+  type EntityPlanConnectorBinding,
+  type EntityPlanRecord,
   type EntityReplayContextRef,
   type ElaborationGraphV3,
   type NativeCircuitIrV3,
@@ -14,7 +19,7 @@ import {
   syntheticSharedTwoColorEntityProfile,
   syntheticZeroPortEntityProfile,
 } from './entity-fixtures.js';
-import { sourceFileId, sourceSpan } from '@comblang/shared';
+import { sourceFileId, sourceSpan, type NetworkId } from '@comblang/shared';
 
 const context: EntityReplayContextRef = {
   database: {
@@ -26,17 +31,48 @@ const context: EntityReplayContextRef = {
   policyIdentity: 'comblang-entity-policy-v1',
 };
 
-const entity: EntityRecord = {
+const endpoint = {
+  connector: 'shared' as EntityConnectorKey,
+  lane: 'shared-red' as EntityLaneKey,
+  color: 'red' as const,
+};
+
+const provenance = {
+  source: sourceSpan(sourceFileId('entity.ts'), 0, 1),
+  instancePath: ['Entity:1'],
+  operationOrdinal: 1,
+};
+
+const planBinding: EntityPlanConnectorBinding = {
+  endpoint,
+  network: 'input',
+  generation: 0,
+  direction: 'input',
+  provenance,
+};
+
+const physicalBinding: EntityPhysicalConnectorBinding = {
+  endpoint,
+  network: 'network:1' as NetworkId,
+  generation: 0,
+  direction: 'input',
+  provenance,
+};
+
+// @ts-expect-error Declaration names are not physical Network IDs.
+const planBindingInPhysicalDomain: EntityPhysicalConnectorBinding = planBinding;
+
+const planEntity: EntityPlanRecord = {
   id: 'entity:1' as EntityId,
   profile: syntheticZeroPortEntityProfile.ref,
-  connectorBindings: [],
-  provenance: {
-    source: sourceSpan(sourceFileId('entity.ts'), 0, 1),
-    instancePath: ['Entity:1'],
-    expansionStack: [],
-    creationRevision: 1,
-  },
+  connectorBindings: [planBinding],
+  provenance: { ...provenance, expansionStack: [], creationRevision: 1 },
   ordinal: 1,
+};
+
+const physicalEntity: EntityPhysicalRecord = {
+  ...planEntity,
+  connectorBindings: [physicalBinding],
 };
 
 const v2Plan: DirectElaborationPlan = {
@@ -52,7 +88,7 @@ const v3Plan: DirectElaborationPlanV3 = {
   context,
   networks: [],
   producers: [],
-  entities: [entity],
+  entities: [planEntity],
 };
 
 const v3Graph: ElaborationGraphV3 = {
@@ -62,7 +98,7 @@ const v3Graph: ElaborationGraphV3 = {
   networks: [],
   producers: [],
   attachments: [],
-  entities: [entity],
+  entities: [physicalEntity],
 };
 
 const v3Ir: NativeCircuitIrV3 = {
@@ -71,7 +107,7 @@ const v3Ir: NativeCircuitIrV3 = {
   context,
   networks: [],
   producers: [],
-  entities: [entity],
+  entities: [physicalEntity],
 };
 
 describe('compiler-owned Entity v3 vocabulary', () => {
@@ -81,6 +117,12 @@ describe('compiler-owned Entity v3 vocabulary', () => {
     expect(v3Graph.version).toBe(3);
     expect(v3Ir.version).toBe(3);
     expect(v3Plan.entities).toHaveLength(1);
+  });
+
+  test('keeps declaration-name and physical-ID Entity binding domains distinct', () => {
+    expect(planEntity.connectorBindings[0]?.network).toBe('input');
+    expect(physicalEntity.connectorBindings[0]?.network).toBe('network:1');
+    expect(planBindingInPhysicalDomain).toBe(planBinding);
   });
 
   test('provides deterministic zero-port and shared two-color synthetic profiles', () => {

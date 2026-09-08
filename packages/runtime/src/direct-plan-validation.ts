@@ -861,6 +861,8 @@ export function validateDirectPlanEnvelope(plan: unknown): DirectPlanEnvelopeVal
       (candidate.fixedColor !== undefined &&
         candidate.fixedColor !== 'red' &&
         candidate.fixedColor !== 'green') ||
+      'generation' in candidate ||
+      'consumedAt' in candidate ||
       descriptorSpan(candidate, 'source') === undefined ||
       !isInstancePath(candidate.instancePath)
     )

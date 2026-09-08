@@ -54,6 +54,7 @@ function dispatchFixture() {
     isSelected: (value) => registry.hasKind(value, 'selected'),
     isNetwork: (value): value is NetworkValue => registry.hasKind(value, 'network'),
     networkFacet: (value) => (registry.hasKind(value, 'network') ? value : undefined),
+    readableNetworkFacet: (value) => (registry.hasKind(value, 'network') ? value : undefined),
     isPair: (value) => registry.hasKind(value, 'pair'),
     isWildcardToken: (value) => registry.hasKind(value, 'wildcard-token'),
     recordDslCall: () => {

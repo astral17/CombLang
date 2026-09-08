@@ -140,11 +140,11 @@ The following language/runtime work is tracked separately from prototype data:
   It preserves actual JavaScript key behavior (`{ A: 5 }` is an item-name string
   key, not the variable `A`), executed ordering, duplicates, zeros, source paths,
   and canonical Signal property keys without accepting arbitrary iterables.
-- Move parity/color contradiction checks into elaboration operations (including
-  fixed colors, pairs, connector inputs, and attachments). A contradiction must
-  fail at its first executed operation with source provenance, before subsequent
-  JavaScript runs. The current final batch solver does not meet this requirement;
-  it should ultimately only orient/materialize already-consistent components.
+- Implemented: parity/color contradiction checks run during elaboration operations
+  (including fixed colors, pairs, connector inputs, and attachments). A
+  contradiction fails at its first executed operation with source provenance,
+  before subsequent JavaScript runs. The final solver only
+  orients/materializes already-consistent components.
 - Implemented initial policy: simple bare `Network` parameters and direct Networks
   passed to untyped function-declaration parameters receive non-consuming read-only
   borrows, with one declaration warning per compilation. Ordinary generic values

@@ -12,7 +12,7 @@ import type {
 import type {
   DirectPlanDebugInstance,
   DirectPlanCapabilityUse,
-  DirectPlanNetwork,
+  DirectPlanNetworkV3,
   DirectPlanNetworkAlias,
   DirectPlanNetworkPair,
   DirectPlanNetworkTransfer,
@@ -127,7 +127,7 @@ export interface EntityProfile {
   readonly synthetic: boolean;
 }
 
-/** Candidate raw input shape. L007-02 supplies bounds and canonical validation. */
+/** Candidate raw input shape; canonicalization supplies bounds and validation. */
 export type EntityRawJson =
   | null
   | boolean
@@ -144,7 +144,7 @@ export interface EntityRawJsonLimits {
   readonly maxBytes: number;
 }
 
-/** Conservative transport defaults; acceptance and path diagnostics belong to L007-02. */
+/** Conservative transport defaults for raw Entity data. */
 export const entityRawJsonLimits: EntityRawJsonLimits = Object.freeze({
   maxDepth: 32,
   maxNodes: 4096,
@@ -163,8 +163,30 @@ export type EntityConfiguration =
   | { readonly mode: 'raw'; readonly payload: EntityRawJson }
   | { readonly mode: 'typed'; readonly payload: EntityRawJson };
 
-export interface EntityConnectorBinding {
+export interface EntityConnectorBindingProvenance {
+  readonly source: SourceSpan;
+  readonly instancePath: readonly string[];
+  readonly operationOrdinal: number;
+}
+
+/** A Direct Plan Network reference is its declaration name, not a physical ID. */
+export type EntityPlanNetworkName = string;
+
+export interface EntityConnectorBindingBase {
   readonly endpoint: EntityLaneEndpoint;
+  /** Ownership generation captured by this endpoint facet. */
+  readonly generation: number;
+  readonly direction: 'input' | 'output';
+  readonly provenance: EntityConnectorBindingProvenance;
+}
+
+/** Transport binding whose optional Network reference names a Direct Plan declaration. */
+export interface EntityPlanConnectorBinding extends EntityConnectorBindingBase {
+  readonly network?: EntityPlanNetworkName;
+}
+
+/** Lowered graph binding whose optional Network reference is an allocated physical ID. */
+export interface EntityPhysicalConnectorBinding extends EntityConnectorBindingBase {
   readonly network?: NetworkId;
 }
 
@@ -175,14 +197,21 @@ export interface EntityProvenance {
   readonly creationRevision: number;
 }
 
-export interface EntityRecord {
+interface EntityRecordBase {
   readonly id: EntityId;
   readonly profile: EntityProfileRef;
   readonly configuration?: EntityConfiguration;
-  readonly connectorBindings: readonly EntityConnectorBinding[];
   readonly placement?: EntityPlacement;
   readonly provenance: EntityProvenance;
   readonly ordinal: number;
+}
+
+export interface EntityPlanRecord extends EntityRecordBase {
+  readonly connectorBindings: readonly EntityPlanConnectorBinding[];
+}
+
+export interface EntityPhysicalRecord extends EntityRecordBase {
+  readonly connectorBindings: readonly EntityPhysicalConnectorBinding[];
 }
 
 export type EntityNativeComparator = '>' | '<' | '=' | '>=' | '<=' | '!=';
@@ -201,28 +230,28 @@ export interface DirectElaborationPlanV3 {
   readonly format: 'comblang-direct-plan';
   readonly version: typeof entitySemanticVersion;
   readonly context: EntityReplayContextRef;
-  readonly networks: readonly DirectPlanNetwork[];
+  readonly networks: readonly DirectPlanNetworkV3[];
   readonly networkAliases?: readonly DirectPlanNetworkAlias[];
   readonly networkTransfers?: readonly DirectPlanNetworkTransfer[];
   readonly networkPairs?: readonly DirectPlanNetworkPair[];
   readonly capabilityUses?: readonly DirectPlanCapabilityUse[];
   readonly debugInstances?: readonly DirectPlanDebugInstance[];
   readonly producers: readonly DirectPlanProducer[];
-  readonly entities: readonly EntityRecord[];
+  readonly entities: readonly EntityPlanRecord[];
   readonly diagnostics?: readonly Diagnostic[];
 }
 
-/** Entity graph and NCIR versions are incompatible with their producer-only v2 forms. */
+/** Entity graph and NCIR versions use physical Network IDs, unlike Direct Plan names. */
 export type ElaborationGraphV3 = Omit<ElaborationGraph, 'version'> & {
   readonly version: typeof entitySemanticVersion;
   readonly context: EntityReplayContextRef;
-  readonly entities: readonly EntityRecord[];
+  readonly entities: readonly EntityPhysicalRecord[];
 };
 
 export type NativeCircuitIrV3 = Omit<NativeCircuitIr, 'version'> & {
   readonly version: typeof entitySemanticVersion;
   readonly context: EntityReplayContextRef;
-  readonly entities: readonly EntityRecord[];
+  readonly entities: readonly EntityPhysicalRecord[];
 };
 
 /** Kept as named aliases so the migration inventory can refer to every v2 reader seam. */

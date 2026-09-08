@@ -1,4 +1,5 @@
 import type { SourceSpan } from '@comblang/shared';
+import type { EntityValue } from './entity-registry.js';
 
 import { ElaborationExecutionError } from './elaboration-errors.js';
 import type {
@@ -11,6 +12,10 @@ import type {
 import { inspectReturnValueGraph } from './return-value-graph.js';
 
 export interface ReturnOwnedValuePolicyContext {
+  isEntity?(value: unknown): value is EntityValue;
+  entityNetworks?(entity: EntityValue): readonly NetworkValue[];
+  assertEntityReturnable?(entity: EntityValue): void;
+  returnEntity?(entity: EntityValue): EntityValue;
   isCombinator(value: unknown): value is CombinatorValue;
   isNetwork(value: unknown): value is NetworkValue;
   isPair(value: unknown): value is PairValue;
@@ -41,13 +46,16 @@ export function returnOwnedValue(
   const graph = inspectReturnValueGraph(
     value,
     (item) =>
+      context.isEntity?.(item) === true ||
       context.isCombinator(item) ||
       context.isNetwork(item) ||
       context.isPair(item) ||
       context.isPairSelection(item),
   );
   const networks: NetworkValue[] = [];
+  const entities: EntityValue[] = [];
   const owners = new Set<NetworkOwnershipState>();
+  const returnedEntities = new Set<EntityValue>();
   const combinatorLanes = new Map<NetworkValue, CombinatorValue>();
   const combinatorReplacements = new Map<object, CombinatorValue>();
   const seenCombinators = new Set<object>();
@@ -69,6 +77,16 @@ export function returnOwnedValue(
     if (combinator !== undefined) combinatorLanes.set(network, combinator);
   };
   for (const handle of graph.handles) {
+    if (context.isEntity?.(handle) === true) {
+      const entity = handle;
+      if (returnedEntities.has(entity)) {
+        continue;
+      }
+      returnedEntities.add(entity);
+      context.assertEntityReturnable?.(entity);
+      entities.push(entity);
+      continue;
+    }
     if (context.isPair(handle) || context.isPairSelection(handle)) {
       throw new ElaborationExecutionError(
         'pair(a, b) is a read-only input view and cannot carry ownership across a return.',
@@ -94,6 +112,17 @@ export function returnOwnedValue(
     if (context.isNetwork(handle)) addNetwork(handle);
   }
 
+  const returnedEntityNetworks = new Set(
+    entities.flatMap((entity) => context.entityNetworks?.(entity) ?? []),
+  );
+  if (networks.some((network) => returnedEntityNetworks.has(network))) {
+    throw new ElaborationExecutionError(
+      'Cannot return an Entity together with one of its owned connector facets.',
+      source,
+      'RT2012',
+    );
+  }
+
   // Charge every transfer before the first ownership mutation. A caught budget
   // failure therefore cannot expose a partially moved return container.
   for (const network of networks) context.chargeTransfer(network);
@@ -103,6 +132,10 @@ export function returnOwnedValue(
     const combinator = combinatorLanes.get(network);
     if (combinator === undefined) replacements.set(network, returned);
     else context.updateCombinatorNetwork(combinator, network, returned);
+  }
+  for (const entity of entities) {
+    const returned = context.returnEntity?.(entity) ?? entity;
+    if (returned !== entity) replacements.set(entity, returned);
   }
   return graph.replace(replacements);
 }

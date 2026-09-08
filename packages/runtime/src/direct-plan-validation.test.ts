@@ -23,6 +23,27 @@ describe('direct plan envelope validation', () => {
     expect(Object.isFrozen(result.value?.plan.networks[0])).toBe(true);
   });
 
+  test.each(['generation', 'consumedAt'])('rejects v3-only Network field %s in v2', (field) => {
+    const plan: Record<string, unknown> = {
+      format: 'comblang-direct-plan',
+      version: 2,
+      networks: [
+        {
+          name: 'input',
+          source: span,
+          instancePath: [],
+          [field]: field === 'generation' ? 0 : span,
+        },
+      ],
+      producers: [],
+    };
+
+    expect(validateDirectPlanEnvelope(plan).diagnostics[0]).toMatchObject({
+      code: 'RT1001',
+      message: 'Invalid Network descriptor in direct plan.',
+    });
+  });
+
   test.each([
     {
       name: 'missing Network collection',

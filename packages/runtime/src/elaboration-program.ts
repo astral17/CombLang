@@ -5,7 +5,16 @@ import {
   Signal,
   type SignalId,
 } from '@comblang/factorio';
-import type { ElaborationJavaScript } from '@comblang/compiler';
+import type {
+  DirectElaborationPlanV3,
+  ElaborationJavaScript,
+  EntityConfiguration,
+  EntityConnectorBindingProvenance,
+  EntityConnectorProfile,
+  EntityLaneEndpoint,
+  EntityProfile,
+  EntityProfileRef,
+} from '@comblang/compiler';
 import type { DslParameterContract } from '@comblang/language';
 import type {
   DirectElaborationPlan,
@@ -16,7 +25,7 @@ import type {
   PlanDeciderCondition,
 } from '@comblang/compiler/direct-plan-schema';
 import type { PrototypeProvider } from '@comblang/prototypes';
-import type { Diagnostic, SourceFileId, SourceSpan } from '@comblang/shared';
+import type { Diagnostic, NetworkId, SourceFileId, SourceSpan } from '@comblang/shared';
 
 import { ElaborationExecutionError, ElaborationOperationLimitError } from './elaboration-errors.js';
 import { ElaborationColorConstraints } from './elaboration-color-constraints.js';
@@ -61,6 +70,19 @@ import { returnNetworkValue } from './network-return-policy.js';
 import { validateCombinatorAttachment } from './combinator-attachment-policy.js';
 import { bindCombinatorHandle } from './combinator-handle-policy.js';
 import { returnOwnedValue } from './return-owned-value-policy.js';
+import {
+  EntityRegistry,
+  EntityRegistryError,
+  entityPrototypeResolverFromProvider,
+  type EntityValue,
+  type EntityPrototypeResolver,
+} from './entity-registry.js';
+import {
+  entityReplayContextRef,
+  resolveEntityReplayProfile,
+  type TrustedEntityReplayContext,
+} from '@comblang/compiler/entity-replay-context';
+import type { EntityPlacement } from '@comblang/compiler/ir';
 
 interface RawSpan {
   readonly start: number;
@@ -109,10 +131,30 @@ interface ExecutionApiFrame {
   dslDomain: boolean;
 }
 
+interface EntityFacetAuthority {
+  readonly endpoint: EntityLaneEndpoint;
+  readonly direction: 'input' | 'output';
+  readonly provenance: EntityConnectorBindingProvenance;
+  readonly source: SourceSpan;
+  network: NetworkValue;
+  locallyOwned: boolean;
+}
+
+interface EntityAuthorityView {
+  readonly entity: EntityValue;
+  owner: symbol | 'top-level' | 'retired';
+  retiredAt?: SourceSpan;
+  readonly facets: Map<string, EntityFacetAuthority>;
+}
+
 export interface ElaborationExecutionOptions {
   readonly dslCallBudget?: number;
   /** Explicit immutable prototype environment exposed to source as `prototypes`. */
   readonly prototypes?: PrototypeProvider;
+  /** Host-only v3 profile context; never exposed to executed source. */
+  readonly trustedEntityReplayContext?: TrustedEntityReplayContext;
+  /** Narrow prototype lookup used by internal Entity construction tests. */
+  readonly entityPrototypeResolver?: EntityPrototypeResolver;
   /** @deprecated Use dslCallBudget. */
   readonly operationBudget?: number;
 }
@@ -141,6 +183,7 @@ function isRawSpan(value: unknown): value is RawSpan {
 class ElaborationRecorder {
   readonly #fileId: SourceFileId;
   readonly #networks: DirectElaborationPlan['networks'][number][] = [];
+  readonly #networkStates = new Map<string, NetworkRuntimeState>();
   readonly #networkTransfers: NonNullable<DirectElaborationPlan['networkTransfers']>[number][] = [];
   readonly #networkAliases = new Map<string, PendingNetworkAlias>();
   readonly #transparentNetworkParameters = new WeakMap<
@@ -180,6 +223,12 @@ class ElaborationRecorder {
   #pendingDebugInstance: PendingDebugInstance | undefined;
   readonly #dslCallBudget: number;
   readonly #prototypes: PrototypeProvider | undefined;
+  readonly #entityContext: TrustedEntityReplayContext | undefined;
+  readonly #entityRegistry: EntityRegistry | undefined;
+  readonly #entityAuthorities = new WeakMap<object, EntityAuthorityView>();
+  readonly #entityAuthorityList: EntityAuthorityView[] = [];
+  #entityRevision = 0;
+  #entityOperationOrdinal = 0;
   #dslCalls = 0;
   readonly #operatorContext: ElaborationOperatorDispatchContext<RawSpan> = {
     isCircuitDslValue: (value): value is DslValue => this.#isCircuitDslValue(value),
@@ -188,6 +237,7 @@ class ElaborationRecorder {
     isSelected: (value): value is SelectedValue => this.#isSelected(value),
     isNetwork: (value): value is NetworkValue => this.#isNetwork(value),
     networkFacet: (value) => this.#networkFacet(value),
+    readableNetworkFacet: (value, source) => this.#readableNetworkFacet(value, source),
     isPair: (value): value is PairValue => this.#isPair(value),
     isWildcardToken: (value): value is WildcardTokenValue => this.#isWildcardToken(value),
     recordDslCall: () => this.#recordDslCall(),
@@ -203,10 +253,17 @@ class ElaborationRecorder {
     fileId: SourceFileId,
     dslCallBudget: number,
     prototypes: PrototypeProvider | undefined,
+    entityContext: TrustedEntityReplayContext | undefined,
+    entityPrototypeResolver: EntityPrototypeResolver | undefined,
   ) {
     this.#fileId = fileId;
     this.#dslCallBudget = dslCallBudget;
     this.#prototypes = prototypes;
+    this.#entityContext = entityContext;
+    this.#entityRegistry =
+      entityContext === undefined || entityPrototypeResolver === undefined
+        ? undefined
+        : new EntityRegistry(entityContext, entityPrototypeResolver);
   }
 
   readonly api = Object.freeze({
@@ -396,6 +453,26 @@ class ElaborationRecorder {
       const [type, name, quality] = values as [SignalId['type'], string, string?];
       return this.#signalHandle(Signal(type, name, quality));
     },
+    entity: (
+      profile: unknown,
+      configuration: unknown,
+      placement: unknown,
+      rawSpan: RawSpan,
+    ): EntityValue => this.#constructEntity(profile, configuration, placement, rawSpan),
+    entityFacet: (
+      value: unknown,
+      connector: unknown,
+      lane: unknown,
+      rawSpan: RawSpan,
+    ): NetworkValue => this.#projectEntity(value, connector, lane, rawSpan),
+    bindEntity: (
+      value: unknown,
+      connector: unknown,
+      lane: unknown,
+      network: unknown,
+      direction: unknown,
+      rawSpan: RawSpan,
+    ): EntityValue => this.#bindEntity(value, connector, lane, network, direction, rawSpan),
     wildcardToken: (value: WildcardName): WildcardTokenValue =>
       this.#runtimeValue({
         kind: 'wildcard-token',
@@ -526,7 +603,7 @@ class ElaborationRecorder {
           source: this.#span(argumentSpan),
         },
         {
-          networkFacet: (candidate) => this.#networkFacet(candidate),
+          networkFacet: (candidate) => this.#readableNetworkFacet(candidate, argumentSpan),
           recordDslCall: () => this.#recordDslCall(),
           acceptUnrestricted: (candidate) =>
             this.#acceptUnrestrictedNetwork(candidate, declarationSpan, parameter),
@@ -565,6 +642,8 @@ class ElaborationRecorder {
         },
         {
           networkFacet: (candidate) => this.#networkFacet(candidate),
+          readableNetworkFacet: (candidate, source) =>
+            this.#readableNetworkFacet(candidate, source),
           isNetwork: (candidate): candidate is NetworkValue => this.#isNetwork(candidate),
           isPair: (candidate): candidate is PairValue => this.#isPair(candidate),
           isPairSelection: (candidate): candidate is PairSelectedValue =>
@@ -720,7 +799,10 @@ class ElaborationRecorder {
           source: this.#span(rawSpan),
         },
         {
-          networkFacet: (candidate) => this.#networkFacet(candidate),
+          networkFacet: (candidate) =>
+            capability === 'readonly'
+              ? this.#readableNetworkFacet(candidate, rawSpan)
+              : this.#networkFacet(candidate),
           assertReadable: (network, source, role) =>
             this.#ownership.assertReadable(network, source, role),
           stateFor: (network) => this.#networkState(network),
@@ -1314,7 +1396,7 @@ class ElaborationRecorder {
     },
   });
 
-  plan(): DirectElaborationPlan {
+  plan(): DirectElaborationPlan | DirectElaborationPlanV3 {
     if (this.#status === 'failed') throw this.#firstFailure;
     if (this.#status === 'sealed') {
       throw new Error('The elaboration runtime has already been sealed.');
@@ -1322,9 +1404,8 @@ class ElaborationRecorder {
     try {
       this.#finalizeUnusedCombinators();
       const declarations = new Map(this.#networks.map((network) => [network.name, network]));
-      const plan: DirectElaborationPlan = {
-        format: 'comblang-direct-plan',
-        version: 2,
+      const common = {
+        format: 'comblang-direct-plan' as const,
         networks: Object.freeze([...this.#networks]),
         networkAliases: Object.freeze(
           [...this.#networkAliases.values()].flatMap(({ read, ...alias }) => {
@@ -1364,6 +1445,34 @@ class ElaborationRecorder {
         ),
         diagnostics: Object.freeze([...this.#diagnostics]),
       };
+      for (const authority of this.#entityAuthorityList) {
+        if (authority.owner === 'retired') continue;
+        for (const facet of authority.facets.values()) {
+          this.#assertReadableNetworkAt(facet.network, facet.source, 'Entity facet');
+        }
+      }
+      const entities = this.#entityRegistry?.records() ?? [];
+      const plan: DirectElaborationPlan | DirectElaborationPlanV3 =
+        entities.length === 0
+          ? { ...common, version: 2 as const }
+          : {
+              ...common,
+              version: 3 as const,
+              context: entityReplayContextRef(this.#entityContext!),
+              networks: Object.freeze(
+                this.#networks.map((network) => {
+                  const state = this.#networkStates.get(network.name);
+                  return Object.freeze({
+                    ...network,
+                    generation: state?.ownership.generation ?? 0,
+                    ...(state?.ownership.consumedAt === undefined
+                      ? {}
+                      : { consumedAt: state.ownership.consumedAt }),
+                  });
+                }),
+              ),
+              entities: Object.freeze([...entities]),
+            };
       this.#status = 'sealed';
       return plan;
     } catch (error) {
@@ -1442,6 +1551,14 @@ class ElaborationRecorder {
 
   #span(raw: RawSpan): SourceSpan {
     return { fileId: this.#fileId, start: raw.start, end: raw.end };
+  }
+
+  #sourceSpan(source: RawSpan | SourceSpan): SourceSpan {
+    return isRawSpan(source) ? this.#span(source) : source;
+  }
+
+  #rawSpan(source: RawSpan | SourceSpan): RawSpan {
+    return { start: source.start, end: source.end };
   }
 
   #invoke(
@@ -1829,6 +1946,7 @@ class ElaborationRecorder {
   }
 
   #networkValue<T extends NetworkValue>(value: T, state: NetworkRuntimeState): T {
+    this.#networkStates.set(value.name, state);
     return this.#runtimeValues.brandNetwork(value, state);
   }
 
@@ -1839,7 +1957,11 @@ class ElaborationRecorder {
   }
 
   #assertReadableNetwork(network: NetworkValue, rawSpan: RawSpan, role = 'Network'): void {
-    this.#ownership.assertReadable(network, this.#span(rawSpan), role);
+    this.#assertReadableNetworkAt(network, this.#span(rawSpan), role);
+  }
+
+  #assertReadableNetworkAt(network: NetworkValue, source: SourceSpan, role = 'Network'): void {
+    this.#ownership.assertReadable(network, source, role);
     this.#markOutputUsed(network);
   }
 
@@ -1854,9 +1976,13 @@ class ElaborationRecorder {
     color: 'red' | 'green',
     rawSpan: RawSpan,
   ): void {
-    if (!this.#ownership.requireColor(network, capability, color, this.#span(rawSpan))) return;
     const source = this.#span(rawSpan);
+    const ownership = this.#networkState(network).ownership;
+    if (ownership.colorRequirement !== undefined && ownership.colorRequirement.color !== color) {
+      this.#ownership.requireColor(network, capability, color, source);
+    }
     this.#colors.requireColor(this.#networkState(network).ownership, network.name, color, source);
+    if (!this.#ownership.requireColor(network, capability, color, source)) return;
     const index = this.#networks.findLastIndex(({ name }) => name === network.name);
     const declaration = this.#networks[index];
     if (declaration === undefined) {
@@ -1891,7 +2017,10 @@ class ElaborationRecorder {
         frame: this.#currentFunctionFrame(),
       },
       {
-        networkFacet: (candidate) => this.#networkFacet(candidate),
+        networkFacet: (candidate) =>
+          capability === 'readonly'
+            ? this.#readableNetworkFacet(candidate, rawSpan)
+            : this.#networkFacet(candidate),
         isNetwork: (candidate): candidate is NetworkValue => this.#isNetwork(candidate),
         isPair: (candidate): candidate is PairValue => this.#isPair(candidate),
         isPairSelection: (candidate): candidate is PairSelectedValue =>
@@ -1928,6 +2057,15 @@ class ElaborationRecorder {
     const source = this.#span(rawSpan);
     const frame = this.#currentFunctionFrame();
     return returnOwnedValue(value, source, {
+      isEntity: (item): item is EntityValue => this.#isEntity(item),
+      entityNetworks: (entity) => {
+        const authority = this.#entityAuthority(entity, source);
+        return [...authority.facets.values()]
+          .filter(({ locallyOwned }) => locallyOwned)
+          .map(({ network }) => network);
+      },
+      assertEntityReturnable: (entity) => this.#assertEntityReturnable(entity, source, frame),
+      returnEntity: (entity) => this.#returnEntity(entity, rawSpan, frame),
       isCombinator: (item): item is CombinatorValue => this.#isCombinator(item),
       isNetwork: (item): item is NetworkValue => this.#isNetwork(item),
       isPair: (item): item is PairValue => this.#isPair(item),
@@ -1957,6 +2095,81 @@ class ElaborationRecorder {
       chargeTransfer: () => this.#recordDslCall(),
       returnNetwork: (network) => this.#returnOwnedNetwork(network, rawSpan, false),
     });
+  }
+
+  #assertEntityReturnable(
+    entity: EntityValue,
+    source: SourceSpan,
+    frame: FunctionOwnershipFrame | undefined,
+  ): void {
+    const authority = this.#entityAuthority(entity, source);
+    if (frame === undefined || authority.owner !== frame.owner) return;
+    for (const facet of authority.facets.values()) {
+      if (facet.locallyOwned && facet.network.capability === 'ref') {
+        throw new ElaborationExecutionError(
+          'A borrowed Entity facet cannot escape its function.',
+          source,
+          'RT2017',
+          [{ message: 'Entity facet was bound here.', span: facet.source }],
+        );
+      }
+      if (facet.locallyOwned) this.#ownership.assertReturnable(facet.network, source, frame);
+      else {
+        const state = this.#networkState(facet.network);
+        if (state.borrow !== undefined) {
+          throw new ElaborationExecutionError(
+            'A borrowed Entity connection cannot escape its function.',
+            source,
+            'RT2017',
+            [{ message: 'Entity connection borrowed here.', span: state.borrow.source }],
+          );
+        }
+        this.#ownership.assertReadable(facet.network, source, 'Entity connection');
+      }
+    }
+  }
+
+  #returnEntity(
+    entity: EntityValue,
+    rawSpan: RawSpan,
+    frame: FunctionOwnershipFrame | undefined,
+  ): EntityValue {
+    const source = this.#span(rawSpan);
+    const authority = this.#entityAuthority(entity, source);
+    if (frame === undefined || authority.owner !== frame.owner) return entity;
+    this.#assertEntityReturnable(entity, source, frame);
+    const registry = this.#entityRegistry;
+    if (registry === undefined) throw new Error('Entity registry is unavailable.');
+    const returnedEntity = registry.createView(entity);
+    const returnedAuthority: EntityAuthorityView = {
+      entity: returnedEntity,
+      owner: this.#parentFunctionFrame()?.owner ?? 'top-level',
+      facets: new Map(),
+    };
+    for (const facet of authority.facets.values()) {
+      const network = facet.locallyOwned
+        ? this.#returnOwnedNetwork(facet.network, rawSpan, false, false)
+        : this.#networkValue(
+            {
+              kind: 'network',
+              name: facet.network.name,
+              declaration: facet.network.declaration,
+              capability: 'readonly',
+              generation: facet.network.generation,
+            },
+            { ownership: this.#networkState(facet.network).ownership },
+          );
+      returnedAuthority.facets.set(this.#entityEndpointKey(facet.endpoint), {
+        ...facet,
+        network,
+      });
+    }
+    authority.owner = 'retired';
+    authority.retiredAt = source;
+    this.#entityAuthorities.set(returnedEntity, returnedAuthority);
+    this.#entityAuthorityList.push(returnedAuthority);
+    this.#syncEntityBindings(returnedAuthority);
+    return returnedEntity;
   }
 
   #combinatorHandle(
@@ -2025,6 +2238,7 @@ class ElaborationRecorder {
       },
       {
         ownership: state.ownership,
+        ...(state.borrow === undefined ? {} : { borrow: state.borrow }),
       },
     );
   }
@@ -2102,6 +2316,334 @@ class ElaborationRecorder {
     }) as SignalHandle;
     Object.freeze(handle);
     return this.#runtimeValues.brandSignal(handle);
+  }
+
+  #constructEntity(
+    profile: unknown,
+    configuration: unknown,
+    placement: unknown,
+    rawSpan: RawSpan,
+  ): EntityValue {
+    this.#recordDslCall();
+    if (!isRawSpan(rawSpan)) throw new Error('t.entity(...) is missing provenance.');
+    const registry = this.#entityRegistry;
+    if (registry === undefined || this.#entityContext === undefined) {
+      throw new ElaborationExecutionError(
+        'Entity construction requires a trusted v3 context and prototype resolver.',
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    try {
+      const entity = registry.create({
+        profile: profile as EntityProfileRef,
+        ...(configuration === undefined
+          ? {}
+          : { configuration: configuration as EntityConfiguration }),
+        ...(placement === undefined ? {} : { placement: placement as EntityPlacement }),
+        source: this.#span(rawSpan),
+        instancePath: this.#path(),
+        expansionStack: [],
+        creationRevision: ++this.#entityRevision,
+      });
+      const authority = {
+        entity,
+        owner: this.#currentFunctionFrame()?.owner ?? 'top-level',
+        facets: new Map(),
+      } satisfies EntityAuthorityView;
+      this.#entityAuthorities.set(entity, authority);
+      this.#entityAuthorityList.push(authority);
+      return entity;
+    } catch (error) {
+      const code =
+        error instanceof EntityRegistryError && error.code.length > 0 ? error.code : 'RT2027';
+      throw new ElaborationExecutionError(
+        error instanceof Error ? error.message : 'Entity construction failed.',
+        this.#span(rawSpan),
+        code,
+        undefined,
+        { cause: error },
+      );
+    }
+  }
+
+  #isEntity(value: unknown): value is EntityValue {
+    return this.#entityRegistry?.isEntity(value) === true;
+  }
+
+  #entityAuthority(value: unknown, source: SourceSpan): EntityAuthorityView {
+    if (!this.#isEntity(value)) {
+      throw new ElaborationExecutionError(
+        'Entity operation requires an Entity handle from this execution session.',
+        source,
+        'RT2027',
+      );
+    }
+    const authority = this.#entityAuthorities.get(value);
+    if (authority === undefined) {
+      throw new ElaborationExecutionError(
+        'Entity handle has no authority view in this execution session.',
+        source,
+        'RT2027',
+      );
+    }
+    if (authority.owner === 'retired') {
+      throw new ElaborationExecutionError(
+        'The Entity view was transferred to its caller and is stale.',
+        source,
+        'RT2012',
+        authority.retiredAt === undefined
+          ? undefined
+          : [{ message: 'Entity view was transferred here.', span: authority.retiredAt }],
+      );
+    }
+    return authority;
+  }
+
+  #entityEndpoint(
+    value: unknown,
+    connectorValue: unknown,
+    laneValue: unknown,
+    source: SourceSpan,
+  ): {
+    readonly authority: EntityAuthorityView;
+    readonly profile: EntityProfile;
+    readonly connector: EntityConnectorProfile;
+    readonly endpoint: EntityLaneEndpoint;
+  } {
+    const authority = this.#entityAuthority(value, source);
+    const context = this.#entityContext;
+    const registry = this.#entityRegistry;
+    if (context === undefined || registry === undefined) {
+      throw new ElaborationExecutionError(
+        'Entity operation requires a trusted v3 context and prototype resolver.',
+        source,
+        'RT2027',
+      );
+    }
+    if (typeof connectorValue !== 'string' || typeof laneValue !== 'string') {
+      throw new ElaborationExecutionError(
+        'Entity connector and lane keys must be strings.',
+        source,
+        'RT2031',
+      );
+    }
+    let profile: EntityProfile;
+    try {
+      profile = resolveEntityReplayProfile(registry.record(authority.entity).profile, context);
+    } catch (error) {
+      throw new ElaborationExecutionError(
+        error instanceof Error ? error.message : 'Entity profile is unavailable.',
+        source,
+        'RT2027',
+        undefined,
+        { cause: error },
+      );
+    }
+    const connector = profile.connectors.find(({ key }) => key === connectorValue);
+    if (connector === undefined) {
+      throw new ElaborationExecutionError(
+        `Unknown Entity connector ${JSON.stringify(connectorValue)}.`,
+        source,
+        'RT2031',
+      );
+    }
+    const lane = connector.lanes.find(({ key }) => key === laneValue);
+    if (lane === undefined) {
+      throw new ElaborationExecutionError(
+        `Unknown Entity lane ${JSON.stringify(laneValue)} on connector ${JSON.stringify(connectorValue)}.`,
+        source,
+        'RT2031',
+      );
+    }
+    return {
+      authority,
+      profile,
+      connector,
+      endpoint: { connector: connector.key, lane: lane.key, color: lane.color },
+    };
+  }
+
+  #entityEndpointKey(endpoint: EntityLaneEndpoint): string {
+    return `${endpoint.connector}/${endpoint.lane}/${endpoint.color}`;
+  }
+
+  #entityBindingProvenance(rawSpan: RawSpan): EntityConnectorBindingProvenance {
+    return Object.freeze({
+      source: this.#span(rawSpan),
+      instancePath: this.#path(),
+      operationOrdinal: ++this.#entityOperationOrdinal,
+    });
+  }
+
+  #projectionDirection(connector: EntityConnectorProfile): 'input' | 'output' {
+    return connector.direction === 'output' ? 'output' : 'input';
+  }
+
+  #syncEntityBindings(authority: EntityAuthorityView): void {
+    this.#entityRegistry?.replaceConnectorBindings(
+      authority.entity,
+      [...authority.facets.values()].map(({ endpoint, network, direction, provenance }) => ({
+        endpoint,
+        network: network.name,
+        generation: network.generation,
+        direction,
+        provenance,
+      })),
+    );
+  }
+
+  #projectEntity(
+    value: unknown,
+    connectorValue: unknown,
+    laneValue: unknown,
+    rawSpan: RawSpan,
+  ): NetworkValue {
+    this.#recordDslCall();
+    if (!isRawSpan(rawSpan)) throw new Error('t.entityFacet(...) is missing provenance.');
+    const source = this.#span(rawSpan);
+    const { authority, connector, endpoint } = this.#entityEndpoint(
+      value,
+      connectorValue,
+      laneValue,
+      source,
+    );
+    const key = this.#entityEndpointKey(endpoint);
+    const existing = authority.facets.get(key);
+    if (existing !== undefined) {
+      this.#assertReadableNetworkAt(existing.network, source, 'Entity facet');
+      return existing.network;
+    }
+    const direction = this.#projectionDirection(connector);
+    const provenance = this.#entityBindingProvenance(rawSpan);
+    const network = this.#network(`$entity:${authority.entity.id}:${key}`, rawSpan, endpoint.color);
+    authority.facets.set(key, {
+      endpoint,
+      direction,
+      provenance,
+      source,
+      network,
+      locallyOwned: true,
+    });
+    this.#syncEntityBindings(authority);
+    return network;
+  }
+
+  #bindEntity(
+    value: unknown,
+    connectorValue: unknown,
+    laneValue: unknown,
+    networkValue: unknown,
+    directionValue: unknown,
+    rawSpan: RawSpan,
+  ): EntityValue {
+    this.#recordDslCall();
+    if (!isRawSpan(rawSpan)) throw new Error('t.bindEntity(...) is missing provenance.');
+    const source = this.#span(rawSpan);
+    if (directionValue !== 'input' && directionValue !== 'output') {
+      throw new ElaborationExecutionError(
+        'Entity binding direction must be input or output.',
+        source,
+        'RT2031',
+      );
+    }
+    const { authority, connector, endpoint } = this.#entityEndpoint(
+      value,
+      connectorValue,
+      laneValue,
+      source,
+    );
+    if (
+      (directionValue === 'input' && connector.direction === 'output') ||
+      (directionValue === 'output' && connector.direction === 'input')
+    ) {
+      throw new ElaborationExecutionError(
+        `Entity connector ${connector.key} cannot be used as an ${directionValue} endpoint.`,
+        source,
+        'RT2031',
+      );
+    }
+    const network = this.#networkFacet(networkValue);
+    if (network === undefined) {
+      throw new ElaborationExecutionError(
+        'Entity binding requires an existing readable Network.',
+        source,
+        'RT2015',
+      );
+    }
+    this.#assertReadableNetworkAt(network, source, 'Entity binding Network');
+    this.#requireNetworkColor(network, 'ref', endpoint.color, rawSpan);
+    const key = this.#entityEndpointKey(endpoint);
+    const existing = authority.facets.get(key);
+    if (existing !== undefined) {
+      if (
+        this.#networkState(existing.network).ownership === this.#networkState(network).ownership &&
+        existing.direction === directionValue
+      ) {
+        return authority.entity;
+      }
+      if (existing.direction !== directionValue) {
+        throw new ElaborationExecutionError(
+          `Entity endpoint ${key} is already bound with direction ${existing.direction}.`,
+          source,
+          'RT2030',
+          [{ message: 'The first Entity binding originates here.', span: existing.source }],
+        );
+      }
+      throw new ElaborationExecutionError(
+        `Entity endpoint ${key} is already bound to a different logical Network.`,
+        source,
+        'RT2030',
+        [{ message: 'The first Entity binding originates here.', span: existing.source }],
+      );
+    }
+    const state = this.#networkState(network);
+    const facet = this.#networkValue(
+      {
+        kind: 'network',
+        name: network.name,
+        declaration: network.declaration,
+        capability: 'ref',
+        generation: network.generation,
+      },
+      {
+        ownership: state.ownership,
+        ...(state.borrow === undefined ? {} : { borrow: state.borrow }),
+      },
+    );
+    authority.facets.set(key, {
+      endpoint,
+      direction: directionValue,
+      provenance: this.#entityBindingProvenance(rawSpan),
+      source,
+      network: facet,
+      locallyOwned: false,
+    });
+    this.#syncEntityBindings(authority);
+    return authority.entity;
+  }
+
+  #readableNetworkFacet(value: unknown, source: RawSpan | SourceSpan): NetworkValue | undefined {
+    if (this.#isEntity(value)) {
+      const profile = this.#entityContext?.profiles.find(
+        ({ ref }) => ref.profileId === value.profile.profileId,
+      );
+      const projection = profile?.defaultReadProjection;
+      if (projection === null || projection === undefined) {
+        throw new ElaborationExecutionError(
+          'Entity has no unambiguous default read projection; select an explicit facet.',
+          this.#sourceSpan(source),
+          'RT2032',
+        );
+      }
+      return this.#projectEntity(
+        value,
+        projection.connector,
+        projection.lane,
+        this.#rawSpan(source),
+      );
+    }
+    return this.#networkFacet(value);
   }
 
   #isSelected(value: unknown): value is SelectedValue {
@@ -2202,6 +2744,12 @@ class ElaborationRecorder {
 
   #arithmeticOperand(value: DslValue, rawSpan: RawSpan): PlanArithmeticOperand {
     if (typeof value === 'number') return { kind: 'constant', value: circuitConstant(value) };
+    if (this.#isEntity(value)) {
+      const network = this.#readableNetworkFacet(value, rawSpan);
+      if (network === undefined) throw new Error('Entity read projection is unavailable.');
+      this.#assertReadableNetwork(network, rawSpan);
+      return { kind: 'each', refKind: 'single', network: network.name };
+    }
     if (this.#isNetwork(value)) {
       this.#assertReadableNetwork(value, rawSpan);
       return { kind: 'each', refKind: 'single', network: value.name };
@@ -2314,6 +2862,7 @@ class ElaborationRecorder {
 
   #isCircuitDslValue(value: unknown): value is DslValue {
     return (
+      this.#isEntity(value) ||
       this.#isSignal(value) ||
       this.#isNetwork(value) ||
       this.#isPair(value) ||
@@ -2328,7 +2877,7 @@ class ElaborationRecorder {
   }
 
   #assertReadableValue(value: unknown, rawSpan: RawSpan): void {
-    const network = this.#resolveNetworkFacet(value, rawSpan);
+    const network = this.#readableNetworkFacet(value, rawSpan);
     if (network !== undefined && !this.#isSelected(value)) {
       this.#assertReadableNetwork(network, rawSpan);
     }
@@ -2404,10 +2953,10 @@ class ElaborationRecorder {
 }
 
 /** Must be invoked only inside a disposable, time-bounded worker for untrusted source. */
-export function executeElaborationProgram(
+function executeElaborationProgramInternal(
   program: ElaborationJavaScript,
   options: ElaborationExecutionOptions = {},
-): DirectElaborationPlan {
+): DirectElaborationPlan | DirectElaborationPlanV3 {
   if (program.format !== 'comblang-elaboration-js' || program.version !== 2) {
     throw new Error('Unsupported elaboration JavaScript format.');
   }
@@ -2421,7 +2970,16 @@ export function executeElaborationProgram(
   if (!Number.isSafeInteger(dslCallBudget) || dslCallBudget <= 0) {
     throw new Error('Elaboration DSL call budget must be a positive safe integer.');
   }
-  const recorder = new ElaborationRecorder(program.fileId, dslCallBudget, options.prototypes);
+  const recorder = new ElaborationRecorder(
+    program.fileId,
+    dslCallBudget,
+    options.prototypes,
+    options.trustedEntityReplayContext,
+    options.entityPrototypeResolver ??
+      (options.prototypes === undefined
+        ? undefined
+        : entityPrototypeResolverFromProvider(options.prototypes)),
+  );
   try {
     Function(program.runtimeParameter, `"use strict";\n${program.code}`)(recorder.executionApi());
   } catch (error) {
@@ -2429,4 +2987,28 @@ export function executeElaborationProgram(
     throw error;
   }
   return recorder.plan();
+}
+
+/** Executes the legacy source path and preserves its producer-only v2 contract. */
+export function executeElaborationProgram(
+  program: ElaborationJavaScript,
+  options: ElaborationExecutionOptions = {},
+): DirectElaborationPlan {
+  const {
+    trustedEntityReplayContext: _context,
+    entityPrototypeResolver: _resolver,
+    ...legacy
+  } = options;
+  return executeElaborationProgramInternal(program, legacy) as DirectElaborationPlan;
+}
+
+/** Internal host/test boundary for execution sessions that may construct Entity records. */
+export function executeElaborationProgramV3(
+  program: ElaborationJavaScript,
+  options: ElaborationExecutionOptions & {
+    readonly trustedEntityReplayContext: TrustedEntityReplayContext;
+    readonly entityPrototypeResolver?: EntityPrototypeResolver;
+  },
+): DirectElaborationPlan | DirectElaborationPlanV3 {
+  return executeElaborationProgramInternal(program, options);
 }

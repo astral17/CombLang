@@ -1,9 +1,10 @@
 import type {
   EntityConfiguration,
+  EntityPlanConnectorBinding,
   EntityId,
   EntityProfileRef,
   EntityProvenance,
-  EntityRecord,
+  EntityPlanRecord,
 } from '@comblang/compiler/entity';
 import type { EntityPlacement } from '@comblang/compiler/ir';
 import { canonicalizeEntityRawJson } from '@comblang/compiler/entity-raw';
@@ -131,8 +132,8 @@ export class EntityRegistry {
   readonly #prototypes: EntityPrototypeResolver;
   readonly #ids = new StableIdAllocator('entity');
   readonly #values = new WeakSet<object>();
-  readonly #records = new WeakMap<object, EntityRecord>();
-  readonly #allRecords: EntityRecord[] = [];
+  readonly #records = new WeakMap<object, EntityPlanRecord>();
+  readonly #allRecords: EntityPlanRecord[] = [];
 
   constructor(context: TrustedEntityReplayContext, prototypes: EntityPrototypeResolver) {
     this.#context = context;
@@ -194,7 +195,7 @@ export class EntityRegistry {
       creationRevision: revision(request.creationRevision),
     });
     const id = this.#ids.allocate() as unknown as EntityId;
-    const record: EntityRecord = Object.freeze({
+    const record: EntityPlanRecord = Object.freeze({
       id,
       profile: profile.ref,
       ...(configuration === undefined ? {} : { configuration }),
@@ -225,12 +226,54 @@ export class EntityRegistry {
     invalid('EN1001', '$', 'value is not an Entity handle from this session.');
   }
 
-  record(value: unknown): EntityRecord {
+  /** Creates a new nominal view for the same physical Entity record. */
+  createView(value: unknown): EntityValue {
+    const entity = this.alias(value);
+    const view: EntityValue = Object.freeze({
+      kind: 'entity',
+      id: entity.id,
+      profile: entity.profile,
+      ...(entity.configuration === undefined ? {} : { configuration: entity.configuration }),
+      ...(entity.placement === undefined ? {} : { placement: entity.placement }),
+    });
+    this.#values.add(view);
+    this.#records.set(view, this.#records.get(entity)!);
+    return view;
+  }
+
+  record(value: unknown): EntityPlanRecord {
     const entity = this.alias(value);
     return this.#records.get(entity)!;
   }
 
-  records(): readonly EntityRecord[] {
+  records(): readonly EntityPlanRecord[] {
     return Object.freeze([...this.#allRecords]);
+  }
+
+  /** Replaces compiler-owned endpoint bindings without changing physical identity. */
+  replaceConnectorBindings(value: unknown, bindings: readonly EntityPlanConnectorBinding[]): void {
+    const entity = this.alias(value);
+    const current = this.#records.get(entity)!;
+    const endpointKeys = bindings.map(
+      ({ endpoint }) => `${endpoint.connector}/${endpoint.lane}/${endpoint.color}`,
+    );
+    if (new Set(endpointKeys).size !== endpointKeys.length) {
+      invalid('EN1000', '$.connectorBindings', 'an Entity endpoint cannot be bound twice.');
+    }
+    for (const [index, binding] of bindings.entries()) {
+      if (!Number.isSafeInteger(binding.generation) || binding.generation < 0) {
+        invalid(
+          'EN1000',
+          `$.connectorBindings[${index}].generation`,
+          'expected a non-negative safe integer.',
+        );
+      }
+    }
+    const updated = Object.freeze({
+      ...current,
+      connectorBindings: Object.freeze([...bindings]),
+    });
+    this.#records.set(entity, updated);
+    this.#allRecords[current.ordinal - 1] = updated;
   }
 }

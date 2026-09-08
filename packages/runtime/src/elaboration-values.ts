@@ -2,6 +2,7 @@ import type {
   DirectPlanProducer,
   PlanDeciderCondition,
 } from '@comblang/compiler/direct-plan-schema';
+import type { EntityValue } from './entity-registry.js';
 import type { SignalId } from '@comblang/factorio';
 import type { SourceSpan } from '@comblang/shared';
 
@@ -132,6 +133,7 @@ export interface CombinatorValue {
 }
 
 export type DslValue =
+  | EntityValue
   | NetworkValue
   | PairValue
   | SelectedValue

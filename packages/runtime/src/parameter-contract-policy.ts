@@ -32,18 +32,24 @@ export interface ParameterContractPolicyContext extends NetworkParameterPolicyCo
     source: SourceSpan,
   ): NetworkValue;
   acceptUnrestricted(network: NetworkValue): void;
+  readableNetworkFacet?(value: unknown, source: SourceSpan): NetworkValue | undefined;
 }
 
 function matches(
   value: unknown,
   contract: DslParameterContract,
   context: ParameterContractPolicyContext,
+  source: SourceSpan,
 ): boolean {
   switch (contract.kind) {
     case 'dynamic':
       return true;
     case 'network':
-      return context.networkFacet(value) !== undefined;
+      return (
+        ((contract.capability === 'readonly'
+          ? context.readableNetworkFacet?.(value, source)
+          : undefined) ?? context.networkFacet(value)) !== undefined
+      );
     case 'producer':
       return context.isCombinator(value);
     case 'primitive':
@@ -53,7 +59,7 @@ function matches(
           ? value === undefined
           : typeof value === contract.value;
     case 'union':
-      return contract.members.some((member) => matches(value, member, context));
+      return contract.members.some((member) => matches(value, member, context, source));
   }
 }
 
@@ -61,10 +67,12 @@ function selectedContract(
   value: unknown,
   contract: DslParameterContract,
   context: ParameterContractPolicyContext,
+  source: SourceSpan,
 ): DslParameterContract | undefined {
-  if (contract.kind !== 'union') return matches(value, contract, context) ? contract : undefined;
+  if (contract.kind !== 'union')
+    return matches(value, contract, context, source) ? contract : undefined;
   for (const member of contract.members) {
-    const selected = selectedContract(value, member, context);
+    const selected = selectedContract(value, member, context, source);
     if (selected !== undefined) return selected;
   }
   return undefined;
@@ -77,7 +85,7 @@ export function bindParameterContract(
   descriptor: ParameterContractDescriptor,
   context: ParameterContractPolicyContext,
 ): unknown {
-  const selected = selectedContract(value, contract, context);
+  const selected = selectedContract(value, contract, context, descriptor.source);
   if (selected === undefined) {
     throw new ElaborationExecutionError(
       `${contract.text} parameter ${descriptor.parameter} received a value that matches none of its admitted branches.`,

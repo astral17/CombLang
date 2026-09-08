@@ -1,13 +1,14 @@
 import type {
   DirectElaborationPlanV3,
-  EntityConnectorBinding,
+  EntityPlanConnectorBinding,
   EntityConnectorKey,
   EntityId,
   EntityLaneEndpoint,
   EntityLaneKey,
   EntityProfileRef,
-  EntityRecord,
+  EntityPlanRecord,
 } from '@comblang/compiler/entity';
+import type { DirectPlanNetwork, DirectPlanNetworkV3 } from '@comblang/compiler/direct-plan-schema';
 import {
   entityReplayContextRef,
   resolveEntityReplayContext,
@@ -16,12 +17,19 @@ import {
 } from '@comblang/compiler/entity-replay-context';
 import { canonicalizeEntityRawJson, EntityRawJsonError } from '@comblang/compiler/entity-raw';
 import type { EntityPlacement } from '@comblang/compiler/ir';
-import type { Diagnostic, NetworkId, SourceSpan } from '@comblang/shared';
+import type { Diagnostic, SourceSpan } from '@comblang/shared';
 
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
 import { validateDirectPlanEnvelope } from './direct-plan-validation.js';
 
 type DataRecord = Record<string, unknown>;
+
+interface V3NetworkDeclaration {
+  readonly path: string;
+  readonly fixedColor?: 'red' | 'green';
+  readonly generation: number;
+  readonly consumedAt?: SourceSpan;
+}
 
 export class EntityPlanValidationError extends Error {
   readonly code: string;
@@ -119,6 +127,13 @@ function text(value: unknown, path: string): string {
 function positive(value: unknown, path: string): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1) {
     invalid('RT3000', path, 'expected a positive safe integer.');
+  }
+  return value;
+}
+
+function nonNegative(value: unknown, path: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    invalid('RT3000', path, 'expected a non-negative safe integer.');
   }
   return value;
 }
@@ -235,16 +250,75 @@ function parseEndpoint(value: unknown, path: string): EntityLaneEndpoint {
   };
 }
 
+function parseBindingProvenance(
+  value: unknown,
+  path: string,
+): EntityPlanConnectorBinding['provenance'] {
+  const record = dataRecord(value, path);
+  exactKeys(record, ['source', 'instancePath', 'operationOrdinal'], path);
+  return Object.freeze({
+    source: parseSource(record.source, `${path}.source`),
+    instancePath: stringArray(record.instancePath, `${path}.instancePath`),
+    operationOrdinal: positive(record.operationOrdinal, `${path}.operationOrdinal`),
+  });
+}
+
+function parseV3Network(value: unknown, path: string): DirectPlanNetworkV3 {
+  const record = dataRecord(value, path);
+  exactKeys(
+    record,
+    ['name', 'fixedColor', 'generation', 'consumedAt', 'source', 'instancePath'],
+    path,
+  );
+  const fixedColor = record.fixedColor;
+  if (fixedColor !== undefined && fixedColor !== 'red' && fixedColor !== 'green') {
+    invalid('RT3000', `${path}.fixedColor`, 'expected red or green.');
+  }
+  if (!('generation' in record)) invalid('RT3000', `${path}.generation`, 'field is required.');
+  const source = parseSource(record.source, `${path}.source`);
+  const instancePath = stringArray(record.instancePath, `${path}.instancePath`);
+  const consumedAt =
+    'consumedAt' in record ? parseSource(record.consumedAt, `${path}.consumedAt`) : undefined;
+  return Object.freeze({
+    name: text(record.name, `${path}.name`),
+    ...(fixedColor === undefined ? {} : { fixedColor }),
+    generation: nonNegative(record.generation, `${path}.generation`),
+    ...(consumedAt === undefined ? {} : { consumedAt }),
+    source,
+    instancePath,
+  });
+}
+
+function v3Networks(value: unknown, path: string): readonly DirectPlanNetworkV3[] {
+  return Object.freeze(
+    dataArray(value, path).map((entry, index) => parseV3Network(entry, `${path}[${index}]`)),
+  );
+}
+
+function v2Network(network: DirectPlanNetworkV3): DirectPlanNetwork {
+  return Object.freeze({
+    name: network.name,
+    ...(network.fixedColor === undefined ? {} : { fixedColor: network.fixedColor }),
+    source: network.source,
+    instancePath: network.instancePath,
+  });
+}
+
 function parseBindings(
   value: unknown,
   path: string,
   networkNames: ReadonlySet<string>,
+  networkDeclarations: ReadonlyMap<string, V3NetworkDeclaration>,
   profile: ReturnType<typeof resolveEntityReplayProfile>,
-): readonly EntityConnectorBinding[] {
+): readonly EntityPlanConnectorBinding[] {
   const bindings = dataArray(value, path).map((entry, index) => {
     const bindingPath = `${path}[${index}]`;
     const record = dataRecord(entry, bindingPath);
-    exactKeys(record, ['endpoint', 'network'], bindingPath);
+    exactKeys(
+      record,
+      ['endpoint', 'network', 'generation', 'direction', 'provenance'],
+      bindingPath,
+    );
     const endpoint = parseEndpoint(record.endpoint, `${bindingPath}.endpoint`);
     const connector = profile.connectors.find(({ key }) => key === endpoint.connector);
     if (connector === undefined)
@@ -257,16 +331,59 @@ function parseBindings(
         'endpoint does not match the trusted profile.',
       );
     }
+    if (record.direction !== 'input' && record.direction !== 'output') {
+      invalid('RT3000', `${bindingPath}.direction`, 'expected input or output.');
+    }
+    if (
+      (record.direction === 'input' && connector.direction === 'output') ||
+      (record.direction === 'output' && connector.direction === 'input')
+    ) {
+      invalid(
+        'RT3002',
+        `${bindingPath}.direction`,
+        'direction does not match the trusted profile.',
+      );
+    }
+    const provenance = parseBindingProvenance(record.provenance, `${bindingPath}.provenance`);
     const network =
-      'network' in record
-        ? (text(record.network, `${bindingPath}.network`) as NetworkId)
-        : undefined;
+      'network' in record ? text(record.network, `${bindingPath}.network`) : undefined;
+    const generation = nonNegative(record.generation, `${bindingPath}.generation`);
     if (network !== undefined && !networkNames.has(network)) {
       invalid('RT3002', `${bindingPath}.network`, 'connector references an unknown Network.');
+    }
+    if (network !== undefined) {
+      const declaration = networkDeclarations.get(network);
+      if (declaration?.fixedColor !== endpoint.color) {
+        invalid(
+          'RT3002',
+          `${declaration?.path ?? `${bindingPath}.network`}.fixedColor`,
+          `Network descriptor must declare fixedColor ${endpoint.color} for this endpoint.`,
+        );
+      }
+      if (declaration?.consumedAt !== undefined) {
+        invalid(
+          'RT3002',
+          `${bindingPath}.network`,
+          'connector references a consumed Network generation.',
+        );
+      }
+      const expectedGeneration = declaration?.generation ?? 0;
+      if (generation !== expectedGeneration) {
+        invalid(
+          'RT3002',
+          `${bindingPath}.generation`,
+          `Network generation ${generation} is stale; expected ${expectedGeneration}.`,
+        );
+      }
+    } else if (generation !== 0) {
+      invalid('RT3002', `${bindingPath}.generation`, 'an unbound connector must use generation 0.');
     }
     return Object.freeze({
       endpoint,
       ...(network === undefined ? {} : { network }),
+      generation,
+      direction: record.direction,
+      provenance,
     });
   });
   const endpointKeys = bindings.map(
@@ -284,7 +401,7 @@ function parseBindings(
   );
 }
 
-function parseConfiguration(value: unknown, path: string): EntityRecord['configuration'] {
+function parseConfiguration(value: unknown, path: string): EntityPlanRecord['configuration'] {
   const record = dataRecord(value, path);
   exactKeys(record, ['mode', 'payload'], path);
   if (record.mode !== 'raw' && record.mode !== 'typed') {
@@ -306,7 +423,8 @@ function parseEntity(
   path: string,
   context: TrustedEntityReplayContext,
   networkNames: ReadonlySet<string>,
-): EntityRecord {
+  networkDeclarations: ReadonlyMap<string, V3NetworkDeclaration>,
+): EntityPlanRecord {
   const record = dataRecord(value, path);
   exactKeys(
     record,
@@ -342,6 +460,7 @@ function parseEntity(
     record.connectorBindings,
     `${path}.connectorBindings`,
     networkNames,
+    networkDeclarations,
     profile.profile,
   );
   return Object.freeze({
@@ -363,11 +482,11 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-function basePlan(value: DataRecord): DirectElaborationPlan {
+function basePlan(value: DataRecord, networks: unknown = value.networks): DirectElaborationPlan {
   const projected: Record<string, unknown> = {
     format: value.format,
     version: 2,
-    networks: value.networks,
+    networks,
     producers: value.producers,
   };
   for (const key of [
@@ -426,10 +545,22 @@ function validateValue(value: unknown, context: TrustedEntityReplayContext): Val
       error instanceof Error ? error.message : 'replay context mismatch.',
     );
   }
-  const plan = basePlan(record);
-  const networkNames = new Set(plan.networks.map(({ name }) => name));
+  const networks = v3Networks(record.networks, '$.networks');
+  const plan = basePlan(record, networks.map(v2Network));
+  const networkNames = new Set(networks.map(({ name }) => name));
+  const networkDeclarations = new Map<string, V3NetworkDeclaration>(
+    networks.map(({ name, fixedColor, generation, consumedAt }, index) => [
+      name,
+      {
+        path: `$.networks[${index}]`,
+        ...(fixedColor === undefined ? {} : { fixedColor }),
+        generation,
+        ...(consumedAt === undefined ? {} : { consumedAt }),
+      },
+    ]),
+  );
   const entities = dataArray(record.entities, '$.entities').map((entry, index) =>
-    parseEntity(entry, `$.entities[${index}]`, context, networkNames),
+    parseEntity(entry, `$.entities[${index}]`, context, networkNames, networkDeclarations),
   );
   const ids = entities.map(({ id }) => id);
   if (new Set(ids).size !== ids.length)
@@ -441,6 +572,7 @@ function validateValue(value: unknown, context: TrustedEntityReplayContext): Val
     ...plan,
     version: 3,
     context: contextReference,
+    networks,
     entities: Object.freeze([...entities].sort((left, right) => left.ordinal - right.ordinal)),
   });
   return { plan: canonical, context };
@@ -484,6 +616,9 @@ export function adaptProducerOnlyPlanV2ToV3(
     ...plan,
     version: 3,
     context: reference,
+    networks: Object.freeze(
+      plan.networks.map((network) => Object.freeze({ ...network, generation: 0 })),
+    ),
     entities: Object.freeze([]),
   });
 }

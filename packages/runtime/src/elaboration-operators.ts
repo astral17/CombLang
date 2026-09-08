@@ -28,6 +28,7 @@ export interface ElaborationOperatorDispatchContext<Source> {
   isSelected(value: unknown): value is SelectedValue;
   isNetwork(value: unknown): value is NetworkValue;
   networkFacet(value: unknown): NetworkValue | undefined;
+  readableNetworkFacet(value: unknown, source: Source): NetworkValue | undefined;
   isPair(value: unknown): value is PairValue;
   isWildcardToken(value: unknown): value is WildcardTokenValue;
   recordDslCall(): void;
@@ -236,8 +237,8 @@ function dispatchComparison<Source>(
             },
     });
   }
-  const leftNetwork = context.networkFacet(left);
-  const rightNetwork = context.networkFacet(right);
+  const leftNetwork = context.readableNetworkFacet(left, source);
+  const rightNetwork = context.readableNetworkFacet(right, source);
   const network =
     leftNetwork ??
     (context.isPair(left) ? left : undefined) ??

@@ -13,10 +13,10 @@ import type {
   EntityConnectorKey,
   EntityLaneKey,
   EntityProfile,
-  EntityRecord,
+  EntityPlanRecord,
 } from '@comblang/compiler/entity';
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
-import { sourceFileId, sourceSpan, type NetworkId } from '@comblang/shared';
+import { sourceFileId, sourceSpan } from '@comblang/shared';
 
 import {
   adaptProducerOnlyPlanV2ToV3,
@@ -38,9 +38,9 @@ function contextFor(
   });
 }
 
-function entityFor(profile: EntityProfile = syntheticZeroPortEntityProfile): EntityRecord {
+function entityFor(profile: EntityProfile = syntheticZeroPortEntityProfile): EntityPlanRecord {
   return {
-    id: 'entity:1' as EntityRecord['id'],
+    id: 'entity:1' as EntityPlanRecord['id'],
     profile: profile.ref,
     connectorBindings: [],
     provenance: {
@@ -59,7 +59,7 @@ function jsonCopy(value: unknown): any {
 
 function planFor(
   context: TrustedEntityReplayContext,
-  entity: EntityRecord = entityFor(context.profiles[0]),
+  entity: EntityPlanRecord = entityFor(context.profiles[0]),
 ): any {
   const reference = entityReplayContextRef(context);
   return {
@@ -123,7 +123,7 @@ describe('v3 Entity plan validation and v2 migration', () => {
 
   test('validates shared connector endpoints against the trusted profile', () => {
     const context = contextFor(syntheticSharedTwoColorEntityProfile);
-    const entity: EntityRecord = {
+    const entity: EntityPlanRecord = {
       ...entityFor(syntheticSharedTwoColorEntityProfile),
       connectorBindings: [
         {
@@ -132,7 +132,14 @@ describe('v3 Entity plan validation and v2 migration', () => {
             lane: 'shared-red' as EntityLaneKey,
             color: 'red',
           },
-          network: 'input' as NetworkId,
+          network: 'input',
+          generation: 0,
+          direction: 'input',
+          provenance: {
+            source: sourceSpan(sourceFileId('entity.ts'), 2, 3),
+            instancePath: ['Entity:1'],
+            operationOrdinal: 1,
+          },
         },
       ],
     };
@@ -140,11 +147,194 @@ describe('v3 Entity plan validation and v2 migration', () => {
     plan.networks = [
       {
         name: 'input',
+        fixedColor: 'red',
+        generation: 0,
         source: sourceSpan(sourceFileId('entity.ts'), 0, 1),
         instancePath: [],
       },
     ];
     expect(validateEntityDirectPlan(plan, context).diagnostics).toEqual([]);
+  });
+
+  test('rejects missing binding direction and provenance at their exact paths', () => {
+    const context = contextFor(syntheticSharedTwoColorEntityProfile);
+    const entity: EntityPlanRecord = {
+      ...entityFor(syntheticSharedTwoColorEntityProfile),
+      connectorBindings: [
+        {
+          endpoint: {
+            connector: 'shared' as EntityConnectorKey,
+            lane: 'shared-red' as EntityLaneKey,
+            color: 'red',
+          },
+          network: 'input',
+          generation: 0,
+          direction: 'input',
+          provenance: {
+            source: sourceSpan(sourceFileId('entity.ts'), 2, 3),
+            instancePath: ['Entity:1'],
+            operationOrdinal: 1,
+          },
+        },
+      ],
+    };
+    const plan = jsonCopy(planFor(context, entity));
+    plan.networks = [
+      {
+        name: 'input',
+        generation: 0,
+        source: sourceSpan(sourceFileId('entity.ts'), 0, 1),
+        instancePath: [],
+      },
+    ];
+
+    const missingDirection = jsonCopy(plan);
+    delete missingDirection.entities[0].connectorBindings[0].direction;
+    expect(validateEntityDirectPlan(missingDirection, context).diagnostics[0]).toMatchObject({
+      code: 'RT3000',
+      message: expect.stringContaining('$.entities[0].connectorBindings[0].direction'),
+    });
+
+    const missingProvenanceField = jsonCopy(plan);
+    delete missingProvenanceField.entities[0].connectorBindings[0].provenance.operationOrdinal;
+    expect(validateEntityDirectPlan(missingProvenanceField, context).diagnostics[0]).toMatchObject({
+      code: 'RT3000',
+      message: expect.stringContaining(
+        '$.entities[0].connectorBindings[0].provenance.operationOrdinal',
+      ),
+    });
+  });
+
+  test('rejects forged, stale, and consumed Entity facet generations before replay', () => {
+    const context = contextFor(syntheticSharedTwoColorEntityProfile);
+    const entity: EntityPlanRecord = {
+      ...entityFor(syntheticSharedTwoColorEntityProfile),
+      connectorBindings: [
+        {
+          endpoint: {
+            connector: 'shared' as EntityConnectorKey,
+            lane: 'shared-red' as EntityLaneKey,
+            color: 'red',
+          },
+          network: 'input',
+          generation: 1,
+          direction: 'input',
+          provenance: {
+            source: sourceSpan(sourceFileId('entity.ts'), 2, 3),
+            instancePath: ['Entity:1'],
+            operationOrdinal: 1,
+          },
+        },
+      ],
+    };
+    const plan = jsonCopy(planFor(context, entity));
+    plan.networks = [
+      {
+        name: 'input',
+        fixedColor: 'red',
+        generation: 2,
+        source: sourceSpan(sourceFileId('entity.ts'), 0, 1),
+        instancePath: [],
+      },
+    ];
+    expect(validateEntityDirectPlan(plan, context).diagnostics[0]).toMatchObject({
+      code: 'RT3002',
+      message: expect.stringContaining('generation'),
+    });
+
+    const consumed = jsonCopy(plan);
+    consumed.networks[0].generation = 1;
+    consumed.networks[0].consumedAt = sourceSpan(sourceFileId('entity.ts'), 2, 3);
+    expect(validateEntityDirectPlan(consumed, context).diagnostics[0]).toMatchObject({
+      code: 'RT3002',
+      message: expect.stringContaining('consumed'),
+    });
+
+    const missingGeneration = jsonCopy(plan);
+    missingGeneration.networks[0].generation = 1;
+    delete missingGeneration.entities[0].connectorBindings[0].generation;
+    expect(validateEntityDirectPlan(missingGeneration, context).diagnostics[0]).toMatchObject({
+      code: 'RT3000',
+      message: expect.stringContaining('generation'),
+    });
+  });
+
+  test('requires replay Network colors to match every bound endpoint', () => {
+    const context = contextFor(syntheticSharedTwoColorEntityProfile);
+    const entity: EntityPlanRecord = {
+      ...entityFor(syntheticSharedTwoColorEntityProfile),
+      connectorBindings: [
+        {
+          endpoint: {
+            connector: 'shared' as EntityConnectorKey,
+            lane: 'shared-red' as EntityLaneKey,
+            color: 'red',
+          },
+          network: 'red-network',
+          generation: 0,
+          direction: 'input',
+          provenance: {
+            source: sourceSpan(sourceFileId('entity.ts'), 2, 3),
+            instancePath: ['Entity:1'],
+            operationOrdinal: 1,
+          },
+        },
+        {
+          endpoint: {
+            connector: 'shared' as EntityConnectorKey,
+            lane: 'shared-green' as EntityLaneKey,
+            color: 'green',
+          },
+          network: 'green-network',
+          generation: 0,
+          direction: 'input',
+          provenance: {
+            source: sourceSpan(sourceFileId('entity.ts'), 4, 5),
+            instancePath: ['Entity:1'],
+            operationOrdinal: 2,
+          },
+        },
+      ],
+    };
+    const plan = jsonCopy(planFor(context, entity));
+    plan.networks = [
+      {
+        name: 'red-network',
+        fixedColor: 'red',
+        generation: 0,
+        source: sourceSpan(sourceFileId('entity.ts'), 0, 1),
+        instancePath: [],
+      },
+      {
+        name: 'green-network',
+        fixedColor: 'green',
+        generation: 0,
+        source: sourceSpan(sourceFileId('entity.ts'), 6, 7),
+        instancePath: [],
+      },
+    ];
+    expect(validateEntityDirectPlan(plan, context).diagnostics).toEqual([]);
+
+    const missingColor = jsonCopy(plan);
+    delete missingColor.networks[0].fixedColor;
+    expect(validateEntityDirectPlan(missingColor, context).diagnostics[0]).toMatchObject({
+      code: 'RT3002',
+      message: expect.stringContaining('$.networks[0].fixedColor'),
+    });
+
+    const oppositeColor = jsonCopy(plan);
+    oppositeColor.networks[0].fixedColor = 'green';
+    expect(validateEntityDirectPlan(oppositeColor, context).diagnostics[0]).toMatchObject({
+      code: 'RT3002',
+      message: expect.stringContaining('$.networks[0].fixedColor'),
+    });
+
+    const incompatibleReuse = jsonCopy(plan);
+    incompatibleReuse.entities[0].connectorBindings[1].network = 'red-network';
+    expect(validateEntityDirectPlan(incompatibleReuse, context).diagnostics[0]).toMatchObject({
+      code: 'RT3002',
+      message: expect.stringContaining('$.networks[0].fixedColor'),
+    });
   });
 
   test('validates two Entity profiles in one plan and reports a missing sibling at its path', () => {
@@ -154,7 +344,7 @@ describe('v3 Entity plan validation and v2 migration', () => {
     ]);
     const second = {
       ...entityFor(syntheticSharedTwoColorEntityProfile),
-      id: 'entity:2' as EntityRecord['id'],
+      id: 'entity:2' as EntityPlanRecord['id'],
       ordinal: 2,
     };
     const plan = jsonCopy(planFor(context, entityFor(syntheticZeroPortEntityProfile)));

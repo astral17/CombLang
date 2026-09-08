@@ -67,6 +67,13 @@ export interface DirectPlanNetwork {
   readonly instancePath: readonly string[];
 }
 
+/** Entity replay snapshot extending, but not widening, the producer-only v2 descriptor. */
+export interface DirectPlanNetworkV3 extends DirectPlanNetwork {
+  readonly generation: number;
+  /** A consumed physical Network cannot be used by an Entity facet. */
+  readonly consumedAt?: SourceSpan;
+}
+
 /** Final executed source binding for an existing physical Network; creates no hardware. */
 export interface DirectPlanNetworkAlias {
   readonly name: string;

@@ -21,6 +21,9 @@ Direct Plan v3 is a separate envelope from circuit-only Direct Plan v2. A v3
 plan carries identity-only replay context and physical Entity records while
 retaining the existing producer computation descriptors. The v2 reader does
 not accept v3, and v2 is not extended with an optional `entities` field.
+Direct Plan Entity bindings reference Network declaration names; lower graph and
+IR Entity bindings reference allocated physical `NetworkId` values. The mapping
+between these domains is explicit at the lowering boundary.
 
 ## Profiles and evidence
 
@@ -66,8 +69,8 @@ transport snapshots. A provider-sourced context must also be checked against a
 host-bound trusted profile set and the selected provider before source
 execution; an explicitly synthetic context is the only context that can travel
 without a provider. The reported `entityReplayIdentity` is a future cache
-identity. There is no compilation-result cache consuming it yet, so this batch
-does not claim cache invalidation or reuse.
+identity. There is no compilation-result cache consuming it yet, so the
+foundation does not claim cache invalidation or reuse.
 
 ## Internal construction and validation
 
@@ -97,16 +100,28 @@ structured paths. The only migration is an explicit lossless adapter for a
 validated producer-only v2 plan; it creates no Entity capabilities. Sending v3
 to a v2 reader or forging profile data fails deterministically.
 
+The executed runtime keeps session-local authority views separate from the
+singular physical Entity record. Explicit connector/lane projection is cached
+on the current view and records the Network name, ownership generation,
+direction, and operation provenance; the same endpoint is idempotent, while a
+different Network or direction is rejected with the first binding's provenance.
+Ownership transfer creates a new nominal view for the same physical `EntityId`
+and leaves captured older views stale. A v3 replay snapshot carries the Network
+generation and consumed provenance, so canonical validation rejects unknown,
+consumed, or stale connector bindings before graph allocation. Entity-to-Network
+conversion is available only at a shared readable argument boundary when the
+trusted profile has an explicit default projection. No public Entity
+construction syntax or physical lowering is introduced by this foundation.
+
 ## Deliberately not implemented here
 
-The next batch, LUNA-008, is the review boundary for:
+The next implementation boundary covers:
 
-1. generation-safe connector facets and ownership;
-2. physical IR and readable blueprint lowering;
-3. Entity debug and test-session adapter bridges;
-4. one fixture-backed native single-comparison condition;
-5. generic end-to-end acceptance across source, replay, IR, export, debug, and
+1. physical IR and readable blueprint lowering;
+2. Entity debug and test-session adapter bridges;
+3. one fixture-backed native single-comparison condition;
+4. generic end-to-end acceptance across source, replay, IR, export, debug, and
    testbench;
-6. later typed facades and any native-verified claims.
+5. later typed facades and any native-verified claims.
 
 No public Entity callable syntax or typed facade is implied by the v3 foundation.
