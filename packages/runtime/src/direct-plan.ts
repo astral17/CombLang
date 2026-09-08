@@ -8,6 +8,15 @@ import type {
 } from '@comblang/compiler/direct-plan-schema';
 import type { Diagnostic, ProducerId, SourceSpan } from '@comblang/shared';
 import type { TestSession } from '@comblang/simulator';
+import type {
+  EntityId,
+  EntityPhysicalRecord,
+  ElaborationGraphV3,
+  NativeCircuitIrV3,
+} from '@comblang/compiler/entity';
+import type { TrustedEntityReplayContext } from '@comblang/compiler/entity-replay-context';
+import { validateEntityDirectPlan } from './entity-plan-validation.js';
+import { lowerPreparedEntityRecords, prepareEntityRecords } from './entity-lowering.js';
 
 import {
   DebugIndex,
@@ -236,7 +245,10 @@ function lowerCondition(
 }
 
 /** Executes compiler-owned descriptors only; it never evaluates source text. */
-function executeDirectPlan(inputPlan: DirectElaborationPlan): ExecutedDirectPlan {
+function executeDirectPlan(
+  inputPlan: DirectElaborationPlan,
+  resolvedNetworks?: (networks: ReadonlyMap<string, NetworkHandle>) => void,
+): ExecutedDirectPlan {
   const validation = validateDirectPlanEnvelope(inputPlan);
   if (validation.value === undefined) {
     throw new RuntimeDiagnosticError(validation.diagnostics[0]!);
@@ -480,6 +492,7 @@ function executeDirectPlan(inputPlan: DirectElaborationPlan): ExecutedDirectPlan
     );
   }
   const circuit = runtime.elaborate();
+  resolvedNetworks?.(networks);
   const debug = DebugIndex.fromDirectPlan(
     plan,
     circuit,
@@ -601,5 +614,105 @@ export function tryElaborateDirectPlan(plan: DirectElaborationPlan): DirectPlanE
 export function elaborateDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
   const result = tryElaborateDirectPlan(plan);
   if (result.execution !== undefined) return result.execution;
+  throw new RuntimeDiagnosticError(result.diagnostics[0]!);
+}
+
+export interface ElaboratedEntityCircuit extends Omit<ElaboratedCircuit, 'graph' | 'ir'> {
+  readonly graph: ElaborationGraphV3;
+  readonly ir: NativeCircuitIrV3;
+}
+
+export interface ExecutedEntityDirectPlan extends Omit<ExecutedDirectPlan, 'circuit'> {
+  readonly circuit: ElaboratedEntityCircuit;
+  entity(idOrOrdinal: EntityId | number): EntityPhysicalRecord;
+}
+
+export interface EntityDirectPlanExecutionResult {
+  readonly execution?: ExecutedEntityDirectPlan;
+  readonly diagnostics: readonly Diagnostic[];
+}
+
+/** Canonical replay is completed before any runtime allocation. Entities remain inert. */
+export function tryElaborateEntityDirectPlan(
+  input: unknown,
+  context: TrustedEntityReplayContext,
+): EntityDirectPlanExecutionResult {
+  const validation = validateEntityDirectPlan(input, context);
+  if (!validation.value) return { diagnostics: validation.diagnostics };
+  const { plan } = validation.value;
+  try {
+    const {
+      entities: planEntities,
+      context: replayContext,
+      version: _version,
+      networks,
+      ...common
+    } = plan;
+    const preparedEntities = prepareEntityRecords(planEntities, context);
+    let physicalEntities: readonly EntityPhysicalRecord[] = [];
+    const execution = executeDirectPlan(
+      {
+        ...common,
+        version: 2,
+        networks: networks.map(
+          ({ generation: _generation, consumedAt: _consumedAt, ...network }) => network,
+        ),
+      },
+      (resolved) => {
+        physicalEntities = lowerPreparedEntityRecords(preparedEntities, resolved);
+      },
+    );
+    const circuit: ElaboratedEntityCircuit = Object.freeze({
+      ...execution.circuit,
+      graph: Object.freeze({
+        ...execution.circuit.graph,
+        version: 3,
+        context: replayContext,
+        entities: physicalEntities,
+      }),
+      ir: Object.freeze({
+        ...execution.circuit.ir,
+        version: 3,
+        context: replayContext,
+        entities: physicalEntities,
+      }),
+    });
+    return {
+      diagnostics: [],
+      execution: Object.freeze({
+        ...execution,
+        circuit,
+        entity(idOrOrdinal: EntityId | number) {
+          const record = physicalEntities.find((entity) =>
+            typeof idOrOrdinal === 'number'
+              ? entity.ordinal === idOrOrdinal
+              : entity.id === idOrOrdinal,
+          );
+          if (!record) throw runtimeFailure('RT3010', `Unknown physical Entity: ${idOrOrdinal}.`);
+          return record;
+        },
+      }),
+    };
+  } catch (error) {
+    return {
+      diagnostics: [
+        error instanceof RuntimeDiagnosticError
+          ? error.diagnostic
+          : {
+              code: 'RT1099',
+              severity: 'error',
+              message: error instanceof Error ? error.message : 'Entity elaboration failed.',
+            },
+      ],
+    };
+  }
+}
+
+export function elaborateEntityDirectPlan(
+  input: unknown,
+  context: TrustedEntityReplayContext,
+): ExecutedEntityDirectPlan {
+  const result = tryElaborateEntityDirectPlan(input, context);
+  if (result.execution) return result.execution;
   throw new RuntimeDiagnosticError(result.diagnostics[0]!);
 }

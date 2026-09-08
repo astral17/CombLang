@@ -54,6 +54,7 @@ const planBinding: EntityPlanConnectorBinding = {
 const physicalBinding: EntityPhysicalConnectorBinding = {
   endpoint,
   network: 'network:1' as NetworkId,
+  nativeConnector: 1,
   generation: 0,
   direction: 'input',
   provenance,
@@ -72,6 +73,7 @@ const planEntity: EntityPlanRecord = {
 
 const physicalEntity: EntityPhysicalRecord = {
   ...planEntity,
+  prototypeName: 'synthetic-zero-port',
   connectorBindings: [physicalBinding],
 };
 

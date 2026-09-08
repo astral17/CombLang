@@ -2,8 +2,8 @@
 
 CombLang now contains the internal, versioned foundation for generic Factorio
 Entity records. This document describes the implemented data and transport
-boundary only. It does not define source syntax, typed constructors, native
-Factorio behavior, or a blueprint export contract for Entities.
+boundary and internal physical preview. It does not define source syntax, typed
+constructors, or verified native Factorio behavior.
 
 ## Implemented contract
 
@@ -110,14 +110,34 @@ and leaves captured older views stale. A v3 replay snapshot carries the Network
 generation and consumed provenance, so canonical validation rejects unknown,
 consumed, or stale connector bindings before graph allocation. Entity-to-Network
 conversion is available only at a shared readable argument boundary when the
-trusted profile has an explicit default projection. No public Entity
-construction syntax or physical lowering is introduced by this foundation.
+trusted profile has an explicit default projection.
+
+## Physical execution and preview
+
+`tryElaborateEntityDirectPlan` and `elaborateEntityDirectPlan` validate the v3
+envelope before runtime allocation, execute the producer topology once, and map
+Entity declaration references through the resolved Network handles after transfers.
+Each Entity appears once in EG/NCIR, with its physical ID, canonical prototype
+name, and trusted native connector ordinal for each bound lane. Missing native
+endpoint metadata fails with source provenance. Physical records are detached
+and deeply frozen. Lookup accepts an Entity ID or its one-based ordinal;
+simulation retains the existing producer behavior and treats Entities as inert.
+
+`generateEntityBlueprintJson` produces a readable preview from self-contained
+physical IR. Producers retain their existing numbering; Entities follow in
+ordinal order. Explicit placement and direction are retained. Automatic Entity
+positions follow producer positions and skip occupied coordinate slots. Bound
+Entity lanes join the same Network wire chains as combinators; native connector
+ordinal `n` encodes red as `2*n-1` and green as `2*n`. Zero-port Entities remain
+visible. Raw/typed configuration is explicitly rejected at preview generation.
+Synthetic fixtures establish these internal contracts, not Factorio import
+compatibility. The producer-only v2 execution and blueprint paths remain unchanged.
 
 ## Deliberately not implemented here
 
 The next implementation boundary covers:
 
-1. physical IR and readable blueprint lowering;
+1. raw/typed native payload lowering and native import fixtures;
 2. Entity debug and test-session adapter bridges;
 3. one fixture-backed native single-comparison condition;
 4. generic end-to-end acceptance across source, replay, IR, export, debug, and

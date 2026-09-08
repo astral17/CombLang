@@ -186,9 +186,11 @@ export interface EntityPlanConnectorBinding extends EntityConnectorBindingBase {
 }
 
 /** Lowered graph binding whose optional Network reference is an allocated physical ID. */
-export interface EntityPhysicalConnectorBinding extends EntityConnectorBindingBase {
-  readonly network?: NetworkId;
-}
+export type EntityPhysicalConnectorBinding = EntityConnectorBindingBase &
+  (
+    | { readonly network: NetworkId; readonly nativeConnector: number }
+    | { readonly network?: never; readonly nativeConnector?: never }
+  );
 
 export interface EntityProvenance {
   readonly source: SourceSpan;
@@ -211,6 +213,7 @@ export interface EntityPlanRecord extends EntityRecordBase {
 }
 
 export interface EntityPhysicalRecord extends EntityRecordBase {
+  readonly prototypeName: string;
   readonly connectorBindings: readonly EntityPhysicalConnectorBinding[];
 }
 
