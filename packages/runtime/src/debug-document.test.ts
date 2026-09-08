@@ -30,6 +30,17 @@ const second = Stage(input);`;
       producers: [...execution.circuit.graph.producers].reverse(),
     };
     const document = createDebugDocument(execution.debug, graph);
+    expect(document.version).toBe(1);
+    if (document.version !== 1) throw new Error('expected producer-only debug document v1');
+    expect(document).toEqual({
+      format: 'comblang-debug',
+      version: 1,
+      scopes: document.scopes.map(({ path, networks, producers }) => ({
+        path,
+        networks,
+        producers,
+      })),
+    });
     expect(JSON.parse(JSON.stringify(document))).toEqual(document);
     expect(document.scopes.map(({ path }) => path)).toEqual([
       [],

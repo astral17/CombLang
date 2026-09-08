@@ -2,6 +2,7 @@ import type {
   DirectElaborationPlan,
   DirectPlanProducer,
 } from '@comblang/compiler/direct-plan-schema';
+import type { EntityPhysicalRecord } from '@comblang/compiler/entity';
 import type { NetworkId, ProducerId, SourceSpan } from '@comblang/shared';
 
 import type { ElaboratedCircuit } from './elaboration.js';
@@ -53,10 +54,25 @@ export interface DebugProducerEntry {
   readonly descriptor: DirectPlanProducer;
 }
 
+export interface DebugEntityEntry {
+  readonly kind: 'entity';
+  /** Physical Entity identity; this is not a Producer debug identity. */
+  readonly entityId: EntityPhysicalRecord['id'];
+  /** Scope-local ordinal used by this DebugScope. */
+  readonly ordinal: number;
+  /** Global physical ordinal retained from the lowered Entity record. */
+  readonly globalOrdinal: number;
+  readonly profile: EntityPhysicalRecord['profile'];
+  readonly provenance: EntityPhysicalRecord['provenance'];
+  readonly placement?: EntityPhysicalRecord['placement'];
+  readonly record: EntityPhysicalRecord;
+}
+
 interface ScopeContents {
   readonly path: readonly string[];
   readonly networks: readonly DebugNetworkEntry[];
   readonly producers: readonly DebugProducerEntry[];
+  readonly entities: readonly DebugEntityEntry[];
   readonly children: readonly DebugScope[];
 }
 
@@ -68,16 +84,22 @@ function candidateLabel(entry: DebugNetworkEntry): string {
   return `${scopeLabel(entry.instancePath)}: ${entry.planName}`;
 }
 
+function entityCandidateLabel(entry: DebugEntityEntry): string {
+  return `${scopeLabel(entry.provenance.instancePath)}: ${entry.entityId} (global ${entry.globalOrdinal})`;
+}
+
 export class DebugScope {
   readonly path: readonly string[];
   readonly networks: readonly DebugNetworkEntry[];
   readonly producers: readonly DebugProducerEntry[];
+  readonly entities: readonly DebugEntityEntry[];
   readonly children: readonly DebugScope[];
 
   constructor(contents: ScopeContents) {
     this.path = Object.freeze([...contents.path]);
     this.networks = Object.freeze([...contents.networks]);
     this.producers = Object.freeze([...contents.producers]);
+    this.entities = Object.freeze([...contents.entities]);
     this.children = Object.freeze([...contents.children]);
     Object.freeze(this);
   }
@@ -154,12 +176,65 @@ export class DebugScope {
       ? this.producers
       : Object.freeze(this.producers.filter((entry) => entry.producerKind === kind));
   }
+
+  entity(index: number): DebugEntityEntry;
+  entity(id: EntityPhysicalRecord['id']): DebugEntityEntry;
+  entity(idOrIndex: EntityPhysicalRecord['id'] | number): DebugEntityEntry {
+    if (typeof idOrIndex === 'string') {
+      const matches = this.entities.filter((entry) => entry.entityId === idOrIndex);
+      if (matches.length === 1) return matches[0]!;
+      if (matches.length === 0) {
+        throw new DebugQueryError(
+          'DBG1001',
+          `Debug scope ${scopeLabel(this.path)} has no Entity named ${JSON.stringify(idOrIndex)}.`,
+          this.entities.map(entityCandidateLabel),
+          this.path,
+        );
+      }
+      throw new DebugQueryError(
+        'DBG1002',
+        `Entity ${JSON.stringify(idOrIndex)} is ambiguous in debug scope ${scopeLabel(this.path)}.`,
+        matches.map(entityCandidateLabel),
+        this.path,
+      );
+    }
+    if (!Number.isSafeInteger(idOrIndex) || idOrIndex < 1) {
+      throw new RangeError('Debug Entity index must be a positive safe integer.');
+    }
+    const entity = this.entities[idOrIndex - 1];
+    if (entity !== undefined) return entity;
+    throw new DebugQueryError(
+      'DBG1001',
+      `Debug scope ${scopeLabel(this.path)} has no Entity at index ${idOrIndex}.`,
+      this.entities.map((entry) => `${entry.ordinal}: ${entry.entityId}`),
+      this.path,
+    );
+  }
+
+  entityByGlobalOrdinal(globalOrdinal: number): DebugEntityEntry {
+    if (!Number.isSafeInteger(globalOrdinal) || globalOrdinal < 1) {
+      throw new RangeError('Global Entity ordinal must be a positive safe integer.');
+    }
+    const matches = this.entities.filter((entry) => entry.globalOrdinal === globalOrdinal);
+    if (matches.length === 1) return matches[0]!;
+    throw new DebugQueryError(
+      'DBG1001',
+      `Debug scope ${scopeLabel(this.path)} has no Entity with global ordinal ${globalOrdinal}.`,
+      this.entities.map(entityCandidateLabel),
+      this.path,
+    );
+  }
+
+  entityList(): readonly DebugEntityEntry[] {
+    return this.entities;
+  }
 }
 
 interface MutableScope {
   readonly path: readonly string[];
   readonly networks: DebugNetworkEntry[];
   readonly producers: DebugProducerEntry[];
+  readonly entities: DebugEntityEntry[];
   readonly childKeys: string[];
 }
 
@@ -204,6 +279,7 @@ export class DebugIndex {
     circuit: ElaboratedCircuit,
     networkId: (planName: string) => NetworkId,
     producerId: (planIndex: number) => ProducerId,
+    entities: readonly EntityPhysicalRecord[] = [],
   ): DebugIndex {
     const graphProducerIds = new Set(circuit.graph.producers.map(({ id }) => id));
     const mutable = new Map<string, MutableScope>();
@@ -216,6 +292,7 @@ export class DebugIndex {
         path: Object.freeze([...path]),
         networks: [],
         producers: [],
+        entities: [],
         childKeys: [],
       };
       mutable.set(key, scope);
@@ -302,12 +379,29 @@ export class DebugIndex {
       );
     }
 
+    for (const record of entities) {
+      const scope = ensure(record.provenance.instancePath);
+      scope.entities.push(
+        Object.freeze({
+          kind: 'entity',
+          entityId: record.id,
+          ordinal: scope.entities.length + 1,
+          globalOrdinal: record.ordinal,
+          profile: record.profile,
+          provenance: record.provenance,
+          ...(record.placement === undefined ? {} : { placement: record.placement }),
+          record,
+        }),
+      );
+    }
+
     const built = new Map<string, DebugScope>();
     const build = (scope: MutableScope): DebugScope => {
       const result = new DebugScope({
         path: scope.path,
         networks: scope.networks,
         producers: scope.producers,
+        entities: scope.entities,
         children: scope.childKeys.map((key) => build(mutable.get(key)!)),
       });
       built.set(pathKey(scope.path), result);

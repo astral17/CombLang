@@ -197,3 +197,22 @@ policies, ordinary aggregation, Unknown provenance, foreign-handle rejection,
 tick-zero registration, and isolated object input/output traces. Phase 6 typed
 objects can implement the same mapping with real connector schemas without
 changing the adapter or trace contracts.
+
+## Physical Entity v3 bridge
+
+The current Entity v3 execution uses this generic boundary without adding a
+typed facade. One `ExecutedEntityDirectPlan` physical record maps to one
+session-local adapter instance. Its connector descriptors are derived only from
+the trusted, lowered physical bindings: lanes are grouped by physical connector,
+input/output Network IDs are deduplicated in stable order, and unbound or
+zero-port records do not receive invented outputs. `entityObject(session, id |
+ordinal)` is the explicit lookup; handles are not stored in cloneable plans,
+debug records, or replay transport.
+
+This bridge deliberately inherits the generic semantics documented above. An
+output-capable Entity starts as strict Unknown until an explicit default, mock,
+or model supplies a value. A model is evaluated once per connector per tick,
+even when its output fans out; an input/output overlap naturally exposes the
+previous committed output on the next boundary. Debug Entity entries remain
+separate from Producer entries, and the bridge creates neither hidden Producers
+nor native Factorio behavior.

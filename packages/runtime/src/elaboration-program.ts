@@ -12,12 +12,15 @@ import type {
   EntityConnectorBindingProvenance,
   EntityConnectorProfile,
   EntityLaneEndpoint,
+  EntityPlanDebugInstance,
+  EntityPlanDebugValue,
   EntityProfile,
   EntityProfileRef,
 } from '@comblang/compiler';
 import type { DslParameterContract } from '@comblang/language';
 import type {
   DirectElaborationPlan,
+  DirectPlanDebugInstance,
   DirectPlanDebugValue,
   DirectPlanProducer,
   PlanEntityPlacement,
@@ -192,7 +195,7 @@ class ElaborationRecorder {
   >();
   readonly #networkPairs: NonNullable<DirectElaborationPlan['networkPairs']>[number][] = [];
   readonly #capabilityUses: NonNullable<DirectElaborationPlan['capabilityUses']>[number][] = [];
-  readonly #debugInstances: NonNullable<DirectElaborationPlan['debugInstances']>[number][] = [];
+  readonly #debugInstances: (DirectPlanDebugInstance | EntityPlanDebugInstance)[] = [];
   readonly #diagnostics: Diagnostic[] = [];
   readonly #implicitBorrowWarnings = new Set<string>();
   readonly #combinators = new CombinatorRegistry();
@@ -1439,7 +1442,6 @@ class ElaborationRecorder {
         networkTransfers: Object.freeze([...this.#networkTransfers]),
         networkPairs: Object.freeze([...this.#networkPairs]),
         capabilityUses: Object.freeze([...this.#capabilityUses]),
-        debugInstances: Object.freeze([...this.#debugInstances]),
         producers: Object.freeze(
           this.#combinators.states().map((state) => this.#combinators.toPlan(state)),
         ),
@@ -1454,10 +1456,19 @@ class ElaborationRecorder {
       const entities = this.#entityRegistry?.records() ?? [];
       const plan: DirectElaborationPlan | DirectElaborationPlanV3 =
         entities.length === 0
-          ? { ...common, version: 2 as const }
+          ? {
+              ...common,
+              version: 2 as const,
+              debugInstances: Object.freeze([
+                ...this.#debugInstances,
+              ]) as readonly DirectPlanDebugInstance[],
+            }
           : {
               ...common,
               version: 3 as const,
+              debugInstances: Object.freeze([
+                ...this.#debugInstances,
+              ]) as readonly EntityPlanDebugInstance[],
               context: entityReplayContextRef(this.#entityContext!),
               networks: Object.freeze(
                 this.#networks.map((network) => {
@@ -1587,7 +1598,11 @@ class ElaborationRecorder {
     }
   }
 
-  #debugValue(value: unknown, rawSpan: RawSpan, seen: Set<object>): DirectPlanDebugValue {
+  #debugValue(
+    value: unknown,
+    rawSpan: RawSpan,
+    seen: Set<object>,
+  ): DirectPlanDebugValue | EntityPlanDebugValue {
     if (this.#isNetwork(value)) {
       this.#assertReadableNetwork(value, rawSpan);
       return { kind: 'network', network: value.name };
@@ -1596,6 +1611,7 @@ class ElaborationRecorder {
       const { captureId } = this.#combinators.capture(value);
       return { kind: 'producer', captureId };
     }
+    if (this.#isEntity(value)) return { kind: 'entity', entityId: value.id };
     if (value === undefined) return { kind: 'undefined' };
     if (
       value === null ||

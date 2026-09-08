@@ -40,7 +40,7 @@ The current repository implements the Phase 3 source compiler, the complete Phas
   - [ ] Implement nominal persistent Entity records, including zero-port objects, immutable raw snapshots, placement, aliases, and generation-scoped Network facets that cannot resurrect consumed authority.
   - [ ] Bind explicit profile-declared connectors and color lanes without inventing feature-specific hardware, hidden unions, delays, or combinators; permit implicit projection only in an unambiguous read context.
   - [ ] Revalidate Entity/profile/evidence constraints during canonical replay before allocation, then preserve physical objects independently from computations through IR and readable blueprint JSON.
-  - [ ] Reconstruct Entity debug handles and register one existing mock/model adapter per physical object per TestSession; do not claim automatic factory simulation.
+  - [x] Reconstruct Entity debug entries and register one existing mock/model adapter per physical object per TestSession; do not claim automatic factory simulation.
   - [ ] Add one native single-comparison condition descriptor attached to the Entity's actual connector, with no hidden Decider and with raw/typed mode kept separate from evidence status.
   - [ ] Prove the generic vertical slice with synthetic zero-port, shared bidirectional, and ambiguous multi-connector profiles across source, replay, IR, blueprint, debug, and testbench boundaries.
   - [ ] Add fixture-backed typed facades in order: Lamp, Roboport, then `Constant(...)` as an Entity while `CC(...)` remains a Combinator and both share one physical implementation record.

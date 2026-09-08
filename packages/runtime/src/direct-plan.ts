@@ -7,20 +7,27 @@ import type {
   PlanNetworkRef,
 } from '@comblang/compiler/direct-plan-schema';
 import type { Diagnostic, ProducerId, SourceSpan } from '@comblang/shared';
-import type { TestSession } from '@comblang/simulator';
+import type { TestObjectHandle, TestSession } from '@comblang/simulator';
 import type {
   EntityId,
+  EntityPlanDebugInstance,
+  EntityPlanDebugValue,
   EntityPhysicalRecord,
   ElaborationGraphV3,
   NativeCircuitIrV3,
 } from '@comblang/compiler/entity';
 import type { TrustedEntityReplayContext } from '@comblang/compiler/entity-replay-context';
-import { validateEntityDirectPlan } from './entity-plan-validation.js';
+import {
+  projectEntityDebugInstancesForV2,
+  validateEntityDirectPlan,
+} from './entity-plan-validation.js';
 import { lowerPreparedEntityRecords, prepareEntityRecords } from './entity-lowering.js';
+import { entityObjectAdapter } from './entity-object-adapter.js';
 
 import {
   DebugIndex,
   DebugQueryError,
+  type DebugEntityEntry,
   type DebugNetworkEntry,
   type DebugScope,
 } from './debug-index.js';
@@ -54,6 +61,7 @@ export type DirectPlanTestTarget = NetworkHandle | DebugNetworkEntry;
 export type ExecutedDebugValue =
   | NetworkHandle
   | ProducerHandle
+  | DebugEntityEntry
   | string
   | number
   | boolean
@@ -111,6 +119,66 @@ function executeDebugValue(
         executeDebugValue(entry.value, networks, producers, source),
       ]),
     ),
+  );
+}
+
+function materializeEntityDebugValue(
+  value: EntityPlanDebugValue,
+  producerValue: ExecutedDebugValue,
+  entities: ReadonlyMap<EntityId, DebugEntityEntry>,
+): ExecutedDebugValue {
+  if (value.kind === 'entity') {
+    const entry = entities.get(value.entityId);
+    if (entry === undefined) {
+      throw runtimeFailure('RT3010', `Unknown physical Entity: ${value.entityId}.`);
+    }
+    return entry;
+  }
+  if (value.kind === 'array') {
+    const fallback = Array.isArray(producerValue) ? producerValue : [];
+    return Object.freeze(
+      value.values.map((item, index) =>
+        materializeEntityDebugValue(item, fallback[index] ?? undefined, entities),
+      ),
+    );
+  }
+  if (value.kind === 'object') {
+    const fallback =
+      producerValue !== null &&
+      typeof producerValue === 'object' &&
+      !Array.isArray(producerValue) &&
+      !('kind' in producerValue)
+        ? (producerValue as { readonly [key: string]: ExecutedDebugValue })
+        : ({} as { readonly [key: string]: ExecutedDebugValue });
+    return Object.freeze(
+      Object.fromEntries(
+        value.entries.map((entry) => [
+          entry.key,
+          materializeEntityDebugValue(entry.value, fallback[entry.key] ?? undefined, entities),
+        ]),
+      ),
+    );
+  }
+  return producerValue;
+}
+
+function materializeEntityDebugInstances(
+  planned: readonly EntityPlanDebugInstance[] | undefined,
+  producerInstances: readonly ExecutedDebugInstance[],
+  entities: ReadonlyMap<EntityId, DebugEntityEntry>,
+): readonly ExecutedDebugInstance[] {
+  if (planned === undefined) return producerInstances;
+  return Object.freeze(
+    planned.map((instance, index) => {
+      const producerInstance = producerInstances[index];
+      if (producerInstance === undefined) {
+        throw runtimeFailure('RT1099', 'Missing executed Entity debug instance mapping.');
+      }
+      return Object.freeze({
+        ...producerInstance,
+        value: materializeEntityDebugValue(instance.value, producerInstance.value, entities),
+      });
+    }),
   );
 }
 
@@ -247,7 +315,9 @@ function lowerCondition(
 /** Executes compiler-owned descriptors only; it never evaluates source text. */
 function executeDirectPlan(
   inputPlan: DirectElaborationPlan,
-  resolvedNetworks?: (networks: ReadonlyMap<string, NetworkHandle>) => void,
+  resolvedNetworks?: (
+    networks: ReadonlyMap<string, NetworkHandle>,
+  ) => readonly EntityPhysicalRecord[] | void,
 ): ExecutedDirectPlan {
   const validation = validateDirectPlanEnvelope(inputPlan);
   if (validation.value === undefined) {
@@ -492,7 +562,7 @@ function executeDirectPlan(
     );
   }
   const circuit = runtime.elaborate();
-  resolvedNetworks?.(networks);
+  const debugEntities = resolvedNetworks?.(networks);
   const debug = DebugIndex.fromDirectPlan(
     plan,
     circuit,
@@ -502,6 +572,7 @@ function executeDirectPlan(
       if (id === undefined) throw runtimeFailure('RT1001', 'Missing executed Producer mapping.');
       return id;
     },
+    debugEntities ?? [],
   );
   const instances = Object.freeze(
     (plan.debugInstances ?? []).map((instance) =>
@@ -625,6 +696,10 @@ export interface ElaboratedEntityCircuit extends Omit<ElaboratedCircuit, 'graph'
 export interface ExecutedEntityDirectPlan extends Omit<ExecutedDirectPlan, 'circuit'> {
   readonly circuit: ElaboratedEntityCircuit;
   entity(idOrOrdinal: EntityId | number): EntityPhysicalRecord;
+  entityObject(
+    session: TestSession<DirectPlanTestTarget>,
+    idOrOrdinal: EntityId | number,
+  ): TestObjectHandle;
 }
 
 export interface EntityDirectPlanExecutionResult {
@@ -643,6 +718,7 @@ export function tryElaborateEntityDirectPlan(
   try {
     const {
       entities: planEntities,
+      debugInstances: planDebugInstances,
       context: replayContext,
       version: _version,
       networks,
@@ -654,12 +730,16 @@ export function tryElaborateEntityDirectPlan(
       {
         ...common,
         version: 2,
+        ...(planDebugInstances === undefined
+          ? {}
+          : { debugInstances: projectEntityDebugInstancesForV2(planDebugInstances)! }),
         networks: networks.map(
           ({ generation: _generation, consumedAt: _consumedAt, ...network }) => network,
         ),
       },
       (resolved) => {
         physicalEntities = lowerPreparedEntityRecords(preparedEntities, resolved);
+        return physicalEntities;
       },
     );
     const circuit: ElaboratedEntityCircuit = Object.freeze({
@@ -677,11 +757,66 @@ export function tryElaborateEntityDirectPlan(
         entities: physicalEntities,
       }),
     });
+    const entityDebugEntries = new Map<EntityId, DebugEntityEntry>(
+      execution.debug.scopes
+        .flatMap(({ entities }) => entities)
+        .map((entry) => [entry.entityId, entry]),
+    );
+    const debugInstances = materializeEntityDebugInstances(
+      planDebugInstances,
+      execution.instances,
+      entityDebugEntries,
+    );
+    const sessionObjects = new WeakMap<
+      TestSession<DirectPlanTestTarget>,
+      ReadonlyMap<EntityId | number, TestObjectHandle>
+    >();
+    const createTestSession = (): TestSession<DirectPlanTestTarget> => {
+      const session = execution.createTestSession();
+      const handles = new Map<EntityId | number, TestObjectHandle>();
+      for (const record of physicalEntities) {
+        const handle = session.adaptObject(entityObjectAdapter, record);
+        handles.set(record.id, handle);
+        handles.set(record.ordinal, handle);
+      }
+      sessionObjects.set(session, handles);
+      return session;
+    };
     return {
       diagnostics: [],
       execution: Object.freeze({
         ...execution,
         circuit,
+        instances: debugInstances,
+        createTestSession,
+        instance(nameOrIndex: string | number) {
+          if (typeof nameOrIndex === 'number') {
+            if (!Number.isSafeInteger(nameOrIndex) || nameOrIndex < 1) {
+              throw new RangeError('Debug instance index must be a positive safe integer.');
+            }
+            const instance = debugInstances[nameOrIndex - 1];
+            if (instance !== undefined) return instance;
+            throw new DebugQueryError(
+              'DBG1001',
+              `No debug instance exists at index ${nameOrIndex}.`,
+              debugInstances.map(({ name }, index) => `${index + 1}: ${name}`),
+            );
+          }
+          const matches = debugInstances.filter(({ name }) => name === nameOrIndex);
+          if (matches.length === 1) return matches[0]!;
+          if (matches.length === 0) {
+            throw new DebugQueryError(
+              'DBG1001',
+              `No debug instance is named ${JSON.stringify(nameOrIndex)}.`,
+              debugInstances.map(({ name }, index) => `${index + 1}: ${name}`),
+            );
+          }
+          throw new DebugQueryError(
+            'DBG1002',
+            `Debug instance ${JSON.stringify(nameOrIndex)} is ambiguous.`,
+            matches.map(({ $ }) => $.path.join(' / ')),
+          );
+        },
         entity(idOrOrdinal: EntityId | number) {
           const record = physicalEntities.find((entity) =>
             typeof idOrOrdinal === 'number'
@@ -690,6 +825,20 @@ export function tryElaborateEntityDirectPlan(
           );
           if (!record) throw runtimeFailure('RT3010', `Unknown physical Entity: ${idOrOrdinal}.`);
           return record;
+        },
+        entityObject(session: TestSession<DirectPlanTestTarget>, idOrOrdinal: EntityId | number) {
+          const handles = sessionObjects.get(session);
+          if (handles === undefined) {
+            throw runtimeFailure(
+              'RT3010',
+              'Entity object lookup requires a TestSession created by this execution.',
+            );
+          }
+          const handle = handles.get(idOrOrdinal);
+          if (handle === undefined) {
+            throw runtimeFailure('RT3010', `Unknown physical Entity: ${idOrOrdinal}.`);
+          }
+          return handle;
         },
       }),
     };

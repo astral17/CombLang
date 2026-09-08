@@ -5,10 +5,17 @@ import type {
   EntityId,
   EntityLaneEndpoint,
   EntityLaneKey,
+  EntityPlanDebugInstance,
+  EntityPlanDebugValue,
   EntityProfileRef,
   EntityPlanRecord,
 } from '@comblang/compiler/entity';
-import type { DirectPlanNetwork, DirectPlanNetworkV3 } from '@comblang/compiler/direct-plan-schema';
+import type {
+  DirectPlanDebugInstance,
+  DirectPlanDebugValue,
+  DirectPlanNetwork,
+  DirectPlanNetworkV3,
+} from '@comblang/compiler/direct-plan-schema';
 import {
   entityReplayContextRef,
   resolveEntityReplayContext,
@@ -34,12 +41,16 @@ interface V3NetworkDeclaration {
 export class EntityPlanValidationError extends Error {
   readonly code: string;
   readonly path: string;
+  readonly detail: string;
+  readonly span: SourceSpan | undefined;
 
-  constructor(code: string, path: string, message: string) {
+  constructor(code: string, path: string, message: string, span?: SourceSpan) {
     super(`${path}: ${message}`);
     this.name = 'EntityPlanValidationError';
     this.code = code;
     this.path = path;
+    this.detail = message;
+    this.span = span;
   }
 }
 
@@ -53,8 +64,8 @@ export interface EntityPlanValidationResult {
   readonly diagnostics: readonly Diagnostic[];
 }
 
-function invalid(code: string, path: string, message: string): never {
-  throw new EntityPlanValidationError(code, path, message);
+function invalid(code: string, path: string, message: string, span?: SourceSpan): never {
+  throw new EntityPlanValidationError(code, path, message, span);
 }
 
 function dataRecord(value: unknown, path: string): DataRecord {
@@ -482,7 +493,11 @@ function deepFreeze<T>(value: T): T {
   return value;
 }
 
-function basePlan(value: DataRecord, networks: unknown = value.networks): DirectElaborationPlan {
+function basePlan(
+  value: DataRecord,
+  networks: unknown = value.networks,
+  debugInstances: unknown = value.debugInstances,
+): DirectElaborationPlan {
   const projected: Record<string, unknown> = {
     format: value.format,
     version: 2,
@@ -499,6 +514,7 @@ function basePlan(value: DataRecord, networks: unknown = value.networks): Direct
   ]) {
     if (key in value) projected[key] = value[key];
   }
+  if (debugInstances !== undefined) projected.debugInstances = debugInstances;
   const result = validateDirectPlanEnvelope(projected);
   if (result.value === undefined) {
     const diagnostic = result.diagnostics[0];
@@ -509,6 +525,242 @@ function basePlan(value: DataRecord, networks: unknown = value.networks): Direct
     );
   }
   return result.value.plan;
+}
+
+const maximumEntityDebugDepth = 128;
+const maximumEntityDebugNodes = 100_000;
+
+function parseEntityDebugValue(
+  value: unknown,
+  path: string,
+  entityIds: ReadonlySet<string>,
+  source: SourceSpan,
+  depth = 0,
+  budget = { remaining: maximumEntityDebugNodes },
+): EntityPlanDebugValue {
+  const debugInvalid = (code: string, errorPath: string, message: string): never =>
+    invalid(code, errorPath, message, source);
+  if (depth > maximumEntityDebugDepth) {
+    debugInvalid(
+      'RT3000',
+      path,
+      `debug value nesting exceeds the ${maximumEntityDebugDepth} level limit.`,
+    );
+  }
+  budget.remaining -= 1;
+  if (budget.remaining < 0)
+    debugInvalid('RT3000', path, 'debug value exceeds the 100000 node limit.');
+  const record = dataRecord(value, path);
+  const kind = record.kind;
+  if (kind === 'network') {
+    try {
+      exactKeys(record, ['kind', 'network'], path);
+    } catch (error) {
+      if (error instanceof EntityPlanValidationError && error.span === undefined)
+        throw new EntityPlanValidationError(error.code, error.path, error.detail, source);
+      throw error;
+    }
+    return Object.freeze({ kind: 'network', network: text(record.network, `${path}.network`) });
+  }
+  if (kind === 'producer') {
+    try {
+      exactKeys(record, ['kind', 'captureId'], path);
+    } catch (error) {
+      if (error instanceof EntityPlanValidationError && error.span === undefined)
+        throw new EntityPlanValidationError(error.code, error.path, error.detail, source);
+      throw error;
+    }
+    return Object.freeze({
+      kind: 'producer',
+      captureId: text(record.captureId, `${path}.captureId`),
+    });
+  }
+  if (kind === 'undefined') {
+    try {
+      exactKeys(record, ['kind'], path);
+    } catch (error) {
+      if (error instanceof EntityPlanValidationError && error.span === undefined)
+        throw new EntityPlanValidationError(error.code, error.path, error.detail, source);
+      throw error;
+    }
+    return Object.freeze({ kind: 'undefined' });
+  }
+  if (kind === 'literal') {
+    try {
+      exactKeys(record, ['kind', 'value'], path);
+    } catch (error) {
+      if (error instanceof EntityPlanValidationError && error.span === undefined)
+        throw new EntityPlanValidationError(error.code, error.path, error.detail, source);
+      throw error;
+    }
+    const literal = record.value;
+    if (
+      literal !== null &&
+      typeof literal !== 'string' &&
+      typeof literal !== 'boolean' &&
+      (typeof literal !== 'number' || !Number.isFinite(literal))
+    ) {
+      debugInvalid('RT3000', `${path}.value`, 'invalid debug literal.');
+    }
+    return Object.freeze({ kind: 'literal', value: literal as string | number | boolean | null });
+  }
+  if (kind === 'entity') {
+    try {
+      exactKeys(record, ['kind', 'entityId'], path);
+    } catch (error) {
+      if (error instanceof EntityPlanValidationError && error.span === undefined)
+        throw new EntityPlanValidationError(error.code, error.path, error.detail, source);
+      throw error;
+    }
+    const entityId = text(record.entityId, `${path}.entityId`);
+    if (!entityIds.has(entityId)) {
+      debugInvalid('RT3003', `${path}.entityId`, 'unknown or orphan Entity debug reference.');
+    }
+    return Object.freeze({ kind: 'entity', entityId: entityId as EntityId });
+  }
+  if (kind === 'array') {
+    try {
+      exactKeys(record, ['kind', 'values'], path);
+    } catch (error) {
+      if (error instanceof EntityPlanValidationError && error.span === undefined)
+        throw new EntityPlanValidationError(error.code, error.path, error.detail, source);
+      throw error;
+    }
+    const values = dataArray(record.values, `${path}.values`);
+    if (values.length > maximumEntityDebugNodes) {
+      debugInvalid('RT3000', `${path}.values`, 'debug value exceeds the 100000 node limit.');
+    }
+    return Object.freeze({
+      kind: 'array',
+      values: Object.freeze(
+        values.map((item, index) =>
+          parseEntityDebugValue(
+            item,
+            `${path}.values[${index}]`,
+            entityIds,
+            source,
+            depth + 1,
+            budget,
+          ),
+        ),
+      ),
+    });
+  }
+  if (kind === 'object') {
+    try {
+      exactKeys(record, ['kind', 'entries'], path);
+    } catch (error) {
+      if (error instanceof EntityPlanValidationError && error.span === undefined)
+        throw new EntityPlanValidationError(error.code, error.path, error.detail, source);
+      throw error;
+    }
+    const entries = dataArray(record.entries, `${path}.entries`);
+    if (entries.length > maximumEntityDebugNodes) {
+      debugInvalid('RT3000', `${path}.entries`, 'debug value exceeds the 100000 node limit.');
+    }
+    const keys = new Set<string>();
+    return Object.freeze({
+      kind: 'object',
+      entries: Object.freeze(
+        entries.map((entry, index) => {
+          const entryPath = `${path}.entries[${index}]`;
+          const entryRecord = dataRecord(entry, entryPath);
+          try {
+            exactKeys(entryRecord, ['key', 'value'], entryPath);
+          } catch (error) {
+            if (error instanceof EntityPlanValidationError && error.span === undefined)
+              throw new EntityPlanValidationError(error.code, error.path, error.detail, source);
+            throw error;
+          }
+          if (typeof entryRecord.key !== 'string') {
+            debugInvalid('RT3000', `${entryPath}.key`, 'expected a string debug object key.');
+          }
+          const key = entryRecord.key as string;
+          if (keys.has(key)) {
+            debugInvalid('RT3000', `${entryPath}.key`, 'duplicate debug object key.');
+          }
+          keys.add(key);
+          return Object.freeze({
+            key,
+            value: parseEntityDebugValue(
+              entryRecord.value,
+              `${entryPath}.value`,
+              entityIds,
+              source,
+              depth + 1,
+              budget,
+            ),
+          });
+        }),
+      ),
+    });
+  }
+  return debugInvalid('RT3000', `${path}.kind`, 'unknown v3 debug value tag.');
+}
+
+function parseEntityDebugInstances(
+  value: unknown,
+  path: string,
+  entityIds: ReadonlySet<string>,
+): readonly EntityPlanDebugInstance[] | undefined {
+  if (value === undefined) return undefined;
+  const instances = dataArray(value, path);
+  if (instances.length > maximumEntityDebugNodes) {
+    invalid('RT3000', path, 'debug instance list exceeds the 100000 node limit.');
+  }
+  return Object.freeze(
+    instances.map((entry, index) => {
+      const instancePath = `${path}[${index}]`;
+      const record = dataRecord(entry, instancePath);
+      exactKeys(record, ['name', 'path', 'source', 'value'], instancePath);
+      const source = parseSource(record.source, `${instancePath}.source`);
+      let value: EntityPlanDebugValue;
+      try {
+        value = parseEntityDebugValue(record.value, `${instancePath}.value`, entityIds, source);
+      } catch (error) {
+        if (error instanceof EntityPlanValidationError && error.span === undefined) {
+          throw new EntityPlanValidationError(error.code, error.path, error.detail, source);
+        }
+        throw error;
+      }
+      return Object.freeze({
+        name: text(record.name, `${instancePath}.name`),
+        path: stringArray(record.path, `${instancePath}.path`),
+        source,
+        value,
+      });
+    }),
+  );
+}
+
+function producerDebugValue(value: EntityPlanDebugValue): DirectPlanDebugValue {
+  if (value.kind === 'entity') return { kind: 'undefined' };
+  if (value.kind === 'array') {
+    return {
+      kind: 'array',
+      values: value.values.map((item) => producerDebugValue(item)),
+    };
+  }
+  if (value.kind === 'object') {
+    return {
+      kind: 'object',
+      entries: value.entries.map((entry) => ({
+        key: entry.key,
+        value: producerDebugValue(entry.value),
+      })),
+    };
+  }
+  return value;
+}
+
+export function projectEntityDebugInstancesForV2(
+  instances: readonly EntityPlanDebugInstance[] | undefined,
+): readonly DirectPlanDebugInstance[] | undefined {
+  if (instances === undefined) return undefined;
+  return instances.map(({ value, ...instance }) => ({
+    ...instance,
+    value: producerDebugValue(value),
+  }));
 }
 
 function validateValue(value: unknown, context: TrustedEntityReplayContext): ValidatedEntityPlanV3 {
@@ -546,7 +798,6 @@ function validateValue(value: unknown, context: TrustedEntityReplayContext): Val
     );
   }
   const networks = v3Networks(record.networks, '$.networks');
-  const plan = basePlan(record, networks.map(v2Network));
   const networkNames = new Set(networks.map(({ name }) => name));
   const networkDeclarations = new Map<string, V3NetworkDeclaration>(
     networks.map(({ name, fixedColor, generation, consumedAt }, index) => [
@@ -568,12 +819,24 @@ function validateValue(value: unknown, context: TrustedEntityReplayContext): Val
   const ordinals = entities.map(({ ordinal }) => ordinal);
   if (new Set(ordinals).size !== ordinals.length)
     invalid('RT3003', '$.entities', 'Entity ordinals must be unique.');
+  const entityIds = new Set(ids);
+  const debugInstances = parseEntityDebugInstances(
+    record.debugInstances,
+    '$.debugInstances',
+    entityIds,
+  );
+  const plan = basePlan(
+    record,
+    networks.map(v2Network),
+    projectEntityDebugInstancesForV2(debugInstances),
+  );
   const canonical: DirectElaborationPlanV3 = deepFreeze({
     ...plan,
     version: 3,
     context: contextReference,
     networks,
     entities: Object.freeze([...entities].sort((left, right) => left.ordinal - right.ordinal)),
+    ...(debugInstances === undefined ? {} : { debugInstances }),
   });
   return { plan: canonical, context };
 }
@@ -593,6 +856,7 @@ export function validateEntityDirectPlan(
             code: error.code,
             severity: 'error',
             message: error.message,
+            ...(error.span === undefined ? {} : { span: error.span }),
           },
         ],
       };

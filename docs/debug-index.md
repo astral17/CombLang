@@ -56,6 +56,16 @@ microtasks. A replaced physical declaration stays inspectable as an internal
 ownership aliases remain marked moved and cannot be used as test targets.
 Readonly returns can still be external test targets, just like physical declarations.
 
+Entity v3 executions add a parallel physical-object collection to every exact
+scope. `scope.entity(index | id)` addresses the scope-local one-based Entity
+ordinal or physical `EntityId`; `scope.entityByGlobalOrdinal(ordinal)` addresses
+the lowered physical ordinal within that scope, and `scope.entityList()` returns
+the stable collection. Each `DebugEntityEntry` retains the physical record,
+profile, provenance, placement, physical ID, and both local/global ordinals.
+Entity entries are not Producers, do not create Network aliases, and are not
+matched by structural object shape. The detached debug document transports the
+same inspection fields without session methods or handles.
+
 This is not a general JavaScript object inspector: arbitrary container properties,
 destructuring aliases of existing Networks, and variables declared without an
 initializer do not acquire new logical query entries. Physical declarations remain

@@ -10,7 +10,6 @@ import type {
   ResolvedCircuitNetworkNode,
 } from './ir.js';
 import type {
-  DirectPlanDebugInstance,
   DirectPlanCapabilityUse,
   DirectPlanNetworkV3,
   DirectPlanNetworkAlias,
@@ -217,6 +216,29 @@ export interface EntityPhysicalRecord extends EntityRecordBase {
   readonly connectorBindings: readonly EntityPhysicalConnectorBinding[];
 }
 
+/** V3-only cloneable debug value; Entity references never enter the v2 envelope. */
+export type EntityPlanDebugValue =
+  | { readonly kind: 'network'; readonly network: string }
+  | { readonly kind: 'producer'; readonly captureId: string }
+  | { readonly kind: 'literal'; readonly value: string | number | boolean | null }
+  | { readonly kind: 'undefined' }
+  | { readonly kind: 'entity'; readonly entityId: EntityId }
+  | { readonly kind: 'array'; readonly values: readonly EntityPlanDebugValue[] }
+  | {
+      readonly kind: 'object';
+      readonly entries: readonly {
+        readonly key: string;
+        readonly value: EntityPlanDebugValue;
+      }[];
+    };
+
+export interface EntityPlanDebugInstance {
+  readonly name: string;
+  readonly path: readonly string[];
+  readonly source: SourceSpan;
+  readonly value: EntityPlanDebugValue;
+}
+
 export type EntityNativeComparator = '>' | '<' | '=' | '>=' | '<=' | '!=';
 
 /** The initial native-enable vocabulary: one concrete Signal/int32 comparison. */
@@ -238,7 +260,7 @@ export interface DirectElaborationPlanV3 {
   readonly networkTransfers?: readonly DirectPlanNetworkTransfer[];
   readonly networkPairs?: readonly DirectPlanNetworkPair[];
   readonly capabilityUses?: readonly DirectPlanCapabilityUse[];
-  readonly debugInstances?: readonly DirectPlanDebugInstance[];
+  readonly debugInstances?: readonly EntityPlanDebugInstance[];
   readonly producers: readonly DirectPlanProducer[];
   readonly entities: readonly EntityPlanRecord[];
   readonly diagnostics?: readonly Diagnostic[];

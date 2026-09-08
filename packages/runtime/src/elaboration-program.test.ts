@@ -15,7 +15,11 @@ import {
 import { sourceFileId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
-import { elaborateDirectPlan, tryElaborateDirectPlan } from './direct-plan.js';
+import {
+  elaborateDirectPlan,
+  elaborateEntityDirectPlan,
+  tryElaborateDirectPlan,
+} from './direct-plan.js';
 import { validateEntityDirectPlan } from './entity-plan-validation.js';
 import { RuntimeDiagnosticError } from './elaboration.js';
 import {
@@ -665,6 +669,44 @@ if (alias !== first || first === second) throw new Error('Entity identity was no
     expect(plan.entities.every(({ connectorBindings }) => connectorBindings.length === 0)).toBe(
       true,
     );
+  });
+
+  test('captures Entity references through v3 instantiation without handles', () => {
+    const context = syntheticEntityExecutionContext();
+    const program = {
+      format: 'comblang-elaboration-js' as const,
+      version: 2 as const,
+      fileId: sourceFileId('entity-capture.factorio.ts'),
+      runtimeParameter: 't',
+      containsUnsupportedAsync: false,
+      code: `
+const entity = t.entity(${JSON.stringify(syntheticSharedTwoColorEntityProfile.ref)}, undefined, undefined, { start: 1, end: 8 });
+function Build() {
+  t.enterFunction('Build', Build, { start: 9, end: 14 });
+  try {
+    return t.returnValue({ direct: entity, aliases: [entity, entity] }, { start: 15, end: 40 });
+  } finally {
+    t.exitInstance({ start: 41, end: 42 });
+  }
+}
+const dut = t.instantiate('dut', Build, { start: 43, end: 54 });`,
+    };
+    const plan = executeElaborationProgramV3(program, {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: syntheticEntityResolver(),
+    });
+    expect(plan.version).toBe(3);
+    if (plan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(plan.debugInstances?.[0]?.value).toMatchObject({ kind: 'object' });
+    const execution = elaborateEntityDirectPlan(plan, context);
+    const value = execution.instance('dut').value as {
+      readonly direct: object;
+      readonly aliases: readonly object[];
+    };
+    expect(value.direct).toBe(execution.debug.root.entity(1));
+    expect(value.aliases[0]).toBe(value.direct);
+    expect(value.aliases[1]).toBe(value.direct);
+    expect(structuredClone(value.direct)).not.toHaveProperty('handle');
   });
 
   test('caches explicit Entity facets and preserves endpoint bindings', () => {

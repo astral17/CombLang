@@ -22,8 +22,11 @@ import type {
 import {
   elaborateDirectPlan,
   elaborateEntityDirectPlan,
+  tryElaborateDirectPlan,
   tryElaborateEntityDirectPlan,
 } from './direct-plan.js';
+import { projectEntityObjectConnectors } from './entity-object-adapter.js';
+import { createDebugDocument } from './debug-document.js';
 import { DslRuntime } from './elaboration.js';
 import { lowerEntityRecords } from './entity-lowering.js';
 
@@ -45,16 +48,78 @@ function entity(profile = zero, ordinal = 1): EntityPlanRecord {
     provenance: { source, instancePath: [], expansionStack: [], creationRevision: 1 },
   };
 }
-function binding(color: 'red' | 'green', network: string) {
+function binding(color: 'red' | 'green', network: string, direction: 'input' | 'output' = 'input') {
   return {
     endpoint: shared.connectors[0]!.lanes.find((lane) => lane.color === color)!.nativeEndpoint!
       .endpoint,
     network,
     generation: 0,
-    direction: 'input' as const,
+    direction,
     provenance: { source, instancePath: [], operationOrdinal: color === 'red' ? 1 : 2 },
   };
 }
+function profileBinding(
+  profile: EntityProfile,
+  connectorKey: string,
+  laneKey: string,
+  network: string,
+  direction: 'input' | 'output',
+) {
+  const connector = profile.connectors.find((candidate) => candidate.key === connectorKey);
+  const lane = connector?.lanes.find((candidate) => candidate.key === laneKey);
+  if (lane?.nativeEndpoint === undefined) throw new Error(`Missing synthetic endpoint ${laneKey}.`);
+  return {
+    endpoint: lane.nativeEndpoint.endpoint,
+    network,
+    generation: 0,
+    direction,
+    provenance: { source, instancePath: [], operationOrdinal: 1 },
+  };
+}
+
+const feedbackProfile: EntityProfile = {
+  ref: {
+    ...shared.ref,
+    prototypeKey: 'entity:synthetic-feedback',
+    profileId: 'profile:synthetic-feedback-v1' as EntityProfile['ref']['profileId'],
+  },
+  connectors: [
+    {
+      key: 'feedback' as EntityProfile['connectors'][number]['key'],
+      direction: 'bidirectional',
+      lanes: [
+        {
+          key: 'feedback-input-red' as EntityProfile['connectors'][number]['lanes'][number]['key'],
+          color: 'red',
+          nativeEndpoint: {
+            endpoint: {
+              connector: 'feedback' as EntityProfile['connectors'][number]['key'],
+              lane: 'feedback-input-red' as EntityProfile['connectors'][number]['lanes'][number]['key'],
+              color: 'red',
+            },
+            nativeConnector: 2,
+          },
+        },
+        {
+          key: 'feedback-output-red' as EntityProfile['connectors'][number]['lanes'][number]['key'],
+          color: 'red',
+          nativeEndpoint: {
+            endpoint: {
+              connector: 'feedback' as EntityProfile['connectors'][number]['key'],
+              lane: 'feedback-output-red' as EntityProfile['connectors'][number]['lanes'][number]['key'],
+              color: 'red',
+            },
+            nativeConnector: 1,
+          },
+        },
+      ],
+    },
+  ],
+  features: [],
+  configurationRules: [],
+  defaultReadProjection: null,
+  synthetic: true,
+};
 function fixture() {
   const context = contextFor();
   const plan: DirectElaborationPlanV3 = {
@@ -133,6 +198,384 @@ describe('physical Entity preview vertical slice', () => {
       [1, 2, 3, 2],
     ]);
     expect(execution.circuit.createSimulation()).toBeDefined();
+  });
+
+  test('projects bound lanes into deterministic connector descriptors', () => {
+    const { plan, context } = fixture();
+    const execution = elaborateEntityDirectPlan(plan, context);
+    const record = execution.entity(2);
+    const inputId = execution.network('input').id;
+    const greenId = execution.network('green').id;
+
+    expect(projectEntityObjectConnectors(record)).toEqual([
+      { name: 'shared', inputNetworks: [greenId, inputId], outputNetworks: [] },
+    ]);
+    expect(
+      projectEntityObjectConnectors({
+        ...record,
+        connectorBindings: record.connectorBindings.map((binding, index) => ({
+          ...binding,
+          direction: index === 0 ? ('output' as const) : ('input' as const),
+        })),
+      }),
+    ).toEqual([{ name: 'shared', inputNetworks: [inputId], outputNetworks: [greenId] }]);
+    expect(
+      projectEntityObjectConnectors({
+        ...record,
+        connectorBindings: record.connectorBindings.map((binding) => ({
+          ...binding,
+          network: greenId,
+        })),
+      }),
+    ).toEqual([{ name: 'shared', inputNetworks: [greenId], outputNetworks: [] }]);
+    expect(projectEntityObjectConnectors(execution.entity(1))).toEqual([]);
+  });
+
+  test('registers one session-local object per physical Entity and preserves provider isolation', () => {
+    const { plan, context } = fixture();
+    const outputPlan = {
+      ...plan,
+      producers: [],
+      entities: [
+        {
+          ...plan.entities[1]!,
+          connectorBindings: [binding('red', 'input', 'output')],
+        },
+      ],
+    };
+    const execution = elaborateEntityDirectPlan(outputPlan, context);
+    const first = execution.createTestSession();
+    const firstById = execution.entityObject(first, execution.entity(2).id);
+    const firstByOrdinal = execution.entityObject(first, 2);
+    expect(firstById).toBe(firstByOrdinal);
+    expect(firstById).toMatchObject({
+      kind: 'test-object',
+      adapterId: 'entity-physical-v3',
+      instanceId: 'ordinal-2',
+      connectors: ['shared'],
+    });
+
+    const mock = first.mock(firstById, 'shared').output([[signal('virtual', 'signal-A'), 7]]);
+    first.tick();
+    expect(first.read(execution.network('input')).get(signal('virtual', 'signal-A'))).toBe(7);
+
+    const second = execution.createTestSession();
+    const secondObject = execution.entityObject(second, 2);
+    expect(secondObject).not.toBe(firstById);
+    const foreign = elaborateEntityDirectPlan(outputPlan, context).createTestSession();
+    expect(() => execution.entityObject(foreign, 2)).toThrow(
+      'TestSession created by this execution',
+    );
+    expect(() => second.readValue(execution.network('input'))).not.toThrow();
+    second.tick();
+    expect(() => second.read(execution.network('input'))).toThrow(/Unknown/);
+    expect(() => first.mock(firstById, 'shared')).not.toThrow();
+    mock.clear();
+    expect(() =>
+      execution.entityObject(second, 'entity:missing' as EntityPlanRecord['id']),
+    ).toThrow('Unknown physical Entity');
+  });
+
+  test('preserves generic bridge semantics for inputs, outputs, providers, traces, and feedback', () => {
+    const { plan, context } = fixture();
+    const inputExecution = elaborateEntityDirectPlan(
+      {
+        ...plan,
+        producers: [],
+        entities: [
+          {
+            ...entity(shared, 2),
+            connectorBindings: [binding('red', 'input'), binding('green', 'green')],
+          },
+        ],
+      },
+      context,
+    );
+    const inputSession = inputExecution.createTestSession();
+    const inputObject = inputExecution.entityObject(inputSession, 2);
+    inputSession
+      .drive(inputExecution.network('input'), [[signal('virtual', 'signal-A'), 2]])
+      .drive(inputExecution.network('green'), [[signal('virtual', 'signal-A'), 3]])
+      .trace(inputSession.objectInput(inputObject, 'shared'))
+      .tick();
+    const aggregated = inputSession.readObjectInput(inputObject, 'shared');
+    expect(aggregated.kind).toBe('known');
+    if (aggregated.kind === 'known')
+      expect(aggregated.bus.get(signal('virtual', 'signal-A'))).toBe(5);
+    expect(inputSession.traces.toJSON().targets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'object-input', connector: 'shared' }),
+      ]),
+    );
+
+    const outputExecution = elaborateEntityDirectPlan(
+      {
+        ...plan,
+        producers: [],
+        entities: [
+          {
+            ...entity(shared, 2),
+            connectorBindings: [
+              binding('red', 'input', 'output'),
+              binding('green', 'green', 'output'),
+            ],
+          },
+        ],
+      },
+      context,
+    );
+    const outputSession = outputExecution.createTestSession();
+    const outputObject = outputExecution.entityObject(outputSession, 2);
+    outputSession.mock(outputObject, 'shared').output([[signal('virtual', 'signal-A'), 4]]);
+    outputSession.trace(outputSession.objectOutput(outputObject, 'shared')).tick();
+    expect(
+      outputSession.read(outputExecution.network('input')).get(signal('virtual', 'signal-A')),
+    ).toBe(4);
+    expect(
+      outputSession.read(outputExecution.network('green')).get(signal('virtual', 'signal-A')),
+    ).toBe(4);
+    expect(outputSession.traces.toJSON().targets).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'object-output', connector: 'shared' }),
+      ]),
+    );
+
+    const strictExecution = elaborateEntityDirectPlan(
+      {
+        ...plan,
+        producers: [],
+        entities: [
+          { ...entity(shared, 2), connectorBindings: [binding('red', 'input', 'output')] },
+        ],
+      },
+      context,
+    );
+    const strictSession = strictExecution.createTestSession();
+    const strictObject = strictExecution.entityObject(strictSession, 2);
+    strictSession.tick();
+    expect(strictSession.readValue(strictExecution.network('input')).kind).toBe('unknown');
+    const mock = strictSession
+      .mock(strictObject, 'shared')
+      .output([[signal('virtual', 'signal-A'), 8]]);
+    strictSession.tick();
+    expect(
+      strictSession.read(strictExecution.network('input')).get(signal('virtual', 'signal-A')),
+    ).toBe(8);
+    mock.clear();
+    strictSession.tick();
+    expect(strictSession.readValue(strictExecution.network('input')).kind).toBe('unknown');
+
+    const feedbackContext = contextFor([zero, shared, feedbackProfile]);
+    const feedbackPlan: DirectElaborationPlanV3 = {
+      ...plan,
+      context: entityReplayContextRef(feedbackContext),
+      networks: [{ name: 'loop', fixedColor: 'red', generation: 0, source, instancePath: [] }],
+      producers: [],
+      entities: [
+        {
+          ...entity(feedbackProfile, 1),
+          connectorBindings: [
+            profileBinding(feedbackProfile, 'feedback', 'feedback-input-red', 'loop', 'input'),
+            profileBinding(feedbackProfile, 'feedback', 'feedback-output-red', 'loop', 'output'),
+          ],
+        },
+      ],
+    };
+    const feedbackExecution = elaborateEntityDirectPlan(feedbackPlan, feedbackContext);
+    const feedbackSession = feedbackExecution.createTestSession();
+    const feedbackObject = feedbackExecution.entityObject(feedbackSession, 1);
+    const seenInputs: string[] = [];
+    const seenValues: (number | undefined)[] = [];
+    const model = feedbackSession.model(
+      feedbackObject,
+      {
+        initialState: 0,
+        step: ({ state, input }) => {
+          seenInputs.push(input.kind);
+          seenValues.push(
+            input.kind === 'known' ? input.bus.get(signal('virtual', 'signal-A')) : undefined,
+          );
+          return { state: state + 1, output: [[signal('virtual', 'signal-A'), state + 1]] };
+        },
+      },
+      'feedback',
+    );
+    feedbackSession.tick();
+    feedbackSession.tick();
+    expect(seenInputs).toEqual(['known', 'known']);
+    expect(seenValues).toEqual([0, 1]);
+    expect(model.state).toBe(2);
+    expect(
+      feedbackSession.read(feedbackExecution.network('loop')).get(signal('virtual', 'signal-A')),
+    ).toBe(2);
+    const feedbackInput = feedbackSession.readObjectInput(feedbackObject, 'feedback');
+    expect(feedbackInput.kind).toBe('known');
+  });
+
+  test('does not synthesize output defaults for input-only or zero-port Entities', () => {
+    const { plan, context } = fixture();
+    const execution = elaborateEntityDirectPlan(
+      {
+        ...plan,
+        producers: [],
+        entities: [
+          { ...entity(shared, 2), connectorBindings: [binding('red', 'input')] },
+          entity(zero, 3),
+        ],
+      },
+      context,
+    );
+    const session = execution.createTestSession();
+    expect(() => session.objectOutput(execution.entityObject(session, 2), 'shared')).toThrow(
+      'has no output Networks',
+    );
+    expect(execution.entityObject(session, 3).connectors).toEqual([]);
+  });
+
+  test('exposes scoped Entity debug entries without changing Producer queries', () => {
+    const { plan, context } = fixture();
+    const nested = {
+      ...entity(zero, 3),
+      provenance: {
+        ...entity(zero, 3).provenance,
+        instancePath: ['DUT nested'],
+      },
+    };
+    const execution = elaborateEntityDirectPlan({ ...plan, entities: [entity(), nested] }, context);
+    const root = execution.debug.root;
+    expect(root.entities).toHaveLength(1);
+    expect(root.entity(1)).toMatchObject({
+      kind: 'entity',
+      entityId: execution.entity(1).id,
+      ordinal: 1,
+      globalOrdinal: 1,
+      record: execution.entity(1),
+    });
+    expect(Object.isFrozen(root.entity(1))).toBe(true);
+    const child = root.child('DUT nested');
+    expect(child.entities).toHaveLength(1);
+    expect(child.entity(execution.entity(3).id).globalOrdinal).toBe(3);
+    expect(child.entityByGlobalOrdinal(3).entityId).toBe(execution.entity(3).id);
+    const document = createDebugDocument(execution.debug, execution.circuit.graph);
+    expect(document.version).toBe(2);
+    if (document.version !== 2) throw new Error('expected Entity-aware debug document');
+    expect(document.scopes[0]?.entities[0]).toMatchObject({
+      entityId: execution.entity(1).id,
+      record: execution.entity(1),
+    });
+    expect(JSON.parse(JSON.stringify(document))).toEqual(document);
+    const zeroExecution = elaborateEntityDirectPlan({ ...plan, entities: [] }, context);
+    const zeroEntityDocument = createDebugDocument(
+      zeroExecution.debug,
+      zeroExecution.circuit.graph,
+    );
+    expect(zeroEntityDocument.version).toBe(2);
+    if (zeroEntityDocument.version !== 2) throw new Error('expected Entity-aware debug document');
+    expect(zeroEntityDocument.scopes.every(({ entities }) => entities.length === 0)).toBe(true);
+    expect(root.combinators()).toHaveLength(1);
+    expect(() => root.entity(2)).toThrowError(expect.objectContaining({ code: 'DBG1001' }));
+  });
+
+  test('replays captured Entity debug values without transporting runtime handles', () => {
+    const { plan, context } = fixture();
+    const captured = {
+      ...plan,
+      debugInstances: [
+        {
+          name: 'dut',
+          path: [],
+          source,
+          value: {
+            kind: 'object' as const,
+            entries: [
+              {
+                key: 'direct',
+                value: { kind: 'entity' as const, entityId: plan.entities[1]!.id },
+              },
+              {
+                key: 'aliases',
+                value: {
+                  kind: 'array' as const,
+                  values: [
+                    { kind: 'entity' as const, entityId: plan.entities[1]!.id },
+                    { kind: 'entity' as const, entityId: plan.entities[1]!.id },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      ],
+    };
+    const execution = elaborateEntityDirectPlan(captured, context);
+    const value = execution.instance('dut').value as {
+      readonly direct: { readonly kind: 'entity'; readonly entityId: EntityPlanRecord['id'] };
+      readonly aliases: readonly {
+        readonly kind: 'entity';
+        readonly entityId: EntityPlanRecord['id'];
+      }[];
+    };
+    expect(value.direct).toBe(execution.debug.root.entity(2));
+    expect(value.aliases[0]).toBe(value.aliases[1]);
+    expect(value.aliases[0]).toBe(value.direct);
+    expect(structuredClone(value.direct)).not.toHaveProperty('handle');
+
+    const orphan = {
+      ...captured,
+      debugInstances: [
+        {
+          ...captured.debugInstances[0]!,
+          value: { kind: 'entity' as const, entityId: 'entity:orphan' as EntityPlanRecord['id'] },
+        },
+      ],
+    };
+    const allocate = vi.spyOn(DslRuntime.prototype, 'network');
+    try {
+      const result = tryElaborateEntityDirectPlan(orphan, context);
+      expect(result.execution).toBeUndefined();
+      expect(result.diagnostics[0]).toMatchObject({
+        code: 'RT3003',
+        message: expect.stringContaining('orphan'),
+        span: source,
+      });
+      expect(allocate).not.toHaveBeenCalled();
+    } finally {
+      allocate.mockRestore();
+    }
+    const malformed = {
+      ...captured,
+      debugInstances: [
+        {
+          ...captured.debugInstances[0]!,
+          value: { kind: 'entity' as const },
+        },
+      ],
+    };
+    expect(tryElaborateEntityDirectPlan(malformed, context).diagnostics[0]).toMatchObject({
+      code: 'RT3000',
+      message: expect.stringContaining('$.debugInstances[0].value.entityId'),
+      span: source,
+    });
+    let deepValue: unknown = {
+      kind: 'entity',
+      entityId: plan.entities[1]!.id,
+    };
+    for (let index = 0; index < 130; index += 1) {
+      deepValue = { kind: 'array', values: [deepValue] };
+    }
+    const tooDeep = {
+      ...captured,
+      debugInstances: [{ ...captured.debugInstances[0]!, value: deepValue }],
+    };
+    expect(tryElaborateEntityDirectPlan(tooDeep, context).diagnostics[0]).toMatchObject({
+      code: 'RT3000',
+      message: expect.stringContaining('$.debugInstances[0].value'),
+      span: source,
+    });
+    expect(
+      tryElaborateDirectPlan(captured as unknown as Parameters<typeof tryElaborateDirectPlan>[0])
+        .diagnostics[0]?.code,
+    ).toBe('RT1001');
   });
 
   test('resolves transfer declarations and public aliases to the survivor', () => {

@@ -1,7 +1,14 @@
+import type { EntityPhysicalRecord } from '@comblang/compiler/entity';
 import type { CircuitProducerNode, ElaborationGraph, EntityPlacement } from '@comblang/compiler/ir';
+import type { ElaborationGraphV3 } from '@comblang/compiler/entity';
 import type { NetworkId } from '@comblang/shared';
 
-import type { DebugIndex, DebugNetworkEntry, DebugProducerEntry } from './debug-index.js';
+import type {
+  DebugEntityEntry,
+  DebugIndex,
+  DebugNetworkEntry,
+  DebugProducerEntry,
+} from './debug-index.js';
 import { producerInputNetworks } from './debug-structure.js';
 
 export interface DebugDocumentProducer extends Omit<DebugProducerEntry, 'descriptor'> {
@@ -11,40 +18,72 @@ export interface DebugDocumentProducer extends Omit<DebugProducerEntry, 'descrip
   readonly placement?: EntityPlacement;
 }
 
-/** Inspection data only: cloned entries are not executable debug handles. */
-export interface DebugDocument {
-  readonly format: 'comblang-debug';
-  readonly version: 1;
-  readonly scopes: readonly {
-    readonly path: readonly string[];
-    readonly networks: readonly DebugNetworkEntry[];
-    readonly producers: readonly DebugDocumentProducer[];
-  }[];
+export interface DebugDocumentEntity extends Omit<DebugEntityEntry, 'record'> {
+  readonly record: EntityPhysicalRecord;
 }
 
+interface DebugDocumentScopeV1 {
+  readonly path: readonly string[];
+  readonly networks: readonly DebugNetworkEntry[];
+  readonly producers: readonly DebugDocumentProducer[];
+}
+
+export interface DebugDocumentV1 {
+  readonly format: 'comblang-debug';
+  readonly version: 1;
+  readonly scopes: readonly DebugDocumentScopeV1[];
+}
+
+export interface DebugDocumentV2 {
+  readonly format: 'comblang-debug';
+  readonly version: 2;
+  readonly scopes: readonly (DebugDocumentScopeV1 & {
+    readonly entities: readonly DebugDocumentEntity[];
+  })[];
+}
+
+/** Inspection data only: cloned entries are not executable debug handles. */
+export type DebugDocument = DebugDocumentV1 | DebugDocumentV2;
+
 /** Serialize IDs from this execution's EG, never by matching array ordinals. */
-export function createDebugDocument(index: DebugIndex, graph: ElaborationGraph): DebugDocument {
+export function createDebugDocument(
+  index: DebugIndex,
+  graph: ElaborationGraph | ElaborationGraphV3,
+): DebugDocument {
   const byId = new Map(graph.producers.map((producer) => [producer.id, producer]));
-  const document: DebugDocument = {
-    format: 'comblang-debug',
-    version: 1,
-    scopes: index.scopes.map((scope) => ({
-      path: scope.path,
-      networks: scope.networks,
-      producers: scope.producers.map(({ descriptor: _descriptor, ...entry }) => {
-        const producer = byId.get(entry.id);
-        if (producer === undefined)
-          throw new Error(`Debug Producer ${entry.id} is absent from EG.`);
-        return {
-          ...entry,
-          inputs: [...producerInputNetworks(producer)],
-          outputs: producer.destinations,
-          config: producer.config,
-          ...(producer.placement === undefined ? {} : { placement: producer.placement }),
+  const scopes = index.scopes.map((scope) => ({
+    path: scope.path,
+    networks: scope.networks,
+    producers: scope.producers.map(({ descriptor: _descriptor, ...entry }) => {
+      const producer = byId.get(entry.id);
+      if (producer === undefined) throw new Error(`Debug Producer ${entry.id} is absent from EG.`);
+      return {
+        ...entry,
+        inputs: [...producerInputNetworks(producer)],
+        outputs: producer.destinations,
+        config: producer.config,
+        ...(producer.placement === undefined ? {} : { placement: producer.placement }),
+      };
+    }),
+  }));
+  const document: DebugDocument =
+    graph.version === 3
+      ? {
+          format: 'comblang-debug',
+          version: 2,
+          scopes: scopes.map((scope, scopeIndex) => ({
+            ...scope,
+            entities: index.scopes[scopeIndex]!.entities.map(({ record, ...entry }) => ({
+              ...entry,
+              record,
+            })),
+          })),
+        }
+      : {
+          format: 'comblang-debug',
+          version: 1,
+          scopes,
         };
-      }),
-    })),
-  };
   // No session references, methods, Maps or mutable aliases to the live execution.
   return structuredClone(document);
 }

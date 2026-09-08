@@ -112,7 +112,7 @@ consumed, or stale connector bindings before graph allocation. Entity-to-Network
 conversion is available only at a shared readable argument boundary when the
 trusted profile has an explicit default projection.
 
-## Physical execution and preview
+## Physical execution, debug, and object-test bridge
 
 `tryElaborateEntityDirectPlan` and `elaborateEntityDirectPlan` validate the v3
 envelope before runtime allocation, execute the producer topology once, and map
@@ -133,15 +133,34 @@ visible. Raw/typed configuration is explicitly rejected at preview generation.
 Synthetic fixtures establish these internal contracts, not Factorio import
 compatibility. The producer-only v2 execution and blueprint paths remain unchanged.
 
+The executed v3 plan also exposes `execution.debug` Entity entries. Each exact
+scope has `entities`, `entity(index | id)`, `entityByGlobalOrdinal`, and
+`entityList()` queries. An entry keeps the physical Entity ID, scope-local and
+global ordinals, profile, provenance, placement, and the frozen physical record;
+it is a separate debug identity from a Producer and does not change Producer
+counts or Network queries. The portable `comblang-debug` document carries these
+detached Entity entries as inspection data.
+
+`ExecutedEntityDirectPlan.createTestSession()` registers exactly one generic
+object-test adapter for each physical Entity in that session. The adapter ID is
+`entity-physical-v3`; its safe instance ID is derived from the physical ordinal,
+and its connectors group bound physical lanes while preserving stable Network
+order and direction. `entityObject(session, id | ordinal)` returns the one
+session-local `TestObjectHandle`; a second session receives distinct handles and
+a handle from another execution is rejected. The bridge only projects topology:
+it creates no native device, configuration behavior, hidden Producer, or native
+simulation semantics. It inherits the generic boundary's strict Unknown output
+fallback, mock replacement/clear, one model step per connector per tick, input
+aggregation, fan-out, self-feedback, and separate input/output traces. Input-only
+and zero-port Entities have no synthetic output connector.
+
 ## Deliberately not implemented here
 
-The next implementation boundary covers:
+The remaining implementation boundary covers:
 
 1. raw/typed native payload lowering and native import fixtures;
-2. Entity debug and test-session adapter bridges;
-3. one fixture-backed native single-comparison condition;
-4. generic end-to-end acceptance across source, replay, IR, export, debug, and
-   testbench;
-5. later typed facades and any native-verified claims.
+2. one fixture-backed native single-comparison condition;
+3. additional generic end-to-end acceptance for source/test-runner ingestion;
+4. later typed facades and any native-verified claims.
 
 No public Entity callable syntax or typed facade is implied by the v3 foundation.

@@ -26,11 +26,12 @@ decision and remaining conformance work. Prototype facts stay out of the simulat
 ## Current slice
 
 Internal Entity v3 execution validates replay, reuses the resolved producer
-topology, and lowers declaration names to physical Network IDs once. Its EG/NCIR
-Entity records carry prototype names and trusted native connector ordinals for
-the explicit readable blueprint preview path. Entities remain inert simulation
-participants. Public constructors, native configuration lowering, Entity adapters,
-and verified native import behavior remain pending; see [Entity v3](entity-v3.md).
+topology, lowers declaration names to physical Network IDs once, exposes
+parallel debug entries, and maps existing physical objects onto the generic
+object-test boundary. Its EG/NCIR Entity records carry prototype names and
+trusted native connector ordinals for the explicit readable blueprint preview
+path. Public constructors, native configuration lowering, typed facades, and
+verified native import behavior remain pending; see [Entity v3](entity-v3.md).
 
 The parser returns the official TypeScript AST plus CombLang-owned diagnostics and stable source spans. Both the CLI and browser workbench call that same API. The browser invokes it through a revisioned Web Worker protocol and ignores stale responses; later compiler phases can extend that protocol without moving heavy work back to the UI thread.
 
