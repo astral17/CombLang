@@ -9,6 +9,7 @@ import {
   browserPrototypeProfileStore,
   type StoredPrototypeProfile,
 } from './prototype-profile-store.js';
+import { rollbackPrototypeProfile } from './prototype-profile-transition.js';
 import { loadSourceDraft, saveSourceDraft, type SourceDraftStorage } from './source-draft.js';
 import { formatSourceDiagnostic, sourcePreviewDiagnostic } from './source-diagnostics.js';
 import { sourceNavigationRange, testFailureRange } from './source-navigation.js';
@@ -167,10 +168,14 @@ let testRenderTimer: ReturnType<typeof setTimeout> | undefined;
 let testRevision = 0;
 let addedTestNumber = 1;
 let activePrototypeProfile: StoredPrototypeProfile | undefined;
+let profileBeforeSelection: StoredPrototypeProfile | undefined;
+let workerIdentityBeforeSelection: string | undefined;
+let pendingProfileSelection = false;
 let workerPrototypeIdentity: string | undefined;
 let profileSelectionRevision = 0;
 let profileReady = false;
 let profileRestoreError: string | undefined;
+let profileNotice: string | undefined;
 let sourceEditor = createSourceEditor(sourceHost, initialSource, scheduleRender);
 let testEditor = createSourceEditor(
   testHost,
@@ -976,6 +981,9 @@ function render(): void {
               ? { identity: workerPrototypeIdentity }
               : {
                   source: activePrototypeProfile.source,
+                  ...(activePrototypeProfile.factorioDumpMetadata === undefined
+                    ? {}
+                    : { factorioDumpMetadata: activePrototypeProfile.factorioDumpMetadata }),
                   ...(activePrototypeProfile.identity === undefined
                     ? {}
                     : { expectedIdentity: activePrototypeProfile.identity }),
@@ -1018,9 +1026,11 @@ function handleWorkerMessage(event: MessageEvent<CompilerWorkerResponse>, worker
   if (workerTimeout !== undefined) clearTimeout(workerTimeout);
   workerTimeout = undefined;
   activeWorkerRevision = undefined;
-  pumpCompilerWorker();
   warmOfflineCache();
-  if (event.data.revision !== currentRevision) return;
+  if (event.data.revision !== currentRevision) {
+    pumpCompilerWorker();
+    return;
+  }
 
   const parsed = event.data.result;
   if (event.data.prototypeEnvironment !== undefined && activePrototypeProfile !== undefined) {
@@ -1030,7 +1040,18 @@ function handleWorkerMessage(event: MessageEvent<CompilerWorkerResponse>, worker
       ...activePrototypeProfile,
       identity: event.data.prototypeEnvironment.identity,
     };
-    prototypeProfileStatus.textContent = `${activePrototypeProfile.name} · Factorio ${event.data.prototypeEnvironment.factorioVersion} · ${event.data.prototypeEnvironment.identity}`;
+    pendingProfileSelection = false;
+    profileBeforeSelection = undefined;
+    workerIdentityBeforeSelection = undefined;
+    const formatLabel =
+      event.data.prototypeEnvironment.format === 'factorio-data-raw' ? 'raw dump' : 'normalized';
+    const warningLabel =
+      event.data.prototypeEnvironment.warnings.length === 0
+        ? ''
+        : ` · ${event.data.prototypeEnvironment.warnings.length} warning(s)`;
+    const profileStatus = `${activePrototypeProfile.name} · ${formatLabel} · Factorio ${event.data.prototypeEnvironment.factorioVersion}${warningLabel} · ${event.data.prototypeEnvironment.identity}`;
+    prototypeProfileStatus.textContent = profileNotice ?? profileStatus;
+    profileNotice = undefined;
     prototypeProfileStatus.dataset.state = 'valid';
     prototypeProfileClear.disabled = false;
     if (needsSave) {
@@ -1053,6 +1074,17 @@ function handleWorkerMessage(event: MessageEvent<CompilerWorkerResponse>, worker
     const profileError = parsed.compilerDiagnostics.find(
       ({ code }) => code.startsWith('PT') || code.startsWith('WP'),
     );
+    const importError = parsed.compilerDiagnostics.find(({ code }) => /^(PI|PD|PT|WP)/.test(code));
+    if (pendingProfileSelection && importError !== undefined) {
+      if (
+        rollbackPendingPrototypeProfile(
+          `import failed (${importError.code}): ${importError.message}`,
+        )
+      ) {
+        scheduleRender();
+      }
+      return;
+    }
     prototypeProfileStatus.textContent =
       profileError === undefined
         ? `${activePrototypeProfile.name} · loading…`
@@ -1136,6 +1168,7 @@ function handleWorkerMessage(event: MessageEvent<CompilerWorkerResponse>, worker
           `${diagnostic.code} ${diagnostic.severity}${diagnostic.line === undefined ? '' : ` at ${diagnostic.line}:${diagnostic.column ?? 1}`}: ${diagnostic.message}`,
       )
       .join('\n');
+  pumpCompilerWorker();
 }
 
 function handleWorkerError(event: ErrorEvent, worker: Worker): void {
@@ -1147,6 +1180,9 @@ function handleWorkerError(event: ErrorEvent, worker: Worker): void {
   worker.terminate();
   parserWorker = undefined;
   workerPrototypeIdentity = undefined;
+  const rolledBack = rollbackPendingPrototypeProfile(
+    `Worker failed: ${event.message || 'the compiler worker crashed.'}`,
+  );
   if (failedRevision === currentRevision) {
     status.textContent = 'Worker failed';
     status.dataset.state = 'invalid';
@@ -1154,7 +1190,30 @@ function handleWorkerError(event: ErrorEvent, worker: Worker): void {
     renderTestsBlocked('The circuit compiler worker failed.');
     result.textContent = event.message;
   }
-  pumpCompilerWorker();
+  if (rolledBack) scheduleRender();
+  else pumpCompilerWorker();
+}
+
+function rollbackPendingPrototypeProfile(failureMessage: string): boolean {
+  if (!pendingProfileSelection || activePrototypeProfile === undefined) return false;
+  const result = rollbackPrototypeProfile(
+    activePrototypeProfile.name,
+    profileBeforeSelection,
+    workerIdentityBeforeSelection,
+    failureMessage,
+  );
+  pendingProfileSelection = false;
+  activePrototypeProfile = result.activeProfile;
+  workerPrototypeIdentity = result.workerIdentity;
+  profileBeforeSelection = undefined;
+  workerIdentityBeforeSelection = undefined;
+  profileReady = true;
+  profileRestoreError = undefined;
+  profileNotice = result.restored ? result.message : undefined;
+  prototypeProfileStatus.textContent = result.message;
+  prototypeProfileStatus.dataset.state = result.restored ? 'valid' : 'invalid';
+  prototypeProfileClear.disabled = !result.restored;
+  return true;
 }
 
 function startCompilerWorker(request: CompilerWorkerRequest): void {
@@ -1189,6 +1248,9 @@ function pumpCompilerWorker(): void {
       ...request,
       prototypeProfile: {
         source: activePrototypeProfile.source,
+        ...(activePrototypeProfile.factorioDumpMetadata === undefined
+          ? {}
+          : { factorioDumpMetadata: activePrototypeProfile.factorioDumpMetadata }),
         expectedIdentity: request.prototypeProfile.identity,
       },
     };
@@ -1196,7 +1258,7 @@ function pumpCompilerWorker(): void {
   activeWorkerRevision = request.revision;
   worker.postMessage(request);
   const timeoutMs =
-    request.prototypeProfile !== undefined && 'source' in request.prototypeProfile ? 5000 : 1000;
+    request.prototypeProfile !== undefined && 'source' in request.prototypeProfile ? 15000 : 1000;
   workerTimeout = setTimeout(() => {
     if (parserWorker !== worker || activeWorkerRevision !== request.revision) return;
     worker.terminate();
@@ -1204,6 +1266,9 @@ function pumpCompilerWorker(): void {
     workerPrototypeIdentity = undefined;
     activeWorkerRevision = undefined;
     workerTimeout = undefined;
+    const rolledBack = rollbackPendingPrototypeProfile(
+      `source-profile timeout (EX1002): Compilation/profile loading exceeded the ${timeoutMs} ms worker budget.`,
+    );
     if (request.revision === currentRevision) {
       status.textContent = 'Elaboration timed out';
       status.dataset.state = 'invalid';
@@ -1211,36 +1276,72 @@ function pumpCompilerWorker(): void {
       renderTestsBlocked('Circuit elaboration timed out, so tests were not run.');
       result.textContent = `EX1002 error: Compilation/profile loading exceeded the ${timeoutMs} ms worker budget.`;
     }
-    pumpCompilerWorker();
+    if (rolledBack) scheduleRender();
+    else pumpCompilerWorker();
   }, timeoutMs);
 }
 
 registerOfflineSupport();
 
 prototypeProfileFile.addEventListener('change', () => {
-  const file = prototypeProfileFile.files?.[0];
-  if (file === undefined) return;
+  const files = [...(prototypeProfileFile.files ?? [])];
+  if (files.length === 0) return;
   const selectionRevision = ++profileSelectionRevision;
-  activePrototypeProfile = undefined;
+  profileBeforeSelection = activePrototypeProfile;
+  workerIdentityBeforeSelection = workerPrototypeIdentity;
+  pendingProfileSelection = false;
+  profileNotice = undefined;
   workerPrototypeIdentity = undefined;
   profileReady = false;
-  prototypeProfileStatus.textContent = `${file.name} · reading…`;
+  prototypeProfileStatus.textContent = `${files.map(({ name }) => name).join(' + ')} · reading…`;
   prototypeProfileClear.disabled = false;
   scheduleRender();
+  const metadataName = (file: File): boolean =>
+    /(^|[._-])(metadata|environment|profile)([._-]|$)/i.test(file.name);
+  let sourceFile: File;
+  let metadataFile: File | undefined;
   try {
-    draftStorage?.setItem(PROFILE_SELECTION_KEY, '');
-  } catch {
-    /* current session still works */
+    if (files.length === 1) {
+      sourceFile = files[0]!;
+    } else if (files.length === 2 && files.filter(metadataName).length === 1) {
+      metadataFile = files.find(metadataName)!;
+      sourceFile = files.find((file) => file !== metadataFile)!;
+    } else {
+      throw new Error(
+        'Select one normalized prototype JSON, or exactly two files: a raw dump and a metadata JSON named metadata/environment/profile.',
+      );
+    }
+  } catch (error) {
+    const previous = profileBeforeSelection;
+    profileReady = true;
+    activePrototypeProfile = previous;
+    workerPrototypeIdentity = workerIdentityBeforeSelection;
+    profileBeforeSelection = undefined;
+    workerIdentityBeforeSelection = undefined;
+    const message = error instanceof Error ? error.message : String(error);
+    profileRestoreError = previous === undefined ? message : undefined;
+    prototypeProfileStatus.textContent =
+      previous === undefined
+        ? message
+        : `${previous.name} · selection failed; previous profile kept`;
+    prototypeProfileStatus.dataset.state = previous === undefined ? 'invalid' : 'valid';
+    prototypeProfileClear.disabled = previous === undefined;
+    if (previous === undefined) scheduleRender();
+    return;
   }
-  void file
-    .text()
-    .then((source) => {
+  void Promise.all([sourceFile.text(), metadataFile?.text()])
+    .then(([source, factorioDumpMetadata]) => {
       if (selectionRevision !== profileSelectionRevision) return;
       profileReady = true;
       profileRestoreError = undefined;
-      activePrototypeProfile = { name: file.name, source };
+      pendingProfileSelection = true;
+      activePrototypeProfile = {
+        name: metadataFile === undefined ? sourceFile.name : `${sourceFile.name} + metadata`,
+        source,
+        ...(factorioDumpMetadata === undefined ? {} : { factorioDumpMetadata }),
+      };
       workerPrototypeIdentity = undefined;
-      prototypeProfileStatus.textContent = `${file.name} · validating…`;
+      prototypeProfileStatus.textContent = `${activePrototypeProfile.name} · validating…`;
       prototypeProfileStatus.dataset.state = 'pending';
       prototypeProfileClear.disabled = false;
       prototypeProfileFile.value = '';
@@ -1249,11 +1350,20 @@ prototypeProfileFile.addEventListener('change', () => {
     .catch((error: unknown) => {
       if (selectionRevision !== profileSelectionRevision) return;
       profileReady = true;
-      activePrototypeProfile = undefined;
-      profileRestoreError = `Cannot read profile: ${error instanceof Error ? error.message : String(error)}`;
-      prototypeProfileStatus.textContent = profileRestoreError;
-      prototypeProfileStatus.dataset.state = 'invalid';
-      prototypeProfileClear.disabled = false;
+      pendingProfileSelection = false;
+      const previous = profileBeforeSelection;
+      activePrototypeProfile = profileBeforeSelection;
+      workerPrototypeIdentity = workerIdentityBeforeSelection;
+      profileBeforeSelection = undefined;
+      workerIdentityBeforeSelection = undefined;
+      const message = `Cannot read profile: ${error instanceof Error ? error.message : String(error)}`;
+      profileRestoreError = previous === undefined ? message : undefined;
+      prototypeProfileStatus.textContent =
+        previous === undefined
+          ? message
+          : `${previous.name} · new import failed; previous profile kept`;
+      prototypeProfileStatus.dataset.state = previous === undefined ? 'invalid' : 'valid';
+      prototypeProfileClear.disabled = previous === undefined;
       scheduleRender();
     });
 });
@@ -1262,6 +1372,10 @@ prototypeProfileClear.addEventListener('click', () => {
   profileSelectionRevision += 1;
   profileReady = true;
   profileRestoreError = undefined;
+  profileNotice = undefined;
+  pendingProfileSelection = false;
+  profileBeforeSelection = undefined;
+  workerIdentityBeforeSelection = undefined;
   activePrototypeProfile = undefined;
   workerPrototypeIdentity = undefined;
   prototypeProfileStatus.textContent = 'None · ordinary circuits remain available';

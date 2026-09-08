@@ -116,8 +116,10 @@ Add `--prototype-identity "<reported identity>"` to reject a different database.
 Missing, invalid or mismatched profiles stop with exit code `2` before source
 execution; they never fall back to another profile. Browser file selection is
 available in the **Prototype environment** bar above Source; the bundled first-run
-profile remains pending. Select a normalized JSON file there; valid data
-is cached in IndexedDB and restored on tab reload with its identity pin. **Disable**
+profile remains pending. Select one normalized JSON file, or a raw dump together
+with its `metadata.json` companion; raw parsing and normalization happen in the
+Worker. Valid data is cached in IndexedDB and restored on tab reload with its
+identity pin. **Disable**
 clears only this tab's selection, without changing code or tests.
 
 For an offline synthetic smoke test, use

@@ -15,6 +15,34 @@ const file = {
 const output = CC(prototypes.item['iron-plate'].stackSize * Signal('iron-plate'));`,
 };
 
+const rawMetadata = JSON.stringify({
+  factorioVersion: '2.1.17',
+  expansions: ['space-age'],
+  mods: [
+    { name: 'base', version: '2.1.17' },
+    { name: 'space-age', version: '2.1.17' },
+  ],
+});
+
+const rawSource = JSON.stringify({
+  item: { 'iron-plate': { type: 'item', name: 'iron-plate', stack_size: 100 } },
+  fluid: { water: { type: 'fluid', name: 'water' } },
+  recipe: {
+    'iron-plate': {
+      type: 'recipe',
+      name: 'iron-plate',
+      ingredients: {},
+      results: [{ type: 'item', name: 'iron-plate', amount: 1 }],
+    },
+  },
+  'recipe-category': { crafting: { type: 'recipe-category', name: 'crafting' } },
+  quality: { normal: { type: 'quality', name: 'normal', level: 0 } },
+  'virtual-signal': { 'signal-A': { type: 'virtual-signal', name: 'signal-A' } },
+  'assembling-machine': {
+    'footprint-less': { type: 'assembling-machine', name: 'footprint-less' },
+  },
+});
+
 describe('browser compiler Worker prototype profile', () => {
   test('constructs the provider from cloneable JSON inside the request handler', async () => {
     const source = JSON.stringify(syntheticPrototypeDatabase());
@@ -42,8 +70,26 @@ describe('browser compiler Worker prototype profile', () => {
     expect(request).not.toHaveProperty('prototypes');
   });
 
+  test('normalizes raw input in the Worker and reports warnings without source-side parsing', async () => {
+    const response = await handleCompilerWorkerRequest({
+      kind: 'parse',
+      revision: 8,
+      file,
+      prototypeProfile: { source: rawSource, factorioDumpMetadata: rawMetadata },
+    });
+    expect(response.prototypeEnvironment).toMatchObject({
+      format: 'factorio-data-raw',
+      factorioVersion: '2.1.17',
+      warnings: [expect.objectContaining({ code: 'PD2002' })],
+    });
+    expect(response.result.compilerDiagnostics).toEqual([
+      expect.objectContaining({ code: 'CL2001', severity: 'warning' }),
+    ]);
+  });
+
   test.each([
     { profile: { source: '{' }, code: 'PT1006' },
+    { profile: { source: rawSource }, code: 'PI1002' },
     { profile: { source: JSON.stringify({ schemaVersion: 99 }) }, code: 'PT1000' },
     {
       profile: { source: JSON.stringify(syntheticPrototypeDatabase()), expectedIdentity: 'wrong' },

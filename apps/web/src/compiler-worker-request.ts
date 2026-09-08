@@ -3,9 +3,11 @@ import {
   EntityReplayContextError,
 } from '@comblang/compiler/entity-replay-context';
 import {
-  loadPrototypeDatabaseJson,
+  FactorioDumpError,
+  loadPrototypeInputJson,
+  PrototypeInputError,
   PrototypeValidationError,
-  type LoadedPrototypeEnvironment,
+  type LoadedPrototypeInput,
 } from '@comblang/prototypes';
 import type { Diagnostic } from '@comblang/shared';
 
@@ -29,19 +31,21 @@ function profileFailure(error: unknown): Diagnostic {
     code:
       error instanceof PrototypeValidationError
         ? error.code
-        : error instanceof BrowserPrototypeSelectionError ||
-            error instanceof BrowserPrototypeCacheMissError
+        : error instanceof PrototypeInputError || error instanceof FactorioDumpError
           ? error.code
-          : error instanceof EntityReplayContextError
+          : error instanceof BrowserPrototypeSelectionError ||
+              error instanceof BrowserPrototypeCacheMissError
             ? error.code
-            : 'WP1003',
+            : error instanceof EntityReplayContextError
+              ? error.code
+              : 'WP1003',
     severity: 'error',
     message: error instanceof Error ? error.message : 'Unable to load the prototype profile.',
   };
 }
 
 export class CompilerWorkerRuntime {
-  readonly #profiles = new Map<string, LoadedPrototypeEnvironment>();
+  readonly #profiles = new Map<string, LoadedPrototypeInput>();
 
   async handle(request: CompilerWorkerRequest): Promise<CompilerWorkerResponse> {
     let entityReplayContext;
@@ -79,7 +83,11 @@ export class CompilerWorkerRuntime {
       const referenceIdentity = 'identity' in profile ? profile.identity : undefined;
       const loaded =
         'source' in profile
-          ? await loadPrototypeDatabaseJson(profile.source)
+          ? await loadPrototypeInputJson(profile.source, {
+              ...(profile.factorioDumpMetadata === undefined
+                ? {}
+                : { factorioDumpMetadata: profile.factorioDumpMetadata }),
+            })
           : this.#profiles.get(profile.identity);
       if (loaded === undefined) {
         throw new BrowserPrototypeCacheMissError(
@@ -99,10 +107,12 @@ export class CompilerWorkerRuntime {
       }
       const environment: BrowserPrototypeEnvironmentReport = Object.freeze({
         identity: loaded.prototypes.identity,
+        format: loaded.format,
         factorioVersion: loaded.prototypes.environment.factorioVersion,
         expansions: loaded.prototypes.environment.expansions,
         mods: loaded.prototypes.environment.mods,
         capabilities: loaded.prototypes.capabilities,
+        warnings: loaded.warnings,
       });
       return {
         kind: 'parsed',

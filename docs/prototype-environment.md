@@ -36,6 +36,14 @@ backend receive a provider through an explicit compilation environment. They do
 not reach into a giant JSON object or a global registry. The simulator continues
 to consume already-lowered circuit devices and buses rather than prototype data.
 
+The public `loadPrototypeInputJson()` boundary accepts either normalized v1 JSON
+or a native `data.raw` dump. A raw dump must be accompanied by explicit metadata
+because its JSON does not identify the Factorio version, mod versions, enabled
+expansions, or startup settings. The loader parses the source once, chooses the
+format conservatively, and does not retry a recognized malformed format as another
+format. Callers that require the strict normalized contract may continue using
+`loadPrototypeDatabaseJson()`.
+
 Schema version 1 includes only facts required by the next acceptance programs:
 
 - environment: schema/generator version, Factorio version, expansions, ordered
@@ -45,7 +53,7 @@ Schema version 1 includes only facts required by the next acceptance programs:
   fluid temperature, the 2.x integer-plus-fraction result count form, independent
   and shared product probability metadata, statistics/productivity exclusions,
   item spoilage/freshness, and fluidbox routing metadata;
-- entities: key, type, footprint, crafting categories, and capability-oriented
+- entities: key, type, optional all-or-nothing footprint, crafting categories, and capability-oriented
   circuit flags;
 - qualities: canonical key and stable ordering information;
 - recipe categories and virtual signals: canonical key and name;
@@ -83,6 +91,9 @@ unknown extension fields, copies and freezes accepted data, and rejects:
 Validation errors carry stable `PT1000`–`PT1006` codes and a structural path.
 `loadPrototypeDatabase()` and `loadPrototypeDatabaseJson()` return the frozen
 database together with an immutable `prototypes` provider.
+
+`EntityPrototype` footprint fields are optional as a pair; omission means that
+ordinary placement dimensions are unknown.
 
 Recipe products are zero-to-many, and ingredients/products may be items or
 fluids. Entity data should expose capabilities needed by CombLang instead of
@@ -137,7 +148,10 @@ only the literal `item` table. It applies the raw RecipePrototype defaults
 preserves multiple categories, exact fluid temperature, and role/kind-applicable
 recipe component fields. Entity dimensions use explicit `tile_width` and
 `tile_height` independently, with the prototype API's documented per-axis
-collision-box fallback; selection boxes are not used as tile footprints.
+collision-box fallback; selection boxes are not used as tile footprints. Entity
+table recognition is limited to the concrete type catalog derived from the
+checked-in 2.1.17 prototype API. A recognized record without enough footprint
+data remains an Entity with omitted dimensions.
 Empty-output recipes, including sentinel/parameter recipes, are retained. They
 do not contribute product-index entries.
 
@@ -156,7 +170,7 @@ Generator `comblang-factorio-data-dump-v1.4` also retains item recipe quality
 metadata and quality-chain links. The supplied dump has six quality records and
 four explicit `next` links, but no explicit recipe quality transformations; tests
 for those transformations use synthetic inputs. This is not an exhaustive native
-RecipePrototype implementation. Generator `comblang-factorio-data-dump-v1.8`
+RecipePrototype implementation. Generator `comblang-factorio-data-dump-v1.9`
 retains all 662 recipes in the same supplied dump, including 11 empty-output
 recipes; only the circuit-capability warning remains in that smoke run. Explicit
 malformed values of applicable recipe fields, recipe booleans, or invalid/ambiguous
@@ -167,9 +181,16 @@ this is an omission warning, not native behavior evidence. Lack of loss warnings
 does not establish complete recipe behavior coverage. Applicable malformed amount
 values and incomplete/conflicting amount forms fail with `PD1001` at their raw
 snake_case paths. A descending raw product range is normalized to the effective
-`amountMax = amountMin` documented by Factorio. For entity footprint, v1.8 uses explicit
+`amountMax = amountMin` documented by Factorio. For entity footprint, v1.9 uses explicit
 `tile_width` and `tile_height` per axis, falling back to collision-box dimensions
 as specified by the prototype API; it never substitutes the selection box.
+
+The Entity table catalog is pinned to the checked-in Factorio 2.1.17 prototype API.
+Its known engine type names remain valid for compatible later dumps, including
+modded records stored in those same tables. A genuinely new Entity type introduced
+by a later Factorio release is not imported until the pinned API is reviewed and
+the catalog is regenerated. Unknown top-level tables are not safely classifiable as
+Entities and are ignored by the raw normalizer.
 
 ### Product probability and excluded amounts
 
@@ -533,8 +554,9 @@ error rather than an implicit precedence rule.
 
 Without either source of prototype data, ordinary circuits still compile and
 accessing `prototypes` produces `EX1004`. No built-in database is installed yet.
-In the browser, use **Load normalized
-JSON** above the source editor. It does not modify source or test drafts. After
+In the browser, use **Load prototype JSON** above the source editor. Select one
+normalized JSON file, or a raw dump and one companion metadata JSON file. It does
+not modify source or test drafts. After
 validation, the database is saved in IndexedDB under its identity and the active
 identity is saved in tab-local session storage. Reloading the tab restores the
 database and checks that pin again before source execution. Separate tabs may
@@ -547,8 +569,9 @@ can still use the selected in-memory profile. A selected database missing from
 IndexedDB blocks compilation until the user loads a file or explicitly disables
 the selection. It never silently substitutes a built-in fallback.
 
-The browser compiler Worker protocol accepts either normalized JSON plus an
-optional expected identity, or an identity already confirmed by that Worker.
+The browser compiler Worker protocol accepts normalized or raw JSON (with raw
+metadata when needed) plus an optional expected identity, or an identity already
+confirmed by that Worker.
 Parsing, validation, hashing and provider construction happen inside the Worker;
 only cloneable JSON enters it and only cloneable environment metadata, diagnostics,
 and the direct plan leave it. Provider methods are never structured-cloned.
@@ -560,7 +583,8 @@ one, while an unknown cached identity returns `WP1002` and asks the caller to se
 the JSON again. Thus a Worker restart cannot silently lose a pin or substitute a
 profile. The UI retains the JSON in memory after loading and resends it with the
 previous identity pin after a Worker restart. Initial JSON loading and compilation
-share a 5000 ms Worker timeout; identity-only recompilation keeps the 1000 ms budget.
+share a 15000 ms Worker timeout to cover a realistic large raw dump; identity-only
+recompilation keeps the 1000 ms budget.
 
 The v1 environment identity is SHA-256 over canonical normalized JSON and is
 prefixed `comblang-prototypes-v1-sha256:`. It includes schema and generator

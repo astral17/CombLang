@@ -691,7 +691,7 @@ describe('Factorio data-raw-dump normalizer', () => {
     const normalized = normalizeFactorioDataDump(dumpFixture(), metadata);
     const { database, prototypes } = await loadPrototypeDatabase(normalized.database);
 
-    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.8');
+    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.9');
     expect(prototypes.item.grenade?.stackSize).toBe(100);
     expect(prototypes.recipe['iron-plate']).toMatchObject({
       categories: ['crafting'],
@@ -739,6 +739,31 @@ describe('Factorio data-raw-dump normalizer', () => {
       tileWidth: 2,
       tileHeight: 3,
     });
+  });
+
+  test('retains catalog-recognized entities when ordinary footprint data is unavailable', () => {
+    const dump = dumpFixture() as Record<string, Record<string, Record<string, unknown>>>;
+    const assembler = dump['assembling-machine']!.assembler!;
+    delete assembler.collision_box;
+    delete assembler.tile_width;
+    delete assembler.tile_height;
+    dump['not-an-entity'] = {
+      fake: {
+        type: 'not-an-entity',
+        name: 'fake',
+        collision_box: [
+          [-1, -1],
+          [1, 1],
+        ],
+      },
+    };
+
+    const normalized = normalizeFactorioDataDump(dump, metadata);
+    expect(normalized.database.entities).toEqual([
+      expect.objectContaining({ key: 'entity:assembler', type: 'assembling-machine' }),
+    ]);
+    expect(normalized.database.entities[0]).not.toHaveProperty('tileWidth');
+    expect(normalized.database.entities[0]).not.toHaveProperty('tileHeight');
   });
 
   test.each([

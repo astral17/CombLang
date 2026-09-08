@@ -1,6 +1,7 @@
 export interface StoredPrototypeProfile {
   readonly name: string;
   readonly source: string;
+  readonly factorioDumpMetadata?: string;
   readonly identity?: string;
 }
 
@@ -21,6 +22,8 @@ export class PrototypeProfileStore {
         value === null ||
         typeof value.name !== 'string' ||
         typeof value.source !== 'string' ||
+        (value.factorioDumpMetadata !== undefined &&
+          typeof value.factorioDumpMetadata !== 'string') ||
         (value.identity !== undefined && typeof value.identity !== 'string'))
     ) {
       throw new Error('Stored prototype profile is malformed.');

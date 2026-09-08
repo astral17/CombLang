@@ -32,6 +32,7 @@ The current repository implements the Phase 3 source compiler, the complete Phas
 - [ ] Phase 5.5 — external prototype environment foundation
   - [x] Complete the compiler/runtime foundation: shared diagnostics and traversal, online color/replay validation, versioned immutable `prototypes.*`, explicit CLI/browser provider injection, project profiles, browser persistence, canonical Signal keys, ordered `CC` inputs, exact recipe component boundaries, and identity-bound evidence manifests.
   - [x] Use final `factorio.exe --dump-data` as the structural authority and keep only the narrow read-only runtime behavior probe; repository code and tests do not depend on sibling Analysis data.
+  - [x] Accept normalized prototype JSON or raw `data.raw` plus explicit metadata through the shared loader; retain catalog-recognized Entity records without fabricated footprints.
   - [ ] Finish the evidence-complete release layer: reviewed base/Space Age/modded circuit fixtures, exact capability profiles, and a generated built-in vanilla/Space Age first-run database.
   - [ ] Finish the production-browser Service Worker install/update/offline lifecycle gate; deterministic cache isolation tests are already complete.
 - [ ] Phase 6 — universal persistent Factorio Entity handles with a generic modded fallback and typed facades.

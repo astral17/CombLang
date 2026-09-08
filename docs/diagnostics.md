@@ -14,6 +14,9 @@ CombLang diagnostics are structured values with a stable code, severity, message
 | `RT2xxx`  | elaboration/runtime      | ownership, topology, native-mode, and wire-color failures |
 | `DBG1xxx` | debug query              | missing or ambiguous scope, Network, Producer, or DUT     |
 | `DBG2xxx` | structural assertion     | executed topology does not match a structural expectation |
+| `PI1xxx`  | prototype input          | unsupported input or missing/invalid raw-dump metadata    |
+| `PD1xxx`  | raw prototype dump       | malformed or internally inconsistent raw-dump data        |
+| `PD2xxx`  | raw prototype dump       | normalization coverage or omission warning                |
 
 An error prevents a valid direct plan or elaborated circuit. A warning does not; its topology is still checked.
 
@@ -210,6 +213,18 @@ warning. Applicable malformed amount values fail as `PD1001` at their raw
 snake_case amount path; incomplete product amount forms do the same. Conversion
 warnings are explicit coverage or omission notices; they do not make the normalized
 v1 subset invalid.
+
+The shared `loadPrototypeInputJson()` boundary detects normalized v1 JSON or a
+Factorio `data.raw` dump after parsing once. Normalized validation keeps its
+`PT1000`–`PT1006` class, recognized raw input keeps `PD1001` paths, and
+`PI1001`/`PI1002`/`PI1003` identify unsupported JSON, missing raw metadata, and
+malformed raw metadata respectively. A raw dump never invents environment fields.
+
+Entity records are recognized only for concrete prototype type names from the
+checked-in Factorio 2.1.17 API catalog. A recognized Entity without both ordinary
+footprint axes is retained with `tileWidth` and `tileHeight` omitted; no `1x1`,
+zero, selection-box, or runtime-probe fallback is fabricated. In normalized v1,
+the two footprint fields are all-or-nothing when present.
 
 Recipe quality transforms use `PT1001` for invalid booleans/int8 shifts, `PT1002`
 for malformed canonical quality keys, and `PT1004` for wrong component roles/types,

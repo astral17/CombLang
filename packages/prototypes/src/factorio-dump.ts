@@ -17,6 +17,7 @@ import {
 } from './recipe-component-policy.js';
 import { evaluateRecipeAmount } from './recipe-amount-policy.js';
 import { buildPrototypeIndexes, validatePrototypeDatabase } from './validation.js';
+import { isFactorioEntityPrototypeType } from './factorio-prototype-catalog.js';
 
 type JsonObject = Record<string, unknown>;
 
@@ -454,13 +455,18 @@ export function normalizeFactorioDataDump(
 
   const entities: EntityPrototype[] = [];
   for (const [table, rawTable] of Object.entries(dump)) {
+    if (!isFactorioEntityPrototypeType(table)) continue;
     if (typeof rawTable !== 'object' || rawTable === null || Array.isArray(rawTable)) continue;
     for (const [name, rawRecord] of Object.entries(rawTable as JsonObject)) {
       if (typeof rawRecord !== 'object' || rawRecord === null || Array.isArray(rawRecord)) continue;
       const record = rawRecord as JsonObject;
-      if (record.name !== name || record.type !== table) continue;
+      if (record.name !== name || record.type !== table) {
+        throw new FactorioDumpError(
+          `${table}.${name}`,
+          `expected matching name and type ${JSON.stringify(table)}.`,
+        );
+      }
       const size = dimensions(record, `${table}.${name}`);
-      if (size === undefined) continue;
       const categories = Array.isArray(record.crafting_categories)
         ? record.crafting_categories.map((category, index) =>
             nonEmptyString(category, `${table}.${name}.crafting_categories[${index}]`),
@@ -470,8 +476,7 @@ export function normalizeFactorioDataDump(
         key: `entity:${name}`,
         name,
         type: table,
-        tileWidth: size[0],
-        tileHeight: size[1],
+        ...(size === undefined ? {} : { tileWidth: size[0], tileHeight: size[1] }),
         ...(categories === undefined
           ? {}
           : { crafting: { categories, supportsFluids: hasFluidBoxes(record.fluid_boxes) } }),
@@ -488,7 +493,7 @@ export function normalizeFactorioDataDump(
 
   const environment: PrototypeEnvironment = {
     ...metadata,
-    generatorVersion: 'comblang-factorio-data-dump-v1.8',
+    generatorVersion: 'comblang-factorio-data-dump-v1.9',
   };
   const candidate = {
     schemaVersion: 1,

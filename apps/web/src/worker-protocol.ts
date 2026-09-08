@@ -1,10 +1,16 @@
 import type { CompiledSourceResult } from './compile-source.js';
 import type { EntityReplayContextTransport } from '@comblang/compiler/entity-replay-context';
-import type { PrototypeDatabaseCapabilities, PrototypeEnvironment } from '@comblang/prototypes';
+import type {
+  FactorioDumpWarning,
+  PrototypeDatabaseCapabilities,
+  PrototypeEnvironment,
+} from '@comblang/prototypes';
 
 export interface BrowserPrototypeProfileSource {
-  /** Normalized Prototype Database JSON. It is parsed only inside the Worker. */
+  /** Normalized or raw Factorio Prototype JSON. It is parsed only inside the Worker. */
   readonly source: string;
+  /** Companion metadata JSON required only for a raw Factorio dump. */
+  readonly factorioDumpMetadata?: string;
   readonly expectedIdentity?: string;
 }
 
@@ -26,10 +32,12 @@ export interface CompilerWorkerRequest {
 
 export interface BrowserPrototypeEnvironmentReport {
   readonly identity: string;
+  readonly format: 'normalized' | 'factorio-data-raw';
   readonly factorioVersion: string;
   readonly expansions: readonly string[];
   readonly mods: PrototypeEnvironment['mods'];
   readonly capabilities: PrototypeDatabaseCapabilities;
+  readonly warnings: readonly FactorioDumpWarning[];
 }
 
 export interface CompilerWorkerResponse {

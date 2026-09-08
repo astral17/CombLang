@@ -23,7 +23,12 @@ describe('browser prototype profile persistence', () => {
   test('round-trips a detached profile and clears it explicitly', async () => {
     const backend = memoryBackend();
     const store = new PrototypeProfileStore(backend);
-    const profile = { name: 'space age.json', source: '{"schemaVersion":1}', identity: 'hash' };
+    const profile = {
+      name: 'data-raw-dump.json + metadata',
+      source: '{"recipe":{}}',
+      factorioDumpMetadata: '{"factorioVersion":"2.1.17"}',
+      identity: 'hash',
+    };
     expect(await store.save(profile)).toBe(true);
     expect(await store.load()).toEqual(profile);
     expect(backend.value).not.toBe(profile);

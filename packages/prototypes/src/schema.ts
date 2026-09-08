@@ -203,8 +203,9 @@ export interface EntityPrototype {
   readonly key: EntityPrototypeKey;
   readonly name: string;
   readonly type: string;
-  readonly tileWidth: number;
-  readonly tileHeight: number;
+  /** Omission means the raw source did not provide an ordinary placement footprint. */
+  readonly tileWidth?: number;
+  readonly tileHeight?: number;
   /** Omission means unknown, never an implicit all-false capability record. */
   readonly circuit?: EntityCircuitCapabilities;
   readonly crafting?: EntityCraftingCapabilities;

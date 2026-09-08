@@ -14,7 +14,9 @@ assertion that every recommendation has been implemented.
 | Reviewed behavior fixtures  | Native observations/configuration round trips and explicit conformance cases in a matching environment                           | Untested features or another mod/version/settings combination    |
 
 The compiler receives a normalized immutable provider, not a raw dump or a live
-game connection. The simulator continues to consume lowered devices and buses;
+game connection. The shared input loader can now accept normalized v1 JSON or a
+raw `data.raw` dump plus explicit metadata before constructing that provider. The
+simulator continues to consume lowered devices and buses;
 it does not become a factory simulator or depend on `packages/prototypes`.
 
 The current schema/normalizer predates this split. Successful validation and a
@@ -38,6 +40,12 @@ crafting fields, and quality chains. A mandatory companion metadata file records
 the game/mod/startup-setting environment because the dump does not identify it.
 Unknown fields remain distinct from explicit negative or empty facts.
 
+Raw entity tables are selected from the concrete prototype type catalog derived
+from the checked-in 2.1.17 prototype API; an arbitrary top-level table is not
+promoted to Entity. Recognized entities remain present when neither ordinary
+footprint axis is available. The normalized v1 footprint fields are optional as
+an all-or-nothing pair, and no placement dimension is fabricated.
+
 The runtime API snapshot and prototype API snapshot checked for this decision are
 the hash-pinned Factorio 2.1.17 / JSON API 6 fixtures under
 `tools/factorio-api/fixtures/2.1.17`. Their offline inventory generator and review
@@ -51,7 +59,8 @@ In particular:
   recipes; they contribute no entries to the product index.
 - Entity tiling dimensions honor explicit `tile_width`/`tile_height` independently,
   then use the prototype API's documented per-axis collision-box fallback. A
-  selection box is not a tile footprint.
+  selection box is not a tile footprint; if both sources are insufficient, the
+  Entity remains in the normalized database with omitted dimensions.
 - Product and ingredient schemas must be validated by role and item/fluid type.
   Do not tighten runtime rules on a mixed raw representation first: raw artifacts
   such as fluid `extra_count_fraction` must not become authoritative runtime facts.
@@ -94,7 +103,7 @@ format is retained speculatively.
   locale collation. This applies to normalization, provider collections, identity,
   and setting-object comparison; recipe row order remains significant.
 - The normalizer retains empty-output recipes and no longer emits a skip warning
-  for them. Version `comblang-factorio-data-dump-v1.8` also uses explicit tile
+  for them. Version `comblang-factorio-data-dump-v1.9` also uses explicit tile
   dimensions before the documented collision-box fallback, role/kind-aware
   normalized recipe projection, and canonical amount normalization for raw
   product ranges.
@@ -120,7 +129,7 @@ fallback. Reload the JSON without a stale pin, inspect the new identity, and
 explicitly update project/supplement pins as appropriate. In the browser, select
 the JSON again if the cached identity no longer matches. Old entries are not
 silently migrated or exempted from validation. Regenerating a raw database with
-v1.8 also changes its contents and generator metadata, hence its identity. Older
+v1.9 also changes its contents and generator metadata, hence its identity. Older
 valid schema-v1 JSON retains its recorded generator label when loaded; the loader
 does not rewrite it to the current raw converter identity.
 

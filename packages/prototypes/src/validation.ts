@@ -551,6 +551,15 @@ function parseEntities(
     const path = `entities[${index}]`;
     const input = object(entry, path);
     const name = string(input.name, `${path}.name`);
+    const tileWidth = optionalPositiveInteger(input.tileWidth, `${path}.tileWidth`);
+    const tileHeight = optionalPositiveInteger(input.tileHeight, `${path}.tileHeight`);
+    if ((tileWidth === undefined) !== (tileHeight === undefined)) {
+      invalid(
+        'PT1004',
+        path,
+        'tileWidth and tileHeight must either both be present or both be omitted.',
+      );
+    }
     if (completeCircuitCoverage && input.circuit === undefined) {
       invalid(
         'PT1004',
@@ -567,8 +576,8 @@ function parseEntities(
       key: canonicalKey('entity', name, input.key, `${path}.key`) as EntityPrototype['key'],
       name,
       type: string(input.type, `${path}.type`),
-      tileWidth: positiveInteger(input.tileWidth, `${path}.tileWidth`),
-      tileHeight: positiveInteger(input.tileHeight, `${path}.tileHeight`),
+      ...(tileWidth === undefined ? {} : { tileWidth }),
+      ...(tileHeight === undefined ? {} : { tileHeight }),
       ...(circuit === undefined ? {} : { circuit }),
       ...(crafting === undefined ? {} : { crafting }),
     });
