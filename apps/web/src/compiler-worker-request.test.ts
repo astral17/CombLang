@@ -7,7 +7,7 @@ import {
 } from '@comblang/compiler/entity-replay-context';
 
 import { CompilerWorkerRuntime, handleCompilerWorkerRequest } from './compiler-worker-request.js';
-import type { CompilerWorkerRequest } from './worker-protocol.js';
+import type { CompilerWorkerProgressStage, CompilerWorkerRequest } from './worker-protocol.js';
 
 const file = {
   path: 'main.factorio.ts',
@@ -44,6 +44,21 @@ const rawSource = JSON.stringify({
 });
 
 describe('browser compiler Worker prototype profile', () => {
+  test('reports ordered cloneable progress for ordinary source compilation', async () => {
+    const stages: CompilerWorkerProgressStage[] = [];
+    const response = await handleCompilerWorkerRequest(
+      {
+        kind: 'parse',
+        revision: 12,
+        file: { path: 'main.factorio.ts', text: 'const output = new Network();' },
+      },
+      (stage) => stages.push(stage),
+    );
+
+    expect(response.kind).toBe('parsed');
+    expect(stages).toEqual(['receive', 'parse', 'semantic', 'transform', 'execute', 'lower']);
+  });
+
   test('constructs the provider from cloneable JSON inside the request handler', async () => {
     const source = JSON.stringify(syntheticPrototypeDatabase());
     const { prototypes } = await loadPrototypeDatabase(syntheticPrototypeDatabase());

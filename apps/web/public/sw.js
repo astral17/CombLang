@@ -1,52 +1,51 @@
 const APP_SHELL_URL = new URL('./', self.registration.scope).href;
 const APP_SCOPE_PATH = new URL(APP_SHELL_URL).pathname;
 const CACHE_NAMESPACE = `comblang-shell:${encodeURIComponent(APP_SCOPE_PATH)}:`;
-const CACHE_NAME = `${CACHE_NAMESPACE}v7`;
+const SHELL_MANIFEST = null;
+
+function cacheName() {
+  if (SHELL_MANIFEST === null) throw new Error('Service Worker shell manifest is not injected.');
+  return `${CACHE_NAMESPACE}build:${SHELL_MANIFEST.identity}`;
+}
 
 function isWithinAppScope(value) {
   const url = new URL(value, APP_SHELL_URL);
   return url.origin === self.location.origin && url.href.startsWith(APP_SHELL_URL);
 }
 
-async function fetchAndCache(cache, url) {
+function shellResourceUrls() {
+  if (SHELL_MANIFEST === null) throw new Error('Service Worker shell manifest is not injected.');
+  return SHELL_MANIFEST.resources.map((resource) => {
+    const url = new URL(resource, APP_SHELL_URL);
+    if (!isWithinAppScope(url) || url.search || url.hash) {
+      throw new Error(`Invalid shell resource ${resource}`);
+    }
+    return url.href;
+  });
+}
+
+async function fetchShellResource(url) {
   const response = await fetch(url, { cache: 'no-cache' });
   if (!response.ok) throw new Error(`Cannot cache ${url}: HTTP ${response.status}`);
-  await cache.put(url, response.clone());
   return response;
 }
 
 async function precacheApplication() {
-  const cache = await caches.open(CACHE_NAME);
-  const shellResponse = await fetchAndCache(cache, APP_SHELL_URL);
-  const html = await shellResponse.text();
-  const assetUrls = [
-    ...new Set(
-      [...html.matchAll(/(?:src|href)=["']([^"']+)["']/g)]
-        .map((match) => new URL(match[1], APP_SHELL_URL).href)
-        .filter(isWithinAppScope),
-    ),
-  ];
-
-  const assetResponses = await Promise.all(
-    assetUrls.map(async (url) => ({ url, response: await fetchAndCache(cache, url) })),
-  );
-  const nestedAssets = new Set();
-  for (const { url, response } of assetResponses) {
-    if (!url.endsWith('.js')) continue;
-    const javaScript = await response.text();
-    for (const match of javaScript.matchAll(
-      /["']([^"']*(?:parser|test)\.worker-[\w-]+\.js)["']/g,
-    )) {
-      const nestedUrl = new URL(match[1], url);
-      if (isWithinAppScope(nestedUrl)) nestedAssets.add(nestedUrl.href);
-    }
+  const currentCacheName = cacheName();
+  const fetched = [];
+  for (const url of shellResourceUrls()) {
+    fetched.push({ url, response: await fetchShellResource(url) });
   }
-  await Promise.all([...nestedAssets].map((url) => fetchAndCache(cache, url)));
+  const cache = await caches.open(currentCacheName);
+  for (const { url, response } of fetched) {
+    await cache.put(url, response.clone());
+    if (url.endsWith('/index.html')) await cache.put(APP_SHELL_URL, response.clone());
+  }
 }
 
+// Keep a new worker waiting so existing pages can continue using old hashed assets.
 self.addEventListener('install', (event) => {
   event.waitUntil(precacheApplication());
-  self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
@@ -57,7 +56,7 @@ self.addEventListener('activate', (event) => {
         .then((keys) =>
           Promise.all(
             keys
-              .filter((key) => key.startsWith(CACHE_NAMESPACE) && key !== CACHE_NAME)
+              .filter((key) => key.startsWith(CACHE_NAMESPACE) && key !== cacheName())
               .map((key) => caches.delete(key)),
           ),
         ),
@@ -71,13 +70,17 @@ self.addEventListener('message', (event) => {
   const urls = event.data.urls.filter((value) => {
     if (typeof value !== 'string') return false;
     try {
-      return isWithinAppScope(value);
+      const url = new URL(value, APP_SHELL_URL);
+      return (
+        isWithinAppScope(url) &&
+        (url.href === APP_SHELL_URL || shellResourceUrls().includes(url.href))
+      );
     } catch {
       return false;
     }
   });
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) =>
+    caches.open(cacheName()).then((cache) =>
       Promise.allSettled(
         urls.map(async (url) => {
           if ((await cache.match(url)) === undefined) await cache.add(url);
@@ -100,13 +103,13 @@ self.addEventListener('fetch', (event) => {
           if (!response.ok) return response;
           const cachedResponse = response.clone();
           return caches
-            .open(CACHE_NAME)
+            .open(cacheName())
             .then((cache) => cache.put(APP_SHELL_URL, cachedResponse))
             .then(() => response);
         })
         .catch(() =>
           caches
-            .open(CACHE_NAME)
+            .open(cacheName())
             .then((cache) => cache.match(APP_SHELL_URL))
             .then((response) => response ?? Response.error()),
         ),
@@ -115,7 +118,7 @@ self.addEventListener('fetch', (event) => {
   }
 
   event.respondWith(
-    caches.open(CACHE_NAME).then(async (cache) => {
+    caches.open(cacheName()).then(async (cache) => {
       const cached = await cache.match(request);
       if (cached !== undefined) return cached;
       const response = await fetch(request);

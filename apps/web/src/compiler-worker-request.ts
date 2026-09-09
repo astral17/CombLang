@@ -14,8 +14,9 @@ import type { Diagnostic } from '@comblang/shared';
 import { compileSource } from './compile-source.js';
 import type {
   BrowserPrototypeEnvironmentReport,
+  CompilerWorkerProgressStage,
   CompilerWorkerRequest,
-  CompilerWorkerResponse,
+  CompilerWorkerParsedResponse,
 } from './worker-protocol.js';
 
 class BrowserPrototypeSelectionError extends Error {
@@ -47,7 +48,11 @@ function profileFailure(error: unknown): Diagnostic {
 export class CompilerWorkerRuntime {
   readonly #profiles = new Map<string, LoadedPrototypeInput>();
 
-  async handle(request: CompilerWorkerRequest): Promise<CompilerWorkerResponse> {
+  async handle(
+    request: CompilerWorkerRequest,
+    observe?: (stage: CompilerWorkerProgressStage) => void,
+  ): Promise<CompilerWorkerParsedResponse> {
+    observe?.('receive');
     let entityReplayContext;
     try {
       entityReplayContext =
@@ -58,7 +63,7 @@ export class CompilerWorkerRuntime {
       return {
         kind: 'parsed',
         revision: request.revision,
-        result: compileSource(request.file, {}, [profileFailure(error)]),
+        result: compileSource(request.file, {}, [profileFailure(error)], observe),
       };
     }
     if (request.prototypeProfile === undefined) {
@@ -66,20 +71,26 @@ export class CompilerWorkerRuntime {
         return {
           kind: 'parsed',
           revision: request.revision,
-          result: compileSource(request.file, {
-            ...(entityReplayContext === undefined ? {} : { entityReplayContext }),
-          }),
+          result: compileSource(
+            request.file,
+            {
+              ...(entityReplayContext === undefined ? {} : { entityReplayContext }),
+            },
+            [],
+            observe,
+          ),
         };
       } catch (error) {
         return {
           kind: 'parsed',
           revision: request.revision,
-          result: compileSource(request.file, {}, [profileFailure(error)]),
+          result: compileSource(request.file, {}, [profileFailure(error)], observe),
         };
       }
     }
     try {
       const profile = request.prototypeProfile;
+      observe?.('profile');
       const referenceIdentity = 'identity' in profile ? profile.identity : undefined;
       const loaded =
         'source' in profile
@@ -117,17 +128,22 @@ export class CompilerWorkerRuntime {
       return {
         kind: 'parsed',
         revision: request.revision,
-        result: compileSource(request.file, {
-          prototypes: loaded.prototypes,
-          ...(entityReplayContext === undefined ? {} : { entityReplayContext }),
-        }),
+        result: compileSource(
+          request.file,
+          {
+            prototypes: loaded.prototypes,
+            ...(entityReplayContext === undefined ? {} : { entityReplayContext }),
+          },
+          [],
+          observe,
+        ),
         prototypeEnvironment: environment,
       };
     } catch (error) {
       return {
         kind: 'parsed',
         revision: request.revision,
-        result: compileSource(request.file, {}, [profileFailure(error)]),
+        result: compileSource(request.file, {}, [profileFailure(error)], observe),
       };
     }
   }
@@ -135,6 +151,9 @@ export class CompilerWorkerRuntime {
 
 const defaultRuntime = new CompilerWorkerRuntime();
 
-export function handleCompilerWorkerRequest(request: CompilerWorkerRequest) {
-  return defaultRuntime.handle(request);
+export function handleCompilerWorkerRequest(
+  request: CompilerWorkerRequest,
+  observe?: (stage: CompilerWorkerProgressStage) => void,
+) {
+  return defaultRuntime.handle(request, observe);
 }

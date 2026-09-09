@@ -34,7 +34,7 @@ The current repository implements the Phase 3 source compiler, the complete Phas
   - [x] Use final `factorio.exe --dump-data` as the structural authority and keep only the narrow read-only runtime behavior probe; repository code and tests do not depend on sibling Analysis data.
   - [x] Accept normalized prototype JSON or raw `data.raw` plus explicit metadata through the shared loader; retain catalog-recognized Entity records without fabricated footprints.
   - [ ] Finish the evidence-complete release layer: reviewed base/Space Age/modded circuit fixtures, exact capability profiles, and a generated built-in vanilla/Space Age first-run database.
-  - [ ] Finish the production-browser Service Worker install/update/offline lifecycle gate; deterministic cache isolation tests are already complete.
+  - [x] Finish the production-browser Service Worker install/update/offline lifecycle gate with deterministic cache isolation and a real production-build install, waiting-worker update, controlled reload, and offline reload.
 - [ ] Phase 6 — universal persistent Factorio Entity handles with a generic modded fallback and typed facades.
   - [x] Complete prerequisites: ordered multi-form `CC(...)` inputs and transparent `Network`/`any`/union function parameters with explicit `Readonly`, `Ref`, and `Move` contracts retained.
   - [ ] Introduce Direct Plan/EG/NCIR v3 contracts for physical Entity identity, connector profiles, raw configuration, provenance, and environment/evidence pins; retain a lossless producer-only v2 adapter.

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 
 import viteConfig from '../vite.config.js';
+import { shellManifestPlaceholder } from './shell-manifest.js';
 
 describe('static deployment configuration', () => {
   it('uses relative assets so a GitHub project page can host the build', () => {
@@ -27,9 +28,11 @@ describe('static deployment configuration', () => {
   it('precaches the production shell and bundled compiler worker', () => {
     const worker = readFileSync(new URL('../public/sw.js', import.meta.url), 'utf8');
     expect(worker).toContain('precacheApplication()');
-    expect(worker).toContain('(?:parser|test)\\.worker-');
+    expect(worker).not.toContain('(?:parser|test)\\.worker-');
+    expect(worker).toContain(shellManifestPlaceholder);
     expect(worker).toContain("request.mode === 'navigate'");
     expect(worker).toContain('CACHE_NAMESPACE');
     expect(worker).toContain('isWithinAppScope');
+    expect(worker).not.toContain(':v7');
   });
 });

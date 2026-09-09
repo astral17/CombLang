@@ -1,5 +1,6 @@
 import type { CompiledSourceResult } from './compile-source.js';
 import type { EntityReplayContextTransport } from '@comblang/compiler/entity-replay-context';
+import type { SourceCompilationStage } from '@comblang/runtime/source-compilation';
 import type {
   FactorioDumpWarning,
   PrototypeDatabaseCapabilities,
@@ -40,9 +41,25 @@ export interface BrowserPrototypeEnvironmentReport {
   readonly warnings: readonly FactorioDumpWarning[];
 }
 
-export interface CompilerWorkerResponse {
+export interface CompilerWorkerReadyResponse {
+  readonly kind: 'ready';
+}
+
+export type CompilerWorkerProgressStage =
+  'receive' | 'profile' | SourceCompilationStage | 'transport';
+
+export interface CompilerWorkerProgressResponse {
+  readonly kind: 'progress';
+  readonly revision: number;
+  readonly stage: CompilerWorkerProgressStage;
+}
+
+export interface CompilerWorkerParsedResponse {
   readonly kind: 'parsed';
   readonly revision: number;
   readonly result: CompiledSourceResult;
   readonly prototypeEnvironment?: BrowserPrototypeEnvironmentReport;
 }
+
+export type CompilerWorkerResponse =
+  CompilerWorkerReadyResponse | CompilerWorkerProgressResponse | CompilerWorkerParsedResponse;

@@ -583,8 +583,9 @@ one, while an unknown cached identity returns `WP1002` and asks the caller to se
 the JSON again. Thus a Worker restart cannot silently lose a pin or substitute a
 profile. The UI retains the JSON in memory after loading and resends it with the
 previous identity pin after a Worker restart. Initial JSON loading and compilation
-share a 15000 ms Worker timeout to cover a realistic large raw dump; identity-only
-recompilation keeps the 1000 ms budget.
+share a 15000 ms Worker timeout to cover a realistic large raw dump; warm identity-only
+recompilation keeps the 1000 ms budget, while its first request after Worker recreation
+uses the cold 15000 ms budget.
 
 The v1 environment identity is SHA-256 over canonical normalized JSON and is
 prefixed `comblang-prototypes-v1-sha256:`. It includes schema and generator

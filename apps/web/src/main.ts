@@ -4,6 +4,16 @@ import { offsetToPosition, sourceFileId, sourceSpan, type Diagnostic } from '@co
 
 import { blueprintJsonForArtifact } from './blueprint-demo.js';
 import { createSourceEditor, type SourceEditorKind } from './code-editor.js';
+import {
+  compilerWorkerRequestTimeoutMs,
+  compilerWorkerRequestTimeoutReason,
+} from './compiler-worker-budget.js';
+import { CompilerWorkerProgressTracker } from './compiler-worker-progress.js';
+import {
+  COMPILER_WORKER_BOOTSTRAP_TIMEOUT_MS,
+  CompilerWorkerScheduler,
+  compilerWorkerBootstrapTimeoutReason,
+} from './compiler-worker-scheduler.js';
 import { registerOfflineSupport, warmOfflineCache } from './offline.js';
 import {
   browserPrototypeProfileStore,
@@ -24,7 +34,11 @@ import { loadTestDraft, saveTestDraft } from './test-draft.js';
 import { TestTracePanel } from './test-trace-panel.js';
 import type { TestWorkerRequest, TestWorkerResponse } from './test-worker-protocol.js';
 import { buildDetailTimeline, buildOverviewTimeline, signalLabel } from './timeline-view.js';
-import type { CompilerWorkerRequest, CompilerWorkerResponse } from './worker-protocol.js';
+import type {
+  CompilerWorkerParsedResponse,
+  CompilerWorkerRequest,
+  CompilerWorkerResponse,
+} from './worker-protocol.js';
 import './styles.css';
 
 const sampleSource = `const SIGNAL_A = Signal("virtual", "signal-A");
@@ -150,9 +164,11 @@ const prototypeProfileClear = requiredElement<HTMLButtonElement>('#prototype-pro
 const prototypeProfileStatus = requiredElement<HTMLOutputElement>('#prototype-profile-status');
 const PROFILE_SELECTION_KEY = 'comblang.prototype-selection.v1';
 let parserWorker: Worker | undefined;
+const compilerWorkerScheduler = new CompilerWorkerScheduler();
+const compilerWorkerProgress = new CompilerWorkerProgressTracker();
+let parserWorkerId: number | undefined;
+let workerBootstrapTimeout: ReturnType<typeof setTimeout> | undefined;
 let workerTimeout: ReturnType<typeof setTimeout> | undefined;
-let activeWorkerRevision: number | undefined;
-let queuedCompilerRequest: CompilerWorkerRequest | undefined;
 let currentRevision = 0;
 let renderTimer: ReturnType<typeof setTimeout> | undefined;
 let copyResetTimer: ReturnType<typeof setTimeout> | undefined;
@@ -725,7 +741,7 @@ function renderProofError(message: string, compiledPlan?: DirectElaborationPlan)
 }
 
 function renderSourceProof(
-  plan: NonNullable<CompilerWorkerResponse['result']['plan']>,
+  plan: NonNullable<CompilerWorkerParsedResponse['result']['plan']>,
   foldedOperations: number,
 ): void {
   pauseSimulation();
@@ -1015,17 +1031,33 @@ function scheduleRender(): void {
   }, 180);
 }
 
-function handleWorkerMessage(event: MessageEvent<CompilerWorkerResponse>, worker: Worker): void {
+function handleWorkerMessage(
+  event: MessageEvent<CompilerWorkerResponse>,
+  worker: Worker,
+  workerId: number,
+): void {
+  if (parserWorker !== worker || !compilerWorkerScheduler.isCurrent(workerId)) return;
+  if (event.data.kind === 'ready') {
+    if (!compilerWorkerScheduler.markReady(workerId)) return;
+    if (workerBootstrapTimeout !== undefined) clearTimeout(workerBootstrapTimeout);
+    workerBootstrapTimeout = undefined;
+    pumpCompilerWorker();
+    return;
+  }
+  if (event.data.kind === 'progress') {
+    if (compilerWorkerScheduler.activeRevision !== event.data.revision) return;
+    compilerWorkerProgress.report(workerId, event.data.revision, event.data.stage);
+    return;
+  }
   if (
-    parserWorker !== worker ||
-    event.data.kind !== 'parsed' ||
-    event.data.revision !== activeWorkerRevision
+    compilerWorkerScheduler.activeRevision !== event.data.revision ||
+    !compilerWorkerScheduler.complete(workerId, event.data.revision)
   ) {
     return;
   }
+  compilerWorkerProgress.clear();
   if (workerTimeout !== undefined) clearTimeout(workerTimeout);
   workerTimeout = undefined;
-  activeWorkerRevision = undefined;
   warmOfflineCache();
   if (event.data.revision !== currentRevision) {
     pumpCompilerWorker();
@@ -1171,24 +1203,63 @@ function handleWorkerMessage(event: MessageEvent<CompilerWorkerResponse>, worker
   pumpCompilerWorker();
 }
 
-function handleWorkerError(event: ErrorEvent, worker: Worker): void {
-  if (parserWorker !== worker) return;
-  const failedRevision = activeWorkerRevision;
-  if (workerTimeout !== undefined) clearTimeout(workerTimeout);
-  workerTimeout = undefined;
-  activeWorkerRevision = undefined;
+function handleWorkerBootstrapTimeout(worker: Worker, workerId: number): void {
+  if (
+    parserWorker !== worker ||
+    !compilerWorkerScheduler.isCurrent(workerId) ||
+    compilerWorkerScheduler.phase !== 'booting'
+  ) {
+    return;
+  }
+  workerBootstrapTimeout = undefined;
+  compilerWorkerProgress.clear();
   worker.terminate();
   parserWorker = undefined;
+  parserWorkerId = undefined;
   workerPrototypeIdentity = undefined;
+  compilerWorkerScheduler.fail(workerId);
+  const bootstrapFailure = compilerWorkerBootstrapTimeoutReason();
   const rolledBack = rollbackPendingPrototypeProfile(
-    `Worker failed: ${event.message || 'the compiler worker crashed.'}`,
+    `Worker bootstrap timeout: ${bootstrapFailure}`,
   );
-  if (failedRevision === currentRevision) {
+  status.textContent = 'Compiler Worker did not become ready';
+  status.dataset.state = 'invalid';
+  renderProofError(bootstrapFailure);
+  renderTestsBlocked('The compiler Worker did not become ready.');
+  result.textContent = bootstrapFailure;
+  if (rolledBack) scheduleRender();
+  else pumpCompilerWorker();
+}
+
+function handleWorkerError(event: ErrorEvent, worker: Worker, workerId: number): void {
+  if (parserWorker !== worker || !compilerWorkerScheduler.isCurrent(workerId)) return;
+  const failedRevision = compilerWorkerScheduler.activeRevision;
+  const wasBooting = compilerWorkerScheduler.phase === 'booting';
+  if (workerTimeout !== undefined) clearTimeout(workerTimeout);
+  workerTimeout = undefined;
+  if (workerBootstrapTimeout !== undefined) clearTimeout(workerBootstrapTimeout);
+  workerBootstrapTimeout = undefined;
+  compilerWorkerProgress.clear();
+  worker.terminate();
+  parserWorker = undefined;
+  parserWorkerId = undefined;
+  workerPrototypeIdentity = undefined;
+  compilerWorkerScheduler.fail(workerId);
+  const failureMessage = event.message || 'the compiler Worker crashed.';
+  const rolledBack = rollbackPendingPrototypeProfile(`Worker failed: ${failureMessage}`);
+  if (wasBooting) {
+    const bootstrapFailure = `Compiler Worker failed before readiness: ${failureMessage}`;
+    status.textContent = 'Compiler Worker failed to start';
+    status.dataset.state = 'invalid';
+    renderProofError(bootstrapFailure);
+    renderTestsBlocked('The compiler Worker failed before it became ready.');
+    result.textContent = bootstrapFailure;
+  } else if (failedRevision === currentRevision) {
     status.textContent = 'Worker failed';
     status.dataset.state = 'invalid';
-    renderProofError(event.message || 'The compiler worker crashed.');
-    renderTestsBlocked('The circuit compiler worker failed.');
-    result.textContent = event.message;
+    renderProofError(failureMessage);
+    renderTestsBlocked('The compiler circuit Worker failed.');
+    result.textContent = failureMessage;
   }
   if (rolledBack) scheduleRender();
   else pumpCompilerWorker();
@@ -1217,7 +1288,7 @@ function rollbackPendingPrototypeProfile(failureMessage: string): boolean {
 }
 
 function startCompilerWorker(request: CompilerWorkerRequest): void {
-  queuedCompilerRequest = request;
+  compilerWorkerScheduler.enqueue(request);
   pumpCompilerWorker();
 }
 
@@ -1226,18 +1297,27 @@ function ensureCompilerWorker(): Worker {
   workerPrototypeIdentity = undefined;
   const worker = new Worker(new URL('./parser.worker.ts', import.meta.url), { type: 'module' });
   parserWorker = worker;
+  const workerId = compilerWorkerScheduler.createWorker();
+  parserWorkerId = workerId;
   worker.addEventListener('message', (event: MessageEvent<CompilerWorkerResponse>) =>
-    handleWorkerMessage(event, worker),
+    handleWorkerMessage(event, worker, workerId),
   );
-  worker.addEventListener('error', (event) => handleWorkerError(event, worker));
+  worker.addEventListener('error', (event) => handleWorkerError(event, worker, workerId));
+  workerBootstrapTimeout = setTimeout(() => {
+    handleWorkerBootstrapTimeout(worker, workerId);
+  }, COMPILER_WORKER_BOOTSTRAP_TIMEOUT_MS);
   return worker;
 }
 
 function pumpCompilerWorker(): void {
-  if (activeWorkerRevision !== undefined || queuedCompilerRequest === undefined) return;
-  let request = queuedCompilerRequest;
-  queuedCompilerRequest = undefined;
+  if (!compilerWorkerScheduler.hasQueuedRequest || compilerWorkerScheduler.phase === 'busy') {
+    return;
+  }
   const worker = ensureCompilerWorker();
+  if (compilerWorkerScheduler.phase !== 'ready') return;
+  const dispatch = compilerWorkerScheduler.takeForDispatch();
+  if (dispatch === undefined) return;
+  let request = dispatch.request;
   if (
     request.prototypeProfile !== undefined &&
     'identity' in request.prototypeProfile &&
@@ -1255,26 +1335,42 @@ function pumpCompilerWorker(): void {
       },
     };
   }
-  activeWorkerRevision = request.revision;
+  const workerId = parserWorkerId;
+  if (workerId === undefined)
+    throw new Error('Compiler Worker scheduler lost its Worker identity.');
+  compilerWorkerProgress.begin(workerId, request.revision);
   worker.postMessage(request);
-  const timeoutMs =
-    request.prototypeProfile !== undefined && 'source' in request.prototypeProfile ? 15000 : 1000;
+  const timeoutMs = compilerWorkerRequestTimeoutMs(request, dispatch.isCold);
   workerTimeout = setTimeout(() => {
-    if (parserWorker !== worker || activeWorkerRevision !== request.revision) return;
+    if (
+      parserWorker !== worker ||
+      !compilerWorkerScheduler.isCurrent(workerId) ||
+      compilerWorkerScheduler.activeRevision !== request.revision
+    ) {
+      return;
+    }
+    const lastStage = compilerWorkerProgress.lastStage(workerId, request.revision);
     worker.terminate();
     parserWorker = undefined;
+    parserWorkerId = undefined;
     workerPrototypeIdentity = undefined;
-    activeWorkerRevision = undefined;
     workerTimeout = undefined;
+    compilerWorkerProgress.clear();
+    compilerWorkerScheduler.fail(workerId);
+    const timeoutReason = compilerWorkerRequestTimeoutReason(request, timeoutMs, lastStage);
+    const testsBlockedReason =
+      lastStage === undefined
+        ? 'Circuit elaboration timed out, so tests were not run.'
+        : `Circuit elaboration timed out, so tests were not run (last reported phase: ${lastStage}).`;
     const rolledBack = rollbackPendingPrototypeProfile(
-      `source-profile timeout (EX1002): Compilation/profile loading exceeded the ${timeoutMs} ms worker budget.`,
+      `request timeout (EX1002): ${timeoutReason}`,
     );
     if (request.revision === currentRevision) {
       status.textContent = 'Elaboration timed out';
       status.dataset.state = 'invalid';
-      renderProofError(`Compilation/profile loading exceeded the ${timeoutMs} ms worker budget.`);
-      renderTestsBlocked('Circuit elaboration timed out, so tests were not run.');
-      result.textContent = `EX1002 error: Compilation/profile loading exceeded the ${timeoutMs} ms worker budget.`;
+      renderProofError(timeoutReason);
+      renderTestsBlocked(testsBlockedReason);
+      result.textContent = `EX1002 error: ${timeoutReason}`;
     }
     if (rolledBack) scheduleRender();
     else pumpCompilerWorker();
