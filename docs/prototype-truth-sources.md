@@ -93,7 +93,8 @@ inputs, and the confirmed Space Age profile is checked in under
 `packages/prototypes/generated/`. Its sidecar pins the raw dump, metadata,
 normalized output bytes, schema versions, and database identity; it does not turn
 structural extraction into native behavior evidence or supply missing environment
-provenance. The asset is not a browser first-run default.
+provenance. The browser uses this structural asset as its first-run profile, but
+that selection does not close the native-conformance gate above.
 
 ## Runtime structural exporter decision
 

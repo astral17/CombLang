@@ -77,6 +77,29 @@ function referencedJavaScriptChunks(
   return selected;
 }
 
+function referencedOutputAssets(
+  bundle: OutputBundle,
+  javascriptFiles: ReadonlySet<string>,
+): Set<string> {
+  const chunks = [...javascriptFiles]
+    .map((fileName) => bundleEntry(bundle, fileName))
+    .filter((entry): entry is OutputChunk => entry?.type === 'chunk');
+  return new Set(
+    Object.values(bundle)
+      .filter(
+        (entry): entry is OutputAsset =>
+          entry.type === 'asset' && entry.fileName !== 'sw.js' && !entry.fileName.endsWith('.map'),
+      )
+      .filter((asset) => {
+        const basename = asset.fileName.slice(asset.fileName.lastIndexOf('/') + 1);
+        return chunks.some(
+          (chunk) => chunk.code.includes(asset.fileName) || chunk.code.includes(basename),
+        );
+      })
+      .map((asset) => asset.fileName),
+  );
+}
+
 function manifestMaterial(
   bundle: OutputBundle,
   resources: readonly string[],
@@ -106,7 +129,8 @@ export function createShellManifest(bundle: OutputBundle, workerTemplate: string
     );
   const initialFiles = new Set(['index.html', ...referenced]);
   const javaScriptFiles = referencedJavaScriptChunks(bundle, initialFiles);
-  const resources = [...new Set([...initialFiles, ...javaScriptFiles])]
+  const outputAssets = referencedOutputAssets(bundle, javaScriptFiles);
+  const resources = [...new Set([...initialFiles, ...javaScriptFiles, ...outputAssets])]
     .filter((fileName) => !fileName.endsWith('.map'))
     .sort()
     .map((fileName) => `./${fileName}`);

@@ -27,6 +27,7 @@ describe('browser prototype profile persistence', () => {
       name: 'data-raw-dump.json + metadata',
       source: '{"recipe":{}}',
       factorioDumpMetadata: '{"factorioVersion":"2.1.17"}',
+      assetManifest: '{"databaseIdentity":"hash"}',
       identity: 'hash',
     };
     expect(await store.save(profile)).toBe(true);

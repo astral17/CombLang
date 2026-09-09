@@ -26,9 +26,9 @@ an identity-bound generated asset plus provenance manifest, and explicit CLI
 database selection with optional identity pins. Versioned CLI project profiles,
 browser-local file selection and identity-keyed IndexedDB persistence are
 implemented. The checked-in Space Age structural asset is available for explicit
-loading and offline integrity checks. Native conformance, browser default
-selection, and the evidence-complete release layer remain subsequent Phase 5.5
-slices.
+loading and offline integrity checks, and the browser uses it as a lazy first-run
+profile. Native conformance and the evidence-complete release layer remain
+subsequent Phase 5.5 slices.
 
 The raw normalizer is transitional, not an authoritative runtime snapshot. See
 [Prototype truth sources and audit follow-up](prototype-truth-sources.md) for the
@@ -182,8 +182,9 @@ contained no setting values, so the metadata records an explicit
 generated asset is `space-age-2.1.17.json` with the sibling manifest
 `space-age-2.1.17.json.manifest.json`; the asset contains 342 items, 662 recipes,
 1028 entities, and 6 qualities. Its `entityCircuitCapabilities` value is false:
-the raw dump supplies structural data, not reviewed native circuit behavior, and
-the asset is not selected as the browser's first-run default.
+the raw dump supplies structural data, not reviewed native circuit behavior. The
+browser selects this pair as its first-run structural profile, but does not treat
+it as native circuit-behavior evidence.
 
 The converter reads every item subtype carrying raw `stack_size`, not
 only the literal `item` table. It applies the raw RecipePrototype defaults
@@ -596,21 +597,30 @@ including an identity pin; combining an injected provider and `--prototypes` is 
 error rather than an implicit precedence rule.
 
 Without either source of prototype data, ordinary circuits still compile and
-accessing `prototypes` produces `EX1004`. No built-in database is installed yet.
-In the browser, use **Load prototype JSON** above the source editor. Select one
-normalized JSON file, or a raw dump and one companion metadata JSON file. It does
-not modify source or test drafts. After
-validation, the database is saved in IndexedDB under its identity and the active
-identity is saved in tab-local session storage. Reloading the tab restores the
-database and checks that pin again before source execution. Separate tabs may
-select different environments without overwriting each other's selection.
+accessing `prototypes` produces `EX1004`. On a browser first run (a missing
+`comblang.prototype-selection.v1` session key), the checked-in Space Age database
+and its generated manifest are fetched as separate Vite assets and validated in
+the compiler Worker. The pair is never embedded in the JavaScript payload, is
+not copied into `public/`, and is not saved to IndexedDB. A missing or corrupt
+built-in pair leaves ordinary circuit compilation available with a truthful
+profile notice.
 
-**Disable** clears the current tab's selection; it does not delete a database that
-another tab may be using. Cached databases can also be removed through browser site
-storage controls. Storage/quota failure is reported as **not saved**; compilation
-can still use the selected in-memory profile. A selected database missing from
-IndexedDB blocks compilation until the user loads a file or explicitly disables
-the selection. It never silently substitutes a built-in fallback.
+In the browser, use **Load prototype JSON** above the source editor to choose a
+custom environment. Select one normalized JSON file, or a raw dump and one
+companion metadata JSON file. It does not modify source or test drafts. After
+validation, a custom database is saved in IndexedDB under its identity and the
+active identity is saved in tab-local session storage. Reloading the tab restores
+the saved custom database and checks that pin again before source execution.
+Separate tabs may select different environments without overwriting each
+other's selection.
+
+**Disable** persists an explicit empty selection for the current tab; it does not
+delete a database that another tab may be using. Cached databases can also be
+removed through browser site storage controls. Storage/quota failure is reported
+as **not saved**; compilation can still use the selected in-memory profile. A
+selected custom database missing from IndexedDB blocks compilation until the user
+loads a file or explicitly disables the selection. It never silently substitutes
+the built-in profile for that custom selection.
 
 The browser compiler Worker protocol accepts normalized or raw JSON (with raw
 metadata when needed) plus an optional expected identity, or an identity already
@@ -625,10 +635,12 @@ is still explicit on every compile request: omitting the profile compiles withou
 one, while an unknown cached identity returns `WP1002` and asks the caller to send
 the JSON again. Thus a Worker restart cannot silently lose a pin or substitute a
 profile. The UI retains the JSON in memory after loading and resends it with the
-previous identity pin after a Worker restart. Initial JSON loading and compilation
-share a 15000 ms Worker timeout to cover a realistic large raw dump; warm identity-only
-recompilation keeps the 1000 ms budget, while its first request after Worker recreation
-uses the cold 15000 ms budget.
+previous identity pin after a Worker restart. The same cold/warm path applies to
+the built-in generated pair: the Worker validates its database and manifest once,
+then reuses the confirmed identity until it is recreated. Initial JSON loading and
+compilation share a 15000 ms Worker timeout to cover a realistic large raw dump;
+warm identity-only recompilation keeps the 1000 ms budget, while its first request
+after Worker recreation uses the cold 15000 ms budget.
 
 The v1 environment identity is SHA-256 over canonical normalized JSON and is
 prefixed `comblang-prototypes-v1-sha256:`. It includes schema and generator

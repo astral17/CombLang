@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'vitest';
-import { loadPrototypeDatabase, syntheticPrototypeDatabase } from '@comblang/prototypes';
+import {
+  generatePrototypeAsset,
+  loadPrototypeDatabase,
+  syntheticPrototypeDatabase,
+} from '@comblang/prototypes';
 import { syntheticZeroPortEntityProfile } from '@comblang/compiler/entity-fixtures';
 import {
   createTrustedEntityReplayContext,
@@ -100,6 +104,85 @@ describe('browser compiler Worker prototype profile', () => {
     expect(response.result.compilerDiagnostics).toEqual([
       expect.objectContaining({ code: 'CL2001', severity: 'warning' }),
     ]);
+  });
+
+  test('validates a generated asset in the Worker and reuses its warm identity', async () => {
+    const generated = await generatePrototypeAsset(rawSource, rawMetadata);
+    const runtime = new CompilerWorkerRuntime();
+    const first = await runtime.handle({
+      kind: 'parse',
+      revision: 13,
+      file,
+      prototypeProfile: {
+        source: generated.databaseJson,
+        assetManifest: generated.manifestJson,
+        expectedIdentity: generated.manifest.databaseIdentity,
+      },
+    });
+
+    expect(first.prototypeEnvironment).toMatchObject({
+      identity: generated.manifest.databaseIdentity,
+      format: 'normalized',
+      warnings: [],
+    });
+    expect(first.result.compilerDiagnostics).toEqual([
+      expect.objectContaining({ code: 'CL2001', severity: 'warning' }),
+    ]);
+
+    const warm = await runtime.handle({
+      kind: 'parse',
+      revision: 14,
+      file,
+      prototypeProfile: { identity: generated.manifest.databaseIdentity },
+    });
+    expect(warm.prototypeEnvironment?.identity).toBe(generated.manifest.databaseIdentity);
+    expect(warm.result.compilerDiagnostics).toEqual([
+      expect.objectContaining({ code: 'CL2001', severity: 'warning' }),
+    ]);
+  });
+
+  test('reports generated asset integrity failures through the profile diagnostic boundary', async () => {
+    const generated = await generatePrototypeAsset(rawSource, rawMetadata);
+    const manifest = JSON.parse(generated.manifestJson) as { outputSha256: string };
+    manifest.outputSha256 = 'sha256:' + '0'.repeat(64);
+    const response = await handleCompilerWorkerRequest({
+      kind: 'parse',
+      revision: 15,
+      file: { path: 'main.factorio.ts', text: `throw new Error('source executed');` },
+      prototypeProfile: {
+        source: generated.databaseJson,
+        assetManifest: JSON.stringify(manifest),
+      },
+    });
+
+    expect(response.prototypeEnvironment).toBeUndefined();
+    expect(response.result.plan).toBeUndefined();
+    expect(response.result.compilerDiagnostics).toEqual([
+      expect.objectContaining({ code: 'PA1003', severity: 'error' }),
+    ]);
+    expect(response.result.compilerDiagnostics[0]?.message).not.toContain('source executed');
+  });
+
+  test('rejects ambiguous raw-metadata and generated-manifest profile inputs', async () => {
+    const generated = await generatePrototypeAsset(rawSource, rawMetadata);
+    const response = await handleCompilerWorkerRequest({
+      kind: 'parse',
+      revision: 16,
+      file: { path: 'main.factorio.ts', text: `throw new Error('source executed');` },
+      prototypeProfile: {
+        source: generated.databaseJson,
+        factorioDumpMetadata: rawMetadata,
+        assetManifest: generated.manifestJson,
+      },
+    });
+
+    expect(response.prototypeEnvironment).toBeUndefined();
+    expect(response.result.plan).toBeUndefined();
+    expect(response.result.compilerDiagnostics).toEqual([
+      expect.objectContaining({ code: 'WP1001', severity: 'error' }),
+    ]);
+    expect(response.result.compilerDiagnostics[0]?.message).toContain('cannot combine');
+    expect(response.result.compilerDiagnostics[0]?.message).not.toContain('source executed');
   });
 
   test.each([

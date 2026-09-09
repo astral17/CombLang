@@ -29,7 +29,7 @@ function bundle(mainSource = 'new URL("parser.worker-a.js", import.meta.url);') 
       imports: [],
       dynamicImports: [],
       implicitlyLoadedBefore: [],
-      code: `${mainSource} new URL("test.worker-a.js", import.meta.url);`,
+      code: `${mainSource} new URL("test.worker-a.js", import.meta.url); new URL("./assets/space-age.json", import.meta.url); new URL("./assets/space-age.json.manifest.json", import.meta.url);`,
       map: null,
     },
     'assets/main-a.css': {
@@ -37,6 +37,18 @@ function bundle(mainSource = 'new URL("parser.worker-a.js", import.meta.url);') 
       fileName: 'assets/main-a.css',
       name: 'main-a.css',
       source: 'body { color: black; }',
+    },
+    'assets/space-age.json': {
+      type: 'asset',
+      fileName: 'assets/space-age.json',
+      name: 'space-age.json',
+      source: '{"database":"payload-a"}',
+    },
+    'assets/space-age.json.manifest.json': {
+      type: 'asset',
+      fileName: 'assets/space-age.json.manifest.json',
+      name: 'space-age.json.manifest.json',
+      source: '{"outputSha256":"digest-a"}',
     },
     'assets/parser.worker-a.js': {
       type: 'chunk',
@@ -102,6 +114,8 @@ describe('production shell manifest', () => {
       './assets/main-a.css',
       './assets/main-a.js',
       './assets/parser.worker-a.js',
+      './assets/space-age.json',
+      './assets/space-age.json.manifest.json',
       './assets/test.worker-a.js',
       './index.html',
     ]);
@@ -122,6 +136,18 @@ describe('production shell manifest', () => {
     expect(same).toEqual(first);
     expect(changed.identity).not.toBe(first.identity);
   });
+
+  test.each(['assets/space-age.json', 'assets/space-age.json.manifest.json'])(
+    'identity changes when referenced emitted asset %s changes',
+    (fileName) => {
+      const first = createShellManifest(bundle(), workerTemplate);
+      const changedBundle = bundle();
+      (changedBundle[fileName] as { source: string }).source = '{"changed":true}';
+      const changed = createShellManifest(changedBundle, workerTemplate);
+
+      expect(changed.identity).not.toBe(first.identity);
+    },
+  );
 
   test('identity changes when only the Service Worker policy changes', () => {
     const first = createShellManifest(bundle(), workerTemplate);

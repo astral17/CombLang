@@ -12,6 +12,8 @@ export interface BrowserPrototypeProfileSource {
   readonly source: string;
   /** Companion metadata JSON required only for a raw Factorio dump. */
   readonly factorioDumpMetadata?: string;
+  /** Generated-asset manifest for a normalized database source. */
+  readonly assetManifest?: string;
   readonly expectedIdentity?: string;
 }
 

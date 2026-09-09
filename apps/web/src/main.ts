@@ -3,6 +3,7 @@ import { signal, type SignalId, type SignalType } from '@comblang/factorio';
 import { offsetToPosition, sourceFileId, sourceSpan, type Diagnostic } from '@comblang/shared';
 
 import { blueprintJsonForArtifact } from './blueprint-demo.js';
+import { builtinPrototypeAsset, fetchBuiltinPrototypeAsset } from './builtin-prototype-asset.js';
 import { createSourceEditor, type SourceEditorKind } from './code-editor.js';
 import {
   compilerWorkerRequestTimeoutMs,
@@ -20,6 +21,10 @@ import {
   type StoredPrototypeProfile,
 } from './prototype-profile-store.js';
 import { rollbackPrototypeProfile } from './prototype-profile-transition.js';
+import {
+  PROFILE_SELECTION_KEY,
+  resolvePrototypeProfileSelection,
+} from './prototype-profile-selection.js';
 import { loadSourceDraft, saveSourceDraft, type SourceDraftStorage } from './source-draft.js';
 import { formatSourceDiagnostic, sourcePreviewDiagnostic } from './source-diagnostics.js';
 import { sourceNavigationRange, testFailureRange } from './source-navigation.js';
@@ -162,7 +167,6 @@ const addTest = requiredElement<HTMLButtonElement>('#add-test');
 const prototypeProfileFile = requiredElement<HTMLInputElement>('#prototype-profile-file');
 const prototypeProfileClear = requiredElement<HTMLButtonElement>('#prototype-profile-clear');
 const prototypeProfileStatus = requiredElement<HTMLOutputElement>('#prototype-profile-status');
-const PROFILE_SELECTION_KEY = 'comblang.prototype-selection.v1';
 let parserWorker: Worker | undefined;
 const compilerWorkerScheduler = new CompilerWorkerScheduler();
 const compilerWorkerProgress = new CompilerWorkerProgressTracker();
@@ -184,7 +188,9 @@ let testRenderTimer: ReturnType<typeof setTimeout> | undefined;
 let testRevision = 0;
 let addedTestNumber = 1;
 let activePrototypeProfile: StoredPrototypeProfile | undefined;
+let activePrototypeProfileIsBuiltin = false;
 let profileBeforeSelection: StoredPrototypeProfile | undefined;
+let profileBeforeSelectionIsBuiltin = false;
 let workerIdentityBeforeSelection: string | undefined;
 let pendingProfileSelection = false;
 let workerPrototypeIdentity: string | undefined;
@@ -1000,6 +1006,9 @@ function render(): void {
                   ...(activePrototypeProfile.factorioDumpMetadata === undefined
                     ? {}
                     : { factorioDumpMetadata: activePrototypeProfile.factorioDumpMetadata }),
+                  ...(activePrototypeProfile.assetManifest === undefined
+                    ? {}
+                    : { assetManifest: activePrototypeProfile.assetManifest }),
                   ...(activePrototypeProfile.identity === undefined
                     ? {}
                     : { expectedIdentity: activePrototypeProfile.identity }),
@@ -1067,13 +1076,15 @@ function handleWorkerMessage(
   const parsed = event.data.result;
   if (event.data.prototypeEnvironment !== undefined && activePrototypeProfile !== undefined) {
     workerPrototypeIdentity = event.data.prototypeEnvironment.identity;
-    const needsSave = activePrototypeProfile.identity === undefined;
+    const needsSave =
+      !activePrototypeProfileIsBuiltin && activePrototypeProfile.identity === undefined;
     activePrototypeProfile = {
       ...activePrototypeProfile,
       identity: event.data.prototypeEnvironment.identity,
     };
     pendingProfileSelection = false;
     profileBeforeSelection = undefined;
+    profileBeforeSelectionIsBuiltin = false;
     workerIdentityBeforeSelection = undefined;
     const formatLabel =
       event.data.prototypeEnvironment.format === 'factorio-data-raw' ? 'raw dump' : 'normalized';
@@ -1103,10 +1114,23 @@ function handleWorkerMessage(
     }
   } else if (activePrototypeProfile !== undefined) {
     workerPrototypeIdentity = undefined;
-    const profileError = parsed.compilerDiagnostics.find(
-      ({ code }) => code.startsWith('PT') || code.startsWith('WP'),
+    const profileError = parsed.compilerDiagnostics.find(({ code }) => /^(PA|PT|WP)/.test(code));
+    const importError = parsed.compilerDiagnostics.find(({ code }) =>
+      /^(PA|PI|PD|PT|WP)/.test(code),
     );
-    const importError = parsed.compilerDiagnostics.find(({ code }) => /^(PI|PD|PT|WP)/.test(code));
+    if (activePrototypeProfileIsBuiltin && importError !== undefined) {
+      activePrototypeProfile = undefined;
+      activePrototypeProfileIsBuiltin = false;
+      workerPrototypeIdentity = undefined;
+      pendingProfileSelection = false;
+      const notice = `Built-in prototype profile unavailable (${importError.code}): ${importError.message}; ordinary circuits remain available.`;
+      profileNotice = undefined;
+      prototypeProfileStatus.textContent = notice;
+      prototypeProfileStatus.dataset.state = 'warning';
+      prototypeProfileClear.disabled = true;
+      scheduleRender();
+      return;
+    }
     if (pendingProfileSelection && importError !== undefined) {
       if (
         rollbackPendingPrototypeProfile(
@@ -1275,8 +1299,10 @@ function rollbackPendingPrototypeProfile(failureMessage: string): boolean {
   );
   pendingProfileSelection = false;
   activePrototypeProfile = result.activeProfile;
+  activePrototypeProfileIsBuiltin = result.restored && profileBeforeSelectionIsBuiltin;
   workerPrototypeIdentity = result.workerIdentity;
   profileBeforeSelection = undefined;
+  profileBeforeSelectionIsBuiltin = false;
   workerIdentityBeforeSelection = undefined;
   profileReady = true;
   profileRestoreError = undefined;
@@ -1331,6 +1357,9 @@ function pumpCompilerWorker(): void {
         ...(activePrototypeProfile.factorioDumpMetadata === undefined
           ? {}
           : { factorioDumpMetadata: activePrototypeProfile.factorioDumpMetadata }),
+        ...(activePrototypeProfile.assetManifest === undefined
+          ? {}
+          : { assetManifest: activePrototypeProfile.assetManifest }),
         expectedIdentity: request.prototypeProfile.identity,
       },
     };
@@ -1384,6 +1413,7 @@ prototypeProfileFile.addEventListener('change', () => {
   if (files.length === 0) return;
   const selectionRevision = ++profileSelectionRevision;
   profileBeforeSelection = activePrototypeProfile;
+  profileBeforeSelectionIsBuiltin = activePrototypeProfileIsBuiltin;
   workerIdentityBeforeSelection = workerPrototypeIdentity;
   pendingProfileSelection = false;
   profileNotice = undefined;
@@ -1411,8 +1441,10 @@ prototypeProfileFile.addEventListener('change', () => {
     const previous = profileBeforeSelection;
     profileReady = true;
     activePrototypeProfile = previous;
+    activePrototypeProfileIsBuiltin = profileBeforeSelectionIsBuiltin;
     workerPrototypeIdentity = workerIdentityBeforeSelection;
     profileBeforeSelection = undefined;
+    profileBeforeSelectionIsBuiltin = false;
     workerIdentityBeforeSelection = undefined;
     const message = error instanceof Error ? error.message : String(error);
     profileRestoreError = previous === undefined ? message : undefined;
@@ -1436,6 +1468,7 @@ prototypeProfileFile.addEventListener('change', () => {
         source,
         ...(factorioDumpMetadata === undefined ? {} : { factorioDumpMetadata }),
       };
+      activePrototypeProfileIsBuiltin = false;
       workerPrototypeIdentity = undefined;
       prototypeProfileStatus.textContent = `${activePrototypeProfile.name} · validating…`;
       prototypeProfileStatus.dataset.state = 'pending';
@@ -1449,8 +1482,10 @@ prototypeProfileFile.addEventListener('change', () => {
       pendingProfileSelection = false;
       const previous = profileBeforeSelection;
       activePrototypeProfile = profileBeforeSelection;
+      activePrototypeProfileIsBuiltin = profileBeforeSelectionIsBuiltin;
       workerPrototypeIdentity = workerIdentityBeforeSelection;
       profileBeforeSelection = undefined;
+      profileBeforeSelectionIsBuiltin = false;
       workerIdentityBeforeSelection = undefined;
       const message = `Cannot read profile: ${error instanceof Error ? error.message : String(error)}`;
       profileRestoreError = previous === undefined ? message : undefined;
@@ -1471,8 +1506,10 @@ prototypeProfileClear.addEventListener('click', () => {
   profileNotice = undefined;
   pendingProfileSelection = false;
   profileBeforeSelection = undefined;
+  profileBeforeSelectionIsBuiltin = false;
   workerIdentityBeforeSelection = undefined;
   activePrototypeProfile = undefined;
+  activePrototypeProfileIsBuiltin = false;
   workerPrototypeIdentity = undefined;
   prototypeProfileStatus.textContent = 'None · ordinary circuits remain available';
   prototypeProfileStatus.dataset.state = 'none';
@@ -1487,20 +1524,67 @@ prototypeProfileClear.addEventListener('click', () => {
 
 async function restorePrototypeProfile(): Promise<void> {
   const selectionRevision = profileSelectionRevision;
+  let selection: string | null;
   try {
-    const identity = draftStorage?.getItem(PROFILE_SELECTION_KEY);
-    if (identity) {
-      const profile = await browserPrototypeProfileStore(identity).load();
-      if (selectionRevision !== profileSelectionRevision) return;
-      if (profile === undefined)
-        throw new Error('The selected prototype database is missing from browser storage.');
-      activePrototypeProfile = { ...profile, identity };
-      prototypeProfileStatus.textContent = `${profile.name} · restoring…`;
+    selection = draftStorage?.getItem(PROFILE_SELECTION_KEY) ?? null;
+  } catch {
+    selection = null;
+  }
+  try {
+    const savedProfile =
+      selection !== null && selection !== ''
+        ? await browserPrototypeProfileStore(selection).load()
+        : undefined;
+    const builtinProfile =
+      selection === null
+        ? await fetchBuiltinPrototypeAsset().then(({ source, assetManifest }) => ({
+            name: builtinPrototypeAsset.name,
+            source,
+            assetManifest,
+          }))
+        : undefined;
+    if (selectionRevision !== profileSelectionRevision) return;
+    const resolved = resolvePrototypeProfileSelection(selection, savedProfile, builtinProfile);
+    if (resolved.kind === 'builtin' || resolved.kind === 'custom') {
+      activePrototypeProfile = resolved.profile;
+      activePrototypeProfileIsBuiltin = resolved.kind === 'builtin';
+      profileRestoreError = undefined;
+      prototypeProfileStatus.textContent = `${resolved.profile.name} · restoring…`;
       prototypeProfileStatus.dataset.state = 'pending';
       prototypeProfileClear.disabled = false;
+    } else if (resolved.kind === 'disabled') {
+      activePrototypeProfile = undefined;
+      activePrototypeProfileIsBuiltin = false;
+      prototypeProfileStatus.textContent = 'None · ordinary circuits remain available';
+      prototypeProfileStatus.dataset.state = 'none';
+      prototypeProfileClear.disabled = true;
+    } else if (resolved.kind === 'builtin-unavailable') {
+      activePrototypeProfile = undefined;
+      activePrototypeProfileIsBuiltin = false;
+      profileRestoreError = undefined;
+      prototypeProfileStatus.textContent = resolved.message;
+      prototypeProfileStatus.dataset.state = 'warning';
+      prototypeProfileClear.disabled = true;
+    } else {
+      activePrototypeProfile = undefined;
+      activePrototypeProfileIsBuiltin = false;
+      throw new Error(resolved.message);
     }
   } catch (error) {
     if (selectionRevision !== profileSelectionRevision) return;
+    if (selection === null) {
+      activePrototypeProfile = undefined;
+      activePrototypeProfileIsBuiltin = false;
+      profileRestoreError = undefined;
+      const message =
+        error instanceof Error ? error.message : 'The built-in prototype profile could not load.';
+      prototypeProfileStatus.textContent = `${message} Ordinary circuits remain available.`;
+      prototypeProfileStatus.dataset.state = 'warning';
+      prototypeProfileClear.disabled = true;
+      profileReady = true;
+      render();
+      return;
+    }
     profileRestoreError =
       error instanceof Error ? error.message : 'Prototype profile restoration failed.';
     prototypeProfileStatus.textContent = profileRestoreError;

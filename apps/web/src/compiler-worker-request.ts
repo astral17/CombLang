@@ -5,6 +5,8 @@ import {
 import {
   FactorioDumpError,
   loadPrototypeInputJson,
+  loadPrototypeAsset,
+  PrototypeAssetError,
   PrototypeInputError,
   PrototypeValidationError,
   type LoadedPrototypeInput,
@@ -32,14 +34,16 @@ function profileFailure(error: unknown): Diagnostic {
     code:
       error instanceof PrototypeValidationError
         ? error.code
-        : error instanceof PrototypeInputError || error instanceof FactorioDumpError
+        : error instanceof PrototypeAssetError
           ? error.code
-          : error instanceof BrowserPrototypeSelectionError ||
-              error instanceof BrowserPrototypeCacheMissError
+          : error instanceof PrototypeInputError || error instanceof FactorioDumpError
             ? error.code
-            : error instanceof EntityReplayContextError
+            : error instanceof BrowserPrototypeSelectionError ||
+                error instanceof BrowserPrototypeCacheMissError
               ? error.code
-              : 'WP1003',
+              : error instanceof EntityReplayContextError
+                ? error.code
+                : 'WP1003',
     severity: 'error',
     message: error instanceof Error ? error.message : 'Unable to load the prototype profile.',
   };
@@ -91,14 +95,29 @@ export class CompilerWorkerRuntime {
     try {
       const profile = request.prototypeProfile;
       observe?.('profile');
+      if (
+        'source' in profile &&
+        profile.assetManifest !== undefined &&
+        profile.factorioDumpMetadata !== undefined
+      ) {
+        throw new BrowserPrototypeSelectionError(
+          'A prototype profile cannot combine raw-dump metadata with a generated-asset manifest.',
+        );
+      }
       const referenceIdentity = 'identity' in profile ? profile.identity : undefined;
       const loaded =
         'source' in profile
-          ? await loadPrototypeInputJson(profile.source, {
-              ...(profile.factorioDumpMetadata === undefined
-                ? {}
-                : { factorioDumpMetadata: profile.factorioDumpMetadata }),
-            })
+          ? profile.assetManifest === undefined
+            ? await loadPrototypeInputJson(profile.source, {
+                ...(profile.factorioDumpMetadata === undefined
+                  ? {}
+                  : { factorioDumpMetadata: profile.factorioDumpMetadata }),
+              })
+            : {
+                ...(await loadPrototypeAsset(profile.source, profile.assetManifest)),
+                format: 'normalized' as const,
+                warnings: Object.freeze([]),
+              }
           : this.#profiles.get(profile.identity);
       if (loaded === undefined) {
         throw new BrowserPrototypeCacheMissError(

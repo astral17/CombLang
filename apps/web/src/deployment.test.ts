@@ -6,7 +6,10 @@ import { shellManifestPlaceholder } from './shell-manifest.js';
 
 describe('static deployment configuration', () => {
   it('uses relative assets so a GitHub project page can host the build', () => {
-    expect(viteConfig).toMatchObject({ base: './' });
+    expect(viteConfig).toMatchObject({
+      base: './',
+      build: { assetsInlineLimit: 0 },
+    });
   });
 
   it('keeps LAN development on one explicit port', () => {

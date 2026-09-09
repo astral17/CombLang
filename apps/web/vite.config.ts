@@ -67,6 +67,7 @@ export default defineConfig({
     strictPort: true,
   },
   build: {
+    assetsInlineLimit: 0,
     target: 'es2022',
   },
 });
