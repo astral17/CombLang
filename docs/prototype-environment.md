@@ -25,8 +25,10 @@ The implemented foundation now also includes an offline native-dump normalizer,
 an identity-bound generated asset plus provenance manifest, and explicit CLI
 database selection with optional identity pins. Versioned CLI project profiles,
 browser-local file selection and identity-keyed IndexedDB persistence are
-implemented. Conformance completion and the generated first-run database remain
-subsequent Phase 5.5 slices.
+implemented. The checked-in Space Age structural asset is available for explicit
+loading and offline integrity checks. Native conformance, browser default
+selection, and the evidence-complete release layer remain subsequent Phase 5.5
+slices.
 
 The raw normalizer is transitional, not an authoritative runtime snapshot. See
 [Prototype truth sources and audit follow-up](prototype-truth-sources.md) for the
@@ -157,7 +159,12 @@ Generate or check the pair from the repository root:
 ```powershell
 npm run prototype:asset -- data-raw-dump.json metadata.json prototypes.json
 npm run prototype:asset:check -- data-raw-dump.json metadata.json prototypes.json
+npm run prototype:asset:verify
 ```
+
+The corresponding CLI spellings are `prototypes asset generate [--check]` for
+source regeneration and `prototypes asset verify` for release-integrity checks;
+the latter requires only the checked-in database and manifest.
 
 Generation validates metadata and the normalized database before writing either
 file. `--check` regenerates in memory, verifies the manifest and all supplied
@@ -166,6 +173,17 @@ stale files. Runtime consumers can call `loadPrototypeAsset()` with only the two
 generated JSON sources, or optionally provide the original input bytes when an
 input pin must also be checked. This loader never parses the raw dump and does
 not treat structural data as circuit-behavior evidence.
+
+The confirmed Space Age profile is tracked at
+`packages/prototypes/generated/space-age-2.1.17.metadata.json`: Factorio 2.1.17,
+Space Age, and the official dependency mods only. The companion settings capture
+contained no setting values, so the metadata records an explicit
+`startupSettings: []` and does not invent a settings identity or timestamp. Its
+generated asset is `space-age-2.1.17.json` with the sibling manifest
+`space-age-2.1.17.json.manifest.json`; the asset contains 342 items, 662 recipes,
+1028 entities, and 6 qualities. Its `entityCircuitCapabilities` value is false:
+the raw dump supplies structural data, not reviewed native circuit behavior, and
+the asset is not selected as the browser's first-run default.
 
 The converter reads every item subtype carrying raw `stack_size`, not
 only the literal `item` table. It applies the raw RecipePrototype defaults
@@ -180,8 +198,8 @@ data remains an Entity with omitted dimensions.
 Empty-output recipes, including sentinel/parameter recipes, are retained. They
 do not contribute product-index entries.
 
-The original supplied-dump smoke test produced a 669 KB normalized database
-with 342 items, 651 recipes after the old empty-output filtering, and 744 entity prototypes. The generator
+The supplied capture produces a 719,498-byte normalized structural database with
+342 items, 662 recipes, 1028 entities, and 6 qualities. The generator
 `comblang-factorio-data-dump-v1.1` additionally retains 100 independent probabilities,
 23 shared ranges, 268 statistics exclusions and 7 productivity exclusions in that
 dump. The smoke run used explicitly unverified environment metadata: it proves

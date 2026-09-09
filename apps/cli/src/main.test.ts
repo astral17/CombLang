@@ -766,7 +766,9 @@ describe('factorio-dsl prototypes normalize', () => {
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    expect(await run(['prototypes', 'asset', dumpPath, metadataPath, outputPath])).toBe(0);
+    expect(await run(['prototypes', 'asset', 'generate', dumpPath, metadataPath, outputPath])).toBe(
+      0,
+    );
     const manifest = JSON.parse(await readFile(`${outputPath}.manifest.json`, 'utf8')) as {
       readonly databaseIdentity: string;
       readonly input: { readonly rawDumpSha256: string; readonly metadataSha256: string };
@@ -779,9 +781,9 @@ describe('factorio-dsl prototypes normalize', () => {
         metadataSha256: expect.stringMatching(/^sha256:/),
       },
     });
-    expect(await run(['prototypes', 'asset', '--check', dumpPath, metadataPath, outputPath])).toBe(
-      0,
-    );
+    expect(
+      await run(['prototypes', 'asset', 'generate', '--check', dumpPath, metadataPath, outputPath]),
+    ).toBe(0);
     expect(String(log.mock.calls.at(-1)?.[0])).toContain('reproducible');
   });
 

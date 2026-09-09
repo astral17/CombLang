@@ -1,0 +1,11 @@
+{
+  "factorioVersion": "2.1.17",
+  "expansions": ["space-age"],
+  "mods": [
+    { "name": "base", "version": "2.1.17" },
+    { "name": "elevated-rails", "version": "2.1.17" },
+    { "name": "quality", "version": "2.1.17" },
+    { "name": "space-age", "version": "2.1.17" }
+  ],
+  "startupSettings": []
+}

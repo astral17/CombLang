@@ -89,9 +89,11 @@ are implemented, but this gate remains open until reviewed native artifacts are
 actually produced and checked against the matching database identity.
 
 The deterministic asset generator/check now provides the release seam for those
-inputs. Its sidecar pins the raw dump, metadata, normalized output bytes, schema
-versions, and database identity; it does not turn structural extraction into
-native behavior evidence or supply missing environment provenance.
+inputs, and the confirmed Space Age profile is checked in under
+`packages/prototypes/generated/`. Its sidecar pins the raw dump, metadata,
+normalized output bytes, schema versions, and database identity; it does not turn
+structural extraction into native behavior evidence or supply missing environment
+provenance. The asset is not a browser first-run default.
 
 ## Runtime structural exporter decision
 

@@ -58,7 +58,8 @@ Usage:
   factorio-dsl check [--json] [--prototypes <database.json>] [--prototype-identity <id>] <file...>
   factorio-dsl test [--json] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts> <circuit.test.js>
   factorio-dsl prototypes normalize <data-raw-dump.json> <metadata.json> <output.json>
-  factorio-dsl prototypes asset [--check] <data-raw-dump.json> <metadata.json> <output.json>
+  factorio-dsl prototypes asset generate [--check] <data-raw-dump.json> <metadata.json> <output.json>
+  factorio-dsl prototypes asset verify <database.json> <manifest.json>
   factorio-dsl prototypes supplement [--json] <database.json> <circuit.json> <output.json>
   factorio-dsl prototypes observations [--json] <circuit-observations.jsonl>
   factorio-dsl prototypes compare-observations [--json] <database.json> <circuit-observations.jsonl>
@@ -310,12 +311,13 @@ async function generatePrototypeDatabaseAsset(
   check: boolean,
   json: boolean,
 ): Promise<number> {
-  if (fileNames.length !== 4 || fileNames[0] !== 'asset') {
+  if (fileNames.length !== 5 || fileNames[0] !== 'asset' || fileNames[1] !== 'generate') {
     console.error(usage);
     return 2;
   }
-  const [, dumpName, metadataName, outputName] = fileNames as readonly [
+  const [, , dumpName, metadataName, outputName] = fileNames as readonly [
     'asset',
+    'generate',
     string,
     string,
     string,
@@ -368,6 +370,36 @@ async function generatePrototypeDatabaseAsset(
   for (const warning of generated.warnings) {
     console.warn(`${warning.code} ${warning.path}: ${warning.message}`);
   }
+  return 0;
+}
+
+async function verifyPrototypeDatabaseAsset(
+  fileNames: readonly string[],
+  json: boolean,
+): Promise<number> {
+  if (fileNames.length !== 4 || fileNames[0] !== 'asset' || fileNames[1] !== 'verify') {
+    console.error(usage);
+    return 2;
+  }
+  const [, , databaseName, manifestName] = fileNames as readonly [
+    'asset',
+    'verify',
+    string,
+    string,
+  ];
+  const [databaseSource, manifestSource] = await Promise.all([
+    readFile(resolve(databaseName), 'utf8'),
+    readFile(resolve(manifestName), 'utf8'),
+  ]);
+  const loaded = await loadPrototypeAsset(databaseSource, manifestSource);
+  const report = {
+    status: 'integrity-verified',
+    database: databaseName,
+    manifest: manifestName,
+    databaseIdentity: loaded.manifest.databaseIdentity,
+  } as const;
+  if (json) console.log(JSON.stringify(report, null, 2));
+  else console.log(`Prototype asset integrity verified: ${databaseName}.`);
   return 0;
 }
 
@@ -532,7 +564,17 @@ export async function run(
       if (files[0] === 'asset') {
         const checkAsset = files.includes('--check');
         const assetFiles = files.filter((argument) => argument !== '--check');
-        return await generatePrototypeDatabaseAsset(assetFiles, checkAsset, json);
+        if (assetFiles[1] === 'verify') {
+          if (checkAsset) {
+            console.error(usage);
+            return 2;
+          }
+          return await verifyPrototypeDatabaseAsset(assetFiles, json);
+        }
+        if (assetFiles[1] === 'generate')
+          return await generatePrototypeDatabaseAsset(assetFiles, checkAsset, json);
+        console.error(usage);
+        return 2;
       }
       return files[0] === 'supplement'
         ? await supplementPrototypes(files, json)
