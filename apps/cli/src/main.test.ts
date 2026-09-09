@@ -722,6 +722,79 @@ describe('factorio-dsl prototypes normalize', () => {
     expect(database.recipes[0]).toMatchObject({ categories: ['crafting'], energy: 0.5 });
     expect(String(log.mock.calls[0]?.[0])).toContain('1 item(s), 1 recipe(s)');
   });
+
+  test('writes and checks a reproducible asset with its provenance manifest', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'comblang-prototype-asset-'));
+    temporaryDirectories.push(directory);
+    const dumpPath = join(directory, 'data-raw-dump.json');
+    const metadataPath = join(directory, 'metadata.json');
+    const outputPath = join(directory, 'prototypes.json');
+    await Promise.all([
+      writeFile(
+        dumpPath,
+        JSON.stringify({
+          item: { plate: { type: 'item', name: 'plate', stack_size: 100 } },
+          fluid: { water: { type: 'fluid', name: 'water' } },
+          recipe: {
+            plate: {
+              type: 'recipe',
+              name: 'plate',
+              ingredients: [],
+              results: [{ type: 'item', name: 'plate', amount: 1 }],
+            },
+          },
+          'recipe-category': {
+            crafting: { type: 'recipe-category', name: 'crafting' },
+          },
+          quality: { normal: { type: 'quality', name: 'normal', level: 0 } },
+          'virtual-signal': {
+            'signal-A': { type: 'virtual-signal', name: 'signal-A' },
+          },
+        }),
+        'utf8',
+      ),
+      writeFile(
+        metadataPath,
+        JSON.stringify({
+          factorioVersion: '2.1.17',
+          expansions: [],
+          mods: [{ name: 'base', version: '2.1.17' }],
+        }),
+        'utf8',
+      ),
+    ]);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    expect(await run(['prototypes', 'asset', dumpPath, metadataPath, outputPath])).toBe(0);
+    const manifest = JSON.parse(await readFile(`${outputPath}.manifest.json`, 'utf8')) as {
+      readonly databaseIdentity: string;
+      readonly input: { readonly rawDumpSha256: string; readonly metadataSha256: string };
+    };
+    expect(manifest).toMatchObject({
+      kind: 'comblang-prototype-database-asset',
+      databaseIdentity: expect.stringMatching(/^comblang-prototypes-v1-sha256:/),
+      input: {
+        rawDumpSha256: expect.stringMatching(/^sha256:/),
+        metadataSha256: expect.stringMatching(/^sha256:/),
+      },
+    });
+    expect(await run(['prototypes', 'asset', '--check', dumpPath, metadataPath, outputPath])).toBe(
+      0,
+    );
+    expect(String(log.mock.calls.at(-1)?.[0])).toContain('reproducible');
+  });
+
+  test('does not silently consume asset-only --check on another prototype command', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    expect(
+      await run(['prototypes', 'normalize', '--check', 'dump.json', 'metadata.json', 'out.json']),
+    ).toBe(2);
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining('factorio-dsl prototypes normalize'),
+    );
+  });
 });
 
 describe('factorio-dsl test', () => {

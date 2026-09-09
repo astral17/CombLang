@@ -25,11 +25,15 @@ import {
   parseCircuitObservationsJsonl,
   compareCircuitObservationEnvironment,
   FactorioDumpError,
+  generatePrototypeAsset,
+  loadPrototypeAsset,
   loadPrototypeEvidence,
   loadPrototypeDatabase,
   loadPrototypeDatabaseJson,
   normalizeFactorioDataDump,
+  PrototypeAssetError,
   PrototypeEvidenceError,
+  PrototypeInputError,
   PrototypeValidationError,
   prototypeCircuitFactFields,
   type FactorioDumpMetadata,
@@ -54,6 +58,7 @@ Usage:
   factorio-dsl check [--json] [--prototypes <database.json>] [--prototype-identity <id>] <file...>
   factorio-dsl test [--json] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts> <circuit.test.js>
   factorio-dsl prototypes normalize <data-raw-dump.json> <metadata.json> <output.json>
+  factorio-dsl prototypes asset [--check] <data-raw-dump.json> <metadata.json> <output.json>
   factorio-dsl prototypes supplement [--json] <database.json> <circuit.json> <output.json>
   factorio-dsl prototypes observations [--json] <circuit-observations.jsonl>
   factorio-dsl prototypes compare-observations [--json] <database.json> <circuit-observations.jsonl>
@@ -300,6 +305,72 @@ async function normalizePrototypes(fileNames: readonly string[]): Promise<number
   return 0;
 }
 
+async function generatePrototypeDatabaseAsset(
+  fileNames: readonly string[],
+  check: boolean,
+  json: boolean,
+): Promise<number> {
+  if (fileNames.length !== 4 || fileNames[0] !== 'asset') {
+    console.error(usage);
+    return 2;
+  }
+  const [, dumpName, metadataName, outputName] = fileNames as readonly [
+    'asset',
+    string,
+    string,
+    string,
+  ];
+  const manifestName = `${outputName}.manifest.json`;
+  const [dumpSource, metadataSource] = await Promise.all([
+    readFile(resolve(dumpName), 'utf8'),
+    readFile(resolve(metadataName), 'utf8'),
+  ]);
+  const generated = await generatePrototypeAsset(dumpSource, metadataSource);
+
+  if (check) {
+    const [databaseSource, manifestSource] = await Promise.all([
+      readFile(resolve(outputName), 'utf8'),
+      readFile(resolve(manifestName), 'utf8'),
+    ]);
+    await loadPrototypeAsset(databaseSource, manifestSource, {
+      rawDumpSource: dumpSource,
+      metadataSource,
+    });
+    if (databaseSource !== generated.databaseJson || manifestSource !== generated.manifestJson) {
+      throw new PrototypeAssetError(
+        'PA1006',
+        outputName,
+        'generated asset bytes differ from the deterministic output.',
+      );
+    }
+    const report = {
+      status: 'reproducible',
+      output: outputName,
+      manifest: manifestName,
+      databaseIdentity: generated.manifest.databaseIdentity,
+    } as const;
+    if (json) console.log(JSON.stringify(report, null, 2));
+    else console.log(`Prototype asset is reproducible: ${outputName}.`);
+  } else {
+    await Promise.all([
+      writeFile(resolve(outputName), generated.databaseJson, 'utf8'),
+      writeFile(resolve(manifestName), generated.manifestJson, 'utf8'),
+    ]);
+    const report = {
+      status: 'generated',
+      output: outputName,
+      manifest: manifestName,
+      databaseIdentity: generated.manifest.databaseIdentity,
+    } as const;
+    if (json) console.log(JSON.stringify(report, null, 2));
+    else console.log(`Generated prototype asset: ${outputName} (+ ${manifestName}).`);
+  }
+  for (const warning of generated.warnings) {
+    console.warn(`${warning.code} ${warning.path}: ${warning.message}`);
+  }
+  return 0;
+}
+
 async function supplementPrototypes(fileNames: readonly string[], json: boolean): Promise<number> {
   if (fileNames.length !== 4) {
     console.error(usage);
@@ -458,6 +529,11 @@ export async function run(
       if (files[0] === 'observations') return await inspectCircuitObservations(files, json);
       if (files[0] === 'compare-observations') return await compareObservations(files, json);
       if (files[0] === 'evidence') return await inspectPrototypeEvidence(files, json);
+      if (files[0] === 'asset') {
+        const checkAsset = files.includes('--check');
+        const assetFiles = files.filter((argument) => argument !== '--check');
+        return await generatePrototypeDatabaseAsset(assetFiles, checkAsset, json);
+      }
       return files[0] === 'supplement'
         ? await supplementPrototypes(files, json)
         : await normalizePrototypes(files);
@@ -511,7 +587,9 @@ export async function run(
         code:
           error instanceof CircuitSupplementError ||
           error instanceof CircuitObservationError ||
+          error instanceof PrototypeAssetError ||
           error instanceof PrototypeEvidenceError ||
+          error instanceof PrototypeInputError ||
           error instanceof PrototypeValidationError ||
           error instanceof FactorioDumpError
             ? error.code
@@ -520,7 +598,9 @@ export async function run(
         message,
         ...(error instanceof CircuitSupplementError ||
         error instanceof CircuitObservationError ||
+        error instanceof PrototypeAssetError ||
         error instanceof PrototypeEvidenceError ||
+        error instanceof PrototypeInputError ||
         error instanceof PrototypeValidationError ||
         error instanceof FactorioDumpError
           ? { path: error.path }

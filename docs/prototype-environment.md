@@ -18,13 +18,15 @@ Phase 5.5 provides `packages/prototypes` with these responsibilities:
 - environment metadata and a deterministic content identity;
 - immutable LuaPrototypes-shaped tables, derived indexes, and query helpers;
 - JSON loading for Node and browser consumers;
-- tiny synthetic fixtures and a generated first-run vanilla/Space Age profile.
+- tiny synthetic fixtures and a deterministic generated-asset boundary with a
+  provenance manifest.
 
-The implemented foundation now also includes an offline native-dump normalizer
-and explicit CLI database selection with optional identity pins. Versioned CLI
-project profiles, browser-local file selection and identity-keyed IndexedDB
-persistence are implemented. Conformance completion and the generated first-run
-database remain subsequent Phase 5.5 slices.
+The implemented foundation now also includes an offline native-dump normalizer,
+an identity-bound generated asset plus provenance manifest, and explicit CLI
+database selection with optional identity pins. Versioned CLI project profiles,
+browser-local file selection and identity-keyed IndexedDB persistence are
+implemented. Conformance completion and the generated first-run database remain
+subsequent Phase 5.5 slices.
 
 The raw normalizer is transitional, not an authoritative runtime snapshot. See
 [Prototype truth sources and audit follow-up](prototype-truth-sources.md) for the
@@ -141,6 +143,29 @@ strings), and color objects/3-or-4-channel arrays are retained. Generator
 `comblang-factorio-data-dump-v1.3` preserves this explicit snapshot. The old
 `startupSettingsIdentity` remains a caller-supplied label/hash, not automatically
 verified against the values. Supplying a label does not replace a captured snapshot.
+
+### Reproducible generated asset
+
+The release seam turns the explicit raw dump and metadata into two deterministic
+files: the requested database JSON and a sibling `<output>.manifest.json`. The
+manifest records the raw-dump and metadata SHA-256 digests, the asset and
+normalized schema/generator versions, the normalized database identity, and the
+exact output JSON digest. It contains no input paths or generated timestamps.
+
+Generate or check the pair from the repository root:
+
+```powershell
+npm run prototype:asset -- data-raw-dump.json metadata.json prototypes.json
+npm run prototype:asset:check -- data-raw-dump.json metadata.json prototypes.json
+```
+
+Generation validates metadata and the normalized database before writing either
+file. `--check` regenerates in memory, verifies the manifest and all supplied
+input/output digests, and then compares bytes; it exits non-zero for missing or
+stale files. Runtime consumers can call `loadPrototypeAsset()` with only the two
+generated JSON sources, or optionally provide the original input bytes when an
+input pin must also be checked. This loader never parses the raw dump and does
+not treat structural data as circuit-behavior evidence.
 
 The converter reads every item subtype carrying raw `stack_size`, not
 only the literal `item` table. It applies the raw RecipePrototype defaults

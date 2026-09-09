@@ -88,6 +88,11 @@ in Factorio for behavior evidence. The evidence-manifest loader and CLI inspecti
 are implemented, but this gate remains open until reviewed native artifacts are
 actually produced and checked against the matching database identity.
 
+The deterministic asset generator/check now provides the release seam for those
+inputs. Its sidecar pins the raw dump, metadata, normalized output bytes, schema
+versions, and database identity; it does not turn structural extraction into
+native behavior evidence or supply missing environment provenance.
+
 ## Runtime structural exporter decision
 
 The prototype-wide runtime exporter, its transport parser, and its CLI command

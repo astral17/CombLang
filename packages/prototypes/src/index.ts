@@ -24,6 +24,7 @@ export type { PrototypeCircuitEvidenceQuery, PrototypeEvidenceIndex } from './ev
 export * from './observation-environment.js';
 export * from './factorio-dump.js';
 export * from './factorio-prototype-catalog.js';
+export * from './generated-asset.js';
 export * from './identity.js';
 export * from './input.js';
 export * from './provider.js';
