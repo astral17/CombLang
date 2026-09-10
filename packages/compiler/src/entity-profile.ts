@@ -12,6 +12,7 @@ import type {
   EntityLaneEndpoint,
   EntityLaneKey,
   EntityLaneProfile,
+  EntityNativeField,
   EntityNativeEndpoint,
   EntityProfile,
   EntityProfileId,
@@ -289,12 +290,30 @@ function configurationMode(value: unknown, path: string): EntityConfigurationMod
   return value;
 }
 
-function parseConfigurationRule(value: unknown, path: string): EntityConfigurationRule {
+function parseConfigurationRule(
+  value: unknown,
+  path: string,
+  features: ReadonlyMap<EntityFeatureKey, EntityFeatureProfile>,
+  connectors: ReadonlyMap<EntityConnectorKey, EntityConnectorProfile>,
+): EntityConfigurationRule {
   const record = dataRecord(value, path);
-  exactKeys(record, ['key', 'kind', 'modes', 'evidence'], path);
+  exactKeys(record, ['key', 'kind', 'feature', 'nativeField', 'modes', 'evidence'], path);
   const key = stableIdentifier(record.key, `${path}.key`) as EntityBehaviorKey;
   if (record.kind !== 'native-single-condition') {
     invalid('EP1001', `${path}.kind`, 'unsupported Entity configuration rule kind.');
+  }
+  const featureKey = stableIdentifier(record.feature, `${path}.feature`) as EntityFeatureKey;
+  const feature = features.get(featureKey);
+  if (feature === undefined) invalid('EP1002', `${path}.feature`, 'unknown feature key.');
+  const connector = connectors.get(feature.connector);
+  if (connector === undefined) {
+    invalid('EP1002', `${path}.feature.connector`, 'feature references an unknown connector key.');
+  }
+  if (connector.direction === 'output') {
+    invalid('EP1002', `${path}.feature.connector`, 'native condition requires an input connector.');
+  }
+  if (record.nativeField !== 'control_behavior.circuit_condition') {
+    invalid('EP1001', `${path}.nativeField`, 'unsupported native Entity configuration field.');
   }
   const modes = dataArray(record.modes, `${path}.modes`).map((mode, index) =>
     configurationMode(mode, `${path}.modes[${index}]`),
@@ -304,6 +323,8 @@ function parseConfigurationRule(value: unknown, path: string): EntityConfigurati
   return {
     key,
     kind: 'native-single-condition',
+    feature: featureKey,
+    nativeField: record.nativeField as EntityNativeField,
     modes: Object.freeze([...modes].sort(compare)),
     evidence: parseEvidence(record.evidence, `${path}.evidence`),
   };
@@ -422,8 +443,10 @@ export function canonicalizeEntityProfile(value: unknown): EntityProfile {
     'feature keys',
   );
   const synthetic = booleanValue(record.synthetic, '$.synthetic');
+  const featureMap = new Map(features.map((feature) => [feature.key, feature]));
   const configurationRules = dataArray(record.configurationRules, '$.configurationRules').map(
-    (rule, index) => parseConfigurationRule(rule, `$.configurationRules[${index}]`),
+    (rule, index) =>
+      parseConfigurationRule(rule, `$.configurationRules[${index}]`, featureMap, connectorMap),
   );
   duplicate(
     configurationRules.map(({ key }) => key),
@@ -442,7 +465,6 @@ export function canonicalizeEntityProfile(value: unknown): EntityProfile {
       );
     }
   }
-  const featureMap = new Map(features.map((feature) => [feature.key, feature]));
   const defaultReadProjection = parseDefaultReadProjection(
     record.defaultReadProjection,
     '$.defaultReadProjection',

@@ -22,7 +22,10 @@ import {
   resolveEntityReplayProfile,
   type TrustedEntityReplayContext,
 } from '@comblang/compiler/entity-replay-context';
-import { canonicalizeEntityRawJson, EntityRawJsonError } from '@comblang/compiler/entity-raw';
+import {
+  canonicalizeEntityConfiguration,
+  EntityConfigurationError,
+} from '@comblang/compiler/entity-configuration';
 import type { EntityPlacement } from '@comblang/compiler/ir';
 import type { Diagnostic, SourceSpan } from '@comblang/shared';
 
@@ -412,18 +415,16 @@ function parseBindings(
   );
 }
 
-function parseConfiguration(value: unknown, path: string): EntityPlanRecord['configuration'] {
-  const record = dataRecord(value, path);
-  exactKeys(record, ['mode', 'payload'], path);
-  if (record.mode !== 'raw' && record.mode !== 'typed') {
-    invalid('RT3000', `${path}.mode`, 'expected raw or typed configuration.');
-  }
+function parseConfiguration(
+  value: unknown,
+  path: string,
+  profile: ReturnType<typeof resolveEntityReplayProfile>,
+): EntityPlanRecord['configuration'] {
   try {
-    return Object.freeze({ mode: record.mode, payload: canonicalizeEntityRawJson(record.payload) });
+    return canonicalizeEntityConfiguration(value, profile, path);
   } catch (error) {
-    if (error instanceof EntityRawJsonError) {
-      const suffix = error.path === '$' ? '' : error.path.slice(1);
-      invalid('RT3003', `${path}.payload${suffix}`, error.message);
+    if (error instanceof EntityConfigurationError) {
+      invalid('RT3003', error.path, error.detail);
     }
     throw error;
   }
@@ -445,7 +446,7 @@ function parseEntity(
   const profile = parseProfileRef(record.profile, `${path}.profile`, context);
   const configuration =
     'configuration' in record
-      ? parseConfiguration(record.configuration, `${path}.configuration`)
+      ? parseConfiguration(record.configuration, `${path}.configuration`, profile.profile)
       : undefined;
   const placement =
     'placement' in record ? parsePlacement(record.placement, `${path}.placement`) : undefined;

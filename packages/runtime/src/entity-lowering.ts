@@ -1,9 +1,12 @@
 import type { EntityPlanRecord, EntityPhysicalRecord } from '@comblang/compiler/entity';
 import {
+  EntityConfigurationError,
+  resolveEntityPhysicalConfiguration,
+} from '@comblang/compiler/entity-configuration';
+import {
   resolveEntityReplayProfile,
   type TrustedEntityReplayContext,
 } from '@comblang/compiler/entity-replay-context';
-import { canonicalizeEntityRawJson } from '@comblang/compiler/entity-raw';
 import type { SourceSpan } from '@comblang/shared';
 import { RuntimeDiagnosticError, type NetworkHandle } from './elaboration.js';
 
@@ -23,6 +26,7 @@ interface PreparedEntityRecord {
   readonly record: EntityPlanRecord;
   readonly prototypeName: string;
   readonly nativeConnectors: readonly (number | undefined)[];
+  readonly physicalConfiguration: EntityPhysicalRecord['configuration'];
 }
 
 export interface PreparedEntityRecords {
@@ -53,7 +57,15 @@ export function prepareEntityRecords(
     if (!/^entity:[^:\s]+$/.test(key))
       fail('Expected canonical entity:<name> prototype key.', source);
 
-    if (record.configuration) canonicalizeEntityRawJson(record.configuration.payload);
+    let physicalConfiguration: EntityPhysicalRecord['configuration'];
+    if (record.configuration !== undefined) {
+      try {
+        physicalConfiguration = resolveEntityPhysicalConfiguration(record.configuration, profile);
+      } catch (error) {
+        if (error instanceof EntityConfigurationError) fail(error.message, source);
+        throw error;
+      }
+    }
     const nativeConnectors = record.connectorBindings.map((binding) => {
       const endpoint = binding.endpoint;
       const connector = profile.connectors.find(({ key }) => key === endpoint.connector);
@@ -82,6 +94,7 @@ export function prepareEntityRecords(
       record,
       prototypeName: key.slice('entity:'.length),
       nativeConnectors: Object.freeze(nativeConnectors),
+      physicalConfiguration,
     });
   });
   return Object.freeze({ records: Object.freeze(prepared) });
@@ -93,7 +106,7 @@ export function lowerPreparedEntityRecords(
   networks: ReadonlyMap<string, NetworkHandle>,
 ): readonly EntityPhysicalRecord[] {
   return Object.freeze(
-    prepared.records.map(({ record, prototypeName, nativeConnectors }) => {
+    prepared.records.map(({ record, prototypeName, nativeConnectors, physicalConfiguration }) => {
       const connectorBindings = record.connectorBindings.map((binding, index) => {
         const { network: name, ...rest } = binding;
         if (name === undefined) return { ...rest };
@@ -118,7 +131,14 @@ export function lowerPreparedEntityRecords(
         return { ...rest, network: handle.id, nativeConnector };
       });
       // Detach nested transport data before freezing so callers retain ownership of their input.
-      return freeze(structuredClone({ ...record, prototypeName, connectorBindings }));
+      return freeze(
+        structuredClone({
+          ...record,
+          ...(physicalConfiguration === undefined ? {} : { configuration: physicalConfiguration }),
+          prototypeName,
+          connectorBindings,
+        }),
+      ) as EntityPhysicalRecord;
     }),
   );
 }

@@ -42,6 +42,19 @@ projection, or `null` when no unambiguous default exists; it is never inferred
 from feature ordering. Native `(nativeConnector, color)` endpoint identity is
 unique across the entire profile.
 
+The internal typed subset maps a rule to one profile-owned feature and the native
+field `control_behavior.circuit_condition`. The plan-side value contains only the
+rule key, a non-empty selection of allowed input lanes, and one pure comparison
+of a concrete Signal with a signed int32 constant. Non-synthetic profiles need
+verified positive evidence for that exact rule before typed construction or
+replay; the shared synthetic fixture uses unknown evidence only to exercise the
+architecture and is not native Factorio proof.
+
+The deprecated v3 `{ mode: "typed", payload }` envelope remains accepted as an
+opaque compatibility snapshot. It is cloned and frozen, but it does not grant
+rule, feature, native-field, connector, or evidence authority; blueprint
+preview rejects it with a source-aware `BP1001`.
+
 The checked-in [synthetic fixtures](../packages/compiler/src/entity-fixtures.ts)
 cover a zero-port Entity, a shared bidirectional connector with red and green
 lanes, and an intentionally ambiguous multi-connector profile. They establish
@@ -95,10 +108,12 @@ rejected both at the payload boundary and inside the native object.
 
 [V3 validation](../packages/runtime/src/entity-plan-validation.ts) resolves
 the trusted context and profile before Entity allocation, validates raw JSON,
-references, endpoints, Networks, provenance, and uniqueness, and reports
-structured paths. The only migration is an explicit lossless adapter for a
-validated producer-only v2 plan; it creates no Entity capabilities. Sending v3
-to a v2 reader or forging profile data fails deterministically.
+typed rule/lane bindings, the pure condition, references, endpoints, Networks,
+provenance, and uniqueness, and reports structured paths. The same configuration
+canonicalizer is used by the internal registry boundary. The only migration is
+an explicit lossless adapter for a validated producer-only v2 plan; it creates no
+Entity capabilities. Sending v3 to a v2 reader or forging profile data fails
+deterministically.
 
 The executed runtime keeps session-local authority views separate from the
 singular physical Entity record. Explicit connector/lane projection is cached
@@ -129,9 +144,16 @@ ordinal order. Explicit placement and direction are retained. Automatic Entity
 positions follow producer positions and skip occupied coordinate slots. Bound
 Entity lanes join the same Network wire chains as combinators; native connector
 ordinal `n` encodes red as `2*n-1` and green as `2*n`. Zero-port Entities remain
-visible. Raw/typed configuration is explicitly rejected at preview generation.
-Synthetic fixtures establish these internal contracts, not Factorio import
-compatibility. The producer-only v2 execution and blueprint paths remain unchanged.
+visible. The internal typed subset emits a readable native
+`control_behavior.circuit_condition` on the existing Entity, including the
+resolved concrete Signal, signed int32 constant, Factorio comparator spelling,
+and red/green input mask. Raw configuration remains explicitly rejected at
+preview generation. The deprecated opaque v3 typed envelope is rejected there
+as well. Physical preview validation is profile-free and rejects malformed or
+forged native fields, lane masks, Signals, comparators, and signed int32
+constants with source-aware `BP1001`. Synthetic fixtures establish these
+internal contracts, not Factorio import compatibility. The producer-only v2
+execution and blueprint paths remain unchanged.
 
 The executed v3 plan also exposes `execution.debug` Entity entries. Each exact
 scope has `entities`, `entity(index | id)`, `entityByGlobalOrdinal`, and
@@ -158,8 +180,9 @@ and zero-port Entities have no synthetic output connector.
 
 The remaining implementation boundary covers:
 
-1. raw/typed native payload lowering and native import fixtures;
-2. one fixture-backed native single-comparison condition;
+1. raw native payload lowering and native import fixtures;
+2. reviewed non-synthetic evidence and Factorio conformance for the native
+   single-comparison condition;
 3. additional generic end-to-end acceptance for source/test-runner ingestion;
 4. later typed facades and any native-verified claims.
 

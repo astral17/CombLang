@@ -72,7 +72,10 @@ const planEntity: EntityPlanRecord = {
 };
 
 const physicalEntity: EntityPhysicalRecord = {
-  ...planEntity,
+  id: planEntity.id,
+  profile: planEntity.profile,
+  provenance: planEntity.provenance,
+  ordinal: planEntity.ordinal,
   prototypeName: 'synthetic-zero-port',
   connectorBindings: [physicalBinding],
 };

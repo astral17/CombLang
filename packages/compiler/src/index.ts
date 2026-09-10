@@ -5,6 +5,7 @@ export * from './blueprint-json.js';
 export * from './direct-plan.js';
 export * from './elaboration-transform.js';
 export * from './entity.js';
+export * from './entity-configuration.js';
 export * from './entity-fixtures.js';
 export * from './entity-profile.js';
 export * from './entity-replay-context.js';

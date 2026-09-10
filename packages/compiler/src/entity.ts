@@ -109,10 +109,14 @@ export type EntityEvidenceState =
 
 export type EntityConfigurationMode = 'raw' | 'typed';
 
+export type EntityNativeField = 'control_behavior.circuit_condition';
+
 /** Capability-specific configuration evidence; structure and evidence stay separate. */
 export interface EntityConfigurationRule {
   readonly key: EntityBehaviorKey;
   readonly kind: 'native-single-condition';
+  readonly feature: EntityFeatureKey;
+  readonly nativeField: EntityNativeField;
   readonly modes: readonly EntityConfigurationMode[];
   readonly evidence: EntityEvidenceState;
 }
@@ -158,9 +162,16 @@ export interface EntityRawPayload {
   readonly placement?: EntityPlacement;
 }
 
-export type EntityConfiguration =
-  | { readonly mode: 'raw'; readonly payload: EntityRawJson }
-  | { readonly mode: 'typed'; readonly payload: EntityRawJson };
+export interface EntityRawConfiguration {
+  readonly mode: 'raw';
+  readonly payload: EntityRawJson;
+}
+
+/** @deprecated Compatibility-only opaque v3 configuration; it has no typed capability authority. */
+export interface EntityOpaqueConfiguration {
+  readonly mode: 'typed';
+  readonly payload: EntityRawJson;
+}
 
 export interface EntityConnectorBindingProvenance {
   readonly source: SourceSpan;
@@ -201,18 +212,43 @@ export interface EntityProvenance {
 interface EntityRecordBase {
   readonly id: EntityId;
   readonly profile: EntityProfileRef;
-  readonly configuration?: EntityConfiguration;
   readonly placement?: EntityPlacement;
   readonly provenance: EntityProvenance;
   readonly ordinal: number;
 }
 
+export interface EntityTypedConfiguration {
+  readonly mode: 'typed';
+  readonly rule: EntityBehaviorKey;
+  readonly lanes: readonly EntityLaneKey[];
+  readonly condition: EntityNativeSingleCondition;
+}
+
+export type EntityConfiguration =
+  EntityRawConfiguration | EntityOpaqueConfiguration | EntityTypedConfiguration;
+
 export interface EntityPlanRecord extends EntityRecordBase {
+  readonly configuration?: EntityConfiguration;
   readonly connectorBindings: readonly EntityPlanConnectorBinding[];
 }
 
+export interface EntityPhysicalTypedConfiguration {
+  readonly mode: 'typed';
+  readonly rule: EntityBehaviorKey;
+  readonly feature: EntityFeatureKey;
+  readonly nativeField: EntityNativeField;
+  readonly connector: EntityConnectorKey;
+  readonly lanes: readonly EntityLaneKey[];
+  readonly laneMask: Readonly<{ readonly red: boolean; readonly green: boolean }>;
+  readonly condition: EntityNativeSingleCondition;
+}
+
+export type EntityPhysicalConfiguration =
+  EntityRawConfiguration | EntityOpaqueConfiguration | EntityPhysicalTypedConfiguration;
+
 export interface EntityPhysicalRecord extends EntityRecordBase {
   readonly prototypeName: string;
+  readonly configuration?: EntityPhysicalConfiguration;
   readonly connectorBindings: readonly EntityPhysicalConnectorBinding[];
 }
 
@@ -247,7 +283,6 @@ export interface EntityNativeSingleCondition {
   readonly signal: SignalId;
   readonly comparator: EntityNativeComparator;
   readonly constant: number;
-  readonly connector: EntityLaneEndpoint;
 }
 
 /** Direct Plan v3 is a separate envelope; v2 remains circuit-only and unchanged. */

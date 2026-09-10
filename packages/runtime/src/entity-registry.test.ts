@@ -1,6 +1,11 @@
 import { describe, expect, test } from 'vitest';
 
-import type { EntityProfileId } from '@comblang/compiler/entity';
+import type {
+  EntityBehaviorKey,
+  EntityLaneKey,
+  EntityProfileId,
+  EntityProfile,
+} from '@comblang/compiler/entity';
 import { sourceFileId, sourceSpan } from '@comblang/shared';
 import {
   loadPrototypeDatabase,
@@ -19,15 +24,20 @@ import {
   createTrustedEntityReplayContext,
   type TrustedEntityReplayContext,
 } from '@comblang/compiler/entity-replay-context';
-import { syntheticZeroPortEntityProfile } from '@comblang/compiler/entity-fixtures';
+import {
+  syntheticSharedTwoColorEntityProfile,
+  syntheticZeroPortEntityProfile,
+} from '@comblang/compiler/entity-fixtures';
 
-function context(): TrustedEntityReplayContext {
+function context(
+  profiles: readonly EntityProfile[] = [syntheticZeroPortEntityProfile],
+): TrustedEntityReplayContext {
   return createTrustedEntityReplayContext({
     database: syntheticZeroPortEntityProfile.ref.database,
     source: 'synthetic',
     evidenceIdentity: 'comblang-synthetic-evidence-v1',
     policyIdentity: 'comblang-entity-policy-v1',
-    profiles: [syntheticZeroPortEntityProfile],
+    profiles,
   });
 }
 
@@ -148,6 +158,60 @@ describe('session-local Entity registry', () => {
     expect(registry.record(entity).placement).toEqual({ x: 2, y: 3, direction: 4 });
     expect(Object.isFrozen(registry.record(entity))).toBe(true);
     expect(Object.isFrozen(entity)).toBe(true);
+  });
+
+  test('snapshots typed configuration by rule and lanes without resolving physical metadata', () => {
+    const registry = new EntityRegistry(
+      context([syntheticZeroPortEntityProfile, syntheticSharedTwoColorEntityProfile]),
+      createSyntheticEntityPrototypeResolver(),
+    );
+    const configuration = {
+      mode: 'typed' as const,
+      rule: 'shared-circuit-condition' as EntityBehaviorKey,
+      lanes: ['shared-green' as EntityLaneKey, 'shared-red' as EntityLaneKey],
+      condition: {
+        kind: 'compare-signal-constant' as const,
+        signal: { type: 'virtual' as const, name: 'signal-A' },
+        comparator: '!=' as const,
+        constant: 4,
+      },
+    } satisfies NonNullable<EntityConstructionRequest['configuration']>;
+    const entity = registry.create(
+      request({ profile: syntheticSharedTwoColorEntityProfile.ref, configuration }),
+    );
+    configuration.lanes.reverse();
+    configuration.condition.signal.name = 'mutated-after-create';
+
+    expect(registry.record(entity).configuration).toEqual({
+      mode: 'typed',
+      rule: 'shared-circuit-condition',
+      lanes: ['shared-green', 'shared-red'],
+      condition: {
+        kind: 'compare-signal-constant',
+        signal: { type: 'virtual', name: 'signal-A' },
+        comparator: '!=',
+        constant: 4,
+      },
+    });
+    expect(registry.records()).toHaveLength(1);
+  });
+
+  test('retains the deprecated opaque typed v3 payload without granting capability authority', () => {
+    const registry = new EntityRegistry(
+      context([syntheticZeroPortEntityProfile, syntheticSharedTwoColorEntityProfile]),
+      createSyntheticEntityPrototypeResolver(),
+    );
+    const configuration = { mode: 'typed' as const, payload: { legacy: false } };
+    const entity = registry.create(
+      request({ profile: syntheticSharedTwoColorEntityProfile.ref, configuration }),
+    );
+    configuration.payload.legacy = true;
+
+    expect(registry.record(entity).configuration).toEqual({
+      mode: 'typed',
+      payload: { legacy: false },
+    });
+    expect(registry.records()).toHaveLength(1);
   });
 
   test('reports malformed construction metadata as structured errors', () => {

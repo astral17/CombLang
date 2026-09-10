@@ -16,6 +16,8 @@ import {
 } from '@comblang/compiler/entity-replay-context';
 import type {
   DirectElaborationPlanV3,
+  EntityBehaviorKey,
+  EntityLaneKey,
   EntityPlanRecord,
   EntityProfile,
 } from '@comblang/compiler/entity';
@@ -624,6 +626,54 @@ describe('physical Entity preview vertical slice', () => {
     }
   });
 
+  test('rejects non-synthetic typed configuration before runtime Network allocation', () => {
+    const providerProfile = {
+      ...structuredClone(shared),
+      synthetic: false,
+    };
+    const providerContext = createTrustedEntityReplayContext({
+      source: 'provider',
+      database: providerProfile.ref.database,
+      profiles: [providerProfile],
+      evidenceIdentity: 'provider-evidence-v1',
+      policyIdentity: 'provider-policy-v1',
+    });
+    const { plan } = fixture();
+    const configured = {
+      ...plan,
+      context: entityReplayContextRef(providerContext),
+      entities: [
+        {
+          ...plan.entities[1]!,
+          profile: providerProfile.ref,
+          configuration: {
+            mode: 'typed' as const,
+            rule: 'shared-circuit-condition' as EntityBehaviorKey,
+            lanes: ['shared-red' as EntityLaneKey],
+            condition: {
+              kind: 'compare-signal-constant' as const,
+              signal: { type: 'virtual' as const, name: 'signal-A' },
+              comparator: '>' as const,
+              constant: 1,
+            },
+          },
+        },
+      ],
+    };
+    const allocate = vi.spyOn(DslRuntime.prototype, 'network');
+    try {
+      const result = tryElaborateEntityDirectPlan(configured, providerContext);
+      expect(result.execution).toBeUndefined();
+      expect(result.diagnostics[0]).toMatchObject({
+        code: 'RT3003',
+        message: expect.stringContaining('verified positive evidence'),
+      });
+      expect(allocate).not.toHaveBeenCalled();
+    } finally {
+      allocate.mockRestore();
+    }
+  });
+
   test('rejects missing trusted native endpoints with source provenance', () => {
     const { plan } = fixture();
     const profile = {
@@ -741,21 +791,149 @@ describe('physical Entity preview vertical slice', () => {
     ).toHaveLength(1);
   });
 
-  test.each(['raw', 'typed'] as const)(
-    'rejects %s configuration at preview instead of dropping it',
-    (mode) => {
-      const { plan, context } = fixture();
-      const configured = {
-        ...plan,
-        entities: [{ ...entity(), configuration: { mode, payload: {} } }],
-      };
-      const execution = elaborateEntityDirectPlan(configured, context);
-      expect(execution.entity(1).configuration).toEqual({ mode, payload: {} });
-      expect(() => generateEntityBlueprintJson(execution.circuit.ir)).toThrow(
-        /configuration.*unsupported/,
-      );
-    },
-  );
+  test('rejects raw configuration at preview instead of dropping it', () => {
+    const { plan, context } = fixture();
+    const configured = {
+      ...plan,
+      entities: [{ ...entity(), configuration: { mode: 'raw' as const, payload: {} } }],
+    };
+    const execution = elaborateEntityDirectPlan(configured, context);
+    expect(execution.entity(1).configuration).toEqual({ mode: 'raw', payload: {} });
+    expect(() => generateEntityBlueprintJson(execution.circuit.ir)).toThrow(
+      /configuration.*unsupported/,
+    );
+  });
+
+  test('accepts deprecated opaque typed v3 configuration until preview and rejects it explicitly', () => {
+    const { plan, context } = fixture();
+    const configured = {
+      ...plan,
+      entities: [
+        { ...entity(), configuration: { mode: 'typed' as const, payload: { legacy: true } } },
+      ],
+    };
+    const execution = elaborateEntityDirectPlan(configured, context);
+    expect(execution.entity(1).configuration).toEqual({
+      mode: 'typed',
+      payload: { legacy: true },
+    });
+    expect(() => generateEntityBlueprintJson(execution.circuit.ir)).toThrowError(
+      expect.objectContaining({ code: 'BP1001', span: source }),
+    );
+  });
+
+  test('lowers typed single-condition configuration into readable native blueprint JSON', () => {
+    const { plan, context } = fixture();
+    const configuration = {
+      mode: 'typed' as const,
+      rule: 'shared-circuit-condition' as EntityBehaviorKey,
+      lanes: ['shared-red' as EntityLaneKey, 'shared-green' as EntityLaneKey],
+      condition: {
+        kind: 'compare-signal-constant' as const,
+        signal: { type: 'item' as const, name: 'iron-plate' },
+        comparator: '>=' as const,
+        constant: -2,
+      },
+    } satisfies Extract<NonNullable<EntityPlanRecord['configuration']>, { mode: 'typed' }>;
+    const configured = {
+      ...plan,
+      entities: [
+        {
+          ...plan.entities[1]!,
+          configuration,
+        },
+      ],
+    };
+    const execution = elaborateEntityDirectPlan(configured, context);
+    configuration.lanes.reverse();
+    configuration.condition.signal.name = 'signal-mutated-after-elaboration';
+
+    const physical = execution.entity(2);
+    const physicalConfiguration = physical.configuration;
+    if (physicalConfiguration?.mode !== 'typed' || 'payload' in physicalConfiguration)
+      throw new Error('expected resolved typed physical configuration');
+    expect(physicalConfiguration).toMatchObject({
+      mode: 'typed',
+      rule: 'shared-circuit-condition',
+      feature: 'read',
+      nativeField: 'control_behavior.circuit_condition',
+      connector: 'shared',
+      lanes: ['shared-green', 'shared-red'],
+      laneMask: { red: true, green: true },
+      condition: {
+        signal: { name: 'iron-plate' },
+        comparator: '>=',
+        constant: -2,
+      },
+    });
+    expect(Object.isFrozen(physical.configuration)).toBe(true);
+    expect(execution.circuit.ir.producers).toHaveLength(1);
+    expect(execution.circuit.ir.networks).toHaveLength(2);
+    expect(execution.circuit.ir.entities).toHaveLength(1);
+    expect(execution.debug.root.entities).toHaveLength(1);
+    expect(execution.debug.root.entity(1).record).toBe(physical);
+
+    const session = execution.createTestSession();
+    const objectById = execution.entityObject(session, physical.id);
+    const objectByOrdinal = execution.entityObject(session, physical.ordinal);
+    expect(objectById).toBe(objectByOrdinal);
+    expect(objectById).toMatchObject({
+      adapterId: 'entity-physical-v3',
+      instanceId: 'ordinal-2',
+      connectors: ['shared'],
+    });
+
+    const previewEntity = generateEntityBlueprintJson(execution.circuit.ir).blueprint.entities[1]!;
+    expect(previewEntity).toMatchObject({
+      entity_number: 2,
+      name: 'synthetic-shared-two-color',
+      control_behavior: {
+        circuit_condition: {
+          first_signal: { name: 'iron-plate' },
+          first_signal_networks: { red: true, green: true },
+          comparator: '≥',
+          constant: -2,
+        },
+      },
+    });
+
+    const unsupported = {
+      ...physical,
+      configuration: {
+        ...physicalConfiguration,
+        nativeField: 'control_behavior.unsupported' as never,
+      },
+    };
+    expect(() =>
+      generateEntityBlueprintJson({ ...execution.circuit.ir, entities: [unsupported] }),
+    ).toThrowError(expect.objectContaining({ code: 'BP1001', span: source }));
+
+    const corruptions: readonly unknown[] = [
+      {
+        ...physicalConfiguration,
+        condition: {
+          ...physicalConfiguration.condition,
+          signal: { type: 'virtual', name: 'signal-each' },
+        },
+      },
+      {
+        ...physicalConfiguration,
+        condition: { ...physicalConfiguration.condition, constant: 1.5 },
+      },
+      {
+        ...physicalConfiguration,
+        condition: { ...physicalConfiguration.condition, constant: 2_147_483_648 },
+      },
+      { ...physicalConfiguration, laneMask: { red: 'yes', green: false } },
+      { ...physicalConfiguration, futureField: true },
+    ];
+    for (const configurationCandidate of corruptions) {
+      const corrupted = { ...physical, configuration: configurationCandidate as never };
+      expect(() =>
+        generateEntityBlueprintJson({ ...execution.circuit.ir, entities: [corrupted] }),
+      ).toThrowError(expect.objectContaining({ code: 'BP1001', span: source }));
+    }
+  });
 
   test('keeps producer-only v2 graph, IR, and blueprint identical', () => {
     const { plan, context } = fixture();

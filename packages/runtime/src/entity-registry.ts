@@ -7,7 +7,10 @@ import type {
   EntityPlanRecord,
 } from '@comblang/compiler/entity';
 import type { EntityPlacement } from '@comblang/compiler/ir';
-import { canonicalizeEntityRawJson } from '@comblang/compiler/entity-raw';
+import {
+  canonicalizeEntityConfiguration,
+  EntityConfigurationError,
+} from '@comblang/compiler/entity-configuration';
 import {
   EntityReplayContextError,
   resolveEntityReplayProfile,
@@ -118,12 +121,18 @@ function placementSnapshot(value: EntityPlacement): EntityPlacement {
   });
 }
 
-function configurationSnapshot(value: EntityConfiguration): EntityConfiguration {
-  const payload = canonicalizeEntityRawJson(value.payload);
-  if (value.mode === 'raw' || value.mode === 'typed') {
-    return Object.freeze({ mode: value.mode, payload });
+function configurationSnapshot(
+  value: EntityConfiguration,
+  profile: ReturnType<typeof resolveEntityReplayProfile>,
+): EntityConfiguration {
+  try {
+    return canonicalizeEntityConfiguration(value, profile, '$.configuration');
+  } catch (error) {
+    if (error instanceof EntityConfigurationError) {
+      invalid('EN1000', error.path, error.detail);
+    }
+    throw error;
   }
-  invalid('EN1000', '$.configuration.mode', 'unknown Entity configuration mode.');
 }
 
 /** Owns one session's Entity identities and never accepts structural impostors. */
@@ -185,7 +194,7 @@ export class EntityRegistry {
     const configuration =
       request.configuration === undefined
         ? undefined
-        : configurationSnapshot(request.configuration);
+        : configurationSnapshot(request.configuration, profile);
     const placement =
       request.placement === undefined ? undefined : placementSnapshot(request.placement);
     const provenance: EntityProvenance = Object.freeze({

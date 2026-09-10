@@ -28,16 +28,7 @@ The current repository implements the Phase 3 source compiler, the complete Phas
 - [x] Phase 2 — direct elaboration runtime: EG/NCIR, session-bound handles, attachments, provenance, color solving, and the MemoCell integration slice.
 - [x] Phase 3 — executed source compiler: conservative semantic checks, DSL-sensitive JavaScript transformation, runtime elaboration, provenance, color solving, CLI validation, and the browser workbench.
 - [x] Phase 4 — ownership, multi-network syntax, eager Combinator identity/output lanes, semantic/runtime boundary hardening, opaque session values, and complete CLI/browser/EG/NCIR acceptance coverage.
-- [x] Phase 5 — deterministic testbench, external-world adapters, Unknown propagation, traces, debug hierarchy, CLI/browser test results, and interactive circuit timelines.
-- [x] Phase 5.5 — external prototype environment foundation
-  - [x] Complete the compiler/runtime foundation: shared diagnostics and traversal, online color/replay validation, versioned immutable `prototypes.*`, explicit CLI/browser provider injection, project profiles, browser persistence, canonical Signal keys, ordered `CC` inputs, exact recipe component boundaries, and identity-bound evidence manifests.
-  - [x] Use the official `factorio.exe --dump-data` output from the selected Factorio/modpack data stage as the structural authority; normalized artifacts are maintained separately from the browser runtime.
-  - [x] Accept normalized prototype JSON or raw `data.raw` plus explicit metadata through the shared loader; retain catalog-recognized Entity records without fabricated footprints.
-  - [x] Provide a deterministic raw-dump asset generator/check and identity-bound provenance manifest/loader, plus a checked-in confirmed Space Age structural asset; raw dumps are not parsed by runtime consumers.
-  - [x] Load the checked-in Space Age structural asset lazily as the browser's integrity-checked first-run profile, while preserving explicit custom/disabled selection and offline shell resources.
-  - [x] Support custom modpack profiles: users may run the official `factorio.exe --dump-data` with their selected mods and startup settings, then load the raw dump plus honest metadata in the browser or normalize it with the existing CLI; no author can prebuild every modpack profile.
-  - [x] Close the Phase 5.5 release layer at its structural scope: reproducible normalization, identity/provenance/integrity, browser-first/custom/offline profiles, and Service Worker lifecycle. Runtime-only Entity capability fields remain unknown for later Phase 6/7 slices.
-  - [x] Finish the production-browser Service Worker install/update/offline lifecycle gate with deterministic cache isolation and a real production-build install, waiting-worker update, controlled reload, and offline reload.
+- [x] Phase 5 — deterministic testbench, external-world adapters, traces and interactive timelines; browser-first prototype environments with reproducible `factorio.exe --dump-data` normalization, bundled and custom modpack profiles, identity-bound provenance, persistence, integrity checks, and offline lifecycle.
 - [ ] Phase 6 — universal persistent Factorio Entity handles with a generic modded fallback and typed facades.
   - [x] Complete prerequisites: ordered multi-form `CC(...)` inputs and transparent `Network`/`any`/union function parameters with explicit `Readonly`, `Ref`, and `Move` contracts retained.
   - [x] Introduce Direct Plan/EG/NCIR v3 contracts for physical Entity identity, connector profiles, raw configuration, provenance, and environment/evidence pins; retain a lossless producer-only v2 adapter.
@@ -45,8 +36,8 @@ The current repository implements the Phase 3 source compiler, the complete Phas
   - [x] Bind explicit profile-declared connectors and color lanes without inventing feature-specific hardware, hidden unions, delays, or combinators; permit implicit projection only in an unambiguous read context.
   - [x] Revalidate Entity/profile/evidence constraints during canonical replay before allocation, then preserve physical objects independently from computations through IR and readable blueprint JSON.
   - [x] Reconstruct Entity debug entries and register one existing mock/model adapter per physical object per TestSession; do not claim automatic factory simulation.
-  - [ ] Add one native single-comparison condition descriptor attached to the Entity's actual connector, with no hidden Decider and with raw/typed mode kept separate from evidence status.
-  - [ ] Prove the generic vertical slice with synthetic zero-port, shared bidirectional, and ambiguous multi-connector profiles across source, replay, IR, blueprint, debug, and testbench boundaries.
+  - [x] Add the internal synthetic-only native single-comparison condition descriptor attached to the Entity's actual connector, with no hidden Decider and with raw/typed mode kept separate from evidence status.
+  - [x] Prove the internal generic vertical slice with synthetic zero-port, shared bidirectional, and ambiguous multi-connector profiles across replay, IR, blueprint, debug, and testbench boundaries; deprecated opaque v3 typed/payload compatibility stops at explicit preview rejection, while source ingestion and native compatibility remain open.
   - [ ] Add fixture-backed typed facades in order: Lamp, Roboport, then `Constant(...)` as an Entity while `CC(...)` remains a Combinator and both share one physical implementation record.
   - [ ] Expand by schema families to logistics, belts, displays, train stops, filters, recipes, and transport settings; track implemented support separately from native-verified support.
 - [ ] Phase 7 — exact constructors and native-config stress: Arithmetic, full Decider normal/else output lists, duplicate outputs, `Everything`, Selector, raw entities, LUTs, and large generated configurations.
@@ -65,7 +56,7 @@ The current repository implements the Phase 3 source compiler, the complete Phas
 - [ ] Phase 10 — physical placement, wire reach verification, relays, and blueprint export.
 - [ ] Phase 11 — language-service and execution-environment polish: operator-domain hovers, completions, code actions, semantic tokens, exact native views, composition-safe textarea highlighting/completion and mobile symbol tools, optional reproducible-build policy, and a fully hardened module sandbox.
 
-Later phases cover prototype profiles, typed Factorio objects, exact constructors, the verified blueprint codec and exchange strings, schematic editing, physical placement, multi-file language services, reproducible builds, and a hardened sandbox.
+Later phases cover reviewed prototype capabilities, typed Factorio objects, exact constructors, the verified blueprint codec and exchange strings, schematic editing, physical placement, multi-file language services, reproducible builds, and a hardened sandbox.
 
 ## Documentation
 

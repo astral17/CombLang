@@ -1,6 +1,6 @@
 # Implementation boundaries
 
-The source compiler, Phase 4 ownership model, and Phase 5 MVP testbench are implemented. Phase 5.5's static prototype environment, browser-first profile, provenance, and integrity boundary are complete. Runtime-only Entity capability fields remain unknown for later Phase 6/7 slices. Major folders are workspace packages, while finer-grained architecture folders (`language/parser`, `compiler/ir`, and so on) remain source modules inside those packages until scale justifies independent publishing.
+The source compiler, Phase 4 ownership model, and Phase 5 MVP testbench are implemented. Phase 5.5's static prototype environment, browser-first profile, provenance, and integrity boundary are complete. The internal synthetic Entity configuration slice is implemented; remaining runtime-only Entity capabilities stay open for later Phase 6/7 slices. Major folders are workspace packages, while finer-grained architecture folders (`language/parser`, `compiler/ir`, and so on) remain source modules inside those packages until scale justifies independent publishing.
 
 Allowed dependency direction:
 
@@ -28,9 +28,10 @@ decision and remaining conformance work. Prototype facts stay out of the simulat
 Internal Entity v3 execution validates replay, reuses the resolved producer
 topology, lowers declaration names to physical Network IDs once, exposes
 parallel debug entries, and maps existing physical objects onto the generic
-object-test boundary. Its EG/NCIR Entity records carry prototype names and
-trusted native connector ordinals for the explicit readable blueprint preview
-path. Public constructors, native configuration lowering, typed facades, and
+object-test boundary. Its EG/NCIR Entity records carry prototype names,
+trusted native connector ordinals, and the synthetic-only typed
+`control_behavior.circuit_condition` subset for the explicit readable blueprint
+preview path. Public constructors, typed facades, raw native import, and
 verified native import behavior remain pending; see [Entity v3](entity-v3.md).
 
 The parser returns the official TypeScript AST plus CombLang-owned diagnostics and stable source spans. Both the CLI and browser workbench call that same API. The browser invokes it through a revisioned Web Worker protocol and ignores stale responses; later compiler phases can extend that protocol without moving heavy work back to the UI thread.

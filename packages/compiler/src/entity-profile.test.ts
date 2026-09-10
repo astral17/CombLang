@@ -125,11 +125,13 @@ describe('Entity capability profile boundary', () => {
       expect.objectContaining({ code: 'EP1001', path: '$.defaultReadProjection' }),
     );
 
-    const verifiedSynthetic = jsonCopy(syntheticZeroPortEntityProfile);
+    const verifiedSynthetic = jsonCopy(syntheticSharedTwoColorEntityProfile);
     verifiedSynthetic.configurationRules = [
       {
         key: 'native-enable',
         kind: 'native-single-condition',
+        feature: 'read',
+        nativeField: 'control_behavior.circuit_condition',
         modes: ['typed'],
         evidence: { status: 'verified', value: true, sourceIds: ['reviewed-native'] },
       },
@@ -140,24 +142,30 @@ describe('Entity capability profile boundary', () => {
   });
 
   test('keeps capability evidence mixed and configuration-mode specific', () => {
-    const mixed = jsonCopy(syntheticZeroPortEntityProfile);
+    const mixed = jsonCopy(syntheticSharedTwoColorEntityProfile);
     mixed.synthetic = false;
     mixed.configurationRules = [
       {
         key: 'native-unknown',
         kind: 'native-single-condition',
+        feature: 'read',
+        nativeField: 'control_behavior.circuit_condition',
         modes: ['raw'],
         evidence: { status: 'unknown' },
       },
       {
         key: 'native-unverified',
         kind: 'native-single-condition',
+        feature: 'read',
+        nativeField: 'control_behavior.circuit_condition',
         modes: ['raw', 'typed'],
         evidence: { status: 'unverified', value: false },
       },
       {
         key: 'native-reviewed',
         kind: 'native-single-condition',
+        feature: 'read',
+        nativeField: 'control_behavior.circuit_condition',
         modes: ['typed'],
         evidence: { status: 'verified', value: false, sourceIds: ['native-review-v1'] },
       },

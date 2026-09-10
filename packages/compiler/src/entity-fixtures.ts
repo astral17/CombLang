@@ -81,7 +81,16 @@ export const syntheticSharedTwoColorEntityProfile: EntityProfile = deepFreeze({
       allowedLanes: [lane('shared-red'), lane('shared-green')],
     },
   ],
-  configurationRules: [],
+  configurationRules: [
+    {
+      key: 'shared-circuit-condition' as EntityProfile['configurationRules'][number]['key'],
+      kind: 'native-single-condition',
+      feature: feature('read'),
+      nativeField: 'control_behavior.circuit_condition',
+      modes: ['typed'],
+      evidence: { status: 'unknown' },
+    },
+  ],
   defaultReadProjection: {
     feature: feature('read'),
     connector: connector('shared'),

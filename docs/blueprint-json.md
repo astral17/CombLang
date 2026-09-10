@@ -44,6 +44,17 @@ The returned object has the normal top-level shape:
 - producers with `.at(x, y, direction?)` use their explicit Factorio position and a direction resolved from a numeric constant or TypeScript enum value;
 - remaining entities are placed in one deterministic horizontal row.
 
+The internal Entity v3 preview also lowers a trusted physical typed
+`native-single-condition` configuration to the existing Entity's
+`control_behavior.circuit_condition`. It emits the resolved concrete Signal,
+signed int32 constant, Factorio comparator spelling, and selected red/green
+input mask. Raw Entity configuration remains an explicit `BP1001` preview
+failure; the typed path is synthetic-only until reviewed non-synthetic evidence
+and native import fixtures exist. The deprecated opaque v3 typed/payload
+envelope is accepted through replay as a compatibility snapshot but is also an
+explicit `BP1001` preview failure. The profile-free physical boundary rejects
+malformed or forged typed fields before emission.
+
 The generator emits plain JSON only. It does not prepend the exchange-string version byte, deflate, or base64-encode the result.
 
 Nested Decider conditions are lowered to OR-connected groups of AND comparisons.
@@ -70,6 +81,7 @@ This is an early preview rather than the Phase 8 codec:
 - the generator does not import existing blueprints;
 - nested condition-group compatibility is deferred to the Phase 8 codec;
 - entity defaults and schema details will be tightened against Factorio import tests;
+- raw Entity native payloads and verified typed Entity import/export remain pending;
 - omission/defaulting rules outside the implemented default-item `Signal(name)` case still need captured import/export conformance fixtures;
 - constant combinators currently export one default section; multiple sections, groups, section multipliers/active state, and entity-wide `is_on` await the Phase 7 exact Constant model and fixtures;
 - source Networks without a physical producing endpoint cannot create an external blueprint connection by themselves.

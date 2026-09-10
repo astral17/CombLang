@@ -10,6 +10,7 @@ import {
   syntheticZeroPortEntityProfile,
 } from '@comblang/compiler/entity-fixtures';
 import type {
+  EntityBehaviorKey,
   EntityConnectorKey,
   EntityLaneKey,
   EntityProfile,
@@ -55,6 +56,20 @@ function entityFor(profile: EntityProfile = syntheticZeroPortEntityProfile): Ent
 
 function jsonCopy(value: unknown): any {
   return JSON.parse(JSON.stringify(value));
+}
+
+function typedConfiguration() {
+  return {
+    mode: 'typed' as const,
+    rule: 'shared-circuit-condition' as EntityBehaviorKey,
+    lanes: ['shared-red' as EntityLaneKey],
+    condition: {
+      kind: 'compare-signal-constant' as const,
+      signal: { type: 'virtual' as const, name: 'signal-A' },
+      comparator: '>' as const,
+      constant: 1,
+    },
+  };
 }
 
 function planFor(
@@ -154,6 +169,68 @@ describe('v3 Entity plan validation and v2 migration', () => {
       },
     ];
     expect(validateEntityDirectPlan(plan, context).diagnostics).toEqual([]);
+  });
+
+  test('canonicalizes typed configuration during replay validation', () => {
+    const context = contextFor(syntheticSharedTwoColorEntityProfile);
+    const plan = planFor(context, {
+      ...entityFor(syntheticSharedTwoColorEntityProfile),
+      configuration: typedConfiguration(),
+    });
+    const result = validateEntityDirectPlan(plan, context);
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.value?.plan.entities[0]?.configuration).toEqual({
+      mode: 'typed',
+      rule: 'shared-circuit-condition',
+      lanes: ['shared-red'],
+      condition: {
+        kind: 'compare-signal-constant',
+        signal: { type: 'virtual', name: 'signal-A' },
+        comparator: '>',
+        constant: 1,
+      },
+    });
+  });
+
+  test('accepts the deprecated opaque typed v3 payload during replay', () => {
+    const context = contextFor(syntheticSharedTwoColorEntityProfile);
+    const result = validateEntityDirectPlan(
+      planFor(context, {
+        ...entityFor(syntheticSharedTwoColorEntityProfile),
+        configuration: { mode: 'typed', payload: { legacy: true } },
+      }),
+      context,
+    );
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.value?.plan.entities[0]?.configuration).toEqual({
+      mode: 'typed',
+      payload: { legacy: true },
+    });
+  });
+
+  test('rejects non-synthetic typed configuration without verified positive evidence', () => {
+    const providerProfile = {
+      ...structuredClone(syntheticSharedTwoColorEntityProfile),
+      synthetic: false,
+    };
+    const context = createTrustedEntityReplayContext({
+      database: providerProfile.ref.database,
+      source: 'provider',
+      evidenceIdentity: 'provider-evidence-v1',
+      policyIdentity: 'provider-policy-v1',
+      profiles: [providerProfile],
+    });
+    const result = validateEntityDirectPlan(
+      planFor(context, { ...entityFor(providerProfile), configuration: typedConfiguration() }),
+      context,
+    );
+
+    expect(result.diagnostics[0]).toMatchObject({
+      code: 'RT3003',
+      message: expect.stringContaining('verified positive evidence'),
+    });
   });
 
   test('rejects missing binding direction and provenance at their exact paths', () => {

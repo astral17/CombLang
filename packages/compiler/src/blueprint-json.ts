@@ -1,7 +1,21 @@
+import type { SignalId } from '@comblang/factorio';
 import type { NetworkId, ProducerId } from '@comblang/shared';
 
 import { lowerNativeBlueprintConfig, BlueprintJsonError } from './blueprint-native-config.js';
-import type { EntityPhysicalRecord, NativeCircuitIrV3 } from './entity.js';
+import {
+  canonicalizeEntityNativeSingleCondition,
+  EntityConfigurationError,
+} from './entity-configuration.js';
+import type {
+  EntityBehaviorKey,
+  EntityConnectorKey,
+  EntityFeatureKey,
+  EntityLaneKey,
+  EntityNativeField,
+  EntityPhysicalRecord,
+  EntityPhysicalTypedConfiguration,
+  NativeCircuitIrV3,
+} from './entity.js';
 
 import type { CircuitColor, CircuitProducerNode, NativeCircuitIr } from './ir.js';
 
@@ -28,6 +42,168 @@ export interface BlueprintJsonOptions {
 }
 
 const FACTORIO_2_0_VERSION = 562_949_953_421_312;
+
+function signalJson(signal: SignalId): Record<string, string> {
+  return {
+    ...(signal.type === 'item' ? {} : { type: signal.type }),
+    name: signal.name,
+    ...(signal.quality === undefined ? {} : { quality: signal.quality }),
+  };
+}
+
+type BlueprintFail = (message: string) => never;
+type DataRecord = Record<string, unknown>;
+
+function dataRecord(value: unknown, path: string, fail: BlueprintFail): DataRecord {
+  if (value === null || typeof value !== 'object' || Array.isArray(value))
+    fail(`${path}: expected a plain data record.`);
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null)
+    fail(`${path}: expected a plain object or null-prototype record.`);
+  const output = Object.create(null) as DataRecord;
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string') fail(`${path}[${String(key)}]: symbol keys are not allowed.`);
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+    if (!('value' in descriptor)) fail(`${path}.${key}: accessors are not allowed.`);
+    output[key] = descriptor.value;
+  }
+  return output;
+}
+
+function dataArray(value: unknown, path: string, fail: BlueprintFail): readonly unknown[] {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype)
+    fail(`${path}: expected a plain array.`);
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length');
+  if (lengthDescriptor === undefined || !('value' in lengthDescriptor))
+    fail(`${path}.length: array length must be data-only.`);
+  const length = lengthDescriptor.value;
+  if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0)
+    fail(`${path}.length: array length must be a non-negative safe integer.`);
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string') fail(`${path}[${String(key)}]: symbol keys are not allowed.`);
+    if (key === 'length') continue;
+    if (!/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= length)
+      fail(`${path}.${key}: unknown array field.`);
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+    if (!('value' in descriptor)) fail(`${path}[${key}]: accessors are not allowed.`);
+  }
+  const output: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor === undefined) fail(`${path}[${index}]: array holes are not allowed.`);
+    if (!('value' in descriptor)) fail(`${path}[${index}]: accessors are not allowed.`);
+    output.push(descriptor.value);
+  }
+  return output;
+}
+
+function exactKeys(
+  record: DataRecord,
+  allowed: readonly string[],
+  path: string,
+  fail: BlueprintFail,
+): void {
+  const allowedSet = new Set(allowed);
+  for (const key of Object.keys(record)) {
+    if (!allowedSet.has(key)) fail(`${path}.${key}: unknown physical Entity configuration field.`);
+  }
+}
+
+function identifier(value: unknown, path: string, fail: BlueprintFail): string {
+  if (
+    typeof value !== 'string' ||
+    value.length === 0 ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)
+  )
+    fail(`${path}: expected a non-empty ASCII identifier.`);
+  return value;
+}
+
+function validateEntityTypedConfiguration(
+  value: unknown,
+  fail: BlueprintFail,
+): EntityPhysicalTypedConfiguration {
+  const path = '$.configuration';
+  const record = dataRecord(value, path, fail);
+  exactKeys(
+    record,
+    ['mode', 'rule', 'feature', 'nativeField', 'connector', 'lanes', 'laneMask', 'condition'],
+    path,
+    fail,
+  );
+  if (record.mode !== 'typed') fail(`${path}.mode: expected typed configuration.`);
+  const rule = identifier(record.rule, `${path}.rule`, fail) as EntityBehaviorKey;
+  const feature = identifier(record.feature, `${path}.feature`, fail) as EntityFeatureKey;
+  const nativeField = record.nativeField;
+  if (nativeField !== 'control_behavior.circuit_condition')
+    fail(`${path}.nativeField: unsupported native Entity configuration field.`);
+  const connector = identifier(record.connector, `${path}.connector`, fail) as EntityConnectorKey;
+  const lanes = dataArray(record.lanes, `${path}.lanes`, fail).map(
+    (lane, index) => identifier(lane, `${path}.lanes[${index}]`, fail) as EntityLaneKey,
+  );
+  if (lanes.length === 0) fail(`${path}.lanes: at least one lane must be selected.`);
+  const seenLanes = new Set<EntityLaneKey>();
+  for (const lane of lanes) {
+    if (seenLanes.has(lane)) fail(`${path}.lanes: duplicate lane ${JSON.stringify(lane)}.`);
+    seenLanes.add(lane);
+  }
+
+  const mask = dataRecord(record.laneMask, `${path}.laneMask`, fail);
+  exactKeys(mask, ['red', 'green'], `${path}.laneMask`, fail);
+  if (!('red' in mask)) fail(`${path}.laneMask.red: field is required.`);
+  if (!('green' in mask)) fail(`${path}.laneMask.green: field is required.`);
+  if (typeof mask.red !== 'boolean') fail(`${path}.laneMask.red: expected a boolean.`);
+  if (typeof mask.green !== 'boolean') fail(`${path}.laneMask.green: expected a boolean.`);
+  if (!mask.red && !mask.green) fail(`${path}.laneMask: at least one color must be selected.`);
+
+  const conditionRecord = dataRecord(record.condition, `${path}.condition`, fail);
+  let condition;
+  try {
+    condition = canonicalizeEntityNativeSingleCondition(conditionRecord, `${path}.condition`);
+  } catch (error) {
+    if (error instanceof EntityConfigurationError) fail(`${error.path}: ${error.detail}`);
+    fail(`${path}.condition: invalid native Entity condition.`);
+  }
+  if (!Object.is(conditionRecord.constant, condition.constant)) {
+    fail(`${path}.condition.constant: physical constant is not normalized to signed int32.`);
+  }
+
+  return Object.freeze({
+    mode: 'typed',
+    rule,
+    feature,
+    nativeField: nativeField as EntityNativeField,
+    connector,
+    lanes: Object.freeze(lanes),
+    laneMask: Object.freeze({ red: mask.red as boolean, green: mask.green as boolean }),
+    condition,
+  });
+}
+
+function comparatorJson(
+  comparator: EntityPhysicalTypedConfiguration['condition']['comparator'],
+): string {
+  return comparator === '>='
+    ? '≥'
+    : comparator === '<='
+      ? '≤'
+      : comparator === '!='
+        ? '≠'
+        : comparator;
+}
+
+function entityControlBehavior(
+  configuration: EntityPhysicalTypedConfiguration,
+): Record<string, unknown> {
+  return {
+    circuit_condition: {
+      first_signal: signalJson(configuration.condition.signal),
+      first_signal_networks: { ...configuration.laneMask },
+      comparator: comparatorJson(configuration.condition.comparator),
+      constant: configuration.condition.constant,
+    },
+  };
+}
 
 interface WireEndpoint {
   readonly entity: number;
@@ -108,6 +284,7 @@ function generatePreview(
   const sortedEntities = [...physicalEntities].sort((a, b) => a.ordinal - b.ordinal);
   const ids = new Set<string>();
   const ordinals = new Set<number>();
+  const typedConfigurations = new Map<string, EntityPhysicalTypedConfiguration>();
   for (const [index, entity] of sortedEntities.entries()) {
     const fail = (message: string): never => {
       throw new BlueprintJsonError(message, entity.provenance.source);
@@ -116,8 +293,16 @@ function generatePreview(
       fail('Duplicate physical Entity identity or ordinal.');
     ids.add(entity.id);
     ordinals.add(entity.ordinal);
-    if (entity.configuration !== undefined)
-      fail('Raw/typed Entity configuration preview lowering is unsupported.');
+    if (entity.configuration !== undefined) {
+      const configuration = dataRecord(entity.configuration, '$.configuration', fail);
+      if (configuration.mode === 'raw')
+        fail('Raw Entity configuration preview lowering is unsupported.');
+      if (configuration.mode !== 'typed')
+        fail('$.configuration.mode: unsupported configuration mode.');
+      if ('payload' in configuration)
+        fail('Raw/typed Entity configuration preview lowering is unsupported.');
+      typedConfigurations.set(entity.id, validateEntityTypedConfiguration(configuration, fail));
+    }
     if (
       !/^[^:\s]+$/.test(entity.prototypeName) ||
       entity.profile.prototypeKey !== `entity:${entity.prototypeName}`
@@ -170,6 +355,7 @@ function generatePreview(
   }
   let automaticIndex = ir.producers.length;
   for (const [index, entity] of sortedEntities.entries()) {
+    const typedConfiguration = typedConfigurations.get(entity.id);
     let position = entity.placement
       ? { x: entity.placement.x, y: entity.placement.y }
       : { x: automaticIndex * 2 + 0.5, y: 0.5 };
@@ -182,6 +368,9 @@ function generatePreview(
     entities.push({
       entity_number: ir.producers.length + index + 1,
       name: entity.prototypeName,
+      ...(typedConfiguration !== undefined
+        ? { control_behavior: entityControlBehavior(typedConfiguration) }
+        : {}),
       position,
       direction: entity.placement?.direction ?? 4,
     });
