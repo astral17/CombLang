@@ -18,22 +18,21 @@ Phase 5.5 provides `packages/prototypes` with these responsibilities:
 - environment metadata and a deterministic content identity;
 - immutable LuaPrototypes-shaped tables, derived indexes, and query helpers;
 - JSON loading for Node and browser consumers;
-- tiny synthetic fixtures and a deterministic generated-asset boundary with a
+- small contract fixtures and a deterministic generated-asset boundary with a
   provenance manifest.
 
-The implemented foundation now also includes an offline native-dump normalizer,
+The implemented foundation now also includes an offline static-dump normalizer,
 an identity-bound generated asset plus provenance manifest, and explicit CLI
 database selection with optional identity pins. Versioned CLI project profiles,
 browser-local file selection and identity-keyed IndexedDB persistence are
 implemented. The checked-in Space Age structural asset is available for explicit
 loading and offline integrity checks, and the browser uses it as a lazy first-run
-profile. Native conformance and the evidence-complete release layer remain
-subsequent Phase 5.5 slices.
+profile. Runtime-only capability fields remain unknown and belong to later Phase
+6/7 feature slices; they are not a Phase 5.5 release prerequisite.
 
-The raw normalizer is transitional, not an authoritative runtime snapshot. See
-[Prototype truth sources and audit follow-up](prototype-truth-sources.md) for the
-raw/runtime/behavior split, known footprint and role-validation gaps, and the
-remaining native conformance gate.
+The raw normalizer is transitional, not a live game snapshot. See [Prototype truth
+sources and audit follow-up](prototype-truth-sources.md) for the static-source split,
+known footprint and role-validation gaps, and the later capability boundary.
 
 The compiler, language service, typed-object schemas, layout, and blueprint
 backend receive a provider through an explicit compilation environment. They do
@@ -41,7 +40,7 @@ not reach into a giant JSON object or a global registry. The simulator continues
 to consume already-lowered circuit devices and buses rather than prototype data.
 
 The public `loadPrototypeInputJson()` boundary accepts either normalized v1 JSON
-or a native `data.raw` dump. A raw dump must be accompanied by explicit metadata
+or a Factorio `data.raw` dump. A raw dump must be accompanied by explicit metadata
 because its JSON does not identify the Factorio version, mod versions, enabled
 expansions, or startup settings. The loader parses the source once, chooses the
 format conservatively, and does not retry a recognized malformed format as another
@@ -104,17 +103,35 @@ fluids. Entity data should expose capabilities needed by CombLang instead of
 copying unstable raw prototype table layouts. Icons and localization are
 separate optional assets, not part of the core identity.
 
-## Factorio-side export
+## Static asset generation
 
-The currently implemented raw extraction path is Factorio's own command-line
-`factorio.exe --dump-data`. It loads the selected game/mod/startup-settings data
-stage and writes the raw prototype dump under `script-output`. A
-separate offline CombLang converter can then select and normalize the small v1
-schema without loading raw prototype JSON in the compiler. This is data-stage
-resolution, not the runtime `LuaPrototypes` view. The former runtime-wide exporter
-was removed after it produced no required structural facts beyond final `data.raw`;
-an optional narrow runtime cross-check remains appropriate only if a concrete
-divergence is found. Reviewed behavior fixtures remain a separate evidence layer.
+The primary structural authority for a selected Factorio installation and modpack is
+Factorio's official data-stage command:
+
+```text
+factorio.exe --dump-data
+```
+
+Run it with the desired mods and startup settings enabled. Factorio writes the raw
+prototype dump under its `script-output` directory. Copy that output out as
+`data-raw-dump.json`, and record honest metadata from the same environment. This is
+an official Factorio executable invoked by a user or maintainer; no CombLang code,
+mod, scenario, or runtime collector runs inside Factorio.
+
+A separate offline CombLang converter selects and normalizes the small v1 schema
+without loading raw prototype JSON in the compiler. This is static data resolution,
+not a live game or runtime `LuaPrototypes` view. The former runtime-wide exporter was
+removed after it produced no required structural facts beyond final `data.raw`.
+Runtime-only capability fields remain unknown; later feature slices may add an
+identity-bound reviewed source without changing this provider boundary.
+
+The checked-in Base + Space Age profile is ready immediately: the browser loads its
+integrity-checked generated pair lazily on first run. For a custom modpack, the user
+can either select `data-raw-dump.json` and its metadata JSON directly in the browser,
+where parsing and normalization happen in the Worker, or create a normalized profile
+with the CLI and select that one file. Checked-in asset generation remains a
+repository-maintainer workflow, but custom dump generation/import is a supported user
+workflow; the authors cannot prebuild a profile for every modpack.
 
 The command is:
 
@@ -365,22 +382,19 @@ still separate from successful structural validation.
 The raw entity records expose connector geometry and wire distance, but not the
 normalized behavior-level flags in `EntityCircuitCapabilities`. The converter
 therefore emits entities and crafting data while setting
-`entityCircuitCapabilities: false`; a later Lua probe or verified per-type rule
-table must supply those facts. It never infers them merely from the presence of
-a connector.
+`entityCircuitCapabilities: false`; those runtime-only fields remain unknown. A
+later Phase 6/7 feature slice may define an accepted static or reviewed source for
+them. The converter never infers them merely from the presence of a connector.
 
-This path still requires native behavior conformance verification. The pinned
-Factorio 2.1.17 runtime API confirms that `LuaPrototypes` exposes corresponding
-read-only dictionaries. A narrow runtime probe may be introduced for a concrete
-reproducible discrepancy, but the removed prototype-wide exporter is not a
-prerequisite for the structural database. Raw extraction itself does not become
-the public compiler contract.
+The pinned Factorio 2.1.17 API descriptions document the available prototype
+shapes, but they do not turn runtime-only behavior into static facts. The removed
+prototype-wide exporter is not a prerequisite for the structural database, and raw
+extraction itself does not become the public compiler contract.
 
-Extraction details still need conformance fixtures against base, Space Age, and
-at least one mod that modifies a vanilla recipe or entity. The architecture does
-not depend on one extraction implementation: a future Factorio dump/API change
-may replace an extraction implementation without changing
-`PrototypeProvider` consumers.
+Extraction details remain covered by checked-in static fixtures for base, Space Age,
+and modded data where available. The architecture does not depend on one extraction
+implementation: a future dump/API change may replace an extraction implementation
+without changing `PrototypeProvider` consumers.
 
 ### Partial circuit coverage and supplements
 
@@ -453,17 +467,10 @@ is not an input claim in the supplement. Recipe/item data and environment metada
 are untouched. Validation happens before the CLI opens the output for writing.
 
 The identity check prevents accidental cross-database mixing; it does not certify
-the truth of manually supplied assertions. A read-only observation collector now
-ships under `tools/comblang-circuit-probe_0.1.0`, but it has not yet been executed in
-Factorio and is not a capability inference probe or verified table. The local
-2.1.17 runtime API provides
-`LuaEntity.get_control_behavior()` / `get_or_create_control_behavior()` and distinct
-control-behavior classes, but `LuaEntityPrototype` does not directly expose the
-nine normalized booleans. A future fixture/probe must test the corresponding native
-behavior on actual entities, including type-specific restrictions and modded
-overrides. A missing property or failed entity creation must remain unknown,
-not become a negative capability result. Native probes should run in a disposable
-test save, not mutate the user's working save.
+the truth of manually supplied assertions. Runtime-only capability fields remain
+unknown when the static database does not contain them. A later feature slice may
+add an identity-bound reviewed source, but the shipped browser never requires a
+live game connection or a user-collected runtime artifact.
 
 ### Identity-bound evidence manifests
 
@@ -490,77 +497,6 @@ not converted to unknown or omitted. The checked-in
 [`evidence.synthetic.json`](../examples/prototype-stack/evidence.synthetic.json)
 is a format-only example bound to the synthetic prototype profile. It contains
 no reviewed native evidence and proves no Factorio behavior.
-
-### Collecting raw native observations
-
-The [collector instructions](../tools/comblang-circuit-probe_0.1.0/README.md) describe
-installation into a disposable test environment and the explicit player command
-`/comblang-probe [case label]`. It reads only the selected existing entity, never
-creates a missing control behavior, and appends to
-`script-output/comblang/circuit-observations.jsonl` for the invoking player.
-
-```powershell
-npm run cli -- prototypes observations --json path/to/circuit-observations.jsonl
-```
-
-The library entry point is `parseCircuitObservationsJsonl(source)`. It returns
-immutable instance snapshots with mod versions (including the collector), startup
-settings, entity identity/position, and individual getter outcomes. JSON output
-uses `mode: "observations-only"` and contains no derived capability coverage.
-Records from different environments or repeated samples are preserved independently.
-
-A getter's false value, nil result, exception, or unexpected value type remain
-distinct states. A successful getter does not prove native setter/wire behavior;
-absence does not prove lack of support. The reader accepts Factorio's empty-table
-sentinel where a list may be empty and keeps decimal tick/unit-number strings
-without converting them to JavaScript numbers. It rejects malformed/truncated
-JSONL with line and field diagnostics. This schema is deliberately separate from
-`EntityCircuitSupplement`; no automatic observation-to-capability conversion exists.
-
-Collector API/static package checks, synthetic JSONL tests and offline comparison
-of declared environment values are implemented. Native collector execution,
-behavior-level assertions and base/Space Age/modded conformance remain pending. Enabling the
-collector changes the active mod set; that fact is retained rather than silently
-removed when comparing evidence to a normalized environment.
-
-### Comparing observation provenance to a database
-
-```powershell
-npm run cli -- prototypes compare-observations --json prototypes.json path/to/circuit-observations.jsonl
-```
-
-The library equivalent is `compareCircuitObservationEnvironment(database, jsonl)`.
-The report includes the validated database identity, per-sample original JSONL
-line/label/entity, issues with field paths, and one of these statuses:
-
-- `match`: Factorio version, complete active mod name/version set, captured startup
-  setting name/value set and the observed entity key/type agree with the database.
-- `mismatch`: at least one compared fact differs. Missing/extra mods and settings
-  count as differences. The collector mod is not automatically excluded.
-- `unverified`: no compared fact differs, but the database lacks startup setting
-  values or declared entity coverage. A legacy settings identity label cannot
-  turn this into a match.
-
-Overall mismatch takes precedence over unverified, which takes precedence over
-match; samples are never discarded. CLI exits 0 for match, 1 for mismatch or
-unverified, and 2 for malformed input/I/O/usage errors. The command is read-only.
-The ordinary `observations` command still only validates/prints raw snapshots.
-
-Startup setting entries are sorted by name in normalized databases and copied/
-frozen with their values; explicit empty snapshots differ from omission in the
-database identity. Comparison ignores entry order and color-object property order,
-but preserves exact representations: false is not zero, omitted color channels
-are not inserted, and tuple/byte/normalized color representations are not silently
-equated. Regeneration with the new generator or adding a snapshot changes identity
-and may require a deliberate project-pin update. Existing v1 databases without
-snapshots keep loading and retain their identity, but cannot fully verify settings.
-
-`mode: "environment-comparison-only"` is not native behavior certification or
-proof that a raw dump was generated from the declared metadata. The observation
-format has no separate expansion-label list or raw-dump content hash, so those
-are not compared. Actual enabled expansion mods are included in the exact mod-set
-comparison. Getter outcomes do not affect provenance matching or produce circuit
-capability flags. Native case verification still requires reviewed game evidence.
 
 ## Loading and identity
 

@@ -1,7 +1,6 @@
 export * from './fixtures.js';
 export * from './canonical.js';
 export * from './circuit-supplement.js';
-export * from './circuit-observations.js';
 export {
   PrototypeEvidenceError,
   prototypeCircuitFactFields,
@@ -21,7 +20,6 @@ export type {
 export * from './evidence-loader.js';
 export { prototypeEvidenceIdentity } from './evidence-index.js';
 export type { PrototypeCircuitEvidenceQuery, PrototypeEvidenceIndex } from './evidence-index.js';
-export * from './observation-environment.js';
 export * from './factorio-dump.js';
 export * from './factorio-prototype-catalog.js';
 export * from './generated-asset.js';

@@ -92,9 +92,25 @@ is not required for compiler/runtime validation or test execution.
 
 Runnable three-test examples are provided for a
 [feedback MemoCell and a synthetic external object](phase-5-acceptance.md).
-They need no downloaded prototype database or running Factorio instance.
+They need no external game data or backend service.
 
-To normalize Factorio's native prototype dump without starting the game again:
+The browser has a bundled Base + Space Age profile. It loads that profile lazily on
+first run, verifies its database and manifest, and keeps ordinary circuits available
+if the profile is unavailable or disabled.
+
+For a custom modpack, run the official Factorio data-stage command with the desired
+mods and startup settings:
+
+```text
+factorio.exe --dump-data
+```
+
+Take the resulting raw dump from Factorio's `script-output` directory and prepare an
+honest `metadata.json` for that same environment. In the browser, choose **Load
+prototype JSON** and select the raw dump together with its metadata file; parsing and
+normalization happen in the Worker. Authors cannot prebuild every modpack profile.
+
+Alternatively, normalize the dump before browser use:
 
 ```sh
 npm run cli -- prototypes normalize data-raw-dump.json metadata.json prototypes.json
@@ -115,11 +131,10 @@ JSON includes the selected `prototypeEnvironment.identity` and capability covera
 Add `--prototype-identity "<reported identity>"` to reject a different database.
 Missing, invalid or mismatched profiles stop with exit code `2` before source
 execution; they never fall back to another profile. Browser file selection is
-available in the **Prototype environment** bar above Source; the bundled first-run
-profile remains pending. Select one normalized JSON file, or a raw dump together
-with its `metadata.json` companion; raw parsing and normalization happen in the
-Worker. Valid data is cached in IndexedDB and restored on tab reload with its
-identity pin. **Disable**
+available in the **Prototype environment** bar above Source. Select one normalized
+JSON file, or a raw dump together with its `metadata.json` companion; raw parsing and
+normalization happen in the Worker. Valid custom data is cached in IndexedDB and
+restored on tab reload with its identity pin. **Disable**
 clears only this tab's selection, without changing code or tests.
 
 For an offline synthetic smoke test, use

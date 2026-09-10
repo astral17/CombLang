@@ -25,7 +25,7 @@ export function subtractInt32(left: CircuitValue, right: CircuitValue): CircuitV
 }
 
 export function divideInt32(left: CircuitValue, right: CircuitValue): CircuitValue {
-  // Kept explicit so an in-game conformance fixture can lock this edge case independently.
+  // Kept explicit so a future compatibility fixture can lock this edge case independently.
   if (right === 0) {
     return 0;
   }
@@ -33,7 +33,7 @@ export function divideInt32(left: CircuitValue, right: CircuitValue): CircuitVal
 }
 
 export function moduloInt32(left: CircuitValue, right: CircuitValue): CircuitValue {
-  // Kept explicit so an in-game conformance fixture can lock this edge case independently.
+  // Kept explicit so a future compatibility fixture can lock this edge case independently.
   if (right === 0) {
     return 0;
   }

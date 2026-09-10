@@ -264,29 +264,12 @@ code 2 from `prototypes evidence --json` on validation failure:
 | `PE1005` | source authority, entity, circuit record, or circuit field cannot support the claim  |
 | `PE1006` | claimed boolean differs from the selected database's stored boolean                  |
 
-The loader accepts no path or URL authority metadata. Raw/runtime sources may be
-structural evidence; only reviewed native behavior sources can verify circuit
-claims. A valid manifest may contain no claim. Query results keep missing facts as
+The loader accepts no path or URL authority metadata. Static sources may support
+structural evidence; only reviewed capability sources can verify a circuit claim.
+A valid manifest may contain no claim. Query results keep missing facts as
 `unknown` and stored facts without a reviewed claim as `unverified`; neither is a
-native conformance result. The repository's synthetic evidence example proves only
-the manifest format, not Factorio behavior, and no reviewed native evidence is
-checked in yet.
-
-Raw circuit observation JSONL uses `CircuitObservationError` / `PO1001` for
-malformed JSON, unsupported observation schema/kind, invalid fields, inconsistent
-mod-version metadata, duplicate named entries or contradictory observation states.
-Errors include a one-based JSONL `line` and structural `path`. Blank lines are
-allowed, but empty captures and truncated records fail. `prototypes observations
---json` returns these diagnostics with exit code 2. Getter failures stored inside
-otherwise valid observations are data, not parse errors or negative capabilities.
-
-`prototypes compare-observations --json` reports valid-but-different provenance as
-`status: "mismatch"`, and missing database startup setting snapshots/entity coverage
-as `"unverified"`; both return exit code 1 rather than being syntax errors. Issues
-carry a `kind`, structural `path`, and message under each sample's original JSONL
-line. Malformed captures still use `PO1001` / exit 2; malformed normalized startup
-settings use `PT1001` (or `PT1003` for duplicate names). A `match` returns exit 0
-but certifies only the explicitly compared metadata, not game behavior.
+runtime conformance result. The repository's synthetic evidence example proves only
+the manifest format, and no reviewed capability evidence is checked in yet.
 
 ## CLI inputs and prototype selection
 

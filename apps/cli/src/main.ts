@@ -21,9 +21,6 @@ import { parseProject } from '@comblang/language';
 import {
   applyEntityCircuitSupplement,
   CircuitSupplementError,
-  CircuitObservationError,
-  parseCircuitObservationsJsonl,
-  compareCircuitObservationEnvironment,
   FactorioDumpError,
   generatePrototypeAsset,
   loadPrototypeAsset,
@@ -61,11 +58,9 @@ Usage:
   factorio-dsl prototypes asset generate [--check] <data-raw-dump.json> <metadata.json> <output.json>
   factorio-dsl prototypes asset verify <database.json> <manifest.json>
   factorio-dsl prototypes supplement [--json] <database.json> <circuit.json> <output.json>
-  factorio-dsl prototypes observations [--json] <circuit-observations.jsonl>
-  factorio-dsl prototypes compare-observations [--json] <database.json> <circuit-observations.jsonl>
   factorio-dsl prototypes evidence [--json] <database.json> <evidence.json>
 
-Checks circuits, executes browser/Node-neutral JavaScript test files, and processes prototype dumps, circuit supplements, raw observations, or evidence manifests.`;
+Checks circuits, executes browser/Node-neutral JavaScript test files, and processes prototype dumps, circuit supplements, or evidence manifests.`;
 
 interface LoadedSource {
   readonly path: string;
@@ -445,57 +440,6 @@ async function supplementPrototypes(fileNames: readonly string[], json: boolean)
   return 0;
 }
 
-async function inspectCircuitObservations(
-  fileNames: readonly string[],
-  json: boolean,
-): Promise<number> {
-  if (fileNames.length !== 2) {
-    console.error(usage);
-    return 2;
-  }
-  const observations = parseCircuitObservationsJsonl(
-    await readFile(resolve(fileNames[1]!), 'utf8'),
-  );
-  if (json) console.log(JSON.stringify({ mode: 'observations-only', observations }, null, 2));
-  else {
-    console.log(
-      `${observations.length} observation(s); no prototype capability assertions inferred.`,
-    );
-    for (const sample of observations) {
-      const fields = sample.behavior.status === 'present' ? sample.behavior.fields : [];
-      console.log(
-        `${JSON.stringify(sample.label)} ${sample.entity.key} tick ${sample.tick}: behavior ${sample.behavior.status}; ${fields.filter(({ status }) => status === 'value').length} value(s), ${fields.filter(({ status }) => status === 'absent').length} absent, ${fields.filter(({ status }) => status === 'error' || status === 'unexpected-type').length} read failure(s).`,
-      );
-    }
-  }
-  return 0;
-}
-
-async function compareObservations(fileNames: readonly string[], json: boolean): Promise<number> {
-  if (fileNames.length !== 3) {
-    console.error(usage);
-    return 2;
-  }
-  const [baseSource, observations] = await Promise.all([
-    readFile(resolve(fileNames[1]!), 'utf8'),
-    readFile(resolve(fileNames[2]!), 'utf8'),
-  ]);
-  const { database } = await loadPrototypeDatabaseJson(baseSource);
-  const report = await compareCircuitObservationEnvironment(database, observations);
-  if (json) console.log(JSON.stringify(report, null, 2));
-  else {
-    console.log(`Observation environment: ${report.status}. Native behavior is not verified.`);
-    for (const sample of report.samples) {
-      console.log(
-        `line ${sample.line} ${sample.entityKey} ${JSON.stringify(sample.label)}: ${sample.status}`,
-      );
-      for (const issue of sample.issues)
-        console.log(`  ${issue.kind} ${issue.path}: ${issue.message}`);
-    }
-  }
-  return report.status === 'match' ? 0 : 1;
-}
-
 async function inspectPrototypeEvidence(
   fileNames: readonly string[],
   json: boolean,
@@ -558,8 +502,6 @@ export async function run(
   try {
     if (command === 'prototypes') {
       const files = rest.filter((argument) => argument !== '--json');
-      if (files[0] === 'observations') return await inspectCircuitObservations(files, json);
-      if (files[0] === 'compare-observations') return await compareObservations(files, json);
       if (files[0] === 'evidence') return await inspectPrototypeEvidence(files, json);
       if (files[0] === 'asset') {
         const checkAsset = files.includes('--check');
@@ -576,9 +518,10 @@ export async function run(
         console.error(usage);
         return 2;
       }
-      return files[0] === 'supplement'
-        ? await supplementPrototypes(files, json)
-        : await normalizePrototypes(files);
+      if (files[0] === 'supplement') return await supplementPrototypes(files, json);
+      if (files[0] === 'normalize') return await normalizePrototypes(files);
+      console.error(usage);
+      return 2;
     }
     const parsedOptions = parseCompilationOptions(rest);
     json = parsedOptions.json;
@@ -628,7 +571,6 @@ export async function run(
       const diagnostic = {
         code:
           error instanceof CircuitSupplementError ||
-          error instanceof CircuitObservationError ||
           error instanceof PrototypeAssetError ||
           error instanceof PrototypeEvidenceError ||
           error instanceof PrototypeInputError ||
@@ -639,7 +581,6 @@ export async function run(
         severity: 'error',
         message,
         ...(error instanceof CircuitSupplementError ||
-        error instanceof CircuitObservationError ||
         error instanceof PrototypeAssetError ||
         error instanceof PrototypeEvidenceError ||
         error instanceof PrototypeInputError ||
@@ -647,7 +588,6 @@ export async function run(
         error instanceof FactorioDumpError
           ? { path: error.path }
           : {}),
-        ...(error instanceof CircuitObservationError ? { line: error.line } : {}),
       };
       if (json) console.log(JSON.stringify({ diagnostics: [diagnostic] }, null, 2));
       else console.error(`Unable to ${action}: ${diagnostic.code}: ${message}`);

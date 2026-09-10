@@ -1,6 +1,6 @@
 # CombLang
 
-CombLang is an early implementation of a TypeScript-shaped structural HDL for Factorio 2.1 circuit networks. The checked-in design and implementation notes live in [`docs/architecture.md`](docs/architecture.md).
+CombLang is an early browser-only implementation of a TypeScript-shaped structural HDL for Factorio 2.1 circuit networks. It has no backend or project-owned Factorio component. The checked-in design and implementation notes live in [`docs/architecture.md`](docs/architecture.md).
 
 The current repository implements the Phase 3 source compiler, the complete Phase 4 ownership/multi-network surface, and its 4.5/4.6 boundary-hardening passes grown from the original Phase 0 skeleton:
 
@@ -29,27 +29,28 @@ The current repository implements the Phase 3 source compiler, the complete Phas
 - [x] Phase 3 — executed source compiler: conservative semantic checks, DSL-sensitive JavaScript transformation, runtime elaboration, provenance, color solving, CLI validation, and the browser workbench.
 - [x] Phase 4 — ownership, multi-network syntax, eager Combinator identity/output lanes, semantic/runtime boundary hardening, opaque session values, and complete CLI/browser/EG/NCIR acceptance coverage.
 - [x] Phase 5 — deterministic testbench, external-world adapters, Unknown propagation, traces, debug hierarchy, CLI/browser test results, and interactive circuit timelines.
-- [ ] Phase 5.5 — external prototype environment foundation
+- [x] Phase 5.5 — external prototype environment foundation
   - [x] Complete the compiler/runtime foundation: shared diagnostics and traversal, online color/replay validation, versioned immutable `prototypes.*`, explicit CLI/browser provider injection, project profiles, browser persistence, canonical Signal keys, ordered `CC` inputs, exact recipe component boundaries, and identity-bound evidence manifests.
-  - [x] Use final `factorio.exe --dump-data` as the structural authority and keep only the narrow read-only runtime behavior probe; repository code and tests do not depend on sibling Analysis data.
+  - [x] Use the official `factorio.exe --dump-data` output from the selected Factorio/modpack data stage as the structural authority; normalized artifacts are maintained separately from the browser runtime.
   - [x] Accept normalized prototype JSON or raw `data.raw` plus explicit metadata through the shared loader; retain catalog-recognized Entity records without fabricated footprints.
   - [x] Provide a deterministic raw-dump asset generator/check and identity-bound provenance manifest/loader, plus a checked-in confirmed Space Age structural asset; raw dumps are not parsed by runtime consumers.
   - [x] Load the checked-in Space Age structural asset lazily as the browser's integrity-checked first-run profile, while preserving explicit custom/disabled selection and offline shell resources.
-  - [ ] Finish the evidence-complete release layer: reviewed base/Space Age/modded circuit fixtures, exact capability profiles, and evidence-backed built-in profile claims.
+  - [x] Support custom modpack profiles: users may run the official `factorio.exe --dump-data` with their selected mods and startup settings, then load the raw dump plus honest metadata in the browser or normalize it with the existing CLI; no author can prebuild every modpack profile.
+  - [x] Close the Phase 5.5 release layer at its structural scope: reproducible normalization, identity/provenance/integrity, browser-first/custom/offline profiles, and Service Worker lifecycle. Runtime-only Entity capability fields remain unknown for later Phase 6/7 slices.
   - [x] Finish the production-browser Service Worker install/update/offline lifecycle gate with deterministic cache isolation and a real production-build install, waiting-worker update, controlled reload, and offline reload.
 - [ ] Phase 6 — universal persistent Factorio Entity handles with a generic modded fallback and typed facades.
   - [x] Complete prerequisites: ordered multi-form `CC(...)` inputs and transparent `Network`/`any`/union function parameters with explicit `Readonly`, `Ref`, and `Move` contracts retained.
-  - [ ] Introduce Direct Plan/EG/NCIR v3 contracts for physical Entity identity, connector profiles, raw configuration, provenance, and environment/evidence pins; retain a lossless producer-only v2 adapter.
-  - [ ] Implement nominal persistent Entity records, including zero-port objects, immutable raw snapshots, placement, aliases, and generation-scoped Network facets that cannot resurrect consumed authority.
-  - [ ] Bind explicit profile-declared connectors and color lanes without inventing feature-specific hardware, hidden unions, delays, or combinators; permit implicit projection only in an unambiguous read context.
-  - [ ] Revalidate Entity/profile/evidence constraints during canonical replay before allocation, then preserve physical objects independently from computations through IR and readable blueprint JSON.
+  - [x] Introduce Direct Plan/EG/NCIR v3 contracts for physical Entity identity, connector profiles, raw configuration, provenance, and environment/evidence pins; retain a lossless producer-only v2 adapter.
+  - [x] Implement nominal persistent Entity records, including zero-port objects, immutable raw snapshots, placement, aliases, and generation-scoped Network facets that cannot resurrect consumed authority.
+  - [x] Bind explicit profile-declared connectors and color lanes without inventing feature-specific hardware, hidden unions, delays, or combinators; permit implicit projection only in an unambiguous read context.
+  - [x] Revalidate Entity/profile/evidence constraints during canonical replay before allocation, then preserve physical objects independently from computations through IR and readable blueprint JSON.
   - [x] Reconstruct Entity debug entries and register one existing mock/model adapter per physical object per TestSession; do not claim automatic factory simulation.
   - [ ] Add one native single-comparison condition descriptor attached to the Entity's actual connector, with no hidden Decider and with raw/typed mode kept separate from evidence status.
   - [ ] Prove the generic vertical slice with synthetic zero-port, shared bidirectional, and ambiguous multi-connector profiles across source, replay, IR, blueprint, debug, and testbench boundaries.
   - [ ] Add fixture-backed typed facades in order: Lamp, Roboport, then `Constant(...)` as an Entity while `CC(...)` remains a Combinator and both share one physical implementation record.
   - [ ] Expand by schema families to logistics, belts, displays, train stops, filters, recipes, and transport settings; track implemented support separately from native-verified support.
 - [ ] Phase 7 — exact constructors and native-config stress: Arithmetic, full Decider normal/else output lists, duplicate outputs, `Everything`, Selector, raw entities, LUTs, and large generated configurations.
-  - [ ] Verify exact Constant section/filter behavior, including multiplier/group/active/isOn and quality comparators. Keep ordinary omitted Signal quality equal to `normal`; expose an any-quality filter only after native behavior fixtures define its useful source semantics.
+  - [ ] Verify exact Constant section/filter behavior, including multiplier/group/active/isOn and quality comparators. Keep ordinary omitted Signal quality equal to `normal`; expose an any-quality filter only after reviewed compatibility fixtures define its useful source semantics.
   - [x] Validate the currently implemented `Each`/`Everything` output compatibility against the final post-execution Decider descriptor, including dynamically generated rows and conditions.
   - [ ] Verify Each-to-concrete copy-count behavior, constant-row interaction, duplicate multiplicity, conditional subsets, and `pair(red, green)` selections against exported Factorio fixtures; never lower these rows as a sum/reduce.
   - [ ] Preserve per-output source span, dynamic instance path, ordinal, and implicit/explicit/exact syntax intent through the final generated Decider descriptor; extend authoritative post-execution validation as the exact surface grows.
@@ -72,10 +73,10 @@ Later phases cover prototype profiles, typed Factorio objects, exact constructor
 - [Current language reference](docs/language-reference.md) — the exact implemented syntax, diagnostics, and known gaps.
 - [Phase 4 ownership design](docs/ownership-and-multi-network.md) — completed affine ownership, borrows, consuming transfer, read-only `pair`, and its acceptance matrix.
 - [Native objects, Deciders, and parameters](docs/native-objects-deciders-and-parameters.md) — planned Phase 6–8 semantic domains and conformance requirements.
-- [Prototype environment](docs/prototype-environment.md) — the Phase 5.5 normalized modded-data provider, Factorio exporter, loading, and environment-identity boundary.
+- [Prototype environment](docs/prototype-environment.md) — the Phase 5.5 normalized static-data provider, asset loading, and environment-identity boundary.
 - [Circuit graph metrics](docs/circuit-graph-metrics.md) — resolved NCIR dependencies, DAG depth, feedback SCCs, and unknown-latency propagation.
 - [Pinned Factorio API inputs](tools/factorio-api/README.md) — versioned local schemas, hashes, license, reviewed ControlBehavior coverage, and offline regeneration.
-- [Prototype truth sources and audit follow-up](docs/prototype-truth-sources.md) — raw/runtime/behavior authority, identity migration, and pending September 4 recommendations.
+- [Prototype truth sources and audit follow-up](docs/prototype-truth-sources.md) — static-data authority, identity migration, and the remaining runtime-only capability boundary.
 - [Runtime debug index](docs/debug-index.md) — exact lexical scopes, physical Network/Producer mappings, deterministic queries, and current ambiguity boundary.
 - [Source-linked schematic editing](docs/source-linked-schematic.md) — planned comment descriptions, diagram-to-source navigation, and safe `.at` write-back.
 - [Executable testbench](docs/testbench.md) — the current JavaScript test API, clock, assertions, traces, and browser/CLI behavior.
@@ -92,7 +93,7 @@ Later phases cover prototype profiles, typed Factorio objects, exact constructor
 - [Compile-time JavaScript](docs/compile-time-javascript.md) — supported metaprogramming subset and explicit compatibility limits.
 - [Security model](docs/security-model.md) — current trusted-source assumption and Worker/CLI isolation limits.
 
-Signal IDs in plans, IR, and blueprint data have structural identity. Source values returned by `Signal(...)` are nevertheless nominal handles registered to the current elaboration session, so an ordinary `{ type, name }` configuration object cannot accidentally enter DSL dispatch. `Signal("chest")` is the same default-item shorthand as `network["chest"]` and produces the internal identity `{ type: "item", name: "chest" }`; blueprint JSON omits that default `item` type. Explicit namespaces use `Signal("virtual", "signal-A")`, while `Signal("virtual", "signal-A", "normal")` also carries quality. The lowercase `signal(...)` helper remains a compatibility alias for internal/runtime code. Broader import-time omission/defaulting rules still require Phase 8 Factorio conformance fixtures.
+Signal IDs in plans, IR, and blueprint data have structural identity. Source values returned by `Signal(...)` are nevertheless nominal handles registered to the current elaboration session, so an ordinary `{ type, name }` configuration object cannot accidentally enter DSL dispatch. `Signal("chest")` is the same default-item shorthand as `network["chest"]` and produces the internal identity `{ type: "item", name: "chest" }`; blueprint JSON omits that default `item` type. Explicit namespaces use `Signal("virtual", "signal-A")`, while `Signal("virtual", "signal-A", "normal")` also carries quality. The lowercase `signal(...)` helper remains a compatibility alias for internal/runtime code. Broader import-time omission/defaulting rules still require Phase 8 compatibility fixtures.
 
 The source compiler recognizes top-level Signal declarations and specific Network selection in compact deciders. For example, `IF(input[SIGNAL_A] > 40, input[SIGNAL_A])` tests and copies only signal A; unrelated signals on the same circuit network are not emitted. Arithmetic may bind its physical output explicitly with `out[RESULT] += left[A] + right[B]`, `.to(out[RESULT])`, or `.to(out, mirror, RESULT)`. Without an explicit destination binding, the first concrete signal operand from left to right is the deterministic fallback.
 

@@ -1,6 +1,6 @@
 # Implementation boundaries
 
-The source compiler, Phase 4 ownership model, and Phase 5 MVP testbench are implemented. Phase 5.5 is building the external prototype environment; native conformance and the first-run database remain incomplete. Major folders are workspace packages, while finer-grained architecture folders (`language/parser`, `compiler/ir`, and so on) remain source modules inside those packages until scale justifies independent publishing.
+The source compiler, Phase 4 ownership model, and Phase 5 MVP testbench are implemented. Phase 5.5's static prototype environment, browser-first profile, provenance, and integrity boundary are complete. Runtime-only Entity capability fields remain unknown for later Phase 6/7 slices. Major folders are workspace packages, while finer-grained architecture folders (`language/parser`, `compiler/ir`, and so on) remain source modules inside those packages until scale justifies independent publishing.
 
 Allowed dependency direction:
 
@@ -18,7 +18,7 @@ prototypes > standalone normalized data/provider boundary
 
 The compiler and simulator packages must remain free of DOM, Monaco, and framework dependencies. Renderer contracts are neutral data; browser rendering belongs in `apps/web`.
 
-Raw data-stage dumps, runtime structural prototypes, and verified native behavior
+Static data-stage dumps, pinned API metadata, and later reviewed capability evidence
 are separate evidence layers. The current raw normalizer is transitional;
 [Prototype truth sources](prototype-truth-sources.md) records the extraction
 decision and remaining conformance work. Prototype facts stay out of the simulator.

@@ -1,22 +1,23 @@
 # Prototype truth sources and September audit follow-up
 
-Status: `--dump-data` is the primary structural input; optional runtime validation
-and native behavior conformance are still pending. This records the triage of the September 4 master
-audit and additional design notes against the current implementation, not an
-assertion that every recommendation has been implemented.
+Status: reviewed static data is the structural input; runtime-only behavior remains
+unknown. This records the triage of the September 4 master audit and additional
+design notes against the current implementation, not an assertion that every
+recommendation has been implemented.
 
 ## Three different kinds of evidence
 
-| Layer                       | Authority and intended use                                                                                                       | Not evidence of                                                  |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| Raw data-stage dump         | `factorio.exe --dump-data`: finalized modded `data.raw`, typed recipe rows, structural prototype fields, and diagnostics         | Native circuit behavior or environment identity without metadata |
-| Runtime structural snapshot | Optional read-only `LuaPrototypes` cross-check for engine-loaded values, runtime-only getters, and captured environment metadata | A required production input or complete circuit behavior         |
-| Reviewed behavior fixtures  | Native observations/configuration round trips and explicit conformance cases in a matching environment                           | Untested features or another mod/version/settings combination    |
+| Layer                        | Authority and intended use                                                                                                                                                       | Not evidence of                                                        |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Raw data-stage dump          | Official `factorio.exe --dump-data` output: finalized modded `data.raw`, typed recipe rows, structural prototype fields, and diagnostics from the reviewed static-input pipeline | Runtime-only circuit behavior or environment identity without metadata |
+| Pinned API metadata          | Versioned local Factorio API descriptions used to validate the static normalizer and its supported shapes                                                                        | A live game connection or complete capability profile                  |
+| Reviewed capability evidence | Explicit, identity-bound evidence accepted for a later feature slice                                                                                                             | Untested features or another mod/version/settings combination          |
 
 The compiler receives a normalized immutable provider, not a raw dump or a live
 game connection. The shared input loader can now accept normalized v1 JSON or a
 raw `data.raw` dump plus explicit metadata before constructing that provider. The
-simulator continues to consume lowered devices and buses;
+browser may perform that raw-to-normalized conversion in its Worker; the CLI can
+perform the same conversion ahead of time. The simulator continues to consume lowered devices and buses;
 it does not become a factory simulator or depend on `packages/prototypes`.
 
 The current schema/normalizer predates this split. Successful validation and a
@@ -26,13 +27,26 @@ transport was removed because no captured runtime fact was shown to add required
 structural information unavailable from the final dump plus the pinned schema.
 
 The separate identity-bound evidence manifest now records this distinction without
-promoting data into the normalized database. A raw or runtime source can support
-structural references, while only a reviewed native behavior source can back a
-matching circuit claim. Synthetic manifests are useful contract/format fixtures
-only; the repository contains no reviewed native behavior artifact yet. Source
-digests identify captured bytes but do not establish their truth by themselves.
+promoting data into the normalized database. A static source can support structural
+references, while only an explicitly reviewed capability source can back a matching
+circuit claim. Synthetic manifests are useful contract/format fixtures only; the
+repository contains no reviewed capability artifact yet. Source digests identify
+bytes but do not establish their truth by themselves.
 
 ## Extraction plan
+
+For a custom environment, run the official Factorio command with the desired mods and
+startup settings:
+
+```text
+factorio.exe --dump-data
+```
+
+Use the resulting raw dump from Factorio's `script-output` directory together with
+explicit, honest metadata describing that same environment. The browser accepts the
+raw dump plus metadata directly, or the existing CLI can normalize them into the v1
+database first. The bundled Base + Space Age profile is already checked in and works
+without this step; authors cannot prebuild every possible modpack profile.
 
 The extraction path normalizes the final dump's item stack sizes, typed recipe
 ingredients/products, `main_product`, categories/energy, entity footprint inputs,
@@ -46,7 +60,7 @@ promoted to Entity. Recognized entities remain present when neither ordinary
 footprint axis is available. The normalized v1 footprint fields are optional as
 an all-or-nothing pair, and no placement dimension is fabricated.
 
-The runtime API snapshot and prototype API snapshot checked for this decision are
+The pinned runtime API description and prototype API snapshot checked for this decision are
 the hash-pinned Factorio 2.1.17 / JSON API 6 fixtures under
 `tools/factorio-api/fixtures/2.1.17`. Their offline inventory generator and review
 manifest are documented in `tools/factorio-api/README.md`. Exporter outputs must
@@ -74,36 +88,30 @@ In particular:
   fallback. The public TypeScript model exposes item/fluid ingredient/product
   unions without serializing duplicate role/kind fields. These boundaries have
   explicit regression coverage at the correct source boundary.
-- Circuit connector geometry is not proof of behavior-level capabilities. Keep
-  the existing identity-bound supplement and observation-provenance checks;
-  require reviewed native evidence before populating a complete capability table.
+- Circuit connector geometry is not proof of behavior-level capabilities. Keep the
+  existing identity-bound supplement and evidence-manifest checks; runtime-only
+  capability fields remain unknown until a later Phase 6/7 feature slice defines an
+  accepted static or reviewed source.
 - Duplicate ingredients and numeric limits need their own validation pass after
   the role/source split. Duplicate **products** may be intentional and must remain.
 
-Gate for a bundled first-run database: checked-in reproducible dump plus metadata
-inputs from base, Space Age, and a modded override, and native conformance for the
-behavior capabilities claimed. A runtime structural capture is optional unless a
-concrete divergence makes it necessary. The observation mod still needs execution
-in Factorio for behavior evidence. The evidence-manifest loader and CLI inspection
-are implemented, but this gate remains open until reviewed native artifacts are
-actually produced and checked against the matching database identity.
+Boundary for the bundled first-run database: checked-in reproducible static data,
+explicit metadata for the selected environment, identity-bound provenance, and
+integrity verification. For custom profiles, the same boundary accepts either the
+official raw dump plus explicit metadata or its normalized v1 result. This structural
+boundary is complete. Per-Entity behavior
+and capability verification is deliberately deferred to the Phase 6/7 feature
+slices; no game execution or user-collected artifact is required by the shipped
+browser product.
 
 The deterministic asset generator/check now provides the release seam for those
 inputs, and the confirmed Space Age profile is checked in under
 `packages/prototypes/generated/`. Its sidecar pins the raw dump, metadata,
 normalized output bytes, schema versions, and database identity; it does not turn
-structural extraction into native behavior evidence or supply missing environment
-provenance. The browser uses this structural asset as its first-run profile, but
-that selection does not close the native-conformance gate above.
-
-## Runtime structural exporter decision
-
-The prototype-wide runtime exporter, its transport parser, and its CLI command
-were removed after reviewing the 2.1.17 dump. It duplicated final `data.raw`
-without demonstrating a structural fact required by CombLang that could not be
-recovered from the dump and pinned schema. A narrow runtime probe may be added in
-the future only for a concrete, reproducible discrepancy; no generic capture
-format is retained speculatively.
+structural extraction into runtime behavior evidence or supply missing environment
+provenance. The browser uses this structural asset as its first-run profile, and
+its integrity check is part of the completed Phase 5.5 boundary. No generic runtime
+capture format is retained.
 
 ## Implemented audit corrections
 

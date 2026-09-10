@@ -100,7 +100,7 @@ Decider/rule with bounded related locations to avoid diagnostic spam. The
 diagnostic subsystem requirements are recorded in
 [Diagnostics](diagnostics.md#planned-configurable-advisories).
 
-`Everything` remains a first-class wildcard rather than compile-time expansion. Feedback patterns may use an O(1) normal update and an O(n) generated initialization list in `.else(...)`. Wildcard behavior for zero-valued signals and feedback bootstrap must be proven against the simulator and captured Factorio fixtures before the rotating-state benchmark becomes an acceptance test.
+`Everything` remains a first-class wildcard rather than compile-time expansion. Feedback patterns may use an O(1) normal update and an O(n) generated initialization list in `.else(...)`. Wildcard behavior for zero-valued signals and feedback bootstrap must be proven against the simulator and reviewed compatibility fixtures before the rotating-state benchmark becomes an acceptance test.
 
 Permanent self-initializing topology is preferred over temporary combinators that are deleted after startup. Entity lifecycle and topology mutation must not be introduced implicitly by a convenience form.
 
@@ -133,7 +133,7 @@ const constants = Constant({
 });
 ```
 
-`multiplier` accepts a finite JavaScript number at elaboration time, but its exact Factorio float conversion and count-rounding behavior must be locked with exported blueprint and in-game behavior fixtures before implementation in Phase 7. The convenience and exact forms must still create one physical entity and no ticks.
+`multiplier` accepts a finite JavaScript number at elaboration time, but its exact Factorio float conversion and count-rounding behavior must be locked with exported blueprint and reviewed compatibility fixtures before implementation in Phase 7. The convenience and exact forms must still create one physical entity and no ticks.
 
 ## Blueprint parameter values
 

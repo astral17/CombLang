@@ -672,6 +672,17 @@ const output: Network = stages[0] + 1;`);
   });
 });
 
+test.each(['observations', 'compare-observations'] as const)(
+  'rejects removed prototype command %s instead of treating it as a data format',
+  async (removedCommand) => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect(await run(['prototypes', removedCommand])).toBe(2);
+    const message = String(error.mock.calls[0]?.[0]);
+    expect(message).toContain('factorio-dsl prototypes normalize');
+    expect(message).not.toContain(removedCommand);
+  },
+);
+
 describe('factorio-dsl prototypes normalize', () => {
   test('writes a validated Prototype DB from a native dump and explicit metadata', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'comblang-prototype-dump-'));

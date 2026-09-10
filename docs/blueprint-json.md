@@ -51,7 +51,7 @@ Nested Decider conditions are lowered to OR-connected groups of AND comparisons.
 of every subsequent group therefore uses `or`. Distribution is required for forms
 such as `(A || B) && (C || D)`. This may duplicate comparisons, but never producers,
 outputs, or ticks. The truth-table tests cover nested conjunctions/disjunctions;
-captured native import/export fixtures remain pending.
+exact import/export compatibility remains outside this preview.
 
 To prevent exponential preview allocations, `maxDeciderConditionRows` defaults to
 1024 expanded rows per Decider. This is an **export-only allocation guard**, not a
@@ -68,7 +68,7 @@ This is an early preview rather than the Phase 8 codec:
 - placement does not yet diagnose wire reach, footprint collisions, relays, or user groups;
 - there is no FCIR layer or semantic import/export round trip yet;
 - the generator does not import existing blueprints;
-- nested condition-group conformance still needs captured in-game fixtures;
+- nested condition-group compatibility is deferred to the Phase 8 codec;
 - entity defaults and schema details will be tightened against Factorio import tests;
 - omission/defaulting rules outside the implemented default-item `Signal(name)` case still need captured import/export conformance fixtures;
 - constant combinators currently export one default section; multiple sections, groups, section multipliers/active state, and entity-wide `is_on` await the Phase 7 exact Constant model and fixtures;

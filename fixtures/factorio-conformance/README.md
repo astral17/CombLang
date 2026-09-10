@@ -1,36 +1,27 @@
 # Factorio conformance fixtures
 
-This directory separates verified Factorio behavior from provisional simulator choices.
+This directory documents the boundary for externally sourced static prototype
+fixtures. It is not a runtime integration, game runner, or user workflow.
 
-Current authoritative inputs:
+The shipped browser product consumes reviewed, versioned static assets generated
+from finalized Factorio data-stage output and pinned local API metadata. The
+checked-in Space Age database and its integrity manifest are the first-run source.
+For a custom modpack, the user may run the official `factorio.exe --dump-data` with
+the desired mods and startup settings, then select the raw dump plus explicit
+metadata in the browser or normalize them first with the existing CLI. Custom
+profiles need not already be normalized; environment metadata is explicit and
+participates in the database identity.
 
-- Factorio Runtime API 2.1.17 / API version 6 as the recorded API baseline;
-- official Factorio Wiki descriptions for arithmetic, decider, and wildcard behavior;
-- structural invariants in the project architecture documents.
+The prototype package and its tests validate normalization, canonical ordering,
+schema constraints, identity binding, evidence-manifest references, and byte-level
+asset integrity. They do not connect to Factorio and do not turn runtime-only
+behavior into a capability claim.
 
-The runtime API fixes the exact configuration shapes and defaults, but does not define every numerical edge case. Before Phase 1 is called conformance-complete, generated in-game snapshots must cover at least:
+Runtime-only fields, including behavior-level Entity capabilities that are absent
+from the static source, remain unknown. Later Phase 6/7 feature slices may add
+reviewed static or externally supplied evidence with an explicit identity and
+schema; that work must not add a project-owned runtime dependency to the browser.
 
-- division and modulo by zero;
-- negative exponent behavior and large exponent overflow;
-- shift counts outside `0..31`;
-- exact Factoriopedia precedence for `Anything` output;
-- mixed AND/OR native condition-list precedence;
-- `Each` candidate sets across independently selected red/green masks;
-- `Each`, `Anything`, and `Everything` output copy/constant modes;
-- normal and else outputs in the same decider;
-- quality-sensitive signal identity.
-
-Tests in `packages/simulator` are deterministic executable specifications. Cases listed above remain provisional until paired with captured Factorio 2.1 fixtures.
-
-## Prototype circuit observations
-
-The [read-only collector](../../tools/comblang-circuit-probe_0.1.0/README.md) provides
-explicit selected-entity snapshots for Phase 5.5 investigation. Native execution
-of that collector is not yet verified. Its synthetic parser fixture lives separately
-in `fixtures/prototype-observations` and must not be treated as game evidence.
-
-For each future native case retain the exact mod/startup-settings environment,
-raw dump metadata, case setup or blueprint, labeled before/after observations and
-the actual wire behavior expected/observed. Readable fields or enabled settings
-alone do not establish prototype capabilities. Keep base, Space Age and modded
-override cases separate until their environments and results have been checked.
+Simulator tests remain deterministic executable specifications for the implemented
+kernel. They are useful for regression coverage, but are not evidence that an
+unimplemented Factorio behavior is supported.

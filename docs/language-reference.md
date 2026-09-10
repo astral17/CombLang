@@ -1,6 +1,6 @@
 # Current language reference
 
-This document describes the implemented source compiler, ownership/multi-network runtime, and prototype-provider access. The Phase 5 testbench has its own reference; Phase 5.5 prototype extraction and native conformance remain incomplete. The language is intentionally narrower than its eventual scope.
+This document describes the implemented source compiler, ownership/multi-network runtime, and prototype-provider access. The Phase 5 testbench has its own reference; Phase 5.5 static prototype profiles are complete, while runtime-only capability fields remain unknown for later feature slices. The language is intentionally narrower than its eventual scope.
 
 Phase 3 elaborates one self-contained source file synchronously. Static or dynamic imports, exports, `import.meta`, `async` functions/arrows/methods, `await`, and `for await…of` report `CL1036` before execution. The executable envelope independently blocks async syntax if semantic preflight is bypassed, so a delayed microtask cannot mutate an already finalized circuit plan. Multi-file linking belongs to a later compiler phase. This boundary is separate from the fully hardened sandbox deferred to Phase 11.
 
@@ -25,7 +25,8 @@ into the compilation environment. For example,
 records. `prototypes` cannot be shadowed by a user declaration. A source file
 that reads it without an active Prototype DB receives `EX1004`; current
 CLI project profiles and `--prototypes`, plus browser-local JSON selection, provide
-that environment. A bundled first-run database is not implemented yet.
+that environment. The browser also offers the integrity-checked bundled first-run
+profile.
 
 The source value returned by `Signal(...)` is a nominal handle registered to the current elaboration session. A plain JavaScript object with `type` and `name` fields remains an ordinary object and is not accepted as a Signal operand or Network selection. Once a valid handle enters a direct plan, its identity is serialized as the structural `{ type, name, quality? }` Signal ID used by IR, simulation, and blueprint JSON. Name-only `network["chest"]` remains an explicit shorthand and does not require constructing a handle first.
 
@@ -243,8 +244,8 @@ omitted filter quality means “any quality”, while an omitted SignalID qualit
 means `normal`. Blueprint export therefore writes `quality: "normal"` explicitly
 for an unqualified constant row; otherwise the game can import it as an any-quality
 filter that does not represent the requested constant. A user-facing any-quality
-constant-filter syntax is not exposed until its native behavior is covered by
-the exact Constant surface and conformance fixtures.
+constant-filter syntax is not exposed until its behavior is covered by the exact
+Constant surface and reviewed compatibility fixtures.
 
 `CC()` is valid and creates one empty physical constant combinator. It emits no signals but can still be placed and attached, for example `CC().at(1, 2).to(out)`. An empty generated list in `CC(...entries)` has the same meaning. Like any other combinator, an unattached standalone `CC()` receives `CL2001`, not an error.
 
