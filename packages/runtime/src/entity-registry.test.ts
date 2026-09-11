@@ -160,6 +160,61 @@ describe('session-local Entity registry', () => {
     expect(Object.isFrozen(entity)).toBe(true);
   });
 
+  test('replaces canonical placement while preserving identity and all other record fields', () => {
+    const registry = new EntityRegistry(context(), createSyntheticEntityPrototypeResolver());
+    const entity = registry.create(
+      request({
+        configuration: {
+          mode: 'raw',
+          payload: { enabled: false },
+        },
+        placement: { x: 1, y: 2 },
+      }),
+    );
+    const alias = registry.createView(entity);
+    const before = registry.record(entity);
+
+    registry.replacePlacement(alias, { x: 10.5, y: -2, direction: 15 });
+
+    const after = registry.record(entity);
+    expect(registry.record(alias)).toBe(after);
+    expect(after).toMatchObject({
+      id: before.id,
+      profile: before.profile,
+      configuration: before.configuration,
+      connectorBindings: before.connectorBindings,
+      provenance: before.provenance,
+      ordinal: before.ordinal,
+      placement: { x: 10.5, y: -2, direction: 15 },
+    });
+    expect(registry.records()).toEqual([after]);
+    expect(entity.id).toBe(before.id);
+    expect(alias.id).toBe(before.id);
+  });
+
+  test('keeps omitted direction omitted and rejects invalid replacement atomically', () => {
+    const registry = new EntityRegistry(context(), createSyntheticEntityPrototypeResolver());
+    const entity = registry.create(request({ placement: { x: 1, y: 2, direction: 4 } }));
+
+    registry.replacePlacement(entity, { x: 3, y: 4 });
+    const replaced = registry.record(entity);
+    expect(replaced.placement).toEqual({ x: 3, y: 4 });
+    expect(replaced.placement).not.toHaveProperty('direction');
+
+    for (const placement of [
+      { x: Number.NaN, y: 0 },
+      { x: 0, y: Number.POSITIVE_INFINITY },
+      { x: 0, y: 0, direction: 1.5 },
+      { x: 0, y: 0, direction: -1 },
+      { x: 0, y: 0, direction: 16 },
+    ]) {
+      expect(() => registry.replacePlacement(entity, placement)).toThrowError(
+        expect.objectContaining({ code: 'EN1000' }),
+      );
+      expect(registry.record(entity)).toBe(replaced);
+    }
+  });
+
   test('snapshots typed configuration by rule and lanes without resolving physical metadata', () => {
     const registry = new EntityRegistry(
       context([syntheticZeroPortEntityProfile, syntheticSharedTwoColorEntityProfile]),

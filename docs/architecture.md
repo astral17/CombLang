@@ -30,9 +30,11 @@ lowers declaration names to physical Network IDs once, exposes parallel debug
 entries, and maps physical objects onto the generic object-test boundary. The
 host-bound source subset now lowers direct `Entity(prototype)` calls and
 explicit `.port(...)`/`.bind(...)` operations into that same v3 path. Its
-EG/NCIR Entity records carry prototype names and trusted native connector
-ordinals; the synthetic-only typed `control_behavior.circuit_condition` subset
-remains an explicit readable blueprint preview path. Typed facades, raw native
+public two-argument form translates exact `{ rule, lanes, condition }` data and
+the nominal `NativeCondition(...)` helper into the existing synthetic-only typed
+`control_behavior.circuit_condition` subset; `.at(...)` replaces placement on
+the same physical record. Both operations preserve one Entity identity and
+create no hidden Producer, Network, Decider, or tick. Typed facades, raw native
 import, and verified native import behavior remain pending; see [Entity v3](entity-v3.md).
 This is host-embedding functionality: the default website and ordinary CLI
 profile selection do not install a trusted Entity profile set, so they remain

@@ -8,10 +8,14 @@ import {
 import type {
   DirectElaborationPlanV3,
   ElaborationJavaScript,
+  EntityBehaviorKey,
   EntityConfiguration,
   EntityConnectorBindingProvenance,
   EntityConnectorProfile,
   EntityLaneEndpoint,
+  EntityLaneKey,
+  EntityNativeComparator,
+  EntityNativeSingleCondition,
   EntityPlanDebugInstance,
   EntityPlanDebugValue,
   EntityProfile,
@@ -51,6 +55,7 @@ import {
   type NetworkOwnershipState,
   type NetworkRuntimeState,
   type NetworkValue,
+  type NativeConditionValue,
   type PairSelectedValue,
   type PairValue,
   type RuntimeObjectKind,
@@ -523,7 +528,13 @@ class ElaborationRecorder {
       rawSpan: RawSpan,
     ): EntityValue => this.#constructEntity(profile, configuration, placement, rawSpan),
     entityFromPrototype: (arguments_: readonly CallArgument[], rawSpan: RawSpan): EntityValue =>
-      this.#constructEntityFromPrototype(arguments_, rawSpan),
+      this.#withTopologyTransaction(rawSpan, () =>
+        this.#constructEntityFromPrototype(arguments_, rawSpan),
+      ),
+    nativeCondition: (
+      arguments_: readonly CallArgument[],
+      rawSpan: RawSpan,
+    ): NativeConditionValue => this.#constructNativeCondition(arguments_, rawSpan),
     entityFacet: (
       value: unknown,
       connector: unknown,
@@ -1335,6 +1346,74 @@ class ElaborationRecorder {
       const direction = args.length === 5 ? args[3] : undefined;
       if (!isRawSpan(rawSpan)) {
         throw new Error('.at(...) is missing provenance.');
+      }
+      const entityLike =
+        this.#isEntity(producer) ||
+        (typeof producer === 'object' &&
+          producer !== null &&
+          (producer as { kind?: unknown }).kind === 'entity' &&
+          typeof (producer as { at?: unknown }).at !== 'function');
+      if (entityLike) {
+        this.#recordDslCall();
+        const source = this.#span(rawSpan);
+        const authority = this.#entityAuthority(producer, source);
+        if (args.length !== 4 && args.length !== 5) {
+          throw new ElaborationExecutionError(
+            'Entity.at(x, y, direction?) requires two or three arguments.',
+            source,
+            'RT2027',
+          );
+        }
+        if (
+          typeof x !== 'number' ||
+          !Number.isFinite(x) ||
+          typeof y !== 'number' ||
+          !Number.isFinite(y)
+        ) {
+          throw new ElaborationExecutionError(
+            'Entity.at(x, y, direction?) requires finite numeric coordinates.',
+            source,
+            'RT2027',
+          );
+        }
+        if (
+          direction !== undefined &&
+          (typeof direction !== 'number' ||
+            !Number.isInteger(direction) ||
+            direction < 0 ||
+            direction > 15)
+        ) {
+          throw new ElaborationExecutionError(
+            'Entity.at(...) direction must be an integer from 0 through 15.',
+            source,
+            'RT2027',
+          );
+        }
+        const placement: EntityPlacement = {
+          x,
+          y,
+          ...(direction === undefined ? {} : { direction }),
+        };
+        const registry = this.#entityRegistry;
+        if (registry === undefined) {
+          throw new ElaborationExecutionError(
+            'Entity placement requires a trusted v3 context and prototype resolver.',
+            source,
+            'RT2027',
+          );
+        }
+        try {
+          registry.replacePlacement(authority.entity, placement);
+        } catch (error) {
+          throw new ElaborationExecutionError(
+            error instanceof Error ? error.message : 'Entity placement failed.',
+            source,
+            'RT2027',
+            undefined,
+            { cause: error },
+          );
+        }
+        return producer;
       }
       if (!this.#isCombinator(producer)) {
         if (
@@ -2766,6 +2845,7 @@ class ElaborationRecorder {
       );
     }
     try {
+      const creationRevision = this.#entityRevision + 1;
       const entity = registry.create({
         profile: profile as EntityProfileRef,
         ...(configuration === undefined
@@ -2775,8 +2855,9 @@ class ElaborationRecorder {
         source: this.#span(rawSpan),
         instancePath: this.#path(),
         expansionStack: [],
-        creationRevision: ++this.#entityRevision,
+        creationRevision,
       });
+      this.#entityRevision = creationRevision;
       const authority = {
         entity,
         owner: this.#currentFunctionFrame()?.owner ?? 'top-level',
@@ -2804,9 +2885,9 @@ class ElaborationRecorder {
   ): EntityValue {
     this.#recordDslCall();
     if (!isRawSpan(rawSpan)) throw new Error('t.entityFromPrototype(...) is missing provenance.');
-    if (!Array.isArray(arguments_) || arguments_.length !== 1) {
+    if (!Array.isArray(arguments_) || (arguments_.length !== 1 && arguments_.length !== 2)) {
       throw new ElaborationExecutionError(
-        'Entity(prototype) requires exactly one argument.',
+        'Entity(prototype, configuration?) requires one or two arguments.',
         this.#span(rawSpan),
         'RT2027',
       );
@@ -2915,11 +2996,142 @@ class ElaborationRecorder {
         'RT2027',
       );
     }
-    return this.#allocateEntity(matches[0]!.ref, undefined, undefined, rawSpan);
+    const configuration =
+      arguments_.length === 2 && arguments_[1]!.value !== undefined
+        ? this.#publicEntityConfiguration(arguments_[1]!.value, arguments_[1]!.source)
+        : undefined;
+    return this.#allocateEntity(matches[0]!.ref, configuration, undefined, rawSpan);
+  }
+
+  #publicEntityConfiguration(value: unknown, rawSpan: RawSpan): EntityConfiguration {
+    const source = this.#span(rawSpan);
+    if (
+      value === null ||
+      typeof value !== 'object' ||
+      Array.isArray(value) ||
+      (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)
+    ) {
+      throw new ElaborationExecutionError(
+        'Entity configuration must be a plain object.',
+        source,
+        'RT2027',
+      );
+    }
+    const record = Object.create(null) as Record<string, unknown>;
+    const allowed = new Set(['rule', 'lanes', 'condition']);
+    for (const key of Reflect.ownKeys(value)) {
+      if (typeof key !== 'string') {
+        throw new ElaborationExecutionError(
+          'Entity configuration cannot contain symbol fields.',
+          source,
+          'RT2027',
+        );
+      }
+      if (!allowed.has(key)) {
+        throw new ElaborationExecutionError(
+          `Entity configuration has unknown field ${JSON.stringify(key)}.`,
+          source,
+          'RT2027',
+        );
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (descriptor === undefined || !('value' in descriptor)) {
+        throw new ElaborationExecutionError(
+          `Entity configuration field ${JSON.stringify(key)} must be data-only.`,
+          source,
+          'RT2027',
+        );
+      }
+      record[key] = descriptor.value;
+    }
+    if (!('rule' in record) || !('lanes' in record) || !('condition' in record)) {
+      throw new ElaborationExecutionError(
+        'Entity configuration requires exactly rule, lanes, and condition.',
+        source,
+        'RT2027',
+      );
+    }
+    const condition = record.condition;
+    if (!this.#isNativeCondition(condition)) {
+      throw new ElaborationExecutionError(
+        'Entity configuration condition must be a NativeCondition from this execution session.',
+        source,
+        'RT2027',
+      );
+    }
+    return {
+      mode: 'typed',
+      rule: record.rule as EntityBehaviorKey,
+      lanes: record.lanes as readonly EntityLaneKey[],
+      condition: condition.condition,
+    };
+  }
+
+  #constructNativeCondition(
+    arguments_: readonly CallArgument[],
+    rawSpan: RawSpan,
+  ): NativeConditionValue {
+    this.#recordDslCall();
+    if (!isRawSpan(rawSpan)) throw new Error('t.nativeCondition(...) is missing provenance.');
+    if (!Array.isArray(arguments_) || arguments_.length !== 3) {
+      throw new ElaborationExecutionError(
+        'NativeCondition(signal, comparator, constant) requires exactly three arguments.',
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    const signalArgument = arguments_[0]!;
+    const comparatorArgument = arguments_[1]!;
+    const constantArgument = arguments_[2]!;
+    if (!this.#isSignal(signalArgument.value)) {
+      throw new ElaborationExecutionError(
+        'NativeCondition requires a concrete Signal from this execution session.',
+        this.#span(signalArgument.source),
+        'RT2027',
+      );
+    }
+    const comparator = comparatorArgument.value;
+    if (
+      comparator !== '>' &&
+      comparator !== '<' &&
+      comparator !== '=' &&
+      comparator !== '>=' &&
+      comparator !== '<=' &&
+      comparator !== '!='
+    ) {
+      throw new ElaborationExecutionError(
+        'NativeCondition comparator must be one of >, <, =, >=, <=, !=.',
+        this.#span(comparatorArgument.source),
+        'RT2027',
+      );
+    }
+    const constant = constantArgument.value;
+    if (typeof constant !== 'number' || !Number.isSafeInteger(constant)) {
+      throw new ElaborationExecutionError(
+        'NativeCondition constant must be a finite safe integer.',
+        this.#span(constantArgument.source),
+        'RT2027',
+      );
+    }
+    const signal = signalArgument.value;
+    const condition: EntityNativeSingleCondition = Object.freeze({
+      kind: 'compare-signal-constant',
+      signal:
+        signal.quality === undefined
+          ? Signal(signal.type, signal.name)
+          : Signal(signal.type, signal.name, signal.quality),
+      comparator: comparator as EntityNativeComparator,
+      constant: circuitConstant(constant),
+    });
+    return this.#runtimeValue(Object.freeze({ kind: 'native-condition', condition }));
   }
 
   #isEntity(value: unknown): value is EntityValue {
     return this.#entityRegistry?.isEntity(value) === true;
+  }
+
+  #isNativeCondition(value: unknown): value is NativeConditionValue {
+    return this.#hasRuntimeKind(value, 'native-condition');
   }
 
   #entityAuthority(value: unknown, source: SourceSpan): EntityAuthorityView {

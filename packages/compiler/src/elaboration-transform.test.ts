@@ -9,7 +9,8 @@ describe('executable elaboration transform', () => {
       path: 'entity-constructor.factorio.ts',
       text: `const fromName = Entity('entity:assembling-machine-3');
 const fromObject = objects.Entity(prototype);
-const forwarded = Entity(...prototypes);`,
+const forwarded = Entity(...prototypes);
+const condition = NativeCondition(Signal('virtual', 'signal-A'), '>', 0);`,
     });
     const code = transformElaborationModule(source).code;
 
@@ -17,6 +18,7 @@ const forwarded = Entity(...prototypes);`,
     expect(code).toContain("'entity:assembling-machine-3'");
     expect(code).toContain('__dsl.invokePrepared(__dsl.prepareMember(objects, "Entity"');
     expect(code).toContain('__dsl.entityFromPrototype([...__dsl.spreadCallArguments(');
+    expect(code).toContain('__dsl.nativeCondition([{ value: __dsl.signal(');
   });
 
   test('routes the reserved prototypes value through the hygienic runtime bridge', () => {

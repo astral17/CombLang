@@ -1091,6 +1091,36 @@ if (t.entityFacet(result.a, 'shared', 'shared-red', { start: 42, end: 73 }).name
     expect(plan.entities).toHaveLength(1);
   });
 
+  test('rejects stale Entity placement handles at the placement call span', () => {
+    const context = syntheticEntityExecutionContext();
+    const program = {
+      format: 'comblang-elaboration-js' as const,
+      version: 2 as const,
+      fileId: sourceFileId('entity-stale-placement.factorio.ts'),
+      runtimeParameter: 't',
+      containsUnsupportedAsync: false,
+      code: `
+t.enterFunction('Make', { start: 1, end: 5 });
+const entity = t.entity(${JSON.stringify(syntheticZeroPortEntityProfile.ref)}, undefined, undefined, { start: 6, end: 13 });
+const stale = entity;
+t.returnValue(entity, { start: 14, end: 25 });
+t.exitInstance({ start: 26, end: 27 });
+t.place(stale, 1, 2, { start: 28, end: 41 });`,
+    };
+
+    expect(() =>
+      executeElaborationProgramV3(program, {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: syntheticEntityResolver(),
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'RT2012',
+        span: { fileId: program.fileId, start: 28, end: 41 },
+      }),
+    );
+  });
+
   test('reports source-linked failure when prototypes are used without an environment', () => {
     const parsed = parseFile({
       path: 'missing-prototype-environment.factorio.ts',

@@ -105,7 +105,25 @@ but do not install that trusted Entity authority, so the real
 or a test may inject a reviewed provider profile (or a clearly labelled synthetic
 fixture) before compiling the source.
 
-`Entity` is a reserved direct DSL value. Its one argument is either a non-empty
+The additional accepted source form is intentionally limited to the typed
+single-condition slice:
+
+```ts
+const machine = Entity('entity:synthetic-shared-two-color', {
+  rule: 'shared-circuit-condition',
+  lanes: ['shared-red', 'shared-green'],
+  condition: NativeCondition(Signal('virtual', 'signal-A'), '>', 0),
+}).at(10.5, -2, 8);
+```
+
+`NativeCondition` is not a circuit `Condition` and cannot be forged by copying
+its visible fields. It carries one concrete Signal, one supported comparator,
+and one safe integer canonicalized to signed int32. The accepted profile maps
+that detached comparison directly onto the Entity's declared native field,
+without a Decider combinator or a tick. The synthetic example proves the
+compiler path only; it is not native Factorio conformance evidence.
+
+`Entity` is a reserved direct DSL value. Its first argument is either a non-empty
 prototype name/canonical key resolved by the host resolver, or the exact
 identity of a record returned by the selected host `prototypes.entity` table.
 The resolved canonical key must select exactly one profile in the matching
@@ -123,10 +141,17 @@ request transport-only and cannot grant Entity authority. The browser's normal
 production runtime does not invent profiles; its main-thread preview likewise
 requires the matching host context before replaying a v3 plan.
 
-`Entity(prototype)` does not accept configuration or placement arguments, and
-`Entity(...)(input)` is not a callable constructor form in this slice. Typed
-facades, raw native payloads, and native Factorio behavior remain separate
-future work.
+`Entity(prototype)` also accepts one public configuration object with exactly
+`rule`, `lanes`, and `condition` fields. The condition must be the nominal
+`NativeCondition(signal, comparator, constant)` value created in the same
+execution session; the runtime translates it to the existing typed
+`control_behavior.circuit_condition` configuration before profile validation.
+`entity.at(x, y, direction?)` mutates the existing physical record, returns the
+same live view, and accepts finite coordinates plus an integer direction from
+`0` through `15`. Neither form allocates a Producer, Network, or hidden
+Decider. `Entity(...)(input)` is not a callable constructor form in this slice.
+Typed facades, raw native payloads, and native Factorio behavior remain
+separate future work.
 
 ## Internal construction and validation
 

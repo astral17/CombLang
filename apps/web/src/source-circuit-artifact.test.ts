@@ -54,7 +54,11 @@ describe('source circuit artifact', () => {
     const compiled = compileSource(
       {
         path: 'entity-preview.factorio.ts',
-        text: `const entity = Entity('synthetic-shared-two-color');`,
+        text: `const entity = Entity('synthetic-shared-two-color', {
+  rule: 'shared-circuit-condition',
+  lanes: ['shared-red', 'shared-green'],
+  condition: NativeCondition(Signal('virtual', 'signal-A'), '>', 0),
+}).at(3.5, -1, 4);`,
       },
       { trustedEntityReplayContext, entityPrototypeResolver },
     );
@@ -67,7 +71,20 @@ describe('source circuit artifact', () => {
     expect(artifact.plan.version).toBe(3);
     expect(artifact.execution.circuit.ir.version).toBe(3);
     expect(artifact.blueprint.blueprint.entities).toEqual([
-      expect.objectContaining({ name: 'synthetic-shared-two-color', entity_number: 1 }),
+      expect.objectContaining({
+        name: 'synthetic-shared-two-color',
+        entity_number: 1,
+        position: { x: 3.5, y: -1 },
+        direction: 4,
+        control_behavior: {
+          circuit_condition: {
+            first_signal: { type: 'virtual', name: 'signal-A' },
+            first_signal_networks: { red: true, green: true },
+            comparator: '>',
+            constant: 0,
+          },
+        },
+      }),
     ]);
     expect(demo.combinators).toBe(0);
     expect(controller.timeline).toHaveLength(1);

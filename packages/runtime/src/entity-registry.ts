@@ -108,11 +108,21 @@ function placementSnapshot(value: EntityPlacement): EntityPlacement {
   if (
     typeof value !== 'object' ||
     value === null ||
+    typeof value.x !== 'number' ||
     !Number.isFinite(value.x) ||
-    !Number.isFinite(value.y) ||
-    (value.direction !== undefined && !Number.isFinite(value.direction))
+    typeof value.y !== 'number' ||
+    !Number.isFinite(value.y)
   ) {
-    invalid('EN1000', '$.placement', 'placement must contain finite coordinates.');
+    invalid('EN1000', '$.placement', 'placement must contain finite numeric coordinates.');
+  }
+  if (
+    value.direction !== undefined &&
+    (typeof value.direction !== 'number' ||
+      !Number.isInteger(value.direction) ||
+      value.direction < 0 ||
+      value.direction > 15)
+  ) {
+    invalid('EN1000', '$.placement.direction', 'direction must be an integer from 0 through 15.');
   }
   return Object.freeze({
     x: value.x,
@@ -141,7 +151,7 @@ export class EntityRegistry {
   readonly #prototypes: EntityPrototypeResolver;
   readonly #ids = new StableIdAllocator('entity');
   readonly #values = new WeakSet<object>();
-  readonly #records = new WeakMap<object, EntityPlanRecord>();
+  readonly #canonicalRecords = new Map<EntityId, EntityPlanRecord>();
   readonly #allRecords: EntityPlanRecord[] = [];
 
   constructor(context: TrustedEntityReplayContext, prototypes: EntityPrototypeResolver) {
@@ -221,7 +231,7 @@ export class EntityRegistry {
       ...(placement === undefined ? {} : { placement }),
     });
     this.#values.add(value);
-    this.#records.set(value, record);
+    this.#canonicalRecords.set(id, record);
     this.#allRecords.push(record);
     return value;
   }
@@ -246,13 +256,12 @@ export class EntityRegistry {
       ...(entity.placement === undefined ? {} : { placement: entity.placement }),
     });
     this.#values.add(view);
-    this.#records.set(view, this.#records.get(entity)!);
     return view;
   }
 
   record(value: unknown): EntityPlanRecord {
     const entity = this.alias(value);
-    return this.#records.get(entity)!;
+    return this.#canonicalRecords.get(entity.id)!;
   }
 
   records(): readonly EntityPlanRecord[] {
@@ -262,7 +271,7 @@ export class EntityRegistry {
   /** Replaces compiler-owned endpoint bindings without changing physical identity. */
   replaceConnectorBindings(value: unknown, bindings: readonly EntityPlanConnectorBinding[]): void {
     const entity = this.alias(value);
-    const current = this.#records.get(entity)!;
+    const current = this.record(entity);
     const endpointKeys = bindings.map(
       ({ endpoint }) => `${endpoint.connector}/${endpoint.lane}/${endpoint.color}`,
     );
@@ -282,7 +291,17 @@ export class EntityRegistry {
       ...current,
       connectorBindings: Object.freeze([...bindings]),
     });
-    this.#records.set(entity, updated);
+    this.#canonicalRecords.set(entity.id, updated);
+    this.#allRecords[current.ordinal - 1] = updated;
+  }
+
+  /** Replaces placement without changing any other part of the physical Entity record. */
+  replacePlacement(value: unknown, placement: EntityPlacement): void {
+    const entity = this.alias(value);
+    const updatedPlacement = placementSnapshot(placement);
+    const current = this.record(entity);
+    const updated = Object.freeze({ ...current, placement: updatedPlacement });
+    this.#canonicalRecords.set(entity.id, updated);
     this.#allRecords[current.ordinal - 1] = updated;
   }
 }

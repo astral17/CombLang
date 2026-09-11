@@ -455,6 +455,7 @@ for (let i = 0; i < arr.length; i++) output += arr[i] * 2;`,
       path: 'reserved-builtins.ts',
       text: `function Signal(value: string) { return value; }
 function Entity(value: string) { return value; }
+function NativeCondition(signal: unknown, comparator: string, constant: number) { return signal; }
 function CC() { return 1; }
 function join() { return 1; }
 class Network { constructor(value: number) {} }
@@ -468,12 +469,23 @@ const prototypes = {};`,
     });
 
     const reserved = validateDslSemantics(parsed).filter(({ code }) => code === 'CL1045');
-    expect(reserved).toHaveLength(9);
+    expect(reserved).toHaveLength(10);
     expect(
       reserved.map(({ span }) =>
         span === undefined ? undefined : parsed.text.slice(span.start, span.end),
       ),
-    ).toEqual(['Signal', 'Entity', 'CC', 'join', 'Network', 'Any', 'All', 'EACH', 'prototypes']);
+    ).toEqual([
+      'Signal',
+      'Entity',
+      'NativeCondition',
+      'CC',
+      'join',
+      'Network',
+      'Any',
+      'All',
+      'EACH',
+      'prototypes',
+    ]);
   });
 
   test('validates join arity and rejects borrowed or pair inputs statically', () => {

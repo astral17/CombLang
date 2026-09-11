@@ -4,6 +4,7 @@ import {
   type EntityPrototype,
 } from '@comblang/prototypes';
 import { sourceFileId, sourceSpan, type Diagnostic } from '@comblang/shared';
+import { generateEntityBlueprintJson } from '@comblang/compiler/blueprint-json';
 import type { EntityProfile } from '@comblang/compiler/entity';
 import {
   syntheticSharedTwoColorEntityProfile,
@@ -22,8 +23,12 @@ import {
   sourceCompilationArtifact,
   type SourceCompilationStage,
 } from './source-compilation.js';
+import { elaborateEntityDirectPlan } from './direct-plan.js';
 
-function syntheticEntityHost(profile: EntityProfile) {
+function syntheticEntityHost(
+  profile: EntityProfile,
+  source: 'synthetic' | 'provider' = 'synthetic',
+) {
   const prototype = {
     key: profile.ref.prototypeKey as EntityPrototype['key'],
     name: profile.ref.prototypeKey.slice('entity:'.length),
@@ -31,8 +36,9 @@ function syntheticEntityHost(profile: EntityProfile) {
   } satisfies EntityPrototype;
   const trustedEntityReplayContext = createTrustedEntityReplayContext({
     database: profile.ref.database,
-    source: 'synthetic',
-    evidenceIdentity: 'comblang-synthetic-evidence-v1',
+    source,
+    evidenceIdentity:
+      source === 'synthetic' ? 'comblang-synthetic-evidence-v1' : 'comblang-provider-evidence-v1',
     policyIdentity: 'comblang-entity-policy-v1',
     profiles: [profile],
   });
@@ -119,6 +125,501 @@ if (evaluations !== 1) throw new Error('Entity prototype expression was evaluate
     expect(plan.entities).toHaveLength(1);
   });
 
+  test('places one Entity through direct, spread, enum, function, and loop forms', () => {
+    const host = syntheticEntityHost(syntheticSharedTwoColorEntityProfile);
+    const compilation = compileSourceProgram(
+      {
+        path: 'entity-placement-source.factorio.ts',
+        text: `enum Direction { East = 4, South = 8 }
+const entity = Entity('entity:synthetic-shared-two-color');
+const input = new Network<R>();
+entity.bind('shared', 'shared-red', input, 'input');
+const before = entity.port('shared', 'shared-red');
+entity.at(1, 2);
+function move(value) { return value.at(...[3, 4], Direction.South); }
+const moved = move(entity);
+for (const position of [[5, 6], [7, 8]]) entity.at(...position);
+const after = moved.port('shared', 'shared-red');`,
+      },
+      host,
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    const execution = compilation.execution;
+    if (
+      plan === undefined ||
+      plan.version !== 3 ||
+      execution === undefined ||
+      !('entityObject' in execution)
+    ) {
+      throw new Error('Expected a host-bound Entity v3 execution.');
+    }
+    expect(plan.producers).toHaveLength(0);
+    expect(plan.networks).toHaveLength(1);
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.entities[0]).toMatchObject({
+      placement: { x: 7, y: 8 },
+      connectorBindings: [
+        expect.objectContaining({
+          endpoint: { connector: 'shared', lane: 'shared-red', color: 'red' },
+          network: 'input',
+          direction: 'input',
+        }),
+      ],
+    });
+    expect(execution.circuit.graph.producers).toHaveLength(0);
+    expect(execution.circuit.ir.networks).toHaveLength(1);
+    expect(execution.circuit.ir.entities).toHaveLength(1);
+  });
+
+  test('constructs a nominal NativeCondition with all comparators and int32 constants', () => {
+    const compilation = compileSourceProgram({
+      path: 'native-condition-source.factorio.ts',
+      text: `const signal = Signal('virtual', 'signal-A');
+const greater = NativeCondition(signal, '>', 0);
+const less = NativeCondition(signal, '<', 1);
+const equal = NativeCondition(signal, '=', 2);
+const greaterEqual = NativeCondition(signal, '>=', 2147483649);
+const lessEqual = NativeCondition(signal, '<=', -2147483649);
+const notEqual = NativeCondition(signal, '!=', 5);
+const values = [greater, less, equal, greaterEqual, lessEqual, notEqual];
+if (values.map(({ kind }) => kind).join(',') !== 'native-condition,native-condition,native-condition,native-condition,native-condition,native-condition' ||
+    values.map(({ condition }) => condition.comparator).join(',') !== '>,<,=,>=,<=,!=' ||
+    greater.condition.signal.type !== 'virtual' || greater.condition.signal.name !== 'signal-A' ||
+    greaterEqual.condition.constant !== -2147483647 || lessEqual.condition.constant !== 2147483647 ||
+    !Object.isFrozen(greater) || !Object.isFrozen(greater.condition)) {
+  throw new Error('NativeCondition was not canonicalized or frozen');
+}`,
+    });
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.plan?.version).toBe(2);
+  });
+
+  test('evaluates NativeCondition arguments once and preserves ordinary object methods', () => {
+    const compilation = compileSourceProgram({
+      path: 'native-condition-evaluation.factorio.ts',
+      text: `let order = '';
+function sourceSignal() { order += 's'; return Signal('virtual', 'signal-A'); }
+function sourceComparator() { order += 'c'; return '>'; }
+function sourceConstant() { order += 'n'; return 7; }
+const condition = NativeCondition(sourceSignal(), sourceComparator(), sourceConstant());
+const ordinary = { NativeCondition(...values) { return values.length; } };
+if (order !== 'scn' || condition.condition.constant !== 7 || ordinary.NativeCondition(1, 2, 3) !== 3) {
+  throw new Error('NativeCondition evaluation order changed');
+}`,
+    });
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+  });
+
+  test('translates literal, dynamic, aliased, and spread Entity configuration forms', () => {
+    const host = syntheticEntityHost(syntheticSharedTwoColorEntityProfile);
+    const compilation = compileSourceProgram(
+      {
+        path: 'entity-configuration-source.factorio.ts',
+        text: `const prototype = 'entity:synthetic-shared-two-color';
+const rule = 'shared-circuit-condition';
+const lanes = ['shared-red', 'shared-green'];
+const signal = Signal('virtual', 'signal-A');
+const condition = NativeCondition(signal, '>', 0);
+const literal = Entity(prototype, { rule, lanes, condition });
+const config = { rule, lanes: [...lanes], condition };
+const aliased = Entity(prototype, config);
+const spreadArgs = [prototype, config];
+const spread = Entity(...spreadArgs);`,
+      },
+      host,
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3) throw new Error('Expected an Entity v3 plan.');
+    expect(plan.entities).toHaveLength(3);
+    expect(plan.entities.map(({ configuration }) => configuration)).toEqual([
+      {
+        mode: 'typed',
+        rule: 'shared-circuit-condition',
+        lanes: ['shared-green', 'shared-red'],
+        condition: {
+          kind: 'compare-signal-constant',
+          signal: { type: 'virtual', name: 'signal-A' },
+          comparator: '>',
+          constant: 0,
+        },
+      },
+      {
+        mode: 'typed',
+        rule: 'shared-circuit-condition',
+        lanes: ['shared-green', 'shared-red'],
+        condition: {
+          kind: 'compare-signal-constant',
+          signal: { type: 'virtual', name: 'signal-A' },
+          comparator: '>',
+          constant: 0,
+        },
+      },
+      {
+        mode: 'typed',
+        rule: 'shared-circuit-condition',
+        lanes: ['shared-green', 'shared-red'],
+        condition: {
+          kind: 'compare-signal-constant',
+          signal: { type: 'virtual', name: 'signal-A' },
+          comparator: '>',
+          constant: 0,
+        },
+      },
+    ]);
+  });
+
+  test('carries configured placement through physical Entity replay and adapters', () => {
+    const host = syntheticEntityHost(syntheticSharedTwoColorEntityProfile);
+    const compilation = compileSourceProgram(
+      {
+        path: 'entity-physical-acceptance.factorio.ts',
+        text: `const config = {
+  rule: 'shared-circuit-condition',
+  lanes: ['shared-red', 'shared-green'],
+  condition: NativeCondition(Signal('virtual', 'signal-A'), '>=', 2),
+};
+function place(entity) { return entity.at(10.5, -2, 8); }
+const machines = [Entity('entity:synthetic-shared-two-color', config)];
+const selected = place(machines[0]);
+for (const alias of [selected]) alias.at(10.5, -2, 8);
+const input = new Network<R>();
+selected.bind('shared', 'shared-red', input, 'input');`,
+      },
+      host,
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    const execution = compilation.execution;
+    if (
+      plan === undefined ||
+      plan.version !== 3 ||
+      execution === undefined ||
+      !('entityObject' in execution)
+    ) {
+      throw new Error('Expected a host-bound Entity v3 execution.');
+    }
+    expect(structuredClone(plan)).toEqual(plan);
+    expect(plan.producers).toHaveLength(0);
+    expect(plan.networks).toHaveLength(1);
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.entities[0]).toMatchObject({
+      placement: { x: 10.5, y: -2, direction: 8 },
+      configuration: {
+        mode: 'typed',
+        rule: 'shared-circuit-condition',
+        lanes: ['shared-green', 'shared-red'],
+        condition: {
+          kind: 'compare-signal-constant',
+          signal: { type: 'virtual', name: 'signal-A' },
+          comparator: '>=',
+          constant: 2,
+        },
+      },
+      connectorBindings: [
+        expect.objectContaining({
+          endpoint: { connector: 'shared', lane: 'shared-red', color: 'red' },
+          network: 'input',
+          direction: 'input',
+        }),
+      ],
+    });
+
+    expect(execution.circuit.graph.producers).toHaveLength(0);
+    expect(execution.circuit.ir.networks).toHaveLength(1);
+    expect(execution.circuit.ir.entities).toHaveLength(1);
+    const physical = execution.circuit.ir.entities[0]!;
+    expect(physical.placement).toEqual({ x: 10.5, y: -2, direction: 8 });
+    expect(physical.connectorBindings).toHaveLength(1);
+    if (physical.configuration?.mode !== 'typed' || 'payload' in physical.configuration) {
+      throw new Error('Expected resolved typed physical configuration.');
+    }
+    expect(physical.configuration).toMatchObject({
+      rule: 'shared-circuit-condition',
+      nativeField: 'control_behavior.circuit_condition',
+      connector: 'shared',
+      lanes: ['shared-green', 'shared-red'],
+      laneMask: { red: true, green: true },
+      condition: {
+        signal: { type: 'virtual', name: 'signal-A' },
+        comparator: '>=',
+        constant: 2,
+      },
+    });
+    expect(execution.entityObject(execution.createTestSession(), 1)).toMatchObject({
+      adapterId: 'entity-physical-v3',
+      instanceId: 'ordinal-1',
+      connectors: ['shared'],
+    });
+
+    const blueprint = generateEntityBlueprintJson(execution.circuit.ir).blueprint;
+    expect(blueprint.entities).toHaveLength(1);
+    expect(blueprint.entities[0]).toMatchObject({
+      entity_number: 1,
+      name: 'synthetic-shared-two-color',
+      position: { x: 10.5, y: -2 },
+      direction: 8,
+      control_behavior: {
+        circuit_condition: {
+          first_signal: { type: 'virtual', name: 'signal-A' },
+          first_signal_networks: { red: true, green: true },
+          comparator: '≥',
+          constant: 2,
+        },
+      },
+    });
+    const replay = elaborateEntityDirectPlan(
+      structuredClone(plan),
+      host.trustedEntityReplayContext,
+    );
+    expect(replay.circuit.ir.entities).toEqual(execution.circuit.ir.entities);
+    expect(replay.circuit.ir.networks).toEqual(execution.circuit.ir.networks);
+  });
+
+  test.each([
+    {
+      name: 'extra field',
+      source: `const entity = Entity('entity:synthetic-shared-two-color', { rule: 'shared-circuit-condition', lanes: ['shared-red'], condition: NativeCondition(Signal('virtual', 'signal-A'), '>', 0), extra: true });`,
+      message: 'Entity configuration has unknown field "extra".',
+    },
+    {
+      name: 'accessor field',
+      source: `const condition = NativeCondition(Signal('virtual', 'signal-A'), '>', 0);
+const config = { rule: 'shared-circuit-condition', lanes: ['shared-red'], condition };
+Object.defineProperty(config, 'condition', { get() { throw new Error('accessor evaluated'); } });
+Entity('entity:synthetic-shared-two-color', config);`,
+      message: 'Entity configuration field "condition" must be data-only.',
+    },
+    {
+      name: 'symbol field',
+      source: `const config = { rule: 'shared-circuit-condition', lanes: ['shared-red'], condition: NativeCondition(Signal('virtual', 'signal-A'), '>', 0) };
+config[Symbol('extra')] = true;
+Entity('entity:synthetic-shared-two-color', config);`,
+      message: 'Entity configuration cannot contain symbol fields.',
+    },
+    {
+      name: 'lane hole',
+      source: `const lanes = [];
+lanes.length = 1;
+Entity('entity:synthetic-shared-two-color', { rule: 'shared-circuit-condition', lanes, condition: NativeCondition(Signal('virtual', 'signal-A'), '>', 0) });`,
+      message: '$.configuration.lanes[0]: array holes are not allowed.',
+    },
+    {
+      name: 'duplicate lane',
+      source: `Entity('entity:synthetic-shared-two-color', { rule: 'shared-circuit-condition', lanes: ['shared-red', 'shared-red'], condition: NativeCondition(Signal('virtual', 'signal-A'), '>', 0) });`,
+      message: 'duplicate input lane',
+    },
+    {
+      name: 'unknown lane',
+      source: `Entity('entity:synthetic-shared-two-color', { rule: 'shared-circuit-condition', lanes: ['shared-blue'], condition: NativeCondition(Signal('virtual', 'signal-A'), '>', 0) });`,
+      message: 'not allowed by the rule feature',
+    },
+    {
+      name: 'unknown rule',
+      source: `Entity('entity:synthetic-shared-two-color', { rule: 'missing-rule', lanes: ['shared-red'], condition: NativeCondition(Signal('virtual', 'signal-A'), '>', 0) });`,
+      message: 'unknown Entity configuration rule',
+    },
+    {
+      name: 'structural condition',
+      source: `Entity('entity:synthetic-shared-two-color', { rule: 'shared-circuit-condition', lanes: ['shared-red'], condition: { kind: 'native-condition', condition: {} } });`,
+      message: 'condition must be a NativeCondition from this execution session.',
+    },
+  ])('rejects malformed public Entity configuration: $name', ({ source, message }) => {
+    const host = syntheticEntityHost(syntheticSharedTwoColorEntityProfile);
+    const compilation = compileSourceProgram(
+      { path: 'entity-configuration-invalid.factorio.ts', text: source },
+      host,
+    );
+
+    expect(compilation.plan).toBeUndefined();
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: expect.stringMatching(/^(RT2027|EN1000)$/),
+        message: expect.stringContaining(message),
+      }),
+    ]);
+  });
+
+  test('does not allocate an Entity before a caught configuration failure', () => {
+    const host = syntheticEntityHost(syntheticSharedTwoColorEntityProfile);
+    const compilation = compileSourceProgram(
+      {
+        path: 'entity-configuration-caught.factorio.ts',
+        text: `let caught = false;
+try {
+  Entity('entity:synthetic-shared-two-color', { rule: 'shared-circuit-condition', lanes: ['shared-red'], condition: { kind: 'native-condition', condition: {} } });
+} catch { caught = true; }
+if (!caught) throw new Error('invalid Entity configuration was accepted');
+const entity = Entity('entity:synthetic-shared-two-color', { rule: 'shared-circuit-condition', lanes: ['shared-red'], condition: NativeCondition(Signal('virtual', 'signal-A'), '>', 0) });`,
+      },
+      host,
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3) throw new Error('Expected an Entity v3 plan.');
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.entities[0]?.ordinal).toBe(1);
+  });
+
+  test('does not advance Entity provenance before a caught profile validation failure', () => {
+    const host = syntheticEntityHost(syntheticSharedTwoColorEntityProfile);
+    const compilation = compileSourceProgram(
+      {
+        path: 'entity-profile-validation-caught.factorio.ts',
+        text: `try {
+  Entity('entity:synthetic-shared-two-color', {
+    rule: 'shared-circuit-condition',
+    lanes: ['shared-blue'],
+    condition: NativeCondition(Signal('virtual', 'signal-A'), '>', 0),
+  });
+} catch {}
+const entity = Entity('entity:synthetic-shared-two-color');`,
+      },
+      host,
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3) throw new Error('Expected an Entity v3 plan.');
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.entities[0]).toMatchObject({
+      ordinal: 1,
+      provenance: { creationRevision: 1 },
+    });
+  });
+
+  test('rejects typed public configuration without verified positive evidence', () => {
+    const profile: EntityProfile = {
+      ...syntheticSharedTwoColorEntityProfile,
+      synthetic: false,
+      configurationRules: syntheticSharedTwoColorEntityProfile.configurationRules.map((rule) => ({
+        ...rule,
+        evidence: { status: 'unknown' },
+      })),
+    };
+    const host = syntheticEntityHost(profile, 'provider');
+    const compilation = compileSourceProgram(
+      {
+        path: 'entity-configuration-evidence.factorio.ts',
+        text: `Entity('entity:synthetic-shared-two-color', {
+  rule: 'shared-circuit-condition',
+  lanes: ['shared-red'],
+  condition: NativeCondition(Signal('virtual', 'signal-A'), '>', 0),
+});`,
+      },
+      host,
+    );
+
+    expect(compilation.plan).toBeUndefined();
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'EN1000',
+        message: expect.stringContaining('verified positive evidence'),
+        span: expect.any(Object),
+      }),
+    ]);
+  });
+
+  test.each([
+    {
+      source: `NativeCondition();`,
+      message: 'NativeCondition(signal, comparator, constant) requires exactly three arguments.',
+    },
+    {
+      source: `NativeCondition(1, '>', 0);`,
+      message: 'NativeCondition requires a concrete Signal from this execution session.',
+    },
+    {
+      source: `NativeCondition(ANY, '>', 0);`,
+      message: 'NativeCondition requires a concrete Signal from this execution session.',
+    },
+    {
+      source: `NativeCondition(new Network(), '>', 0);`,
+      message: 'NativeCondition requires a concrete Signal from this execution session.',
+    },
+    {
+      source: `const signal = Signal('virtual', 'signal-A');
+const foreign = structuredClone(signal);
+NativeCondition(foreign, '>', 0);`,
+      message: 'NativeCondition requires a concrete Signal from this execution session.',
+    },
+    {
+      source: `NativeCondition(Signal('virtual', 'signal-A'), '==', 0);`,
+      message: 'NativeCondition comparator must be one of >, <, =, >=, <=, !=.',
+    },
+    {
+      source: `NativeCondition(Signal('virtual', 'signal-A'), '>', 1.5);`,
+      message: 'NativeCondition constant must be a finite safe integer.',
+    },
+    {
+      source: `NativeCondition(Signal('virtual', 'signal-A'), '>', Infinity);`,
+      message: 'NativeCondition constant must be a finite safe integer.',
+    },
+  ])('rejects an invalid NativeCondition argument at its source span', ({ source, message }) => {
+    const compilation = compileSourceProgram({
+      path: 'native-condition-invalid.factorio.ts',
+      text: source,
+    });
+
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({ code: 'RT2027', message, span: expect.any(Object) }),
+    ]);
+  });
+
+  test.each([
+    {
+      source: `const entity = Entity('entity:synthetic-zero-port');
+entity.at(1);`,
+      message: 'Entity.at(x, y, direction?) requires two or three arguments.',
+    },
+    {
+      source: `const entity = Entity('entity:synthetic-zero-port');
+entity.at(1, Number.NaN);`,
+      message: 'Entity.at(x, y, direction?) requires finite numeric coordinates.',
+    },
+    {
+      source: `const entity = Entity('entity:synthetic-zero-port');
+entity.at(1, 2, 1.5);`,
+      message: 'Entity.at(...) direction must be an integer from 0 through 15.',
+    },
+    {
+      source: `const entity = Entity('entity:synthetic-zero-port');
+entity.at(1, 2, 16);`,
+      message: 'Entity.at(...) direction must be an integer from 0 through 15.',
+    },
+  ])('reports invalid Entity placement at the call span', ({ source, message }) => {
+    const host = syntheticEntityHost(syntheticZeroPortEntityProfile);
+    const compilation = compileSourceProgram(
+      { path: 'entity-placement-invalid.factorio.ts', text: source },
+      host,
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({ code: 'RT2027', message, span: expect.any(Object) }),
+    ]);
+  });
+
+  test('keeps ordinary object .at calls native', () => {
+    const compilation = compileSourceProgram({
+      path: 'ordinary-at-method.factorio.ts',
+      text: `const ordinary = { at(...values) { return values; } };
+const values = ordinary.at(1, 2, 3);
+const tagged = { kind: 'entity', at(...items) { return items; } };
+const taggedValues = tagged.at(4, 5);
+if (values.length !== 3 || values[2] !== 3 || taggedValues[1] !== 5) throw new Error('ordinary .at was intercepted');`,
+    });
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.plan?.version).toBe(2);
+  });
+
   test('keeps Entity authority out of the transport-only source path', () => {
     const compilation = compileSourceProgram({
       path: 'entity-without-host.factorio.ts',
@@ -135,12 +636,12 @@ if (evaluations !== 1) throw new Error('Entity prototype expression was evaluate
     {
       method: 'constructor',
       source: `Entity();`,
-      message: 'Entity(prototype) requires exactly one argument.',
+      message: 'Entity(prototype, configuration?) requires one or two arguments.',
     },
     {
       method: 'constructor',
-      source: `Entity('entity:synthetic-shared-two-color', 'extra');`,
-      message: 'Entity(prototype) requires exactly one argument.',
+      source: `Entity('entity:synthetic-shared-two-color', {}, {});`,
+      message: 'Entity(prototype, configuration?) requires one or two arguments.',
     },
     {
       method: 'port',

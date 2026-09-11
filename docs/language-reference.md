@@ -72,9 +72,29 @@ authority, so `assembling-machine-3` is not a runnable out-of-the-box example;
 host integrations and tests must inject the matching provider profile (or a
 clearly labelled synthetic fixture).
 
-`Entity(prototype)` accepts exactly one argument: a non-empty entity prototype
+The accepted typed configuration and placement subset is:
+
+```ts
+const machine = Entity('entity:synthetic-shared-two-color', {
+  rule: 'shared-circuit-condition',
+  lanes: ['shared-red', 'shared-green'],
+  condition: NativeCondition(Signal('virtual', 'signal-A'), '>', 0),
+}).at(10.5, -2, 8);
+```
+
+`NativeCondition(signal, comparator, constant)` requires a concrete current
+session Signal, a comparator from `> < = >= <= !=`, and a finite safe integer;
+the constant is canonicalized to signed int32. The returned value is a nominal
+configuration handle, not a circuit `Condition`, Network, Producer, boolean,
+or forgeable data record. The profile maps the comparison directly onto one
+physical Entity's native circuit-condition field, so this operation adds no
+Decider combinator and no simulation tick. The example is a synthetic
+host-embedding fixture, not a claim of native Factorio compatibility.
+
+`Entity(prototype)` accepts one or two arguments: a non-empty entity prototype
 name/canonical key resolved by the host, or the same object identity returned by
-the selected `prototypes.entity` table. The host resolves that prototype to one
+the selected `prototypes.entity` table, optionally followed by the public
+configuration object shown above. The host resolves that prototype to one
 trusted profile before allocating a nominal physical Entity. `Entity` is
 reserved and only a direct identifier call has this meaning; ordinary object
 members such as `object.Entity`, `object.port`, and `object.bind` remain native
@@ -84,9 +104,11 @@ JavaScript operations.
 four-argument `machine.bind(connector, lane, network, direction)` form binds
 that lane to an existing Network, with `direction` equal to `input` or
 `output`. Both operations preserve source spans, physical Entity identity, and
-Network ownership validation. Configuration, placement, typed facades, raw
-native payloads, and `Entity(...)(input)` are not part of the current language
-surface.
+Network ownership validation. `entity.at(x, y, direction?)` accepts finite
+numeric coordinates and an integer direction from `0` through `15`, mutates
+the existing physical record, and returns the same live Entity view. Typed
+facades, raw native payloads, and `Entity(...)(input)` are not part of the
+current language surface.
 
 The browser Worker request transports only replay identity metadata. Source
 Entity authority is available only when a host adapter resolves the detached

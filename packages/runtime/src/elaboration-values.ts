@@ -2,6 +2,7 @@ import type {
   DirectPlanProducer,
   PlanDeciderCondition,
 } from '@comblang/compiler/direct-plan-schema';
+import type { EntityNativeSingleCondition } from '@comblang/compiler/entity';
 import type { EntityValue } from './entity-registry.js';
 import type { SignalId } from '@comblang/factorio';
 import type { SourceSpan } from '@comblang/shared';
@@ -108,6 +109,12 @@ export interface ConditionValue {
   readonly condition: PlanDeciderCondition;
 }
 
+/** Session-nominal source configuration handle; deliberately not a circuit Condition. */
+export interface NativeConditionValue {
+  readonly kind: 'native-condition';
+  readonly condition: EntityNativeSingleCondition;
+}
+
 type WithoutDestinations<T> = T extends unknown ? Omit<T, 'destinations'> : never;
 
 type CompleteCombinatorDescriptor = WithoutDestinations<DirectPlanProducer>;
@@ -146,7 +153,7 @@ export type DslValue =
   | SignalHandle
   | number;
 
-export type RuntimeObjectValue = Exclude<DslValue, SignalHandle | number>;
+export type RuntimeObjectValue = Exclude<DslValue, SignalHandle | number> | NativeConditionValue;
 export type RuntimeObjectKind = RuntimeObjectValue['kind'];
 
 /** Nominal, session-local identity for runtime-only DSL values. */
