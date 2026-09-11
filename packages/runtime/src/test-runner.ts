@@ -15,6 +15,7 @@ import { StructureAssertionError } from './debug-structure.js';
 import {
   elaborateDirectPlan,
   type DirectPlanTestTarget,
+  type ExecutedEntityDirectPlan,
   type ExecutedDirectPlan,
 } from './direct-plan.js';
 import type { NetworkHandle } from './elaboration.js';
@@ -46,7 +47,7 @@ export interface DirectPlanTestRun {
 }
 
 export interface DirectPlanTestApi {
-  readonly execution: ExecutedDirectPlan;
+  readonly execution: ExecutedDirectPlan | ExecutedEntityDirectPlan;
   readonly session: TestSession<DirectPlanTestTarget>;
   network(name: string): NetworkHandle;
   drive(network: NetworkHandle, values: TestBusInput): void;
@@ -131,7 +132,7 @@ function failure(
 }
 
 function runTestsWithExecution(
-  getExecution: () => ExecutedDirectPlan,
+  getExecution: () => ExecutedDirectPlan | ExecutedEntityDirectPlan,
   source: string,
   options: DirectPlanTestRunnerOptions = {},
 ): DirectPlanTestRun {
@@ -169,7 +170,7 @@ function runTestsWithExecution(
   }
 
   const results = registered.map((registeredTest): DirectPlanTestCaseResult => {
-    let execution: ExecutedDirectPlan;
+    let execution: ExecutedDirectPlan | ExecutedEntityDirectPlan;
     try {
       execution = getExecution();
     } catch (error) {
@@ -245,7 +246,7 @@ function runTestsWithExecution(
 
 /** Runs tests with a circuit already produced by the shared compilation service. */
 export function runExecutedDirectPlanTests(
-  execution: ExecutedDirectPlan,
+  execution: ExecutedDirectPlan | ExecutedEntityDirectPlan,
   source: string,
   options: DirectPlanTestRunnerOptions = {},
 ): DirectPlanTestRun {

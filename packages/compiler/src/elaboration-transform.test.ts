@@ -4,6 +4,21 @@ import { describe, expect, test, vi } from 'vitest';
 import { transformElaborationModule } from './elaboration-transform.js';
 
 describe('executable elaboration transform', () => {
+  test('routes only the public Entity constructor identifier through the host bridge', () => {
+    const source = parseFile({
+      path: 'entity-constructor.factorio.ts',
+      text: `const fromName = Entity('entity:assembling-machine-3');
+const fromObject = objects.Entity(prototype);
+const forwarded = Entity(...prototypes);`,
+    });
+    const code = transformElaborationModule(source).code;
+
+    expect(code).toContain('__dsl.entityFromPrototype(');
+    expect(code).toContain("'entity:assembling-machine-3'");
+    expect(code).toContain('__dsl.invokePrepared(__dsl.prepareMember(objects, "Entity"');
+    expect(code).toContain('__dsl.entityFromPrototype([...__dsl.spreadCallArguments(');
+  });
+
   test('routes the reserved prototypes value through the hygienic runtime bridge', () => {
     const source = parseFile({
       path: 'prototype-access.factorio.ts',

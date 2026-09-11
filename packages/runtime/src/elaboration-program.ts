@@ -27,7 +27,7 @@ import type {
   PlanArithmeticOperand,
   PlanDeciderCondition,
 } from '@comblang/compiler/direct-plan-schema';
-import type { PrototypeProvider } from '@comblang/prototypes';
+import type { EntityPrototype, PrototypeProvider } from '@comblang/prototypes';
 import type { Diagnostic, NetworkId, SourceFileId, SourceSpan } from '@comblang/shared';
 
 import {
@@ -256,6 +256,7 @@ class ElaborationRecorder {
   readonly #dslCallBudget: number;
   readonly #prototypes: PrototypeProvider | undefined;
   readonly #entityContext: TrustedEntityReplayContext | undefined;
+  readonly #entityPrototypeResolver: EntityPrototypeResolver | undefined;
   readonly #entityRegistry: EntityRegistry | undefined;
   readonly #entityAuthorities = new WeakMap<object, EntityAuthorityView>();
   readonly #entityAuthorityList: EntityAuthorityView[] = [];
@@ -292,6 +293,7 @@ class ElaborationRecorder {
     this.#dslCallBudget = dslCallBudget;
     this.#prototypes = prototypes;
     this.#entityContext = entityContext;
+    this.#entityPrototypeResolver = entityPrototypeResolver;
     this.#entityRegistry =
       entityContext === undefined || entityPrototypeResolver === undefined
         ? undefined
@@ -325,6 +327,35 @@ class ElaborationRecorder {
           then: (...values) => this.api.appendDecider(receiver, 'then', values, rawSpan),
           else: (...values) => this.api.appendDecider(receiver, 'else', values, rawSpan),
         };
+        if (this.#isEntity(receiver)) {
+          operations.port = (...values) => {
+            if (values.length !== 2) {
+              throw new ElaborationExecutionError(
+                'Entity.port(connector, lane) requires exactly two arguments.',
+                this.#span(rawSpan),
+                'RT2027',
+              );
+            }
+            return this.api.entityFacet(receiver, values[0], values[1], rawSpan);
+          };
+          operations.bind = (...values) => {
+            if (values.length !== 4) {
+              throw new ElaborationExecutionError(
+                'Entity.bind(connector, lane, network, direction) requires exactly four arguments.',
+                this.#span(rawSpan),
+                'RT2027',
+              );
+            }
+            return this.api.bindEntity(
+              receiver,
+              values[0],
+              values[1],
+              values[2],
+              values[3],
+              rawSpan,
+            );
+          };
+        }
         const operation =
           typeof property === 'string' && Object.hasOwn(operations, property)
             ? operations[property]
@@ -491,6 +522,8 @@ class ElaborationRecorder {
       placement: unknown,
       rawSpan: RawSpan,
     ): EntityValue => this.#constructEntity(profile, configuration, placement, rawSpan),
+    entityFromPrototype: (arguments_: readonly CallArgument[], rawSpan: RawSpan): EntityValue =>
+      this.#constructEntityFromPrototype(arguments_, rawSpan),
     entityFacet: (
       value: unknown,
       connector: unknown,
@@ -2714,6 +2747,15 @@ class ElaborationRecorder {
     rawSpan: RawSpan,
   ): EntityValue {
     this.#recordDslCall();
+    return this.#allocateEntity(profile, configuration, placement, rawSpan);
+  }
+
+  #allocateEntity(
+    profile: unknown,
+    configuration: unknown,
+    placement: unknown,
+    rawSpan: RawSpan,
+  ): EntityValue {
     if (!isRawSpan(rawSpan)) throw new Error('t.entity(...) is missing provenance.');
     const registry = this.#entityRegistry;
     if (registry === undefined || this.#entityContext === undefined) {
@@ -2754,6 +2796,126 @@ class ElaborationRecorder {
         { cause: error },
       );
     }
+  }
+
+  #constructEntityFromPrototype(
+    arguments_: readonly CallArgument[],
+    rawSpan: RawSpan,
+  ): EntityValue {
+    this.#recordDslCall();
+    if (!isRawSpan(rawSpan)) throw new Error('t.entityFromPrototype(...) is missing provenance.');
+    if (!Array.isArray(arguments_) || arguments_.length !== 1) {
+      throw new ElaborationExecutionError(
+        'Entity(prototype) requires exactly one argument.',
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    const prototypeValue = arguments_[0]!.value;
+    const context = this.#entityContext;
+    const resolver = this.#entityPrototypeResolver;
+    if (context === undefined || resolver === undefined) {
+      throw new ElaborationExecutionError(
+        'Entity construction requires a trusted v3 context and prototype resolver.',
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+
+    let prototype: EntityPrototype | undefined;
+    if (typeof prototypeValue === 'string') {
+      if (prototypeValue.length === 0) {
+        throw new ElaborationExecutionError(
+          'Entity prototype name must be a non-empty string.',
+          this.#span(rawSpan),
+          'RT2027',
+        );
+      }
+      try {
+        prototype = resolver.getEntity(prototypeValue);
+      } catch (error) {
+        throw new ElaborationExecutionError(
+          error instanceof Error ? error.message : 'Entity prototype lookup failed.',
+          this.#span(rawSpan),
+          'RT2027',
+          undefined,
+          { cause: error },
+        );
+      }
+    } else if (typeof prototypeValue === 'object' && prototypeValue !== null) {
+      if (this.#prototypes === undefined) {
+        throw new ElaborationExecutionError(
+          'Entity prototype records require the selected host prototype provider.',
+          this.#span(rawSpan),
+          'RT2027',
+        );
+      }
+      const candidate = prototypeValue as Partial<EntityPrototype>;
+      if (typeof candidate.key !== 'string') {
+        throw new ElaborationExecutionError(
+          'Entity prototype record has no canonical key.',
+          this.#span(rawSpan),
+          'RT2027',
+        );
+      }
+      try {
+        const selected = this.#prototypes.getEntity(candidate.key);
+        if (selected === undefined || selected !== prototypeValue) {
+          throw new ElaborationExecutionError(
+            'Entity prototype record is foreign or not owned by the selected host provider.',
+            this.#span(rawSpan),
+            'RT2027',
+          );
+        }
+        prototype = selected;
+      } catch (error) {
+        if (error instanceof ElaborationExecutionError) throw error;
+        throw new ElaborationExecutionError(
+          error instanceof Error ? error.message : 'Entity prototype lookup failed.',
+          this.#span(rawSpan),
+          'RT2027',
+          undefined,
+          { cause: error },
+        );
+      }
+    } else {
+      throw new ElaborationExecutionError(
+        'Entity prototype must be a name or a record from the selected host provider.',
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+
+    if (
+      prototype === undefined ||
+      typeof prototype.key !== 'string' ||
+      typeof prototype.name !== 'string' ||
+      typeof prototype.type !== 'string' ||
+      !/^entity:[^:\s]+$/.test(prototype.key) ||
+      prototype.key !== `entity:${prototype.name}`
+    ) {
+      throw new ElaborationExecutionError(
+        'Entity prototype is malformed or unavailable in the selected host database.',
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    const matches = context.profiles.filter(({ ref }) => ref.prototypeKey === prototype.key);
+    if (matches.length === 0) {
+      throw new ElaborationExecutionError(
+        `No trusted Entity profile matches prototype ${JSON.stringify(prototype.key)}.`,
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    if (matches.length > 1) {
+      throw new ElaborationExecutionError(
+        `Entity prototype ${JSON.stringify(prototype.key)} has ambiguous trusted profiles.`,
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    return this.#allocateEntity(matches[0]!.ref, undefined, undefined, rawSpan);
   }
 
   #isEntity(value: unknown): value is EntityValue {

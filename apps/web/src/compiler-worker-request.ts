@@ -1,6 +1,10 @@
 import {
   cloneEntityReplayContextTransport,
   EntityReplayContextError,
+  entityReplayContextIdentity,
+  entityReplayContextTransport,
+  type EntityReplayContextTransport,
+  type TrustedEntityReplayContext,
 } from '@comblang/compiler/entity-replay-context';
 import {
   FactorioDumpError,
@@ -12,6 +16,7 @@ import {
   type LoadedPrototypeInput,
 } from '@comblang/prototypes';
 import type { Diagnostic } from '@comblang/shared';
+import type { EntityPrototypeResolver } from '@comblang/runtime/entity-registry';
 
 import { compileSource } from './compile-source.js';
 import type {
@@ -27,6 +32,19 @@ class BrowserPrototypeSelectionError extends Error {
 
 class BrowserPrototypeCacheMissError extends Error {
   readonly code = 'WP1002';
+}
+
+/** Host-local authority supplied after the cloneable replay envelope is checked. */
+export interface CompilerWorkerEntityHostContext {
+  readonly trustedEntityReplayContext: TrustedEntityReplayContext;
+  readonly entityPrototypeResolver?: EntityPrototypeResolver;
+}
+
+export interface CompilerWorkerRuntimeOptions {
+  /** Resolves host-owned profiles and provider handles for one transport identity. */
+  readonly resolveEntityReplayContext?: (
+    transport: EntityReplayContextTransport,
+  ) => CompilerWorkerEntityHostContext | undefined;
 }
 
 function profileFailure(error: unknown): Diagnostic {
@@ -51,18 +69,44 @@ function profileFailure(error: unknown): Diagnostic {
 
 export class CompilerWorkerRuntime {
   readonly #profiles = new Map<string, LoadedPrototypeInput>();
+  readonly #resolveEntityReplayContext:
+    | ((transport: EntityReplayContextTransport) => CompilerWorkerEntityHostContext | undefined)
+    | undefined;
+
+  constructor(options: CompilerWorkerRuntimeOptions = {}) {
+    this.#resolveEntityReplayContext = options.resolveEntityReplayContext;
+  }
 
   async handle(
     request: CompilerWorkerRequest,
     observe?: (stage: CompilerWorkerProgressStage) => void,
   ): Promise<CompilerWorkerParsedResponse> {
     observe?.('receive');
-    let entityReplayContext;
+    let entityReplayContext: EntityReplayContextTransport | undefined;
+    let entityHostContext: CompilerWorkerEntityHostContext | undefined;
     try {
       entityReplayContext =
         request.entityReplayContext === undefined
           ? undefined
           : cloneEntityReplayContextTransport(request.entityReplayContext);
+      if (entityReplayContext !== undefined && this.#resolveEntityReplayContext !== undefined) {
+        entityHostContext = this.#resolveEntityReplayContext(entityReplayContext);
+        if (entityHostContext !== undefined) {
+          const trustedTransport = entityReplayContextTransport(
+            entityHostContext.trustedEntityReplayContext,
+          );
+          if (
+            entityReplayContextIdentity(trustedTransport) !==
+            entityReplayContextIdentity(entityReplayContext)
+          ) {
+            throw new EntityReplayContextError(
+              'ER1001',
+              '$.entityReplayContext',
+              'host-bound trusted context does not match the request transport.',
+            );
+          }
+        }
+      }
     } catch (error) {
       return {
         kind: 'parsed',
@@ -79,6 +123,14 @@ export class CompilerWorkerRuntime {
             request.file,
             {
               ...(entityReplayContext === undefined ? {} : { entityReplayContext }),
+              ...(entityHostContext === undefined
+                ? {}
+                : {
+                    trustedEntityReplayContext: entityHostContext.trustedEntityReplayContext,
+                    ...(entityHostContext.entityPrototypeResolver === undefined
+                      ? {}
+                      : { entityPrototypeResolver: entityHostContext.entityPrototypeResolver }),
+                  }),
             },
             [],
             observe,
@@ -152,6 +204,14 @@ export class CompilerWorkerRuntime {
           {
             prototypes: loaded.prototypes,
             ...(entityReplayContext === undefined ? {} : { entityReplayContext }),
+            ...(entityHostContext === undefined
+              ? {}
+              : {
+                  trustedEntityReplayContext: entityHostContext.trustedEntityReplayContext,
+                  ...(entityHostContext.entityPrototypeResolver === undefined
+                    ? {}
+                    : { entityPrototypeResolver: entityHostContext.entityPrototypeResolver }),
+                }),
           },
           [],
           observe,

@@ -36,7 +36,11 @@ import {
   type FactorioDumpMetadata,
   type PrototypeProvider,
 } from '@comblang/prototypes';
-import { runExecutedDirectPlanTests, type ExecutedDirectPlan } from '@comblang/runtime';
+import {
+  runExecutedDirectPlanTests,
+  type ExecutedDirectPlan,
+  type ExecutedEntityDirectPlan,
+} from '@comblang/runtime';
 import { compileParsedSourceProgram } from '@comblang/runtime/source-compilation';
 import { offsetToPosition, type Diagnostic } from '@comblang/shared';
 import { resolveProjectOptions } from './project-profile.js';
@@ -215,7 +219,7 @@ async function testCircuit(
   const project = parseProject([source]);
   const file = [...project.files.values()][0];
   const diagnostics: Diagnostic[] = [...projectOnlyDiagnostics(project)];
-  let execution: ExecutedDirectPlan | undefined;
+  let execution: ExecutedDirectPlan | ExecutedEntityDirectPlan | undefined;
 
   if (file !== undefined && !diagnostics.some(({ severity }) => severity === 'error')) {
     const compiled = compileParsedSourceProgram(file, environment);

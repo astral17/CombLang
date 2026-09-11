@@ -51,6 +51,48 @@ object, and `Signal('signal:v1/virtual/signal-A/')` still means an item with tha
 literal name. The canonical property-key form is accepted by `CC` dictionaries;
 an ordinary bare string key remains item shorthand.
 
+## Host-bound Entities
+
+The current public Entity surface is intentionally small and requires a
+matching host-owned trusted replay context:
+
+```ts
+// In a host embedding with a matching reviewed profile:
+const machine = Entity('entity:assembling-machine-3');
+const fromTable = Entity(prototypes.entity['assembling-machine-3']);
+
+machine.bind('circuit', 'red', input, 'input');
+const redPort = machine.port('circuit', 'red');
+```
+
+The example assumes that the embedding host has installed a matching reviewed
+`TrustedEntityReplayContext`, profile set, and prototype resolver. The default
+website runtime and ordinary CLI profile selection do not install that Entity
+authority, so `assembling-machine-3` is not a runnable out-of-the-box example;
+host integrations and tests must inject the matching provider profile (or a
+clearly labelled synthetic fixture).
+
+`Entity(prototype)` accepts exactly one argument: a non-empty entity prototype
+name/canonical key resolved by the host, or the same object identity returned by
+the selected `prototypes.entity` table. The host resolves that prototype to one
+trusted profile before allocating a nominal physical Entity. `Entity` is
+reserved and only a direct identifier call has this meaning; ordinary object
+members such as `object.Entity`, `object.port`, and `object.bind` remain native
+JavaScript operations.
+
+`machine.port(connector, lane)` selects an explicit connector lane. The exact
+four-argument `machine.bind(connector, lane, network, direction)` form binds
+that lane to an existing Network, with `direction` equal to `input` or
+`output`. Both operations preserve source spans, physical Entity identity, and
+Network ownership validation. Configuration, placement, typed facades, raw
+native payloads, and `Entity(...)(input)` are not part of the current language
+surface.
+
+The browser Worker request transports only replay identity metadata. Source
+Entity authority is available only when a host adapter resolves the detached
+transport to a matching `TrustedEntityReplayContext` and prototype resolver;
+transport-only compilation cannot construct an Entity.
+
 ## Networks and colors
 
 ```ts

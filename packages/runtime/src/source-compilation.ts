@@ -1,5 +1,6 @@
 import { transformElaborationModule } from '@comblang/compiler/elaboration-transform';
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
+import type { DirectElaborationPlanV3 } from '@comblang/compiler/entity';
 import {
   cloneEntityReplayContextTransport,
   entityReplayContextIdentity,
@@ -20,8 +21,14 @@ import {
 import type { PrototypeProvider } from '@comblang/prototypes';
 import type { Diagnostic } from '@comblang/shared';
 
-import { tryElaborateDirectPlan, type ExecutedDirectPlan } from './direct-plan.js';
-import { executeElaborationProgram } from './elaboration-program.js';
+import {
+  tryElaborateDirectPlan,
+  tryElaborateEntityDirectPlan,
+  type ExecutedDirectPlan,
+  type ExecutedEntityDirectPlan,
+} from './direct-plan.js';
+import { executeElaborationProgram, executeElaborationProgramV3 } from './elaboration-program.js';
+import type { EntityPrototypeResolver } from './entity-registry.js';
 import { executionFailureDiagnostic } from './execution-diagnostic.js';
 
 export interface SourceCompilationEnvironment {
@@ -30,6 +37,8 @@ export interface SourceCompilationEnvironment {
   readonly entityReplayContext?: EntityReplayContextTransport;
   /** Host-only profile set used to validate a provider context before transport. */
   readonly trustedEntityReplayContext?: TrustedEntityReplayContext;
+  /** Host-only resolver used by synthetic or otherwise injected Entity environments. */
+  readonly entityPrototypeResolver?: EntityPrototypeResolver;
 }
 
 /** Serializable result safe to send through a browser Worker boundary. */
@@ -44,12 +53,12 @@ export interface SourceCompilationArtifact extends ParseWorkerResult {
   /** Future result-cache identity; no compilation-result cache consumes it yet. */
   readonly entityReplayIdentity?: string;
   readonly elaborationJavaScript?: string;
-  readonly plan?: DirectElaborationPlan;
+  readonly plan?: DirectElaborationPlan | DirectElaborationPlanV3;
 }
 
 /** Host-local compilation state. Runtime handles never enter the transport artifact. */
 export interface LocalSourceCompilation extends SourceCompilationArtifact {
-  readonly execution?: ExecutedDirectPlan;
+  readonly execution?: ExecutedDirectPlan | ExecutedEntityDirectPlan;
 }
 
 export type SourceCompilationStage = 'parse' | 'semantic' | 'transform' | 'execute' | 'lower';
@@ -106,8 +115,8 @@ function compileParsedSource(
   observe?: SourceCompilationObserver,
 ): LocalSourceCompilation {
   const entityReplayContext = replayTransport(environment);
-  let plan: DirectElaborationPlan | undefined;
-  let execution: ExecutedDirectPlan | undefined;
+  let plan: DirectElaborationPlan | DirectElaborationPlanV3 | undefined;
+  let execution: ExecutedDirectPlan | ExecutedEntityDirectPlan | undefined;
   let elaborationJavaScript: string | undefined;
   observe?.('semantic');
   const semanticDiagnostics = validateDslSemantics(parsed);
@@ -129,9 +138,26 @@ function compileParsedSource(
       elaborationJavaScript = program.code;
       if (!compilerDiagnostics.some(({ severity }) => severity === 'error')) {
         observe?.('execute');
-        plan = executeElaborationProgram(program, environment);
+        plan =
+          environment.trustedEntityReplayContext === undefined
+            ? executeElaborationProgram(program, environment)
+            : executeElaborationProgramV3(program, {
+                ...environment,
+                trustedEntityReplayContext: environment.trustedEntityReplayContext,
+              });
         observe?.('lower');
-        const lowered = tryElaborateDirectPlan(plan);
+        const lowered =
+          plan.version === 3
+            ? environment.trustedEntityReplayContext === undefined
+              ? (() => {
+                  throw new EntityReplayContextError(
+                    'ER1001',
+                    '$.entityReplayContext',
+                    'Entity v3 plans require a host-bound trusted profile-set context.',
+                  );
+                })()
+              : tryElaborateEntityDirectPlan(plan, environment.trustedEntityReplayContext)
+            : tryElaborateDirectPlan(plan);
         execution = lowered.execution;
         appendCompilerDiagnostics(plan.diagnostics ?? []);
         appendCompilerDiagnostics(lowered.diagnostics);

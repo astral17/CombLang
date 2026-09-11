@@ -3,6 +3,7 @@ import {
   generatePrototypeAsset,
   loadPrototypeDatabase,
   syntheticPrototypeDatabase,
+  type EntityPrototype,
 } from '@comblang/prototypes';
 import { syntheticZeroPortEntityProfile } from '@comblang/compiler/entity-fixtures';
 import {
@@ -308,6 +309,111 @@ describe('browser compiler Worker prototype profile', () => {
         entityReplayIdentity: expect.not.stringContaining('comblang-synthetic-evidence-v1'),
       },
     });
+  });
+
+  test('resolves a host-owned trusted context after the transport boundary and compiles Entity source', async () => {
+    const trusted = createTrustedEntityReplayContext({
+      database: syntheticZeroPortEntityProfile.ref.database,
+      source: 'synthetic',
+      evidenceIdentity: 'comblang-synthetic-evidence-v1',
+      policyIdentity: 'comblang-entity-policy-v1',
+      profiles: [syntheticZeroPortEntityProfile],
+    });
+    const prototype = {
+      key: syntheticZeroPortEntityProfile.ref.prototypeKey,
+      name: 'synthetic-zero-port',
+      type: 'container',
+    } as EntityPrototype;
+    const runtime = new CompilerWorkerRuntime({
+      resolveEntityReplayContext(transport) {
+        return transport.profileSetIdentity === trusted.profileSetIdentity
+          ? {
+              trustedEntityReplayContext: trusted,
+              entityPrototypeResolver: {
+                database: trusted.database,
+                getEntity(nameOrKey: string) {
+                  return nameOrKey === prototype.key || nameOrKey === prototype.name
+                    ? prototype
+                    : undefined;
+                },
+              },
+            }
+          : undefined;
+      },
+    });
+    const response = await runtime.handle({
+      kind: 'parse',
+      revision: 17,
+      file: {
+        path: 'worker-entity.factorio.ts',
+        text: `const entity = Entity('entity:synthetic-zero-port');`,
+      },
+      entityReplayContext: entityReplayContextTransport(trusted),
+    });
+
+    expect(response.result.compilerDiagnostics).toEqual([]);
+    expect(response.result.plan).toMatchObject({
+      version: 3,
+      entities: [{ profile: syntheticZeroPortEntityProfile.ref }],
+    });
+    expect(response.result).not.toHaveProperty('execution');
+    expect(structuredClone(response)).toEqual(response);
+  });
+
+  test('keeps a cloneable Entity transport powerless without a Worker host resolver', async () => {
+    const trusted = createTrustedEntityReplayContext({
+      database: syntheticZeroPortEntityProfile.ref.database,
+      source: 'synthetic',
+      evidenceIdentity: 'comblang-synthetic-evidence-v1',
+      policyIdentity: 'comblang-entity-policy-v1',
+      profiles: [syntheticZeroPortEntityProfile],
+    });
+    const response = await new CompilerWorkerRuntime().handle({
+      kind: 'parse',
+      revision: 19,
+      file: {
+        path: 'worker-entity-without-host.factorio.ts',
+        text: `const entity = Entity('entity:synthetic-zero-port');`,
+      },
+      entityReplayContext: entityReplayContextTransport(trusted),
+    });
+
+    expect(response.result.plan).toBeUndefined();
+    expect(response.result.compilerDiagnostics).toEqual([
+      expect.objectContaining({ code: 'RT2027', severity: 'error' }),
+    ]);
+  });
+
+  test('rejects a host resolver returning a different trusted identity before source execution', async () => {
+    const trusted = createTrustedEntityReplayContext({
+      database: syntheticZeroPortEntityProfile.ref.database,
+      source: 'synthetic',
+      evidenceIdentity: 'comblang-synthetic-evidence-v1',
+      policyIdentity: 'comblang-entity-policy-v1',
+      profiles: [syntheticZeroPortEntityProfile],
+    });
+    const other = createTrustedEntityReplayContext({
+      database: syntheticZeroPortEntityProfile.ref.database,
+      source: 'synthetic',
+      evidenceIdentity: 'other-evidence',
+      policyIdentity: 'comblang-entity-policy-v1',
+      profiles: [syntheticZeroPortEntityProfile],
+    });
+    const runtime = new CompilerWorkerRuntime({
+      resolveEntityReplayContext: () => ({ trustedEntityReplayContext: other }),
+    });
+    const response = await runtime.handle({
+      kind: 'parse',
+      revision: 18,
+      file: { path: 'worker-entity-mismatch.factorio.ts', text: `throw new Error('executed');` },
+      entityReplayContext: entityReplayContextTransport(trusted),
+    });
+
+    expect(response.result.plan).toBeUndefined();
+    expect(response.result.compilerDiagnostics).toEqual([
+      expect.objectContaining({ code: 'ER1001', severity: 'error' }),
+    ]);
+    expect(response.result.compilerDiagnostics[0]?.message).not.toContain('executed');
   });
 
   test('rejects an unbound provider replay context before Worker source execution', async () => {

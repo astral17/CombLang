@@ -84,8 +84,10 @@ spans, exact scope ambiguity and moved-handle rejection; see the
 
 These tests establish CombLang's implemented simulator contract. They are not
 Factorio conformance evidence: uncertain native semantics still need versioned
-game exports/fixtures. The synthetic object adapter is also not a typed entity,
-inventory, or logistics simulation; those state models belong to Phase 6.
+game exports/fixtures. A host-bound source Entity can appear in the same
+generic object adapter and test-session debug surface, but that adapter remains
+topology-only: it is not a typed entity, inventory, logistics, or native device
+simulation. Those state models and facades remain later Phase 6 work.
 See [Phase 5 acceptance](phase-5-acceptance.md) for commands, complete examples,
 coverage and the completed MVP boundary.
 

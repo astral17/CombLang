@@ -671,6 +671,39 @@ if (alias !== first || first === second) throw new Error('Entity identity was no
     );
   });
 
+  test('charges one DSL call for each public Entity construction', () => {
+    const context = syntheticEntityExecutionContext();
+    const resolver = syntheticEntityResolver();
+    const call = `t.entityFromPrototype([{ value: ${JSON.stringify(syntheticZeroPortEntityProfile.ref.prototypeKey)}, source: { start: 1, end: 8 } }], { start: 1, end: 8 });`;
+    const program = {
+      format: 'comblang-elaboration-js' as const,
+      version: 2 as const,
+      fileId: sourceFileId('entity-call-budget.factorio.ts'),
+      runtimeParameter: 't',
+      containsUnsupportedAsync: false,
+      code: `const entity = ${call}`,
+    };
+
+    const plan = executeElaborationProgramV3(program, {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: resolver,
+      dslCallBudget: 1,
+    });
+    if (plan.version !== 3) throw new Error('Expected an Entity v3 plan.');
+    expect(plan.entities).toHaveLength(1);
+
+    expect(() =>
+      executeElaborationProgramV3(
+        { ...program, code: `const first = ${call}\nconst second = ${call}` },
+        {
+          trustedEntityReplayContext: context,
+          entityPrototypeResolver: resolver,
+          dslCallBudget: 1,
+        },
+      ),
+    ).toThrow(ElaborationOperationLimitError);
+  });
+
   test('captures Entity references through v3 instantiation without handles', () => {
     const context = syntheticEntityExecutionContext();
     const program = {

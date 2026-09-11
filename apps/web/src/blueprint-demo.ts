@@ -1,5 +1,4 @@
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
-
 import {
   createSourceCircuitArtifact,
   type SourceCircuitArtifact,

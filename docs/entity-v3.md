@@ -1,9 +1,9 @@
 # Entity v3 foundation
 
 CombLang now contains the internal, versioned foundation for generic Factorio
-Entity records. This document describes the implemented data and transport
-boundary and internal physical preview. It does not define source syntax, typed
-constructors, or verified native Factorio behavior.
+Entity records plus a narrow host-bound source surface. This document describes
+the implemented data and transport boundary and internal physical preview; it
+does not claim typed facades or verified native Factorio behavior.
 
 ## Implemented contract
 
@@ -84,6 +84,49 @@ execution; an explicitly synthetic context is the only context that can travel
 without a provider. The reported `entityReplayIdentity` is a future cache
 identity. There is no compilation-result cache consuming it yet, so the
 foundation does not claim cache invalidation or reuse.
+
+## Host-bound source subset
+
+The implemented public source constructor is deliberately exact:
+
+```ts
+// In a host embedding with a matching reviewed profile:
+const entity = Entity('entity:assembling-machine-3');
+const same = Entity(prototypes.entity['assembling-machine-3']);
+entity.bind('circuit', 'red', input, 'input');
+const red = entity.port('circuit', 'red');
+```
+
+This example is conditional on the host installing a matching
+`TrustedEntityReplayContext`, profile set, and prototype resolver. The default
+website runtime and ordinary CLI profile selection provide static prototype data
+but do not install that trusted Entity authority, so the real
+`assembling-machine-3` example is not runnable out of the box. A host embedding
+or a test may inject a reviewed provider profile (or a clearly labelled synthetic
+fixture) before compiling the source.
+
+`Entity` is a reserved direct DSL value. Its one argument is either a non-empty
+prototype name/canonical key resolved by the host resolver, or the exact
+identity of a record returned by the selected host `prototypes.entity` table.
+The resolved canonical key must select exactly one profile in the matching
+`TrustedEntityReplayContext`; the source never supplies a profile reference,
+evidence, connector schema, or native ID. `port` takes exactly
+`(connector, lane)` and `bind` takes exactly
+`(connector, lane, network, direction)`, where direction is `input` or
+`output`. Both methods operate only on a nominal Entity handle and retain
+source provenance and ownership generation.
+
+The cloneable Worker request carries only `EntityReplayContextTransport`. An
+injectable host callback may resolve that transport to the trusted profile set
+and a host-local prototype resolver. A missing or mismatched callback leaves the
+request transport-only and cannot grant Entity authority. The browser's normal
+production runtime does not invent profiles; its main-thread preview likewise
+requires the matching host context before replaying a v3 plan.
+
+`Entity(prototype)` does not accept configuration or placement arguments, and
+`Entity(...)(input)` is not a callable constructor form in this slice. Typed
+facades, raw native payloads, and native Factorio behavior remain separate
+future work.
 
 ## Internal construction and validation
 
@@ -183,7 +226,8 @@ The remaining implementation boundary covers:
 1. raw native payload lowering and native import fixtures;
 2. reviewed non-synthetic evidence and Factorio conformance for the native
    single-comparison condition;
-3. additional generic end-to-end acceptance for source/test-runner ingestion;
+3. additional typed/generic acceptance beyond the host-bound source subset;
 4. later typed facades and any native-verified claims.
 
-No public Entity callable syntax or typed facade is implied by the v3 foundation.
+No configuration/placement constructor overload, callable constructor form, or
+native-verified behavior is implied by this source subset.

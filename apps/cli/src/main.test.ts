@@ -10,6 +10,7 @@ import {
   validatePrototypeDatabase,
 } from '@comblang/prototypes';
 import { syntheticZeroPortEntityProfile } from '@comblang/compiler/entity-fixtures';
+import type { EntityProfile } from '@comblang/compiler/entity';
 import {
   createTrustedEntityReplayContext,
   entityReplayContextTransport,
@@ -141,6 +142,62 @@ const input = CC(); const a = Double(input); const b = Double(input); const c = 
       diagnostics: [expect.objectContaining({ code: 'ER1001' })],
     });
     expect(String(log.mock.calls[0]?.[0])).not.toContain('source executed');
+  });
+
+  test('keeps a cloneable Entity transport powerless without CLI host authority', async () => {
+    const path = await sourceFile(`const entity = Entity('entity:synthetic-zero-port');`);
+    const trusted = createTrustedEntityReplayContext({
+      database: syntheticZeroPortEntityProfile.ref.database,
+      source: 'synthetic',
+      evidenceIdentity: 'comblang-synthetic-evidence-v1',
+      policyIdentity: 'comblang-entity-policy-v1',
+      profiles: [syntheticZeroPortEntityProfile],
+    });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(
+      await run(['check', '--json', path], {
+        entityReplayContext: entityReplayContextTransport(trusted),
+      }),
+    ).toBe(1);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'RT2027', severity: 'error' })],
+    });
+  });
+
+  test('accepts host-bound Entity source through the programmatic CLI environment', async () => {
+    const path = await sourceFile(`const entity = Entity('assembling-machine-3');`);
+    const { prototypes } = await loadPrototypeDatabase(syntheticPrototypeDatabase());
+    const profile: EntityProfile = {
+      ...structuredClone(syntheticZeroPortEntityProfile),
+      ref: {
+        ...syntheticZeroPortEntityProfile.ref,
+        prototypeKey: 'entity:assembling-machine-3',
+        database: {
+          schemaVersion: prototypes.schemaVersion,
+          identity: prototypes.identity,
+        },
+      },
+    };
+    const trustedEntityReplayContext = createTrustedEntityReplayContext({
+      database: profile.ref.database,
+      source: 'provider',
+      evidenceIdentity: 'provider-evidence-v1',
+      policyIdentity: 'provider-policy-v1',
+      profiles: [profile],
+    });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(
+      await run(['check', '--json', path], {
+        prototypes,
+        trustedEntityReplayContext,
+      }),
+    ).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      diagnostics: [],
+      producerCount: 0,
+    });
   });
 
   test('reports a recursive union parameter mismatch at the executed call site', async () => {

@@ -746,10 +746,7 @@ function renderProofError(message: string, compiledPlan?: DirectElaborationPlan)
   resetCopyButton();
 }
 
-function renderSourceProof(
-  plan: NonNullable<CompilerWorkerParsedResponse['result']['plan']>,
-  foldedOperations: number,
-): void {
+function renderSourceProof(plan: DirectElaborationPlan, foldedOperations: number): void {
   pauseSimulation();
   const artifact = createSourceCircuitArtifact(plan);
   const controller = new SourceSimulationController(artifact);
@@ -1202,16 +1199,22 @@ function handleWorkerMessage(
     );
     renderTestsBlocked('Fix the circuit source before running its tests.');
   } else {
+    const previewPlan = parsed.plan.version === 2 ? parsed.plan : undefined;
     try {
-      currentPlan = parsed.plan;
-      renderSourceProof(parsed.plan, foldedOperations);
+      if (previewPlan === undefined) {
+        throw new Error(
+          'Entity v3 source compiled, but the main-thread preview requires its host-bound trusted context.',
+        );
+      }
+      currentPlan = previewPlan;
+      renderSourceProof(previewPlan, foldedOperations);
       scheduleTestRender();
     } catch (error) {
       const diagnostic = sourcePreviewDiagnostic(error);
       status.textContent = diagnostic.code === 'WEB1001' ? 'preview error' : 'runtime diagnostic';
       status.dataset.state = 'invalid';
       sourceEditor.setDiagnostics([...parsed.pipelineDiagnostics, diagnostic]);
-      renderProofError(formatSourceDiagnostic(diagnostic, sourceEditor.getValue()), parsed.plan);
+      renderProofError(formatSourceDiagnostic(diagnostic, sourceEditor.getValue()), previewPlan);
       // Preview failures do not turn a successfully compiled circuit into invalid source.
       scheduleTestRender();
     }

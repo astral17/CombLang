@@ -102,6 +102,12 @@ export function transformCallOrElementNode(
       pair: 'pair',
       join: 'join',
     }[node.expression.text];
+    if (node.expression.text === 'Entity') {
+      return context.dslCall('entityFromPrototype', [
+        callArguments(node.arguments),
+        context.spanLiteral(node),
+      ]);
+    }
     if (node.expression.text === 'IF' && node.arguments.length >= 2) {
       return context.dslCall('deciderBranches', [
         ts.visitNode(node.arguments[0]!, visit) as ts.Expression,

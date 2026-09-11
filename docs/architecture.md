@@ -25,14 +25,18 @@ decision and remaining conformance work. Prototype facts stay out of the simulat
 
 ## Current slice
 
-Internal Entity v3 execution validates replay, reuses the resolved producer
-topology, lowers declaration names to physical Network IDs once, exposes
-parallel debug entries, and maps existing physical objects onto the generic
-object-test boundary. Its EG/NCIR Entity records carry prototype names,
-trusted native connector ordinals, and the synthetic-only typed
-`control_behavior.circuit_condition` subset for the explicit readable blueprint
-preview path. Public constructors, typed facades, raw native import, and
-verified native import behavior remain pending; see [Entity v3](entity-v3.md).
+Entity v3 execution validates replay, reuses the resolved producer topology,
+lowers declaration names to physical Network IDs once, exposes parallel debug
+entries, and maps physical objects onto the generic object-test boundary. The
+host-bound source subset now lowers direct `Entity(prototype)` calls and
+explicit `.port(...)`/`.bind(...)` operations into that same v3 path. Its
+EG/NCIR Entity records carry prototype names and trusted native connector
+ordinals; the synthetic-only typed `control_behavior.circuit_condition` subset
+remains an explicit readable blueprint preview path. Typed facades, raw native
+import, and verified native import behavior remain pending; see [Entity v3](entity-v3.md).
+This is host-embedding functionality: the default website and ordinary CLI
+profile selection do not install a trusted Entity profile set, so they remain
+unable to construct a real Entity until a host injects that authority.
 
 The parser returns the official TypeScript AST plus CombLang-owned diagnostics and stable source spans. Both the CLI and browser workbench call that same API. The browser invokes it through a revisioned Web Worker protocol and ignores stale responses; later compiler phases can extend that protocol without moving heavy work back to the UI thread.
 
@@ -48,9 +52,9 @@ Phase 3 started with a read-only semantic side table over the official TypeScrip
 
 The implemented Phase 3 pipeline is `conservative semantic preflight -> syntax-preserving DSL instrumentation -> bounded JavaScript execution with authoritative runtime domain dispatch -> EG`. Ordinary JavaScript functions, loops, branches, arrays, and objects are executed by the JavaScript engine. Instrumented operators dispatch from their executed value categories: ordinary values retain JavaScript behavior, while runtime-branded DSL values construct circuit descriptors. The browser runs that JavaScript in a terminable Worker; the CLI uses the same transform/runtime path without requiring the web app. Consequently, supporting a new compile-time loop shape must never require adding a corresponding source-template matcher. The supported compatibility surface is recorded in [Compile-time JavaScript](compile-time-javascript.md).
 
-`compileSourceProgram` in the isolated `@comblang/runtime/source-compilation` entry point owns that complete stage sequence and its append-only diagnostic order. Keeping it outside the lightweight runtime barrel prevents the TypeScript parser from entering the main UI and test Worker bundles. Its local result may contain an `ExecutedDirectPlan`; `sourceCompilationArtifact` explicitly removes that host-local value and retains the serializable plan, generated JavaScript, summaries, diagnostics, and prototype-environment identity. The browser compiler Worker transports only this artifact. The CLI invokes the parsed-file variant after `parseProject`, aggregates the same pipeline diagnostics, and reuses the local execution for tests.
+`compileSourceProgram` in the isolated `@comblang/runtime/source-compilation` entry point owns that complete stage sequence and its append-only diagnostic order. Keeping it outside the lightweight runtime barrel prevents the TypeScript parser from entering the main UI and test Worker bundles. Its local result may contain an `ExecutedDirectPlan` or host-bound `ExecutedEntityDirectPlan`; `sourceCompilationArtifact` explicitly removes that host-local value and retains the serializable v2/v3 plan, generated JavaScript, summaries, diagnostics, and prototype-environment identity. The browser compiler Worker transports only this artifact. A Worker request carries only cloneable Entity replay identity; an injected host adapter resolves trusted profiles and prototype methods after the boundary. The CLI invokes the parsed-file variant after `parseProject`, aggregates the same pipeline diagnostics, and reuses the local execution for tests.
 
-After a serializable Direct Plan reaches the browser main thread, the workbench creates one `SourceCircuitArtifact`. Its executed circuit and generated blueprint are shared by the overview, interactive simulation, and JSON preview. Resetting or branching a trace creates a fresh simulation kernel over that immutable circuit; it does not replay source or lower the plan again. The Worker transport deliberately remains serializable and contains no runtime handles, functions, or `Map` instances.
+After a serializable Direct Plan reaches the browser main thread, the workbench creates one `SourceCircuitArtifact`. Its executed circuit and generated blueprint are shared by the overview, interactive simulation, and JSON preview; v3 requires the matching host-bound trusted context at this replay seam. Resetting or branching a trace creates a fresh simulation kernel over that immutable circuit; it does not replay source or lower the plan again. The Worker transport deliberately remains serializable and contains no runtime handles, functions, profiles, or `Map` instances.
 
 Bindings and element reads use the executed value as their final discriminator. A combinator-valued declaration retains the already-created physical handle; an explicit `: Network` only narrows it to the existing primary output facet. Ordinary JavaScript values pass through unchanged. Element reads select a Signal only when their executed receiver is a Network facet; array and object reads retain JavaScript behavior, and write/update targets are deliberately left native. This removes declaration-name topology and recursive container conversion without pretending that JavaScript has operator overloading.
 
