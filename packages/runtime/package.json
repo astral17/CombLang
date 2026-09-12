@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./entity-plan-validation": "./src/entity-plan-validation.ts",
+    "./resolved-source-circuit": "./src/resolved-source-circuit.ts",
     "./entity-registry": "./src/entity-registry.ts",
     "./source-compilation": "./src/source-compilation.ts"
   },

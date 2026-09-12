@@ -356,6 +356,18 @@ describe('browser compiler Worker prototype profile', () => {
       version: 3,
       entities: [{ profile: syntheticZeroPortEntityProfile.ref }],
     });
+    expect(response.result.resolvedCircuit).toMatchObject({
+      format: 'comblang-resolved-source-circuit',
+      version: 1,
+      ir: {
+        format: 'comblang-ncir',
+        version: 3,
+        entities: [expect.objectContaining({ profile: syntheticZeroPortEntityProfile.ref })],
+      },
+    });
+    expect(JSON.stringify(response.result.resolvedCircuit)).not.toMatch(
+      /profiles|function|resolver|prototypeProvider|trustedEntityReplayContext/,
+    );
     expect(response.result).not.toHaveProperty('execution');
     expect(structuredClone(response)).toEqual(response);
   });
@@ -379,6 +391,7 @@ describe('browser compiler Worker prototype profile', () => {
     });
 
     expect(response.result.plan).toBeUndefined();
+    expect(response.result.resolvedCircuit).toBeUndefined();
     expect(response.result.compilerDiagnostics).toEqual([
       expect.objectContaining({ code: 'RT2027', severity: 'error' }),
     ]);

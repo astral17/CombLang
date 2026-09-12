@@ -1,5 +1,6 @@
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
 import { signal, type SignalId, type SignalType } from '@comblang/factorio';
+import type { DirectElaborationPlanV3 } from '@comblang/compiler/entity';
 import { offsetToPosition, sourceFileId, sourceSpan, type Diagnostic } from '@comblang/shared';
 
 import { blueprintJsonForArtifact } from './blueprint-demo.js';
@@ -703,9 +704,12 @@ function renderProofPending(): void {
   resetCopyButton();
 }
 
-function renderProofError(message: string, compiledPlan?: DirectElaborationPlan): void {
+function renderProofError(
+  message: string,
+  compiledPlan?: DirectElaborationPlan | DirectElaborationPlanV3,
+): void {
   pauseSimulation();
-  currentPlan = compiledPlan;
+  currentPlan = compiledPlan?.version === 2 ? compiledPlan : undefined;
   currentDemo = undefined;
   sourceSimulation = undefined;
   selectedSimulationTick = 0;
@@ -746,9 +750,19 @@ function renderProofError(message: string, compiledPlan?: DirectElaborationPlan)
   resetCopyButton();
 }
 
-function renderSourceProof(plan: DirectElaborationPlan, foldedOperations: number): void {
+function renderSourceProof(
+  plan: DirectElaborationPlan | DirectElaborationPlanV3,
+  foldedOperations: number,
+  resolvedCircuit?: NonNullable<CompilerWorkerParsedResponse['result']['resolvedCircuit']>,
+): void {
   pauseSimulation();
-  const artifact = createSourceCircuitArtifact(plan);
+  if (plan.version === 3 && resolvedCircuit === undefined) {
+    throw new Error('Entity v3 source compiled without a resolved circuit.');
+  }
+  const artifact =
+    plan.version === 3
+      ? createSourceCircuitArtifact(plan, resolvedCircuit!)
+      : createSourceCircuitArtifact(plan);
   const controller = new SourceSimulationController(artifact);
   sourceSimulation = controller;
   selectedSimulationTick = 0;
@@ -1199,15 +1213,10 @@ function handleWorkerMessage(
     );
     renderTestsBlocked('Fix the circuit source before running its tests.');
   } else {
-    const previewPlan = parsed.plan.version === 2 ? parsed.plan : undefined;
+    const previewPlan = parsed.plan;
     try {
-      if (previewPlan === undefined) {
-        throw new Error(
-          'Entity v3 source compiled, but the main-thread preview requires its host-bound trusted context.',
-        );
-      }
-      currentPlan = previewPlan;
-      renderSourceProof(previewPlan, foldedOperations);
+      currentPlan = previewPlan.version === 2 ? previewPlan : undefined;
+      renderSourceProof(previewPlan, foldedOperations, parsed.resolvedCircuit);
       scheduleTestRender();
     } catch (error) {
       const diagnostic = sourcePreviewDiagnostic(error);

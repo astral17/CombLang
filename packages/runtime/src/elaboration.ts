@@ -16,6 +16,7 @@ import type {
   Provenance,
   EntityPlacement,
 } from '@comblang/compiler/ir';
+import type { NativeCircuitIrV3 } from '@comblang/compiler/entity';
 import { SparseBus, type SignalId } from '@comblang/factorio';
 import {
   ArithmeticCombinatorDevice,
@@ -221,6 +222,11 @@ export interface SimulationInitialValue {
   readonly values: SparseBus;
 }
 
+export interface NativeCircuitSimulationInitialValue {
+  readonly network: NetworkId;
+  readonly values: SparseBus;
+}
+
 export interface ElaboratedCircuit {
   readonly graph: ElaborationGraph;
   readonly ir: NativeCircuitIr;
@@ -246,6 +252,122 @@ function makeProvenance(options: RuntimeProvenanceOptions = {}): Provenance {
 
 function unique<T>(values: Iterable<T>): T[] {
   return [...new Set(values)];
+}
+
+type SimulatableNativeCircuitIr = NativeCircuitIr | NativeCircuitIrV3;
+
+function simulationDevicesForIr(ir: SimulatableNativeCircuitIr): {
+  readonly concrete: readonly SynchronousDevice[];
+  readonly value: readonly ValueSynchronousDevice[];
+} {
+  const colors = new Map(ir.networks.map((network) => [network.id, network.color]));
+  const selection = (value: LogicalNetworkRef) => {
+    const result = { red: false, green: false };
+    for (const network of value.refKind === 'single' ? [value.network] : value.networks)
+      result[colors.get(network)!] = true;
+    return result;
+  };
+  const inputNetworks = (producer: CircuitProducerNode) => {
+    const result: { red?: NetworkId; green?: NetworkId } = {};
+    for (const network of producerInputNetworkIds(producer)) result[colors.get(network)!] = network;
+    return result;
+  };
+  const concrete: SynchronousDevice[] = [];
+  const value: ValueSynchronousDevice[] = [];
+  for (const producer of ir.producers) {
+    if (producer.kind === 'arithmetic') {
+      const operand = (value: typeof producer.config.left): ArithmeticOperand =>
+        value.kind === 'constant' ? value : { ...value, networks: selection(value) };
+      const combinator: ArithmeticCombinatorConfig = {
+        left: operand(producer.config.left),
+        operation: producer.config.operation,
+        right: operand(producer.config.right),
+        output: producer.config.output,
+      };
+      const config = {
+        id: producer.id as unknown as DeviceId,
+        inputNetworks: inputNetworks(producer),
+        outputNetworks: producer.destinations,
+        combinator,
+      };
+      concrete.push(new ArithmeticCombinatorDevice(config));
+      value.push(new ArithmeticValueCombinatorDevice(config));
+    } else if (producer.kind === 'constant') {
+      const config = {
+        id: producer.id as unknown as DeviceId,
+        outputNetworks: producer.destinations,
+        values: new SparseBus(
+          producer.config.outputs.map((output) => [output.signal, output.value] as const),
+        ),
+      };
+      concrete.push(new ConstantCombinatorDevice(config));
+      value.push(new ConstantValueCombinatorDevice(config));
+    } else {
+      const scalar = (value: LogicalScalarOperand): ScalarOperand =>
+        value.kind === 'constant' ? value : { ...value, networks: selection(value) };
+      const condition = (value: LogicalDeciderCondition): DeciderCondition =>
+        value.kind === 'and' || value.kind === 'or'
+          ? { kind: value.kind, conditions: value.conditions.map(condition) }
+          : {
+              kind: 'compare',
+              left:
+                value.left.kind === 'signal'
+                  ? {
+                      kind: 'signal',
+                      signal: value.left.signal,
+                      networks: selection(value.left),
+                    }
+                  : { ...value.left, networks: selection(value.left) },
+              comparator: value.comparator,
+              right: scalar(value.right),
+            };
+      const output = (value: DeciderProducerConfig['outputs'][number]): DeciderOutput =>
+        value.mode === 'constant'
+          ? {
+              mode: 'constant',
+              signal: value.signal,
+              value: value.value,
+              ...(value.input === undefined ? {} : { networks: selection(value.input) }),
+            }
+          : {
+              mode: 'copy',
+              signal: value.signal,
+              ...(value.input === undefined ? {} : { networks: selection(value.input) }),
+            };
+      const combinator: DeciderCombinatorConfig = {
+        condition: condition(producer.config.condition),
+        outputs: producer.config.outputs.map(output),
+        ...(producer.config.elseOutputs === undefined
+          ? {}
+          : { elseOutputs: producer.config.elseOutputs.map(output) }),
+      };
+      const config = {
+        id: producer.id as unknown as DeviceId,
+        inputNetworks: inputNetworks(producer),
+        outputNetworks: producer.destinations,
+        combinator,
+      };
+      concrete.push(new DeciderCombinatorDevice(config));
+      value.push(new DeciderValueCombinatorDevice(config));
+    }
+  }
+  return { concrete, value };
+}
+
+export function createSimulationFromNativeCircuitIr(
+  ir: SimulatableNativeCircuitIr,
+  initial: readonly NativeCircuitSimulationInitialValue[] = [],
+): SimulationKernel {
+  const networkIds = new Set(ir.networks.map((network) => network.id));
+  for (const value of initial) {
+    if (!networkIds.has(value.network)) {
+      runtimeFailure('RT1005', `Unknown Network: ${value.network}.`);
+    }
+  }
+  const kernel = new SimulationKernel();
+  for (const device of simulationDevicesForIr(ir).concrete) kernel.addDevice(device);
+  for (const value of initial) kernel.setInitialNetwork(value.network, value.values);
+  return kernel;
 }
 
 export class DslRuntime {
@@ -701,115 +823,15 @@ export class DslRuntime {
     ir: NativeCircuitIr,
     initial: readonly SimulationInitialValue[],
   ): SimulationKernel {
-    const kernel = new SimulationKernel();
-    for (const device of this.#simulationDevices(ir).concrete) kernel.addDevice(device);
-    for (const value of initial)
-      kernel.setInitialNetwork(this.#networkId(value.network), value.values);
-    return kernel;
+    return createSimulationFromNativeCircuitIr(
+      ir,
+      initial.map((value) => ({ network: this.#networkId(value.network), values: value.values })),
+    );
   }
 
   #createValueSimulation(ir: NativeCircuitIr): ValueSimulationKernel {
     const kernel = new ValueSimulationKernel();
-    for (const device of this.#simulationDevices(ir).value) kernel.addDevice(device);
+    for (const device of simulationDevicesForIr(ir).value) kernel.addDevice(device);
     return kernel;
-  }
-
-  #simulationDevices(ir: NativeCircuitIr): {
-    readonly concrete: readonly SynchronousDevice[];
-    readonly value: readonly ValueSynchronousDevice[];
-  } {
-    const colors = new Map(ir.networks.map((network) => [network.id, network.color]));
-    const selection = (value: LogicalNetworkRef) => {
-      const result = { red: false, green: false };
-      for (const network of value.refKind === 'single' ? [value.network] : value.networks)
-        result[colors.get(network)!] = true;
-      return result;
-    };
-    const inputNetworks = (producer: CircuitProducerNode) => {
-      const result: { red?: NetworkId; green?: NetworkId } = {};
-      for (const network of producerInputNetworkIds(producer))
-        result[colors.get(network)!] = network;
-      return result;
-    };
-    const concrete: SynchronousDevice[] = [];
-    const value: ValueSynchronousDevice[] = [];
-    for (const producer of ir.producers) {
-      if (producer.kind === 'arithmetic') {
-        const operand = (value: typeof producer.config.left): ArithmeticOperand =>
-          value.kind === 'constant' ? value : { ...value, networks: selection(value) };
-        const combinator: ArithmeticCombinatorConfig = {
-          left: operand(producer.config.left),
-          operation: producer.config.operation,
-          right: operand(producer.config.right),
-          output: producer.config.output,
-        };
-        const config = {
-          id: producer.id as unknown as DeviceId,
-          inputNetworks: inputNetworks(producer),
-          outputNetworks: producer.destinations,
-          combinator,
-        };
-        concrete.push(new ArithmeticCombinatorDevice(config));
-        value.push(new ArithmeticValueCombinatorDevice(config));
-      } else if (producer.kind === 'constant') {
-        const config = {
-          id: producer.id as unknown as DeviceId,
-          outputNetworks: producer.destinations,
-          values: new SparseBus(
-            producer.config.outputs.map((output) => [output.signal, output.value] as const),
-          ),
-        };
-        concrete.push(new ConstantCombinatorDevice(config));
-        value.push(new ConstantValueCombinatorDevice(config));
-      } else {
-        const scalar = (value: LogicalScalarOperand): ScalarOperand =>
-          value.kind === 'constant' ? value : { ...value, networks: selection(value) };
-        const condition = (value: LogicalDeciderCondition): DeciderCondition =>
-          value.kind === 'and' || value.kind === 'or'
-            ? { kind: value.kind, conditions: value.conditions.map(condition) }
-            : {
-                kind: 'compare',
-                left:
-                  value.left.kind === 'signal'
-                    ? {
-                        kind: 'signal',
-                        signal: value.left.signal,
-                        networks: selection(value.left),
-                      }
-                    : { ...value.left, networks: selection(value.left) },
-                comparator: value.comparator,
-                right: scalar(value.right),
-              };
-        const output = (value: DeciderProducerConfig['outputs'][number]): DeciderOutput =>
-          value.mode === 'constant'
-            ? {
-                mode: 'constant',
-                signal: value.signal,
-                value: value.value,
-                ...(value.input === undefined ? {} : { networks: selection(value.input) }),
-              }
-            : {
-                mode: 'copy',
-                signal: value.signal,
-                ...(value.input === undefined ? {} : { networks: selection(value.input) }),
-              };
-        const combinator: DeciderCombinatorConfig = {
-          condition: condition(producer.config.condition),
-          outputs: producer.config.outputs.map(output),
-          ...(producer.config.elseOutputs === undefined
-            ? {}
-            : { elseOutputs: producer.config.elseOutputs.map(output) }),
-        };
-        const config = {
-          id: producer.id as unknown as DeviceId,
-          inputNetworks: inputNetworks(producer),
-          outputNetworks: producer.destinations,
-          combinator,
-        };
-        concrete.push(new DeciderCombinatorDevice(config));
-        value.push(new DeciderValueCombinatorDevice(config));
-      }
-    }
-    return { concrete, value };
   }
 }

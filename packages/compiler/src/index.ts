@@ -12,3 +12,4 @@ export * from './entity-replay-context.js';
 export * from './entity-raw.js';
 export * from './ir.js';
 export * from './producer-network-references.js';
+export * from './resolved-source-circuit.js';

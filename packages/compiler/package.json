@@ -19,7 +19,8 @@
     "./entity-raw": "./src/entity-raw.ts",
     "./elaboration-transform": "./src/elaboration-transform.ts",
     "./ir": "./src/ir.ts",
-    "./producer-network-references": "./src/producer-network-references.ts"
+    "./producer-network-references": "./src/producer-network-references.ts",
+    "./resolved-source-circuit": "./src/resolved-source-circuit.ts"
   },
   "dependencies": {
     "@comblang/factorio": "0.0.0",

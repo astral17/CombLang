@@ -30,6 +30,11 @@ import {
 import { executeElaborationProgram, executeElaborationProgramV3 } from './elaboration-program.js';
 import type { EntityPrototypeResolver } from './entity-registry.js';
 import { executionFailureDiagnostic } from './execution-diagnostic.js';
+import {
+  resolvedSourceCircuitPlanFingerprint,
+  snapshotResolvedSourceCircuit,
+  type ResolvedSourceCircuit,
+} from '@comblang/compiler/resolved-source-circuit';
 
 export interface SourceCompilationEnvironment {
   readonly prototypes?: PrototypeProvider;
@@ -54,6 +59,8 @@ export interface SourceCompilationArtifact extends ParseWorkerResult {
   readonly entityReplayIdentity?: string;
   readonly elaborationJavaScript?: string;
   readonly plan?: DirectElaborationPlan | DirectElaborationPlanV3;
+  /** Detached physical v3 IR; present only after host-authorized lowering succeeds. */
+  readonly resolvedCircuit?: ResolvedSourceCircuit;
 }
 
 /** Host-local compilation state. Runtime handles never enter the transport artifact. */
@@ -117,6 +124,7 @@ function compileParsedSource(
   const entityReplayContext = replayTransport(environment);
   let plan: DirectElaborationPlan | DirectElaborationPlanV3 | undefined;
   let execution: ExecutedDirectPlan | ExecutedEntityDirectPlan | undefined;
+  let resolvedCircuit: ResolvedSourceCircuit | undefined;
   let elaborationJavaScript: string | undefined;
   observe?.('semantic');
   const semanticDiagnostics = validateDslSemantics(parsed);
@@ -159,6 +167,14 @@ function compileParsedSource(
               : tryElaborateEntityDirectPlan(plan, environment.trustedEntityReplayContext)
             : tryElaborateDirectPlan(plan);
         execution = lowered.execution;
+        if (plan.version === 3 && execution !== undefined) {
+          resolvedCircuit = snapshotResolvedSourceCircuit({
+            format: 'comblang-resolved-source-circuit',
+            version: 1,
+            planFingerprint: resolvedSourceCircuitPlanFingerprint(plan),
+            ir: execution.circuit.ir,
+          });
+        }
         appendCompilerDiagnostics(plan.diagnostics ?? []);
         appendCompilerDiagnostics(lowered.diagnostics);
       }
@@ -188,6 +204,7 @@ function compileParsedSource(
         }),
     ...(elaborationJavaScript === undefined ? {} : { elaborationJavaScript }),
     ...(plan === undefined ? {} : { plan }),
+    ...(resolvedCircuit === undefined ? {} : { resolvedCircuit }),
     ...(execution === undefined ? {} : { execution }),
   };
 }

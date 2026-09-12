@@ -81,9 +81,38 @@ Compilation artifacts and the browser compiler Worker request carry detached
 transport snapshots. A provider-sourced context must also be checked against a
 host-bound trusted profile set and the selected provider before source
 execution; an explicitly synthetic context is the only context that can travel
-without a provider. The reported `entityReplayIdentity` is a future cache
-identity. There is no compilation-result cache consuming it yet, so the
-foundation does not claim cache invalidation or reuse.
+without a provider. Successful host-authorized v3 lowering additionally emits
+one `ResolvedSourceCircuit` envelope around the physical `NativeCircuitIrV3`.
+It contains only cloneable topology, physical Entity records, provenance,
+signals, and context/profile identities; it contains no profiles, resolver,
+provider, functions, execution objects, or trusted context. The main thread
+validates, detaches, freezes, and uses this snapshot for blueprint and
+simulation preview. It never replays the v3 plan, and an identity-only replay
+transport remains powerless to construct an Entity. The reported
+`entityReplayIdentity` is a future cache identity. There is no
+compilation-result cache consuming it yet, so the foundation does not claim
+cache invalidation or reuse.
+
+The resolved-circuit envelope is deliberately separate from Direct Plan v3:
+
+```ts
+interface ResolvedSourceCircuit {
+  readonly format: 'comblang-resolved-source-circuit';
+  readonly version: 1;
+  /** Correlation only; this never grants replay or profile authority. */
+  readonly planFingerprint: string;
+  readonly ir: NativeCircuitIrV3;
+}
+```
+
+Its profile-free validator rejects unknown fields, malformed context and
+provenance, duplicate physical identities, dangling Network references,
+invalid placement/configuration, cross-record database mismatches, and
+inconsistent resolved colors or connector ordinals. The fingerprint catches
+accidental stale or cross-source responses; it is not an authority token. A
+runtime hydration facade exposes stable, runtime-local Network handles and
+fresh simulation kernels; physical Entities remain inert topology records and
+do not become simulator devices.
 
 ## Host-bound source subset
 
@@ -91,7 +120,8 @@ The implemented public source constructor is deliberately exact:
 
 ```ts
 // In a host embedding with a matching reviewed profile:
-const entity = Entity('entity:assembling-machine-3');
+const entity = Entity('assembling-machine-3');
+const canonical = Entity('entity:assembling-machine-3');
 const same = Entity(prototypes.entity['assembling-machine-3']);
 entity.bind('circuit', 'red', input, 'input');
 const red = entity.port('circuit', 'red');
@@ -109,7 +139,7 @@ The additional accepted source form is intentionally limited to the typed
 single-condition slice:
 
 ```ts
-const machine = Entity('entity:synthetic-shared-two-color', {
+const machine = Entity('synthetic-shared-two-color', {
   rule: 'shared-circuit-condition',
   lanes: ['shared-red', 'shared-green'],
   condition: NativeCondition(Signal('virtual', 'signal-A'), '>', 0),
@@ -123,8 +153,9 @@ that detached comparison directly onto the Entity's declared native field,
 without a Decider combinator or a tick. The synthetic example proves the
 compiler path only; it is not native Factorio conformance evidence.
 
-`Entity` is a reserved direct DSL value. Its first argument is either a non-empty
-prototype name/canonical key resolved by the host resolver, or the exact
+`Entity` is a reserved direct DSL value. Its first argument is either a short
+prototype name (the preferred spelling) or canonical key resolved by the host
+resolver, or the exact
 identity of a record returned by the selected host `prototypes.entity` table.
 The resolved canonical key must select exactly one profile in the matching
 `TrustedEntityReplayContext`; the source never supplies a profile reference,
@@ -138,8 +169,9 @@ The cloneable Worker request carries only `EntityReplayContextTransport`. An
 injectable host callback may resolve that transport to the trusted profile set
 and a host-local prototype resolver. A missing or mismatched callback leaves the
 request transport-only and cannot grant Entity authority. The browser's normal
-production runtime does not invent profiles; its main-thread preview likewise
-requires the matching host context before replaying a v3 plan.
+production runtime does not invent profiles; its main-thread preview consumes
+the resolved physical snapshot returned by a successful authorized Worker
+compilation and does not require the host resolver again.
 
 `Entity(prototype)` also accepts one public configuration object with exactly
 `rule`, `lanes`, and `condition` fields. The condition must be the nominal
@@ -149,9 +181,10 @@ execution session; the runtime translates it to the existing typed
 `entity.at(x, y, direction?)` mutates the existing physical record, returns the
 same live view, and accepts finite coordinates plus an integer direction from
 `0` through `15`. Neither form allocates a Producer, Network, or hidden
-Decider. `Entity(...)(input)` is not a callable constructor form in this slice.
-Typed facades, raw native payloads, and native Factorio behavior remain
-separate future work.
+Decider. The callable form `Entity(...)(input)`, including
+`output += Entity(params)(input)`, is reserved and planned; it is not
+implemented by the present generic host-embedding slice. Typed facades, raw
+native payloads, and native Factorio behavior remain separate future work.
 
 ## Internal construction and validation
 
@@ -254,5 +287,7 @@ The remaining implementation boundary covers:
 3. additional typed/generic acceptance beyond the host-bound source subset;
 4. later typed facades and any native-verified claims.
 
-No configuration/placement constructor overload, callable constructor form, or
-native-verified behavior is implied by this source subset.
+The configuration and placement forms documented above are implemented. The
+callable constructor form remains reserved and planned; raw payload lowering,
+broader typed facades, and native-verified behavior are not implied by this
+source subset.

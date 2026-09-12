@@ -10,5 +10,6 @@ export * from './entity-plan-validation.js';
 export * from './constant-signal-values.js';
 export * from './elaboration-program.js';
 export * from './elaboration.js';
+export * from './resolved-source-circuit.js';
 export * from './execution-diagnostic.js';
 export * from './test-runner.js';

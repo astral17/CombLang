@@ -9,6 +9,7 @@ import { describe, expect, test } from 'vitest';
 import { blueprintJsonForArtifact, blueprintJsonForPlan } from './blueprint-demo.js';
 import { compileSource } from './compile-source.js';
 import { createSourceCircuitArtifact } from './source-circuit-artifact.js';
+import { sourcePreviewDiagnostic } from './source-diagnostics.js';
 import {
   runSourceCircuitDemo,
   runSourcePlanDemo,
@@ -16,7 +17,7 @@ import {
 } from './source-demo.js';
 
 describe('source circuit artifact', () => {
-  test('requires a correlated host context for every v3 artifact consumer at compile time', () => {
+  test('requires a correlated resolved circuit for every v3 artifact consumer at compile time', () => {
     if (false) {
       const plan = {} as DirectElaborationPlanV3;
       // @ts-expect-error Bare v3 artifact construction must not be callable.
@@ -64,11 +65,14 @@ describe('source circuit artifact', () => {
     );
     const plan = compiled.plan;
     if (plan === undefined || plan.version !== 3) throw new Error('Expected a v3 source plan.');
-    const artifact = createSourceCircuitArtifact(plan, trustedEntityReplayContext);
+    const resolvedCircuit = compiled.resolvedCircuit;
+    if (resolvedCircuit === undefined) throw new Error('Expected a resolved v3 source circuit.');
+    const artifact = createSourceCircuitArtifact(plan, resolvedCircuit);
     const controller = new SourceSimulationController(artifact);
     const demo = runSourceCircuitDemo(artifact, 0, 0);
 
     expect(artifact.plan.version).toBe(3);
+    expect(artifact.resolvedCircuit.planFingerprint).toMatch(/^v1-[0-9a-f]{16}$/);
     expect(artifact.execution.circuit.ir.version).toBe(3);
     expect(artifact.blueprint.blueprint.entities).toEqual([
       expect.objectContaining({
@@ -88,6 +92,183 @@ describe('source circuit artifact', () => {
     ]);
     expect(demo.combinators).toBe(0);
     expect(controller.timeline).toHaveLength(1);
+  });
+
+  test('rejects stale and modified v3 plans even when context and record counts match', () => {
+    const profile = syntheticSharedTwoColorEntityProfile;
+    const trustedEntityReplayContext = createTrustedEntityReplayContext({
+      database: profile.ref.database,
+      source: 'synthetic',
+      evidenceIdentity: 'comblang-synthetic-evidence-v1',
+      policyIdentity: 'comblang-entity-policy-v1',
+      profiles: [profile],
+    });
+    const prototype = {
+      key: profile.ref.prototypeKey,
+      name: 'synthetic-shared-two-color',
+      type: 'container',
+    } as EntityPrototype;
+    const environment = {
+      trustedEntityReplayContext,
+      entityPrototypeResolver: {
+        database: profile.ref.database,
+        getEntity(nameOrKey: string) {
+          return nameOrKey === prototype.key || nameOrKey === prototype.name
+            ? prototype
+            : undefined;
+        },
+      } as EntityPrototypeResolver,
+    };
+    const compile = (bias: number) =>
+      compileSource(
+        {
+          path: `correlation-${bias}.factorio.ts`,
+          text: `const entity = Entity('synthetic-shared-two-color');
+const input = new Network();
+const output = new Network();
+output += input + ${bias};`,
+        },
+        environment,
+      );
+    const first = compile(1);
+    const second = compile(2);
+    const firstPlan = first.plan;
+    const firstResolved = first.resolvedCircuit;
+    const secondPlan = second.plan;
+    const secondResolved = second.resolvedCircuit;
+    if (
+      firstPlan === undefined ||
+      firstPlan.version !== 3 ||
+      firstResolved === undefined ||
+      secondPlan === undefined ||
+      secondPlan.version !== 3 ||
+      secondResolved === undefined
+    ) {
+      throw new Error('Expected two resolved v3 source compilations.');
+    }
+    expect(firstPlan.context).toEqual(secondPlan.context);
+    expect(firstPlan.producers).toHaveLength(secondPlan.producers.length);
+    expect(firstPlan.entities).toHaveLength(secondPlan.entities.length);
+    expect(firstResolved.planFingerprint).not.toBe(secondResolved.planFingerprint);
+
+    expect(() => createSourceCircuitArtifact(firstPlan, secondResolved)).toThrow(
+      /fingerprint does not match/,
+    );
+    const modifiedPlan = {
+      ...firstPlan,
+      producers: firstPlan.producers.map((producer) =>
+        producer.kind === 'arithmetic'
+          ? { ...producer, right: { kind: 'constant' as const, value: 99 } }
+          : producer,
+      ),
+    };
+    expect(() => createSourceCircuitArtifact(modifiedPlan, firstResolved)).toThrow(
+      /fingerprint does not match/,
+    );
+  });
+
+  test('hydrates a mixed combinator and Entity source without replaying the Entity plan', () => {
+    const profile = syntheticSharedTwoColorEntityProfile;
+    const trustedEntityReplayContext = createTrustedEntityReplayContext({
+      database: profile.ref.database,
+      source: 'synthetic',
+      evidenceIdentity: 'comblang-synthetic-evidence-v1',
+      policyIdentity: 'comblang-entity-policy-v1',
+      profiles: [profile],
+    });
+    const prototype = {
+      key: profile.ref.prototypeKey,
+      name: 'synthetic-shared-two-color',
+      type: 'container',
+    } as EntityPrototype;
+    const compiled = compileSource(
+      {
+        path: 'mixed-entity-preview.factorio.ts',
+        text: `const entity = Entity('synthetic-shared-two-color');
+const input = new Network<R>();
+const output: Network = input + 1;`,
+      },
+      {
+        trustedEntityReplayContext,
+        entityPrototypeResolver: {
+          database: profile.ref.database,
+          getEntity(nameOrKey) {
+            return nameOrKey === prototype.key || nameOrKey === prototype.name
+              ? prototype
+              : undefined;
+          },
+        },
+      },
+    );
+    const plan = compiled.plan;
+    const resolvedCircuit = compiled.resolvedCircuit;
+    if (plan === undefined || plan.version !== 3 || resolvedCircuit === undefined) {
+      throw new Error('Expected a resolved mixed v3 source compilation.');
+    }
+
+    const artifact = createSourceCircuitArtifact(plan, resolvedCircuit);
+    const demo = runSourceCircuitDemo(artifact, 3, 1);
+
+    expect(demo).toMatchObject({ combinators: 1, outputValue: 4 });
+    expect(artifact.execution.circuit.ir.entities).toHaveLength(1);
+  });
+
+  test('turns missing, malformed, and mismatched resolved data into WEB1001 preview diagnostics', () => {
+    const profile = syntheticSharedTwoColorEntityProfile;
+    const trustedEntityReplayContext = createTrustedEntityReplayContext({
+      database: profile.ref.database,
+      source: 'synthetic',
+      evidenceIdentity: 'comblang-synthetic-evidence-v1',
+      policyIdentity: 'comblang-entity-policy-v1',
+      profiles: [profile],
+    });
+    const prototype = {
+      key: profile.ref.prototypeKey,
+      name: 'synthetic-shared-two-color',
+      type: 'container',
+    } as EntityPrototype;
+    const compiled = compileSource(
+      {
+        path: 'invalid-resolved-preview.factorio.ts',
+        text: "Entity('synthetic-shared-two-color');",
+      },
+      {
+        trustedEntityReplayContext,
+        entityPrototypeResolver: {
+          database: profile.ref.database,
+          getEntity(nameOrKey) {
+            return nameOrKey === prototype.key || nameOrKey === prototype.name
+              ? prototype
+              : undefined;
+          },
+        },
+      },
+    );
+    const plan = compiled.plan;
+    const resolvedCircuit = compiled.resolvedCircuit;
+    if (plan === undefined || plan.version !== 3 || resolvedCircuit === undefined) {
+      throw new Error('Expected a resolved Entity source compilation.');
+    }
+
+    const malformed = structuredClone(resolvedCircuit) as { format: string };
+    malformed.format = 'wrong';
+    const mismatched = structuredClone(resolvedCircuit) as any;
+    mismatched.ir.context.evidenceIdentity = 'evidence:other';
+    const captureError = (action: () => void): unknown => {
+      try {
+        action();
+      } catch (error) {
+        return error;
+      }
+      throw new Error('Expected invalid resolved data to fail.');
+    };
+    for (const error of [
+      captureError(() => createSourceCircuitArtifact(plan, undefined as never)),
+      captureError(() => createSourceCircuitArtifact(plan, malformed as never)),
+      captureError(() => createSourceCircuitArtifact(plan, mismatched)),
+    ]) {
+      expect(sourcePreviewDiagnostic(error)).toMatchObject({ code: 'WEB1001', severity: 'error' });
+    }
   });
 
   test('shares one elaborated circuit across preview consumers and fresh simulations', () => {

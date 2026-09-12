@@ -32,6 +32,15 @@ For version 2 Deciders, ingress normalizes an absent `outputs` list to `[output]
 
 Resolved topology, ownership transitions, native mode compatibility, and color consistency still belong to elaboration because they require relationships across otherwise valid descriptors.
 
+For host-authorized Entity compilation, the resulting physical NCIR is carried
+in the separate cloneable `ResolvedSourceCircuit` envelope. It is not an
+optional field on Direct Plan v2 or v3. The Worker may transport the plan and
+resolved circuit together. The v1 envelope also carries a deterministic
+`planFingerprint` for accidental stale-response correlation; it grants no
+authority. A main-thread consumer must validate the resolved envelope and use
+its frozen physical IR rather than replaying a v3 plan without the trusted
+profile authority.
+
 ## Descriptor groups
 
 - `networks` declares logical Network identities and optional fixed colors.

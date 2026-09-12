@@ -4,6 +4,7 @@ import {
   type EntityPrototype,
 } from '@comblang/prototypes';
 import { sourceFileId, sourceSpan, type Diagnostic } from '@comblang/shared';
+import { SparseBus } from '@comblang/factorio';
 import { generateEntityBlueprintJson } from '@comblang/compiler/blueprint-json';
 import type { EntityProfile } from '@comblang/compiler/entity';
 import {
@@ -24,6 +25,7 @@ import {
   type SourceCompilationStage,
 } from './source-compilation.js';
 import { elaborateEntityDirectPlan } from './direct-plan.js';
+import { hydrateResolvedSourceCircuit } from './resolved-source-circuit.js';
 
 function syntheticEntityHost(
   profile: EntityProfile,
@@ -52,6 +54,69 @@ function syntheticEntityHost(
 }
 
 describe('shared source compilation service', () => {
+  test('snapshots and hydrates canonical Decider copy input output data', () => {
+    const host = syntheticEntityHost(syntheticZeroPortEntityProfile);
+    const compilation = compileSourceProgram(
+      {
+        path: 'copy-output-transport.factorio.ts',
+        text: `const entity = Entity('synthetic-zero-port');
+const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output = new Network();
+output += IF(input[A] > 0, input[A]);`,
+      },
+      host,
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const resolvedCircuit = compilation.resolvedCircuit;
+    if (resolvedCircuit === undefined) throw new Error('Expected a resolved source circuit.');
+    const decider = resolvedCircuit.ir.producers.find((producer) => producer.kind === 'decider');
+    if (decider === undefined || decider.kind !== 'decider') {
+      throw new Error('Expected a Decider producer.');
+    }
+    expect(decider.config.outputs[0]).toMatchObject({
+      mode: 'copy',
+      input: { refKind: 'single' },
+    });
+
+    const hydrated = hydrateResolvedSourceCircuit(resolvedCircuit);
+    const input = hydrated.ir.networks.find(({ name }) => name === 'input');
+    const output = hydrated.ir.networks.find(({ name }) => name === 'output');
+    if (input === undefined || output === undefined)
+      throw new Error('Expected input/output Networks.');
+    const value = hydrated
+      .createSimulation([
+        {
+          network: hydrated.network(input.id),
+          values: new SparseBus([[{ type: 'virtual', name: 'signal-A' }, 4]]),
+        },
+      ])
+      .step()
+      .read(output.id);
+    expect(value.get({ type: 'virtual', name: 'signal-A' })).toBe(4);
+  });
+
+  test('resolves short and canonical Entity prototype spellings to one host prototype', () => {
+    const host = syntheticEntityHost(syntheticZeroPortEntityProfile);
+    const compilation = compileSourceProgram(
+      {
+        path: 'entity-prototype-spellings.factorio.ts',
+        text: `const shortName = Entity('synthetic-zero-port');
+const canonicalName = Entity('entity:synthetic-zero-port');`,
+      },
+      host,
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3) throw new Error('Expected a v3 source plan.');
+    expect(plan.entities.map(({ profile }) => profile)).toEqual([
+      syntheticZeroPortEntityProfile.ref,
+      syntheticZeroPortEntityProfile.ref,
+    ]);
+  });
+
   test('compiles the public host-bound Entity constructor and explicit port/bind methods as v3', () => {
     const host = syntheticEntityHost(syntheticSharedTwoColorEntityProfile);
     const compilation = compileSourceProgram(
@@ -81,6 +146,12 @@ output += facet + 1;`,
     if (!('entityObject' in execution)) throw new Error('Expected Entity test adapters.');
     expect(plan.version).toBe(3);
     expect(execution.circuit.ir.version).toBe(3);
+    expect(compilation.resolvedCircuit).toMatchObject({
+      format: 'comblang-resolved-source-circuit',
+      version: 1,
+      ir: execution.circuit.ir,
+    });
+    expect(structuredClone(compilation.resolvedCircuit)).toEqual(compilation.resolvedCircuit);
     expect(execution.circuit.ir.entities).toHaveLength(1);
     expect(plan.entities[0]?.connectorBindings).toEqual(
       expect.arrayContaining([
@@ -865,6 +936,7 @@ output += CC(
 
     expect(compilation.execution).toBeDefined();
     expect(artifact).not.toHaveProperty('execution');
+    expect(artifact).not.toHaveProperty('resolvedCircuit');
     expect(structuredClone(artifact)).toEqual(artifact);
   });
 
@@ -885,8 +957,30 @@ output += CC(
 
     expect(artifact.entityReplayContext).toEqual(entityReplayContext);
     expect(artifact.entityReplayIdentity).toContain('comblang-synthetic-evidence-v1');
+    expect(artifact.resolvedCircuit).toBeUndefined();
     expect(structuredClone(artifact)).toEqual(artifact);
     expect(compilation).not.toHaveProperty('entityRegistry');
+  });
+
+  test('does not emit resolved physical data for an identity-only Entity request', () => {
+    const trusted = createTrustedEntityReplayContext({
+      database: syntheticZeroPortEntityProfile.ref.database,
+      source: 'synthetic',
+      evidenceIdentity: 'comblang-synthetic-evidence-v1',
+      policyIdentity: 'comblang-entity-policy-v1',
+      profiles: [syntheticZeroPortEntityProfile],
+    });
+    const compilation = compileSourceProgram(
+      {
+        path: 'identity-only-v3.factorio.ts',
+        text: "const entity = Entity('entity:synthetic-zero-port');",
+      },
+      { entityReplayContext: entityReplayContextTransport(trusted) },
+    );
+
+    expect(compilation.resolvedCircuit).toBeUndefined();
+    expect(compilation.plan).toBeUndefined();
+    expect(compilation.pipelineDiagnostics).toEqual([expect.objectContaining({ code: 'RT2027' })]);
   });
 
   test('requires trusted profile-set binding for provider contexts and verifies provider identity/schema', async () => {
@@ -963,6 +1057,7 @@ output += CC(
 
     expect(compilation.prototypeIdentity).toBe(prototypes.identity);
     expect(compilation.plan).toBeUndefined();
+    expect(compilation.resolvedCircuit).toBeUndefined();
     expect(compilation.pipelineDiagnostics.map(({ code }) => code)).toEqual([
       'ENV_WARNING',
       'EX1001',
