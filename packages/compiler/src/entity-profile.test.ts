@@ -27,6 +27,82 @@ describe('Entity capability profile boundary', () => {
     expect(reordered).toBe(forward);
   });
 
+  test('accepts one explicit callable input/output projection and keeps it data-only', () => {
+    const canonical = canonicalizeEntityProfile(syntheticSharedTwoColorEntityProfile);
+
+    expect(canonical.callProjection).toEqual({
+      input: { connector: 'shared', lane: 'shared-red', color: 'red' },
+      output: { connector: 'shared', lane: 'shared-green', color: 'green' },
+    });
+    expect(Object.isFrozen(canonical.callProjection)).toBe(true);
+    expect(Object.isFrozen(canonical.callProjection?.input)).toBe(true);
+    expect(Object.isFrozen(canonical.callProjection?.output)).toBe(true);
+  });
+
+  test('omits callable projection when it is absent instead of inferring one', () => {
+    const canonical = canonicalizeEntityProfile(syntheticZeroPortEntityProfile);
+
+    expect(canonical).not.toHaveProperty('callProjection');
+
+    const explicitUndefined = jsonCopy(syntheticZeroPortEntityProfile);
+    explicitUndefined.callProjection = undefined;
+    expect(() => canonicalizeEntityProfile(explicitUndefined)).toThrowError(
+      expect.objectContaining({ code: 'EP1001', path: '$.callProjection' }),
+    );
+  });
+
+  test('rejects an ambiguous projection that reuses one physical endpoint', () => {
+    const input = jsonCopy(syntheticSharedTwoColorEntityProfile);
+    input.callProjection.output = input.callProjection.input;
+
+    expect(() => canonicalizeEntityProfile(input)).toThrowError(
+      expect.objectContaining({ code: 'EP1000', path: '$.callProjection' }),
+    );
+  });
+
+  test.each([
+    ['input', 'output', '$.callProjection.input.connector'],
+    ['output', 'input', '$.callProjection.output.connector'],
+  ])(
+    'rejects a call endpoint with incompatible %s connector direction',
+    (endpoint, direction, path) => {
+      const input = jsonCopy(syntheticSharedTwoColorEntityProfile);
+      input.configurationRules = [];
+      input.connectors[0].direction = direction;
+
+      expect(() => canonicalizeEntityProfile(input)).toThrowError(
+        expect.objectContaining({ code: 'EP1002', path }),
+      );
+    },
+  );
+
+  test.each([
+    ['connector', '$.callProjection.input.connector', 'missing-connector'],
+    ['lane', '$.callProjection.output.lane', 'missing-lane'],
+  ])('rejects a call endpoint with an unknown %s', (kind, path, value) => {
+    const input = jsonCopy(syntheticSharedTwoColorEntityProfile);
+    if (kind === 'connector') input.callProjection.input.connector = value;
+    else input.callProjection.output.lane = value;
+
+    expect(() => canonicalizeEntityProfile(input)).toThrowError(
+      expect.objectContaining({ code: 'EP1002', path }),
+    );
+  });
+
+  test('rejects unknown fields and noncanonical colors in callable projection data', () => {
+    const unknownField = jsonCopy(syntheticSharedTwoColorEntityProfile);
+    unknownField.callProjection.extra = true;
+    expect(() => canonicalizeEntityProfile(unknownField)).toThrowError(
+      expect.objectContaining({ code: 'EP1000', path: '$.callProjection.extra' }),
+    );
+
+    const wrongColor = jsonCopy(syntheticSharedTwoColorEntityProfile);
+    wrongColor.callProjection.output.color = 'red';
+    expect(() => canonicalizeEntityProfile(wrongColor)).toThrowError(
+      expect.objectContaining({ code: 'EP1002', path: '$.callProjection.output.color' }),
+    );
+  });
+
   test('deeply freezes the canonical snapshot and isolates caller mutation', () => {
     const input = jsonCopy(syntheticSharedTwoColorEntityProfile);
     const canonical = canonicalizeEntityProfile(input);

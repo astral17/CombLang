@@ -98,6 +98,12 @@ export interface EntityDefaultReadProjection {
   readonly lane: EntityLaneKey;
 }
 
+/** Explicit callable wiring; omission means that the Entity is not callable. */
+export interface EntityCallProjection {
+  readonly input: EntityLaneEndpoint;
+  readonly output: EntityLaneEndpoint;
+}
+
 export type EntityEvidenceState =
   | { readonly status: 'unknown' }
   | { readonly status: 'unverified'; readonly value: boolean }
@@ -127,6 +133,7 @@ export interface EntityProfile {
   readonly features: readonly EntityFeatureProfile[];
   readonly configurationRules: readonly EntityConfigurationRule[];
   readonly defaultReadProjection: EntityDefaultReadProjection | null;
+  readonly callProjection?: EntityCallProjection;
   readonly synthetic: boolean;
 }
 

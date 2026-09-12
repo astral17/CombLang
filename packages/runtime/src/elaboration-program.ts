@@ -1490,8 +1490,12 @@ class ElaborationRecorder {
         this.#isPair(left) ||
         this.#isSelected(left) ||
         this.#isDestination(left);
+      const entityRight = this.#isEntity(right);
       const operation = (): unknown => {
         if (destination) this.#assertWritableValue(left, rawSpan);
+        if (entityRight) {
+          return this.#bindEntityOutput(left, right as EntityValue, rawSpan);
+        }
         if (destination && this.#isCombinator(right)) {
           this.#recordDslCall();
           this.#attachDestination(
@@ -1521,7 +1525,7 @@ class ElaborationRecorder {
         assign(result);
         return result;
       };
-      return destination || this.#isCombinator(right)
+      return destination || entityRight || this.#isCombinator(right)
         ? this.#withTopologyTransaction(rawSpan, operation)
         : operation();
     },
@@ -1718,6 +1722,7 @@ class ElaborationRecorder {
     args: readonly CallArgument[],
     rawSpan: RawSpan,
   ): unknown {
+    if (this.#isEntity(callable)) return this.#invokeEntity(callable, args, rawSpan);
     if (typeof callable !== 'function') throw new TypeError('Called value is not a function.');
     const invocation: Invocation = {
       callable,
@@ -1736,6 +1741,96 @@ class ElaborationRecorder {
     } finally {
       this.#invocations.pop();
     }
+  }
+
+  #invokeEntity(entity: EntityValue, args: readonly CallArgument[], rawSpan: RawSpan): EntityValue {
+    const source = this.#span(rawSpan);
+    const profile = this.#entityProfile(entity, source);
+    if (profile.callProjection === undefined) {
+      throw new ElaborationExecutionError(
+        `Entity profile ${JSON.stringify(profile.ref.prototypeKey)} has no callable projection.`,
+        source,
+        'RT2027',
+      );
+    }
+    if (args.length !== 1) {
+      throw new ElaborationExecutionError(
+        'Callable Entity invocation requires exactly one argument.',
+        source,
+        'RT2027',
+      );
+    }
+    const argument = args[0]!;
+    const readable = this.#readableNetworkFacet(argument.value, argument.source);
+    if (readable === undefined) {
+      throw new ElaborationExecutionError(
+        'Callable Entity input requires a readable Network or Producer output.',
+        this.#span(argument.source),
+        'RT2015',
+      );
+    }
+    return this.#bindEntity(
+      entity,
+      profile.callProjection.input.connector,
+      profile.callProjection.input.lane,
+      readable,
+      'input',
+      rawSpan,
+    );
+  }
+
+  #entityProfile(entity: EntityValue, source: SourceSpan): EntityProfile {
+    this.#entityAuthority(entity, source);
+    const context = this.#entityContext;
+    const registry = this.#entityRegistry;
+    if (context === undefined || registry === undefined) {
+      throw new ElaborationExecutionError(
+        'Entity operation requires a trusted v3 context and prototype resolver.',
+        source,
+        'RT2027',
+      );
+    }
+    let profile: EntityProfile;
+    try {
+      profile = resolveEntityReplayProfile(registry.record(entity).profile, context);
+    } catch (error) {
+      throw new ElaborationExecutionError(
+        error instanceof Error ? error.message : 'Entity profile is unavailable.',
+        source,
+        'RT2027',
+        undefined,
+        { cause: error },
+      );
+    }
+    return profile;
+  }
+
+  #bindEntityOutput(destination: unknown, entity: EntityValue, rawSpan: RawSpan): EntityValue {
+    const source = this.#span(rawSpan);
+    const profile = this.#entityProfile(entity, source);
+    if (profile.callProjection === undefined) {
+      throw new ElaborationExecutionError(
+        `Entity profile ${JSON.stringify(profile.ref.prototypeKey)} has no callable projection.`,
+        source,
+        'RT2027',
+      );
+    }
+    const network = this.#resolveWritableNetwork(destination, rawSpan, 'Entity output destination');
+    if (network === undefined) {
+      throw new ElaborationExecutionError(
+        'Callable Entity output requires a writable Network destination.',
+        source,
+        'RT2015',
+      );
+    }
+    return this.#bindEntity(
+      entity,
+      profile.callProjection.output.connector,
+      profile.callProjection.output.lane,
+      network,
+      'output',
+      rawSpan,
+    );
   }
 
   #debugValue(
@@ -3333,6 +3428,9 @@ class ElaborationRecorder {
         source,
         'RT2015',
       );
+    }
+    if (directionValue === 'output') {
+      this.#assertWritableNetwork(network, rawSpan, 'Entity output binding Network');
     }
     this.#assertReadableNetworkAt(network, source, 'Entity binding Network');
     this.#requireNetworkColor(network, 'ref', endpoint.color, rawSpan);

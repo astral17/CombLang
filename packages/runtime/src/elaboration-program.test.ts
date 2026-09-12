@@ -704,6 +704,413 @@ if (alias !== first || first === second) throw new Error('Entity identity was no
     ).toThrow(ElaborationOperationLimitError);
   });
 
+  test('invokes a callable Entity through the nominal runtime boundary and returns the same view', () => {
+    const context = syntheticEntityExecutionContext();
+    const parsed = parseFile({
+      path: 'entity-call-execution.factorio.ts',
+      text: `const argument = new Network();
+const entity = Entity('entity:synthetic-shared-two-color');
+const called = entity(argument);
+if (!Object.is(called, entity)) throw new Error('Entity call changed the live view');
+const inline = Entity('entity:synthetic-shared-two-color')(argument);
+if (Object.is(inline, entity)) throw new Error('distinct construction unexpectedly reused identity');`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+
+    const plan = executeElaborationProgramV3(transformElaborationModule(parsed), {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: syntheticEntityResolver(),
+    });
+    expect(plan.version).toBe(3);
+    if (plan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(plan.entities).toHaveLength(2);
+    expect(plan.networks).toHaveLength(1);
+    expect(plan.producers).toHaveLength(0);
+    expect(plan.entities.every(({ connectorBindings }) => connectorBindings.length === 1)).toBe(
+      true,
+    );
+  });
+
+  test('rejects an Entity invocation when its profile has no call projection at the call span', () => {
+    const context = syntheticEntityExecutionContext();
+    const parsed = parseFile({
+      path: 'entity-non-callable.factorio.ts',
+      text: `const entity = Entity('entity:synthetic-zero-port');
+entity({});`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+
+    const callStart = parsed.text.indexOf('entity({})');
+    expect(callStart).toBeGreaterThanOrEqual(0);
+    expect(() =>
+      executeElaborationProgramV3(transformElaborationModule(parsed), {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: syntheticEntityResolver(),
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'RT2027',
+        span: {
+          fileId: sourceFileId('entity-non-callable.factorio.ts'),
+          start: callStart,
+          end: callStart + 'entity({})'.length,
+        },
+      }),
+    );
+  });
+
+  test.each(['entity()', 'entity(1, 2)'])(
+    'requires exactly one callable Entity argument: %s',
+    (call) => {
+      const context = syntheticEntityExecutionContext();
+      const parsed = parseFile({
+        path: 'entity-call-arity.factorio.ts',
+        text: `const entity = Entity('entity:synthetic-shared-two-color');
+${call};`,
+      });
+      expect(validateDslSemantics(parsed)).toEqual([]);
+
+      expect(() =>
+        executeElaborationProgramV3(transformElaborationModule(parsed), {
+          trustedEntityReplayContext: context,
+          entityPrototypeResolver: syntheticEntityResolver(),
+        }),
+      ).toThrowError(expect.objectContaining({ code: 'RT2027' }));
+    },
+  );
+
+  test('keeps ordinary and structurally Entity-shaped values on normal JavaScript call errors', () => {
+    const parsed = parseFile({
+      path: 'entity-call-lookalike.factorio.ts',
+      text: `const lookalike = { kind: 'entity', id: 'entity:1' };
+lookalike({});`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+      expect.objectContaining({ code: 'EX1001', message: 'Called value is not a function.' }),
+    );
+  });
+
+  test('binds a callable Entity input to the declared physical endpoint and makes repeats idempotent', () => {
+    const context = syntheticEntityExecutionContext();
+    const parsed = parseFile({
+      path: 'entity-call-input-bind.factorio.ts',
+      text: `const input = new Network();
+const entity = Entity('entity:synthetic-shared-two-color');
+const first = entity(input);
+const second = entity(input);
+if (!Object.is(first, entity) || !Object.is(second, entity)) {
+  throw new Error('Entity call changed the live view');
+}`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+
+    const plan = executeElaborationProgramV3(transformElaborationModule(parsed), {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: syntheticEntityResolver(),
+    });
+    expect(plan.version).toBe(3);
+    if (plan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(plan.networks).toHaveLength(1);
+    expect(plan.networks[0]?.fixedColor).toBe('red');
+    expect(plan.producers).toHaveLength(0);
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.entities[0]?.connectorBindings).toHaveLength(1);
+    expect(plan.entities[0]?.connectorBindings[0]).toMatchObject({
+      endpoint: { connector: 'shared', lane: 'shared-red', color: 'red' },
+      network: plan.networks[0]?.name,
+      direction: 'input',
+    });
+  });
+
+  test('accepts a readable Producer output as a callable Entity input without adding topology', () => {
+    const context = syntheticEntityExecutionContext();
+    const parsed = parseFile({
+      path: 'entity-call-producer-input.factorio.ts',
+      text: `const signal = Signal('virtual', 'signal-A');
+const source = CC(2 * signal);
+const entity = Entity('entity:synthetic-shared-two-color');
+entity(source);`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+
+    const plan = executeElaborationProgramV3(transformElaborationModule(parsed), {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: syntheticEntityResolver(),
+    });
+    expect(plan.version).toBe(3);
+    if (plan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(plan.producers).toHaveLength(1);
+    expect(plan.networks).toHaveLength(1);
+    expect(plan.entities[0]?.connectorBindings).toHaveLength(1);
+    expect(plan.entities[0]?.connectorBindings[0]?.network).toBe(plan.networks[0]?.name);
+  });
+
+  test('reports non-Network callable input at the argument span and conflicting repeats at the original binding', () => {
+    const context = syntheticEntityExecutionContext();
+    const invalidInput = parseFile({
+      path: 'entity-call-invalid-input.factorio.ts',
+      text: `const entity = Entity('entity:synthetic-shared-two-color');
+entity(123);`,
+    });
+    expect(validateDslSemantics(invalidInput)).toEqual([]);
+    const argumentStart = invalidInput.text.indexOf('123');
+    expect(() =>
+      executeElaborationProgramV3(transformElaborationModule(invalidInput), {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: syntheticEntityResolver(),
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'RT2015',
+        span: {
+          fileId: sourceFileId('entity-call-invalid-input.factorio.ts'),
+          start: argumentStart,
+          end: argumentStart + 3,
+        },
+      }),
+    );
+
+    const conflicting = parseFile({
+      path: 'entity-call-conflicting-input.factorio.ts',
+      text: `const first = new Network();
+const second = new Network();
+const entity = Entity('entity:synthetic-shared-two-color');
+entity(first);
+entity(second);`,
+    });
+    expect(validateDslSemantics(conflicting)).toEqual([]);
+    expect(() =>
+      executeElaborationProgramV3(transformElaborationModule(conflicting), {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: syntheticEntityResolver(),
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'RT2030',
+        related: [
+          expect.objectContaining({ message: 'The first Entity binding originates here.' }),
+        ],
+      }),
+    );
+  });
+
+  test('attaches Network += Entity to the declared output endpoint without creating another Entity', () => {
+    const context = syntheticEntityExecutionContext();
+    const parsed = parseFile({
+      path: 'entity-call-output-bind.factorio.ts',
+      text: `const input = new Network();
+const output = new Network();
+const entity = Entity('entity:synthetic-shared-two-color');
+entity(input);
+output += entity;
+output += entity;`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+
+    const plan = executeElaborationProgramV3(transformElaborationModule(parsed), {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: syntheticEntityResolver(),
+    });
+    expect(plan.version).toBe(3);
+    if (plan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(plan.networks).toHaveLength(2);
+    expect(plan.networks.map(({ fixedColor }) => fixedColor)).toEqual(['red', 'green']);
+    expect(plan.producers).toHaveLength(0);
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.entities[0]?.connectorBindings).toHaveLength(2);
+    expect(plan.entities[0]?.connectorBindings).toMatchObject([
+      {
+        endpoint: { connector: 'shared', lane: 'shared-red', color: 'red' },
+        direction: 'input',
+      },
+      {
+        endpoint: { connector: 'shared', lane: 'shared-green', color: 'green' },
+        direction: 'output',
+      },
+    ]);
+  });
+
+  test('supports inline output += Entity(prototype)(input) with one physical Entity and one charge per operation', () => {
+    const context = syntheticEntityExecutionContext();
+    const parsed = parseFile({
+      path: 'entity-call-inline-output.factorio.ts',
+      text: `const input = new Network();
+const output = new Network();
+output += Entity('entity:synthetic-shared-two-color')(input);`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+
+    const program = transformElaborationModule(parsed);
+    const plan = executeElaborationProgramV3(program, {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: syntheticEntityResolver(),
+      dslCallBudget: 5,
+    });
+    expect(plan.version).toBe(3);
+    if (plan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.networks).toHaveLength(2);
+    expect(plan.entities[0]?.connectorBindings).toHaveLength(2);
+    expect(plan.producers).toHaveLength(0);
+    expect(() =>
+      executeElaborationProgramV3(program, {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: syntheticEntityResolver(),
+        dslCallBudget: 4,
+      }),
+    ).toThrow(ElaborationOperationLimitError);
+  });
+
+  test('reports a conflicting callable Entity output repeat with the original output binding', () => {
+    const context = syntheticEntityExecutionContext();
+    const parsed = parseFile({
+      path: 'entity-call-conflicting-output.factorio.ts',
+      text: `const first = new Network();
+const second = new Network();
+const entity = Entity('entity:synthetic-shared-two-color');
+first += entity;
+second += entity;`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+
+    expect(() =>
+      executeElaborationProgramV3(transformElaborationModule(parsed), {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: syntheticEntityResolver(),
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'RT2030',
+        related: [
+          expect.objectContaining({ message: 'The first Entity binding originates here.' }),
+        ],
+      }),
+    );
+  });
+
+  test('does not allow explicit Entity output binding through a Readonly Network', () => {
+    const context = syntheticEntityExecutionContext();
+    const parsed = parseFile({
+      path: 'entity-explicit-output-readonly.factorio.ts',
+      text: `const entity = Entity('entity:synthetic-shared-two-color');
+function Attach(input: Readonly<Network>) {
+  entity.bind('shared', 'shared-green', input, 'output');
+}
+Attach(new Network());`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+
+    expect(() =>
+      executeElaborationProgramV3(transformElaborationModule(parsed), {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: syntheticEntityResolver(),
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'RT2015' }));
+  });
+
+  test('keeps one callable Entity identity across aliases, containers, computed selection, and function returns', () => {
+    const context = syntheticEntityExecutionContext();
+    const parsed = parseFile({
+      path: 'entity-call-ownership-aliases.factorio.ts',
+      text: `const input = new Network();
+const output = new Network();
+const entity = Entity('entity:synthetic-shared-two-color');
+const alias = entity;
+const array = [alias];
+const holder = { selected: array[0] };
+const key = 'selected';
+function identity(value) { return value; }
+const selected = identity(holder[key]);
+if (!Object.is(selected, entity)) throw new Error('Entity alias changed identity');
+selected(input);
+const returned = identity(array[0]);
+if (!Object.is(returned, entity)) throw new Error('Entity return changed identity');
+returned(input);
+output += holder[key];`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+
+    const plan = executeElaborationProgramV3(transformElaborationModule(parsed), {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: syntheticEntityResolver(),
+    });
+    expect(plan.version).toBe(3);
+    if (plan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.networks).toHaveLength(2);
+    expect(plan.producers).toHaveLength(0);
+    expect(plan.entities[0]?.connectorBindings).toHaveLength(2);
+    expect(plan.entities[0]?.connectorBindings.map(({ direction }) => direction)).toEqual([
+      'input',
+      'output',
+    ]);
+  });
+
+  test('rejects a stale Entity view after function return without reviving its physical identity', () => {
+    const context = syntheticEntityExecutionContext();
+    const parsed = parseFile({
+      path: 'entity-call-stale-view.factorio.ts',
+      text: `let stale;
+function make() {
+  stale = Entity('entity:synthetic-shared-two-color');
+  return stale;
+}
+const live = make();
+const input = new Network();
+live(input);
+stale(input);`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const staleCallStart = parsed.text.indexOf('stale(input)');
+    expect(staleCallStart).toBeGreaterThanOrEqual(0);
+
+    expect(() =>
+      executeElaborationProgramV3(transformElaborationModule(parsed), {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: syntheticEntityResolver(),
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'RT2012',
+        span: {
+          fileId: sourceFileId('entity-call-stale-view.factorio.ts'),
+          start: staleCallStart,
+          end: staleCallStart + 'stale(input)'.length,
+        },
+      }),
+    );
+  });
+
+  test.each([
+    {
+      name: 'missing projection',
+      source: `const output = new Network();
+const entity = Entity('entity:synthetic-zero-port');
+output += entity;`,
+      code: 'RT2027',
+    },
+    {
+      name: 'invalid destination',
+      source: `const destination = {};
+const entity = Entity('entity:synthetic-shared-two-color');
+destination += entity;`,
+      code: 'RT2015',
+    },
+  ])('rejects callable Entity output with $name', ({ source, code }) => {
+    const context = syntheticEntityExecutionContext();
+    const parsed = parseFile({ path: `entity-call-output-${code}.factorio.ts`, text: source });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+
+    expect(() =>
+      executeElaborationProgramV3(transformElaborationModule(parsed), {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: syntheticEntityResolver(),
+      }),
+    ).toThrowError(expect.objectContaining({ code }));
+  });
+
   test('captures Entity references through v3 instantiation without handles', () => {
     const context = syntheticEntityExecutionContext();
     const program = {

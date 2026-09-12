@@ -174,6 +174,69 @@ output += facet + 1;`,
     });
   });
 
+  test('compiles callable Entity input/output through transport, blueprint, debug, and inert simulation', () => {
+    const host = syntheticEntityHost(syntheticSharedTwoColorEntityProfile);
+    const compilation = compileSourceProgram(
+      {
+        path: 'callable-entity-source.factorio.ts',
+        text: `const input = new Network();
+const output = new Network();
+output += Entity('synthetic-shared-two-color')(input);`,
+      },
+      host,
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    const execution = compilation.execution;
+    const resolvedCircuit = compilation.resolvedCircuit;
+    if (
+      plan === undefined ||
+      plan.version !== 3 ||
+      execution === undefined ||
+      execution.circuit.ir.version !== 3 ||
+      !('entityObject' in execution) ||
+      resolvedCircuit === undefined
+    ) {
+      throw new Error('Expected a resolved callable Entity v3 compilation.');
+    }
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.networks).toHaveLength(2);
+    expect(plan.entities[0]?.connectorBindings).toHaveLength(2);
+    expect(execution.circuit.ir.entities).toHaveLength(1);
+    expect(resolvedCircuit.ir.entities).toEqual(execution.circuit.ir.entities);
+    expect(structuredClone(resolvedCircuit)).toEqual(resolvedCircuit);
+
+    const blueprint = generateEntityBlueprintJson(execution.circuit.ir);
+    expect(blueprint.blueprint.entities).toHaveLength(1);
+    expect(blueprint.blueprint.entities[0]).toMatchObject({
+      name: 'synthetic-shared-two-color',
+      entity_number: 1,
+    });
+
+    const debugEntity = execution.debug.root.entity(1);
+    expect(debugEntity.entityId).toBe(execution.circuit.ir.entities[0]?.id);
+    expect(debugEntity.record.connectorBindings).toHaveLength(2);
+    const session = execution.createTestSession();
+    expect(execution.entityObject(session, 1)).toMatchObject({
+      adapterId: 'entity-physical-v3',
+      instanceId: 'ordinal-1',
+    });
+
+    const hydrated = hydrateResolvedSourceCircuit(resolvedCircuit);
+    const inputRecord = hydrated.ir.networks.find(({ name }) => name === 'input');
+    const outputRecord = hydrated.ir.networks.find(({ name }) => name === 'output');
+    if (inputRecord === undefined || outputRecord === undefined) {
+      throw new Error('Expected hydrated callable Entity input/output Networks.');
+    }
+    const input = hydrated.network(inputRecord.id);
+    const output = hydrated.network(outputRecord.id);
+    const tick = hydrated.createSimulation().step();
+    expect(tick.tick).toBe(1);
+    expect(tick.read(input.id)).toEqual(tick.read(output.id));
+    expect(hydrated.ir.entities).toHaveLength(1);
+  });
+
   test('evaluates the Entity prototype expression exactly once', () => {
     const host = syntheticEntityHost(syntheticZeroPortEntityProfile);
     const compilation = compileSourceProgram(

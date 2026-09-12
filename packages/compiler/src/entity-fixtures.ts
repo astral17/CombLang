@@ -96,6 +96,18 @@ export const syntheticSharedTwoColorEntityProfile: EntityProfile = deepFreeze({
     connector: connector('shared'),
     lane: lane('shared-red'),
   },
+  callProjection: {
+    input: {
+      connector: connector('shared'),
+      lane: lane('shared-red'),
+      color: 'red',
+    },
+    output: {
+      connector: connector('shared'),
+      lane: lane('shared-green'),
+      color: 'green',
+    },
+  },
   synthetic: true,
 });
 

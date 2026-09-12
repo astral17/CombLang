@@ -2,6 +2,7 @@ import type {
   EntityConnectorDirection,
   EntityConnectorKey,
   EntityConnectorProfile,
+  EntityCallProjection,
   EntityConfigurationMode,
   EntityConfigurationRule,
   EntityDefaultReadProjection,
@@ -359,6 +360,62 @@ function parseDefaultReadProjection(
   return { feature, connector, lane };
 }
 
+function parseCallEndpoint(
+  value: unknown,
+  path: string,
+  connectors: ReadonlyMap<EntityConnectorKey, EntityConnectorProfile>,
+  direction: 'input' | 'output',
+): EntityLaneEndpoint {
+  const record = dataRecord(value, path);
+  exactKeys(record, ['connector', 'lane', 'color'], path);
+  const connectorKey = stableIdentifier(
+    record.connector,
+    `${path}.connector`,
+  ) as EntityConnectorKey;
+  const connector = connectors.get(connectorKey);
+  if (connector === undefined) {
+    invalid('EP1002', `${path}.connector`, 'unknown connector key.');
+  }
+  if (
+    (direction === 'input' && connector.direction === 'output') ||
+    (direction === 'output' && connector.direction === 'input')
+  ) {
+    invalid(
+      'EP1002',
+      `${path}.connector`,
+      `connector cannot be used as an ${direction} call endpoint.`,
+    );
+  }
+  const laneKey = stableIdentifier(record.lane, `${path}.lane`) as EntityLaneKey;
+  const lane = connector.lanes.find(({ key }) => key === laneKey);
+  if (lane === undefined) {
+    invalid('EP1002', `${path}.lane`, 'unknown lane on the selected connector.');
+  }
+  if (record.color !== lane.color) {
+    invalid('EP1002', `${path}.color`, 'call endpoint color must match the declared lane color.');
+  }
+  return { connector: connectorKey, lane: laneKey, color: lane.color };
+}
+
+function callEndpointKey(endpoint: EntityLaneEndpoint): string {
+  return `${endpoint.connector}/${endpoint.lane}/${endpoint.color}`;
+}
+
+function parseCallProjection(
+  value: unknown,
+  path: string,
+  connectors: ReadonlyMap<EntityConnectorKey, EntityConnectorProfile>,
+): EntityCallProjection {
+  const record = dataRecord(value, path);
+  exactKeys(record, ['input', 'output'], path);
+  const input = parseCallEndpoint(record.input, `${path}.input`, connectors, 'input');
+  const output = parseCallEndpoint(record.output, `${path}.output`, connectors, 'output');
+  if (callEndpointKey(input) === callEndpointKey(output)) {
+    invalid('EP1000', path, 'call input and output endpoints must be distinct physical lanes.');
+  }
+  return Object.freeze({ input, output });
+}
+
 function parseEvidence(value: unknown, path: string): EntityEvidenceState {
   const record = dataRecord(value, path);
   const status = stringValue(record.status, `${path}.status`);
@@ -392,7 +449,15 @@ export function canonicalizeEntityProfile(value: unknown): EntityProfile {
   const record = dataRecord(value, '$');
   exactKeys(
     record,
-    ['ref', 'connectors', 'features', 'configurationRules', 'defaultReadProjection', 'synthetic'],
+    [
+      'ref',
+      'connectors',
+      'features',
+      'configurationRules',
+      'defaultReadProjection',
+      'callProjection',
+      'synthetic',
+    ],
     '$',
   );
 
@@ -471,6 +536,10 @@ export function canonicalizeEntityProfile(value: unknown): EntityProfile {
     featureMap,
     connectorMap,
   );
+  const callProjection =
+    'callProjection' in record
+      ? parseCallProjection(record.callProjection, '$.callProjection', connectorMap)
+      : undefined;
 
   return deepFreeze({
     ref: parsedRef,
@@ -480,6 +549,7 @@ export function canonicalizeEntityProfile(value: unknown): EntityProfile {
       [...configurationRules].sort((left, right) => compare(left.key, right.key)),
     ),
     defaultReadProjection,
+    ...(callProjection === undefined ? {} : { callProjection }),
     synthetic,
   });
 }

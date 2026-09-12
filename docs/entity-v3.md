@@ -39,8 +39,12 @@ Evidence is attached to a capability, currently a configuration rule such as
 modes are independent of evidence status. Synthetic profiles cannot claim
 verified evidence. Every profile also carries one explicit default read
 projection, or `null` when no unambiguous default exists; it is never inferred
-from feature ordering. Native `(nativeConnector, color)` endpoint identity is
-unique across the entire profile.
+from feature ordering. A callable profile may additionally declare one explicit
+`callProjection` with exactly one `input` and one `output` connector/lane/color
+endpoint. Both endpoints must exist, match their declared lane colors, use
+compatible connector directions, and be distinct; this projection is separate
+from default reads, configuration rules, and evidence claims. Native
+`(nativeConnector, color)` endpoint identity is unique across the entire profile.
 
 The internal typed subset maps a rule to one profile-owned feature and the native
 field `control_behavior.circuit_condition`. The plan-side value contains only the
@@ -125,6 +129,8 @@ const canonical = Entity('entity:assembling-machine-3');
 const same = Entity(prototypes.entity['assembling-machine-3']);
 entity.bind('circuit', 'red', input, 'input');
 const red = entity.port('circuit', 'red');
+const output = new Network();
+output += Entity('reviewed-callable-machine')(input);
 ```
 
 This example is conditional on the host installing a matching
@@ -181,10 +187,17 @@ execution session; the runtime translates it to the existing typed
 `entity.at(x, y, direction?)` mutates the existing physical record, returns the
 same live view, and accepts finite coordinates plus an integer direction from
 `0` through `15`. Neither form allocates a Producer, Network, or hidden
-Decider. The callable form `Entity(...)(input)`, including
-`output += Entity(params)(input)`, is reserved and planned; it is not
-implemented by the present generic host-embedding slice. Typed facades, raw
-native payloads, and native Factorio behavior remain separate future work.
+Decider. For a profile with an explicit `callProjection`, the implemented
+callable subset accepts exactly one readable Network argument (including a
+Producer's readable primary output), binds it to the declared input endpoint,
+and returns the same live Entity view. `Network += entity` binds that same
+physical Entity to the declared output endpoint; the inline
+`output += Entity(params)(input)` form therefore creates one Entity with two
+bindings and no hidden topology. Repeated identical bindings are idempotent;
+conflicts, stale handles, non-callable profiles, and invalid destinations fail
+with source-aware diagnostics. Ordinary objects and structural Entity lookalikes
+retain ordinary JavaScript call behavior. Typed facades, raw native payloads,
+and native Factorio behavior remain separate future work.
 
 ## Internal construction and validation
 
@@ -226,7 +239,8 @@ and leaves captured older views stale. A v3 replay snapshot carries the Network
 generation and consumed provenance, so canonical validation rejects unknown,
 consumed, or stale connector bindings before graph allocation. Entity-to-Network
 conversion is available only at a shared readable argument boundary when the
-trusted profile has an explicit default projection.
+trusted profile has an explicit default projection; callable input binding uses
+that same readable boundary and its separate explicit `callProjection.input`.
 
 ## Physical execution, debug, and object-test bridge
 
@@ -287,7 +301,7 @@ The remaining implementation boundary covers:
 3. additional typed/generic acceptance beyond the host-bound source subset;
 4. later typed facades and any native-verified claims.
 
-The configuration and placement forms documented above are implemented. The
-callable constructor form remains reserved and planned; raw payload lowering,
-broader typed facades, and native-verified behavior are not implied by this
+The configuration, placement, and trusted-profile callable forms documented
+above are implemented. Raw payload lowering, broader typed facades, reviewed
+provider profile wiring, and native-verified behavior are not implied by this
 source subset.

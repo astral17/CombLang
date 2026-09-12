@@ -108,10 +108,24 @@ that lane to an existing Network, with `direction` equal to `input` or
 Network ownership validation. `entity.at(x, y, direction?)` accepts finite
 numeric coordinates and an integer direction from `0` through `15`, mutates
 the existing physical record, and returns the same live Entity view. The
-callable form `Entity(...)(input)`, including
-`output += Entity(params)(input)`, is reserved and planned but not yet
-implemented. Typed facades and raw native payloads are also outside the current
-language surface.
+callable form is implemented for a trusted profile that declares an explicit
+input/output `callProjection`:
+
+```ts
+const input = new Network();
+const output = new Network();
+output += Entity('reviewed-callable-machine')(input);
+```
+
+The call accepts exactly one readable Network argument, including a
+Combinator's readable primary output, binds it to the declared input endpoint,
+and returns the same live Entity handle. `Network += entity` binds the declared
+output endpoint, so the inline form creates one physical Entity and no hidden
+Producer, Network, or tick. Identical repeat bindings are idempotent; conflicts,
+stale handles, profiles without a call projection, and invalid destinations are
+source-aware errors. Ordinary objects and structural lookalikes keep normal
+JavaScript call behavior. Typed facades and raw native payloads are also
+outside the current language surface.
 
 The browser Worker request transports only replay identity metadata. Source
 Entity authority is available only when a host adapter resolves the detached
@@ -361,7 +375,7 @@ to(first, second)[RESULT] += left[A] + right[B];
 (left + right).to(first, second, RESULT);
 ```
 
-The free destination form binds an output Signal as `to(first, second)[SIGNAL]`; fluent syntax uses `.to(first, second, SIGNAL)`. The output binding changes the existing physical configuration and adds no combinator. A destination may be an ordinary Network or a Combinator's primary Network facet; pair views and multi-output destinations must be selected explicitly. `.to(first[SIGNAL], second[SIGNAL])` remains invalid. Empty, duplicate, and over-capacity destination lists report `RT2003`, `RT2004`, and `RT2005`. A third sequential lane request reports `RT2028`. The first output binding is retained for the physical combinator: an incompatible later binding reports `RT2023` at the later operation with both binding and creation provenance. `Network += Network` and `Network += number` remain errors: the right side must be a physical `Combinator` handle.
+The free destination form binds an output Signal as `to(first, second)[SIGNAL]`; fluent syntax uses `.to(first, second, SIGNAL)`. The output binding changes the existing physical configuration and adds no combinator. A destination may be an ordinary Network or a Combinator's primary Network facet; pair views and multi-output destinations must be selected explicitly. `.to(first[SIGNAL], second[SIGNAL])` remains invalid. Empty, duplicate, and over-capacity destination lists report `RT2003`, `RT2004`, and `RT2005`. A third sequential lane request reports `RT2028`. The first output binding is retained for the physical combinator: an incompatible later binding reports `RT2023` at the later operation with both binding and creation provenance. `Network += Network` and `Network += number` remain errors; the callable Entity output form is the separate `Network += entity` case documented above and requires a declared profile projection.
 
 `when(condition)` also creates its Decider immediately. `.then(...)` and `.else(...)` mutate central state shared by every alias:
 

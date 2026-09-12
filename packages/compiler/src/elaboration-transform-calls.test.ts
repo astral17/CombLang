@@ -63,6 +63,15 @@ describe('elaboration call/member transform', () => {
     expect(code).toContain('...__dsl.spreadCallArguments(rest');
   });
 
+  test('instruments computed and returned-call callees at the executed boundary', () => {
+    const code = transformCalls(
+      `const called = Entity('entity:synthetic')(input); getFactory()(value);`,
+    );
+
+    expect(code).toContain('__dsl.invoke(__dsl.entityFromPrototype(');
+    expect(code).toContain('__dsl.invoke(__dsl.invoke(getFactory');
+  });
+
   test('recognizes both fluent decider branch forms before generic member calls', () => {
     const code = transformCalls(
       `when(test).then(a, b).else(c); when(other).else(fallback); object.method(value);`,

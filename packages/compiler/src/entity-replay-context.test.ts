@@ -116,6 +116,17 @@ describe('trusted Entity replay context', () => {
     ).toThrowError(expect.objectContaining({ code: 'ER1000', path: '$.policyIdentity' }));
   });
 
+  test('includes the explicit callable projection in profile-set identity', () => {
+    const callable = context([syntheticSharedTwoColorEntityProfile]);
+    const withoutProjection = JSON.parse(
+      JSON.stringify(syntheticSharedTwoColorEntityProfile),
+    ) as Record<string, unknown>;
+    delete withoutProjection.callProjection;
+    const nonCallable = context([withoutProjection as never]);
+
+    expect(callable.profileSetIdentity).not.toBe(nonCallable.profileSetIdentity);
+  });
+
   test('reports structured errors at the identity boundary', () => {
     try {
       resolveEntityReplayContext({}, {} as never);

@@ -168,6 +168,22 @@ export function transformCallOrElementNode(
     ]);
   }
 
+  // Calls whose callee is computed or itself returned from a call need the same
+  // runtime boundary as identifier calls. This is what lets a nominal Entity
+  // handle receive DSL call meaning without making it a JavaScript function.
+  if (
+    ts.isCallExpression(node) &&
+    node.questionDotToken === undefined &&
+    node.expression.kind !== ts.SyntaxKind.SuperKeyword &&
+    !(ts.isIdentifier(node.expression) && node.expression.text === 'eval')
+  ) {
+    return context.dslCall('invoke', [
+      ts.visitNode(node.expression, visit) as ts.Expression,
+      callArguments(node.arguments),
+      context.spanLiteral(node),
+    ]);
+  }
+
   if (
     ts.isElementAccessExpression(node) &&
     node.questionDotToken === undefined &&
