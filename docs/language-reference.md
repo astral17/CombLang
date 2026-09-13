@@ -174,6 +174,14 @@ call projection, convenience translation, extra physical record, Producer,
 Network, or tick. Checked schema support and synthetic fixtures are not native
 Factorio behavior evidence.
 
+`Roboport(prototype, configuration?)` is the corresponding structural
+roboport-family facade. It accepts the same prototype and configuration forms,
+requires actual provider type `roboport`, delegates to generic Entity
+construction, and returns one nominal Entity value backed by one physical
+record. It does not infer the vanilla `roboport`, expose readback or output
+Networks, invent connectors or callable behavior, translate convenience fields,
+or establish native Factorio behavior.
+
 `machine.port(connector, lane)` selects an explicit connector lane. The exact
 four-argument `machine.bind(connector, lane, network, direction)` form binds
 that lane to an existing Network, with `direction` equal to `input` or
@@ -197,7 +205,7 @@ output endpoint, so the inline form creates one physical Entity and no hidden
 Producer, Network, or tick. Identical repeat bindings are idempotent; conflicts,
 stale handles, profiles without a call projection, and invalid destinations are
 source-aware errors. Ordinary objects and structural lookalikes keep normal
-JavaScript call behavior. Further typed facades and reviewed native import
+JavaScript call behavior. Remaining typed facades and reviewed native import
 remain outside the current language surface.
 
 The browser Worker request transports only replay identity metadata. Source

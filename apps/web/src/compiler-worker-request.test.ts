@@ -58,6 +58,13 @@ const rawSource = JSON.stringify({
       flags: ['placeable-player', 'player-creation'],
     },
   },
+  roboport: {
+    'fixture-roboport': {
+      type: 'roboport',
+      name: 'fixture-roboport',
+      flags: ['placeable-player', 'player-creation'],
+    },
+  },
 });
 
 describe('browser compiler Worker prototype profile', () => {
@@ -260,6 +267,29 @@ const machine = Entity('footprint-less', {
         profile: expect.objectContaining({ prototypeKey: 'entity:fixture-lamp' }),
         placement: { x: 4, y: 5, direction: 8 },
         configuration: { mode: 'raw', payload: { always_on: false } },
+      }),
+    ]);
+    expect(structuredClone(response)).toEqual(response);
+  });
+
+  test('constructs and detaches a Roboport facade in the Worker', async () => {
+    const runtime = new CompilerWorkerRuntime();
+    const response = await runtime.handle({
+      kind: 'parse',
+      revision: 19,
+      file: {
+        path: 'worker-roboport.factorio.ts',
+        text: `const roboport = Roboport('fixture-roboport', { raw: { request_filters: { sections: [] } } }).at(4, 5, 8);`,
+      },
+      prototypeProfile: { source: rawSource, factorioDumpMetadata: rawMetadata },
+    });
+
+    expect(response.result.compilerDiagnostics).toEqual([]);
+    expect(response.result.resolvedCircuit?.ir.entities).toEqual([
+      expect.objectContaining({
+        profile: expect.objectContaining({ prototypeKey: 'entity:fixture-roboport' }),
+        placement: { x: 4, y: 5, direction: 8 },
+        configuration: { mode: 'raw', payload: { request_filters: { sections: [] } } },
       }),
     ]);
     expect(structuredClone(response)).toEqual(response);

@@ -57,7 +57,7 @@ describe('elaboration call/member transform', () => {
     );
 
     expect(code).toContain('__dsl.signal("signal-A"');
-    expect(code).toContain('__dsl.lampFromPrototype([{ value: first, source:');
+    expect(code).toContain('__dsl.entityFamilyFromPrototype("Lamp", [{ value: first, source:');
     expect(code).toContain('__dsl.constant(value');
     expect(code).toContain('__dsl.deciderBranches(test, yes, no');
     expect(code).toContain('__dsl.invoke(fn, [{ value: first, source:');

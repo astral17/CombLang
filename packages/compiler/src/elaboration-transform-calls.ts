@@ -1,6 +1,10 @@
 import ts from 'typescript';
 
-import { wildcardDslNames } from '@comblang/language';
+import {
+  entityFamilyDslNames,
+  wildcardDslNames,
+  type EntityFamilyDslName,
+} from '@comblang/language';
 
 export interface CallTransformContext {
   readonly factory: ts.NodeFactory;
@@ -108,8 +112,15 @@ export function transformCallOrElementNode(
         context.spanLiteral(node),
       ]);
     }
-    if (node.expression.text === 'Lamp') {
-      return context.dslCall('lampFromPrototype', [
+    const entityFamily = Object.prototype.hasOwnProperty.call(
+      entityFamilyDslNames,
+      node.expression.text,
+    )
+      ? entityFamilyDslNames[node.expression.text as EntityFamilyDslName]
+      : undefined;
+    if (entityFamily !== undefined) {
+      return context.dslCall('entityFamilyFromPrototype', [
+        factory.createStringLiteral(node.expression.text),
         callArguments(node.arguments),
         context.spanLiteral(node),
       ]);

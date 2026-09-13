@@ -9,9 +9,12 @@ describe('executable elaboration transform', () => {
       path: 'entity-constructor.factorio.ts',
       text: `const fromName = Entity('entity:assembling-machine-3');
 const lamp = Lamp('entity:small-lamp');
+const roboport = Roboport('entity:roboport');
 const fromObject = objects.Entity(prototype);
 const memberLamp = objects.Lamp(prototype);
+const memberRoboport = objects.Roboport(prototype);
 const computedLamp = objects['Lamp'](prototype);
+const ordinaryName = makeValue();
 const forwarded = Entity(...prototypes);
 const forwardedLamp = Lamp(...prototypes);
 const condition = NativeCondition(Signal('virtual', 'signal-A'), '>', 0);`,
@@ -19,14 +22,19 @@ const condition = NativeCondition(Signal('virtual', 'signal-A'), '>', 0);`,
     const code = transformElaborationModule(source).code;
 
     expect(code).toContain('__dsl.entityFromPrototype(');
-    expect(code).toContain('__dsl.lampFromPrototype(');
+    expect(code).toContain('__dsl.entityFamilyFromPrototype("Lamp",');
+    expect(code).toContain('__dsl.entityFamilyFromPrototype("Roboport",');
     expect(code).toContain("'entity:assembling-machine-3'");
     expect(code).toContain("'entity:small-lamp'");
     expect(code).toContain('__dsl.invokePrepared(__dsl.prepareMember(objects, "Entity"');
     expect(code).toContain('__dsl.invokePrepared(__dsl.prepareMember(objects, "Lamp"');
+    expect(code).toContain('__dsl.invokePrepared(__dsl.prepareMember(objects, "Roboport"');
+    expect(code).toContain('__dsl.invoke(makeValue, []');
     expect(code).toContain("__dsl.invokePrepared(__dsl.prepareMember(objects, 'Lamp'");
     expect(code).toContain('__dsl.entityFromPrototype([...__dsl.spreadCallArguments(');
-    expect(code).toContain('__dsl.lampFromPrototype([...__dsl.spreadCallArguments(');
+    expect(code).toContain(
+      '__dsl.entityFamilyFromPrototype("Lamp", [...__dsl.spreadCallArguments(',
+    );
     expect(code).toContain('__dsl.nativeCondition([{ value: __dsl.signal(');
   });
 

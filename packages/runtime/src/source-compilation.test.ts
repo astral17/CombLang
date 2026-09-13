@@ -543,6 +543,356 @@ Lamp('small-lamp', { always_on: false });`,
     ]);
   });
 
+  test('resolves Roboport through short, canonical, and provider-record forms', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'roboport-prototype-forms.factorio.ts',
+        text: `const short = Roboport('roboport');
+const canonical = Roboport('entity:roboport');
+const record = Roboport(prototypes.entity['roboport']);`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3)
+      throw new Error('Expected a Roboport Entity plan.');
+    expect(plan.entities).toHaveLength(3);
+    expect(plan.entities.map(({ profile }) => profile.prototypeKey)).toEqual([
+      'entity:roboport',
+      'entity:roboport',
+      'entity:roboport',
+    ]);
+  });
+
+  test('preserves Roboport schema configuration and one physical Entity', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const text = `let order = '';
+function selectPrototype() { order += 'p'; return 'roboport'; }
+function selectConfiguration() { order += 'c'; return {
+  control_behavior: {
+    read_items_mode: false,
+    read_robot_stats: false,
+    output_networks: { red: false, green: true },
+    roboport_count_output_signal: Signal('virtual', 'signal-A'),
+    available_logistic_output_signal: { name: 'signal-B' },
+  },
+  request_filters: {
+    request_from_buffers: false,
+    trash_not_requested: false,
+    sections: [{
+      active: false,
+      index: 0,
+      multiplier: 0,
+      filters: [{ name: 'iron-plate', count: 0, index: 0, quality: 'normal', request_from: 'planet', type: 'item' }],
+    }],
+  },
+}; }
+const facade = Roboport(selectPrototype(), selectConfiguration()).at(4, 5, 8);
+const aliases = [facade];
+if (order !== 'pc' || !Object.is(aliases[0], facade)) throw new Error('Roboport evaluation or identity changed');
+const generic = Entity('roboport', selectConfiguration()).at(4, 5, 8);`;
+    const compilation = compileSourceProgram(
+      { path: 'roboport-configuration.factorio.ts', text },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3)
+      throw new Error('Expected a Roboport Entity plan.');
+    expect(plan.entities).toHaveLength(2);
+    expect(plan.producers).toEqual([]);
+    expect(plan.networks).toEqual([]);
+    expect(plan.entities[0]?.profile).toEqual(plan.entities[1]?.profile);
+    expect(plan.entities[0]?.configuration).toEqual(plan.entities[1]?.configuration);
+    expect(plan.entities[0]?.placement).toEqual(plan.entities[1]?.placement);
+    expect(plan.entities[0]?.configuration).toEqual({
+      mode: 'raw',
+      payload: {
+        control_behavior: {
+          read_items_mode: false,
+          read_robot_stats: false,
+          output_networks: { red: false, green: true },
+          roboport_count_output_signal: { type: 'virtual', name: 'signal-A' },
+          available_logistic_output_signal: { name: 'signal-B' },
+        },
+        request_filters: {
+          request_from_buffers: false,
+          trash_not_requested: false,
+          sections: [
+            {
+              active: false,
+              index: 0,
+              multiplier: 0,
+              filters: [
+                {
+                  name: 'iron-plate',
+                  count: 0,
+                  index: 0,
+                  quality: 'normal',
+                  request_from: 'planet',
+                  type: 'item',
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    const resolved = compilation.resolvedCircuit;
+    if (resolved === undefined) throw new Error('Expected a resolved Roboport circuit.');
+    expect(resolved.ir.entities).toHaveLength(2);
+    expect(resolved.ir.producers).toEqual([]);
+    expect(resolved.ir.entities[0]?.profile).toEqual(resolved.ir.entities[1]?.profile);
+    expect(resolved.ir.entities[0]?.configuration).toEqual(resolved.ir.entities[1]?.configuration);
+    expect(resolved.ir.entities[0]?.placement).toEqual(resolved.ir.entities[1]?.placement);
+    const execution = compilation.execution;
+    if (execution === undefined) throw new Error('Expected Roboport execution details.');
+    const document = createDebugDocument(execution.debug, execution.circuit.graph);
+    expect(
+      document.scopes.flatMap((scope) => ('entities' in scope ? scope.entities : [])),
+    ).toHaveLength(2);
+    const blueprint = generateEntityBlueprintJson(resolved.ir).blueprint;
+    expect(blueprint.entities).toHaveLength(2);
+    expect({ ...blueprint.entities[0], entity_number: 0 }).toEqual({
+      ...blueprint.entities[1],
+      entity_number: 0,
+    });
+  });
+
+  test.each([
+    {
+      name: 'missing prototype',
+      source: `Roboport('missing-roboport');`,
+      message: 'Entity prototype is malformed or unavailable',
+    },
+    {
+      name: 'foreign prototype record',
+      source: `Roboport({ key: 'entity:roboport', name: 'roboport', type: 'roboport' });`,
+      message: 'foreign or not owned by the selected host provider',
+    },
+  ])('rejects Roboport with a $name', async ({ source, message }) => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      { path: 'roboport-invalid-prototype.factorio.ts', text: source },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.plan).toBeUndefined();
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({ code: 'RT2027', message: expect.stringContaining(message) }),
+    ]);
+  });
+
+  test('rejects a non-roboport prototype at the prototype argument span', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const text = `Roboport('assembling-machine-3');`;
+    const compilation = compileSourceProgram(
+      { path: 'roboport-wrong-family.factorio.ts', text },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    const start = text.indexOf("'assembling-machine-3'");
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'RT2027',
+        message: expect.stringContaining('requires provider Entity type "roboport"'),
+        span: {
+          fileId: 'file:roboport-wrong-family.factorio.ts',
+          start,
+          end: start + "'assembling-machine-3'".length,
+        },
+      }),
+    ]);
+    expect(compilation.pipelineDiagnostics[0]?.message).toContain(
+      'actual type "assembling-machine"',
+    );
+  });
+
+  test('rolls back caught Roboport family and configuration failures before allocation', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'roboport-rollback.factorio.ts',
+        text: `let caught = 0;
+try { Roboport('assembling-machine-3'); } catch { caught += 1; }
+try { Roboport('roboport', { control_behavior: { read_robot_stats: 0 } }); } catch { caught += 1; }
+if (caught !== 2) throw new Error('Roboport failures were accepted');
+Roboport('roboport', { raw: { request_filters: { sections: [] } } });`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3)
+      throw new Error('Expected recovered Roboport plan.');
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.entities[0]?.id).toBe('entity:1');
+    expect(plan.networks).toEqual([]);
+    expect(plan.producers).toEqual([]);
+  });
+
+  test.each([`Roboport();`, `Roboport('roboport', {}, 'extra');`])(
+    'validates public Roboport constructor arity at the call span: %s',
+    async (text) => {
+      const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+      const provisioned = new EntityProvisioningService().provision(
+        prototypes,
+        conservativeEntityProvisioningPolicy,
+      );
+      const compilation = compileSourceProgram(
+        { path: 'roboport-arity.factorio.ts', text },
+        {
+          prototypes,
+          trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+          entityPrototypeResolver: provisioned.entityPrototypeResolver,
+        },
+      );
+
+      expect(compilation.pipelineDiagnostics).toEqual([
+        expect.objectContaining({
+          code: 'RT2027',
+          message: 'Roboport(prototype, configuration?) requires one or two arguments.',
+          span: { fileId: 'file:roboport-arity.factorio.ts', start: 0, end: text.length - 1 },
+        }),
+      ]);
+    },
+  );
+
+  test('keeps fallback Roboport connector, callable, and readback authority unavailable', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const cases = [
+      {
+        source: `Roboport('roboport').port('circuit', 'red');`,
+        message: 'Unknown Entity connector',
+        code: 'RT2031',
+      },
+      {
+        source: `Roboport('roboport').bind('circuit', 'red', new Network(), 'input');`,
+        message: 'Unknown Entity connector',
+        code: 'RT2031',
+      },
+      {
+        source: `Roboport('roboport')(new Network());`,
+        message: 'has no callable projection',
+        code: 'RT2027',
+      },
+      {
+        source: `const output = new Network();
+output += Roboport('roboport');`,
+        message: 'has no callable projection',
+        code: 'RT2027',
+      },
+    ] as const;
+
+    for (const [index, { source, message, code }] of cases.entries()) {
+      const compilation = compileSourceProgram(
+        { path: `roboport-fallback-authority-${index}.factorio.ts`, text: source },
+        {
+          prototypes,
+          trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+          entityPrototypeResolver: provisioned.entityPrototypeResolver,
+        },
+      );
+      expect(compilation.plan).toBeUndefined();
+      expect(compilation.pipelineDiagnostics).toEqual([
+        expect.objectContaining({ code, message: expect.stringContaining(message) }),
+      ]);
+    }
+  });
+
+  test('rejects invalid Roboport configuration while accepting raw and preserving envelope rules', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const raw = compileSourceProgram(
+      {
+        path: 'roboport-raw-configuration.factorio.ts',
+        text: `Roboport('roboport', { raw: { request_filters: { sections: [] } } });`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+    expect(raw.pipelineDiagnostics).toEqual([]);
+    expect(raw.plan?.version).toBe(3);
+    expect(raw.plan?.version === 3 ? raw.plan.entities[0]?.configuration : undefined).toEqual({
+      mode: 'raw',
+      payload: { request_filters: { sections: [] } },
+    });
+
+    for (const [index, source] of [
+      `Roboport('roboport', { control_behavior: { read_robot_stats: 0 } });`,
+      `Roboport('roboport', { control_behavior: { unsupported: true } });`,
+      `Roboport('roboport', { raw: {}, request_filters: {} });`,
+    ].entries()) {
+      const compilation = compileSourceProgram(
+        { path: `roboport-invalid-configuration-${index}.factorio.ts`, text: source },
+        {
+          prototypes,
+          trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+          entityPrototypeResolver: provisioned.entityPrototypeResolver,
+        },
+      );
+      expect(compilation.plan).toBeUndefined();
+      expect(compilation.pipelineDiagnostics).toEqual([
+        expect.objectContaining({ code: 'RT2027', span: expect.any(Object) }),
+      ]);
+    }
+  });
+
   test('snapshots and hydrates canonical Decider copy input output data', () => {
     const host = syntheticEntityHost(syntheticZeroPortEntityProfile);
     const compilation = compileSourceProgram(

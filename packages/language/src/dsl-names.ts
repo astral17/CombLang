@@ -13,10 +13,18 @@ export const wildcardDslNames = Object.freeze({
 
 export type WildcardDslName = keyof typeof wildcardDslNames;
 
+/** Closed Entity-family constructor/type pairs supported by the source DSL. */
+export const entityFamilyDslNames = Object.freeze({
+  Lamp: 'lamp',
+  Roboport: 'roboport',
+} as const);
+
+export type EntityFamilyDslName = keyof typeof entityFamilyDslNames;
+
 export const freeDslFunctionNames = Object.freeze([
   'Signal',
   'Entity',
-  'Lamp',
+  ...Object.keys(entityFamilyDslNames),
   'NativeCondition',
   'Network',
   'CC',

@@ -21,7 +21,7 @@ import type {
   EntityProfile,
   EntityProfileRef,
 } from '@comblang/compiler';
-import type { DslParameterContract } from '@comblang/language';
+import { entityFamilyDslNames, type DslParameterContract } from '@comblang/language';
 import type {
   DirectElaborationPlan,
   DirectPlanDebugInstance,
@@ -117,6 +117,11 @@ interface CallArgument {
   readonly value: unknown;
   readonly source: RawSpan;
 }
+
+const entityFamilyConstructionTypes = Object.freeze({
+  Lamp: 'lamp',
+  Roboport: 'roboport',
+} as const) satisfies typeof entityFamilyDslNames;
 
 interface Invocation {
   readonly callable: unknown;
@@ -541,10 +546,33 @@ class ElaborationRecorder {
       this.#withTopologyTransaction(rawSpan, () =>
         this.#constructEntityFromPrototype(arguments_, rawSpan),
       ),
-    lampFromPrototype: (arguments_: readonly CallArgument[], rawSpan: RawSpan): EntityValue =>
-      this.#withTopologyTransaction(rawSpan, () =>
-        this.#constructEntityFromPrototype(arguments_, rawSpan, 'lamp'),
-      ),
+    entityFamilyFromPrototype: (
+      constructorName: unknown,
+      arguments_: readonly CallArgument[],
+      rawSpan: RawSpan,
+    ): EntityValue =>
+      this.#withTopologyTransaction(rawSpan, () => {
+        if (
+          typeof constructorName !== 'string' ||
+          !Object.prototype.hasOwnProperty.call(entityFamilyConstructionTypes, constructorName)
+        ) {
+          throw new ElaborationExecutionError(
+            'Unknown Entity family constructor.',
+            this.#span(rawSpan),
+            'RT2027',
+          );
+        }
+        const expectedType =
+          entityFamilyConstructionTypes[
+            constructorName as keyof typeof entityFamilyConstructionTypes
+          ];
+        return this.#constructEntityFromPrototype(
+          arguments_,
+          rawSpan,
+          expectedType,
+          constructorName,
+        );
+      }),
     nativeCondition: (
       arguments_: readonly CallArgument[],
       rawSpan: RawSpan,
@@ -2992,13 +3020,14 @@ class ElaborationRecorder {
     arguments_: readonly CallArgument[],
     rawSpan: RawSpan,
     expectedType?: string,
+    constructorName?: string,
   ): EntityValue {
     this.#recordDslCall();
     if (!isRawSpan(rawSpan)) throw new Error('t.entityFromPrototype(...) is missing provenance.');
-    const constructorName = expectedType === undefined ? 'Entity' : 'Lamp';
+    const publicConstructorName = constructorName ?? 'Entity';
     if (!Array.isArray(arguments_) || (arguments_.length !== 1 && arguments_.length !== 2)) {
       throw new ElaborationExecutionError(
-        `${constructorName}(prototype, configuration?) requires one or two arguments.`,
+        `${publicConstructorName}(prototype, configuration?) requires one or two arguments.`,
         this.#span(rawSpan),
         'RT2027',
       );

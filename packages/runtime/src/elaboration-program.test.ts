@@ -704,37 +704,64 @@ if (alias !== first || first === second) throw new Error('Entity identity was no
     ).toThrow(ElaborationOperationLimitError);
   });
 
-  test('charges one DSL call for each public Lamp construction', () => {
+  test.each([
+    { constructorName: 'Lamp', prototypeType: 'lamp' },
+    { constructorName: 'Roboport', prototypeType: 'roboport' },
+  ])(
+    'charges one DSL call for each public $constructorName construction',
+    ({ constructorName, prototypeType }) => {
+      const context = syntheticEntityExecutionContext();
+      const resolver = syntheticEntityResolver(prototypeType);
+      const call = `t.entityFamilyFromPrototype('${constructorName}', [{ value: ${JSON.stringify(syntheticZeroPortEntityProfile.ref.prototypeKey)}, source: { start: 1, end: 8 } }], { start: 1, end: 8 });`;
+      const program = {
+        format: 'comblang-elaboration-js' as const,
+        version: 2 as const,
+        fileId: sourceFileId('lamp-call-budget.factorio.ts'),
+        runtimeParameter: 't',
+        containsUnsupportedAsync: false,
+        code: `const lamp = ${call}`,
+      };
+
+      const plan = executeElaborationProgramV3(program, {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: resolver,
+        dslCallBudget: 1,
+      });
+      if (plan.version !== 3) throw new Error('Expected an Entity v3 plan.');
+      expect(plan.entities).toHaveLength(1);
+
+      expect(() =>
+        executeElaborationProgramV3(
+          { ...program, code: `const first = ${call}\nconst second = ${call}` },
+          {
+            trustedEntityReplayContext: context,
+            entityPrototypeResolver: resolver,
+            dslCallBudget: 1,
+          },
+        ),
+      ).toThrow(ElaborationOperationLimitError);
+    },
+  );
+
+  test('keeps Entity-family bridge dispatch closed to reviewed constructor pairs', () => {
     const context = syntheticEntityExecutionContext();
     const resolver = syntheticEntityResolver('lamp');
-    const call = `t.lampFromPrototype([{ value: ${JSON.stringify(syntheticZeroPortEntityProfile.ref.prototypeKey)}, source: { start: 1, end: 8 } }], { start: 1, end: 8 });`;
+    const call = `t.entityFamilyFromPrototype('Unknown', [{ value: ${JSON.stringify(syntheticZeroPortEntityProfile.ref.prototypeKey)}, source: { start: 1, end: 8 } }], { start: 1, end: 8 });`;
     const program = {
       format: 'comblang-elaboration-js' as const,
       version: 2 as const,
-      fileId: sourceFileId('lamp-call-budget.factorio.ts'),
+      fileId: sourceFileId('entity-family-dispatch.factorio.ts'),
       runtimeParameter: 't',
       containsUnsupportedAsync: false,
-      code: `const lamp = ${call}`,
+      code: `const value = ${call}`,
     };
 
-    const plan = executeElaborationProgramV3(program, {
-      trustedEntityReplayContext: context,
-      entityPrototypeResolver: resolver,
-      dslCallBudget: 1,
-    });
-    if (plan.version !== 3) throw new Error('Expected an Entity v3 plan.');
-    expect(plan.entities).toHaveLength(1);
-
     expect(() =>
-      executeElaborationProgramV3(
-        { ...program, code: `const first = ${call}\nconst second = ${call}` },
-        {
-          trustedEntityReplayContext: context,
-          entityPrototypeResolver: resolver,
-          dslCallBudget: 1,
-        },
-      ),
-    ).toThrow(ElaborationOperationLimitError);
+      executeElaborationProgramV3(program, {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: resolver,
+      }),
+    ).toThrow('Unknown Entity family constructor.');
   });
 
   test('invokes a callable Entity through the nominal runtime boundary and returns the same view', () => {
