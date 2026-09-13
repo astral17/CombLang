@@ -10,6 +10,8 @@ import type {
 export interface BrowserPrototypeProfileSource {
   /** Normalized or raw Factorio Prototype JSON. It is parsed only inside the Worker. */
   readonly source: string;
+  /** Routing metadata only; authority is built from the loaded provider in the Worker. */
+  readonly kind?: 'builtin' | 'custom';
   /** Companion metadata JSON required only for a raw Factorio dump. */
   readonly factorioDumpMetadata?: string;
   /** Generated-asset manifest for a normalized database source. */
@@ -20,6 +22,8 @@ export interface BrowserPrototypeProfileSource {
 export interface BrowserPrototypeProfileReference {
   /** Identity previously confirmed by this Worker instance. */
   readonly identity: string;
+  /** Routing metadata only; authority is built from the cached provider in the Worker. */
+  readonly kind?: 'builtin' | 'custom';
 }
 
 export type BrowserPrototypeProfile =

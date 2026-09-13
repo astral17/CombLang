@@ -98,6 +98,13 @@ database together with an immutable `prototypes` provider.
 `EntityPrototype` footprint fields are optional as a pair; omission means that
 ordinary placement dimensions are unknown.
 
+`EntityPrototype.blueprintEligible` is an optional normalized fact. The raw
+converter emits `true` only when the raw flags contain `player-creation` and do
+not contain `not-blueprintable`; it emits `false` otherwise, including when the
+optional raw flags field has its empty default. Legacy normalized Entities that
+omit the derived field remain unknown and do not authorize universal Entity
+construction.
+
 Recipe products are zero-to-many, and ingredients/products may be items or
 fluids. Entity data should expose capabilities needed by CombLang instead of
 copying unstable raw prototype table layouts. Icons and localization are
@@ -198,7 +205,8 @@ contained no setting values, so the metadata records an explicit
 `startupSettings: []` and does not invent a settings identity or timestamp. Its
 generated asset is `space-age-2.1.17.json` with the sibling manifest
 `space-age-2.1.17.json.manifest.json`; the asset contains 342 items, 662 recipes,
-1028 entities, and 6 qualities. Its `entityCircuitCapabilities` value is false:
+and 1028 entities (158 explicitly blueprint-eligible and 870 explicitly
+ineligible), plus 6 qualities. Its `entityCircuitCapabilities` value is false:
 the raw dump supplies structural data, not reviewed native circuit behavior. The
 browser selects this pair as its first-run structural profile, but does not treat
 it as native circuit-behavior evidence.
@@ -231,7 +239,7 @@ Generator `comblang-factorio-data-dump-v1.4` also retains item recipe quality
 metadata and quality-chain links. The supplied dump has six quality records and
 four explicit `next` links, but no explicit recipe quality transformations; tests
 for those transformations use synthetic inputs. This is not an exhaustive native
-RecipePrototype implementation. Generator `comblang-factorio-data-dump-v1.9`
+RecipePrototype implementation. Generator `comblang-factorio-data-dump-v1.10`
 retains all 662 recipes in the same supplied dump, including 11 empty-output
 recipes; only the circuit-capability warning remains in that smoke run. Explicit
 malformed values of applicable recipe fields, recipe booleans, or invalid/ambiguous
@@ -242,9 +250,15 @@ this is an omission warning, not native behavior evidence. Lack of loss warnings
 does not establish complete recipe behavior coverage. Applicable malformed amount
 values and incomplete/conflicting amount forms fail with `PD1001` at their raw
 snake_case paths. A descending raw product range is normalized to the effective
-`amountMax = amountMin` documented by Factorio. For entity footprint, v1.9 uses explicit
+`amountMax = amountMin` documented by Factorio. For entity footprint, v1.10 uses explicit
 `tile_width` and `tile_height` per axis, falling back to collision-box dimensions
 as specified by the prototype API; it never substitutes the selection box.
+The same generator derives `blueprintEligible` from raw flags: only
+`player-creation` without `not-blueprintable` becomes `true`; a disqualifying or
+non-player-creatable record becomes `false`, and absent raw flags use the native
+empty-set default. Only an older normalized Entity which omits this derived fact
+remains unknown. Fallback Entity profiles are generated only from explicit `true`
+records.
 
 The Entity table catalog is pinned to the checked-in Factorio 2.1.17 prototype API.
 Its known engine type names remain valid for compatible later dumps, including
@@ -533,7 +547,8 @@ including an identity pin; combining an injected provider and `--prototypes` is 
 error rather than an implicit precedence rule.
 
 Without either source of prototype data, ordinary circuits still compile and
-accessing `prototypes` produces `EX1004`. On a browser first run (a missing
+accessing `prototypes` produces `EX1004`; Entity construction also has no
+authority. On a browser first run (a missing
 `comblang.prototype-selection.v1` session key), the checked-in Space Age database
 and its generated manifest are fetched as separate Vite assets and validated in
 the compiler Worker. The pair is never embedded in the JavaScript payload, is
@@ -560,7 +575,12 @@ the built-in profile for that custom selection.
 
 The browser compiler Worker protocol accepts normalized or raw JSON (with raw
 metadata when needed) plus an optional expected identity, or an identity already
-confirmed by that Worker.
+confirmed by that Worker. A selected provider also enables conservative Entity
+construction: after loading and validating the provider, the Worker derives a
+deterministic zero-port fallback profile for each Entity record whose normalized
+`blueprintEligible` fact is explicitly `true`. Omitted or false facts do not
+authorize construction. The request's identity and its built-in/custom routing
+label are not authority; the loaded provider is.
 Parsing, validation, hashing and provider construction happen inside the Worker;
 only cloneable JSON enters it and only cloneable environment metadata, diagnostics,
 and the direct plan leave it. Provider methods are never structured-cloned.

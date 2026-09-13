@@ -59,7 +59,7 @@ describe('PrototypeDatabase v1', () => {
         expected,
       );
       expect((await loadPrototypeDatabase(mutableFixture())).prototypes.identity).toBe(
-        'comblang-prototypes-v1-sha256:995933ebfa6a616450f87947e57fe09d956a156ef156455c69080456997d6131',
+        'comblang-prototypes-v1-sha256:5244960cc6e8a99f94612f88d7759fd1ed83e23002be5ae7f423c6c3674fb74f',
       );
     } finally {
       collation.mockRestore();
@@ -257,6 +257,18 @@ describe('PrototypeDatabase v1', () => {
     expect(loadedOlder.database.environment.generatorVersion).toBe('fixture-v1');
     expect(JSON.stringify(older)).toBe(olderJson);
     expect(loadedOlder.prototypes.identity).not.toBe(loadedNewer.prototypes.identity);
+  });
+
+  test('validates the optional Entity blueprint eligibility fact strictly', () => {
+    const legacy = mutableFixture();
+    delete legacy.entities[0]!.blueprintEligible;
+    expect(validatePrototypeDatabase(legacy).entities[0]).not.toHaveProperty('blueprintEligible');
+
+    const invalid = mutableFixture();
+    invalid.entities[0]!.blueprintEligible = 'yes';
+    expect(() => validatePrototypeDatabase(invalid)).toThrowError(
+      expect.objectContaining({ code: 'PT1001', path: 'entities[0].blueprintEligible' }),
+    );
   });
 
   test('builds deterministic multi-recipe product indexes without duplicate rows', () => {

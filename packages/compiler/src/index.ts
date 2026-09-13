@@ -8,6 +8,7 @@ export * from './entity.js';
 export * from './entity-configuration.js';
 export * from './entity-fixtures.js';
 export * from './entity-profile.js';
+export * from './entity-provisioning.js';
 export * from './entity-replay-context.js';
 export * from './entity-raw.js';
 export * from './ir.js';

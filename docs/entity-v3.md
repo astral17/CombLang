@@ -1,9 +1,12 @@
 # Entity v3 foundation
 
 CombLang now contains the internal, versioned foundation for generic Factorio
-Entity records plus a narrow host-bound source surface. This document describes
-the implemented data and transport boundary and internal physical preview; it
-does not claim typed facades or verified native Factorio behavior.
+Entity records plus a narrow source surface. Selected built-in and imported
+providers provision a conservative fallback profile only for Entity records
+whose normalized `blueprintEligible: true` fact is explicit, so construction
+and placement are runnable without claiming typed facades or verified native
+Factorio behavior. Legacy normalized records that omit this fact remain
+queryable but do not gain universal Entity construction authority.
 
 ## Implemented contract
 
@@ -118,12 +121,12 @@ runtime hydration facade exposes stable, runtime-local Network handles and
 fresh simulation kernels; physical Entities remain inert topology records and
 do not become simulator devices.
 
-## Host-bound source subset
+## Provider- and host-bound source subset
 
 The implemented public source constructor is deliberately exact:
 
 ```ts
-// In a host embedding with a matching reviewed profile:
+// With a selected built-in or imported provider:
 const entity = Entity('assembling-machine-3');
 const canonical = Entity('entity:assembling-machine-3');
 const same = Entity(prototypes.entity['assembling-machine-3']);
@@ -133,13 +136,12 @@ const output = new Network();
 output += Entity('reviewed-callable-machine')(input);
 ```
 
-This example is conditional on the host installing a matching
-`TrustedEntityReplayContext`, profile set, and prototype resolver. The default
-website runtime and ordinary CLI profile selection provide static prototype data
-but do not install that trusted Entity authority, so the real
-`assembling-machine-3` example is not runnable out of the box. A host embedding
-or a test may inject a reviewed provider profile (or a clearly labelled synthetic
-fixture) before compiling the source.
+The browser Worker and CLI create the matching trusted replay context and narrow
+provider resolver from the selected immutable provider. The default fallback
+profile is intentionally zero-port: it permits construction and `.at(...)`
+placement, but does not expose guessed connector lanes, call projections, or
+configuration rules. A reviewed provider profile or clearly labelled synthetic
+fixture is still required for typed configuration and connector operations.
 
 The additional accepted source form is intentionally limited to the typed
 single-condition slice:
@@ -163,21 +165,21 @@ compiler path only; it is not native Factorio conformance evidence.
 prototype name (the preferred spelling) or canonical key resolved by the host
 resolver, or the exact
 identity of a record returned by the selected host `prototypes.entity` table.
-The resolved canonical key must select exactly one profile in the matching
-`TrustedEntityReplayContext`; the source never supplies a profile reference,
+The resolved canonical key must select exactly one fallback or reviewed profile
+in the matching `TrustedEntityReplayContext`; the source never supplies a profile reference,
 evidence, connector schema, or native ID. `port` takes exactly
 `(connector, lane)` and `bind` takes exactly
 `(connector, lane, network, direction)`, where direction is `input` or
 `output`. Both methods operate only on a nominal Entity handle and retain
 source provenance and ownership generation.
 
-The cloneable Worker request carries only `EntityReplayContextTransport`. An
-injectable host callback may resolve that transport to the trusted profile set
-and a host-local prototype resolver. A missing or mismatched callback leaves the
-request transport-only and cannot grant Entity authority. The browser's normal
-production runtime does not invent profiles; its main-thread preview consumes
-the resolved physical snapshot returned by a successful authorized Worker
-compilation and does not require the host resolver again.
+The cloneable Worker request carries only `EntityReplayContextTransport`. For a
+selected built-in or imported provider, the Worker provisions the fallback
+profile set only after it has loaded and validated that provider; request
+identity and the `builtin`/`custom` routing label never grant authority. An
+injectable host callback remains available for explicitly host-bound contexts.
+The main-thread preview consumes the resolved physical snapshot returned by a
+successful Worker compilation and does not require the host resolver again.
 
 `Entity(prototype)` also accepts one public configuration object with exactly
 `rule`, `lanes`, and `condition` fields. The condition must be the nominal
@@ -205,9 +207,10 @@ The runtime [Entity registry](../packages/runtime/src/entity-registry.ts) is
 session-local and internal. Production construction receives a narrow resolver
 derived from the selected `PrototypeProvider`; its database schema/identity
 must match the trusted context, and `getEntity(profile.prototypeKey)` must
-succeed before an Entity handle is allocated. Clearly labelled synthetic
-resolvers are used only by unit fixtures. A profile alone is not proof that a
-prototype exists.
+succeed before an Entity handle is allocated. The provisioning service creates
+one deterministic zero-port fallback profile per eligible provider record.
+Clearly labelled synthetic resolvers are used only by unit fixtures. A profile
+alone is not proof that a prototype exists.
 
 Each construction gets a distinct nominal identity; an alias returns the same
 handle. Foreign-session handles and objects that only look like Entity records
@@ -301,7 +304,9 @@ The remaining implementation boundary covers:
 3. additional typed/generic acceptance beyond the host-bound source subset;
 4. later typed facades and any native-verified claims.
 
-The configuration, placement, and trusted-profile callable forms documented
-above are implemented. Raw payload lowering, broader typed facades, reviewed
-provider profile wiring, and native-verified behavior are not implied by this
-source subset.
+The fallback construction and placement forms documented above are implemented
+for selected built-in and imported providers. Raw payload lowering, broader
+typed facades, reviewed connector/configuration profile wiring, and
+native-verified behavior are not implied by this source subset. Without a
+selected provider, ordinary circuit-only compilation remains unchanged and
+`Entity(...)` has no authority.

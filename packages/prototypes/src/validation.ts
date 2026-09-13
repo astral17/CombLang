@@ -551,6 +551,7 @@ function parseEntities(
     const path = `entities[${index}]`;
     const input = object(entry, path);
     const name = string(input.name, `${path}.name`);
+    const blueprintEligible = optionalBoolean(input.blueprintEligible, `${path}.blueprintEligible`);
     const tileWidth = optionalPositiveInteger(input.tileWidth, `${path}.tileWidth`);
     const tileHeight = optionalPositiveInteger(input.tileHeight, `${path}.tileHeight`);
     if ((tileWidth === undefined) !== (tileHeight === undefined)) {
@@ -576,6 +577,7 @@ function parseEntities(
       key: canonicalKey('entity', name, input.key, `${path}.key`) as EntityPrototype['key'],
       name,
       type: string(input.type, `${path}.type`),
+      ...(blueprintEligible === undefined ? {} : { blueprintEligible }),
       ...(tileWidth === undefined ? {} : { tileWidth }),
       ...(tileHeight === undefined ? {} : { tileHeight }),
       ...(circuit === undefined ? {} : { circuit }),

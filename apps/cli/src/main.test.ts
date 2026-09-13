@@ -200,6 +200,77 @@ const input = CC(); const a = Double(input); const b = Double(input); const c = 
     });
   });
 
+  test('rejects a host-bound Entity context for a different selected provider before execution', async () => {
+    const path = await sourceFile(`throw new Error('source executed');`);
+    const firstDatabase = syntheticPrototypeDatabase();
+    const secondDatabase = structuredClone(firstDatabase) as {
+      environment: { factorioVersion: string };
+    };
+    secondDatabase.environment.factorioVersion = '2.1.18';
+    const [{ prototypes: first }, { prototypes: second }] = await Promise.all([
+      loadPrototypeDatabase(firstDatabase),
+      loadPrototypeDatabase(secondDatabase),
+    ]);
+    const trustedEntityReplayContext = createTrustedEntityReplayContext({
+      database: { schemaVersion: first.schemaVersion, identity: first.identity },
+      source: 'provider',
+      evidenceIdentity: 'provider-evidence-v1',
+      policyIdentity: 'provider-policy-v1',
+      profiles: [],
+    });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(
+      await run(['check', '--json', path], { prototypes: second, trustedEntityReplayContext }),
+    ).toBe(2);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'ER1001', severity: 'error' })],
+    });
+    expect(String(log.mock.calls[0]?.[0])).not.toContain('source executed');
+  });
+
+  test('provisions Entity construction from an explicitly selected CLI provider', async () => {
+    const source = await sourceFile(`const entity = Entity('assembling-machine-3').at(2, 3, 8);`);
+    const profile = await profileFile();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', '--prototypes', profile, source])).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      diagnostics: [],
+      producerCount: 0,
+      entityReplayContext: {
+        source: 'provider',
+        profileSetIdentity: expect.stringContaining('entity-profile-set-v1:'),
+      },
+    });
+  });
+
+  test('does not provision an explicitly non-blueprintable CLI Entity', async () => {
+    const database = structuredClone(syntheticPrototypeDatabase()) as {
+      capabilities: { entityCircuitCapabilities: boolean };
+      entities: Array<Record<string, unknown>>;
+    };
+    database.capabilities.entityCircuitCapabilities = false;
+    database.entities.push({
+      key: 'entity:grenade',
+      name: 'grenade',
+      type: 'projectile',
+      blueprintEligible: false,
+    });
+    const profile = await profileFile(JSON.stringify(database));
+    const source = await sourceFile(
+      `const entity = Entity('grenade');
+throw new Error('source executed');`,
+    );
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', '--prototypes', profile, source])).toBe(1);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      diagnostics: [expect.objectContaining({ code: 'RT2027', severity: 'error' })],
+    });
+    expect(String(log.mock.calls[0]?.[0])).not.toContain('source executed');
+  });
+
   test('reports a recursive union parameter mismatch at the executed call site', async () => {
     const argument = "'wrong'";
     const text = `function Read(input: Readonly<Network> | number) { return input; }

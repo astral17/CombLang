@@ -119,7 +119,7 @@ capture format is retained.
   locale collation. This applies to normalization, provider collections, identity,
   and setting-object comparison; recipe row order remains significant.
 - The normalizer retains empty-output recipes and no longer emits a skip warning
-  for them. Version `comblang-factorio-data-dump-v1.9` also uses explicit tile
+  for them. Version `comblang-factorio-data-dump-v1.10` also uses explicit tile
   dimensions before the documented collision-box fallback, role/kind-aware
   normalized recipe projection, and canonical amount normalization for raw
   product ranges.
@@ -145,7 +145,8 @@ fallback. Reload the JSON without a stale pin, inspect the new identity, and
 explicitly update project/supplement pins as appropriate. In the browser, select
 the JSON again if the cached identity no longer matches. Old entries are not
 silently migrated or exempted from validation. Regenerating a raw database with
-v1.9 also changes its contents and generator metadata, hence its identity. Older
+v1.10 also changes its contents and generator metadata, hence its identity; it
+also records the explicit raw-flag proof used for blueprint eligibility. Older
 valid schema-v1 JSON retains its recorded generator label when loaded; the loader
 does not rewrite it to the current raw converter identity.
 

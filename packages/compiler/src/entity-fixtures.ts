@@ -32,6 +32,7 @@ export const syntheticZeroPortEntityProfile: EntityProfile = deepFreeze({
     profileId: profile('profile:synthetic-zero-port-v1'),
   },
   connectors: [],
+  connectorStructure: 'complete',
   features: [],
   configurationRules: [],
   defaultReadProjection: null,
@@ -73,6 +74,7 @@ export const syntheticSharedTwoColorEntityProfile: EntityProfile = deepFreeze({
       ],
     },
   ],
+  connectorStructure: 'complete',
   features: [
     {
       key: feature('read'),
@@ -133,6 +135,7 @@ export const syntheticAmbiguousMultiConnectorEntityProfile: EntityProfile = deep
       lanes: [{ key: lane('right-green'), color: 'green' }],
     },
   ],
+  connectorStructure: 'complete',
   features: [
     {
       key: feature('read'),

@@ -2,6 +2,7 @@ import type {
   EntityConnectorDirection,
   EntityConnectorKey,
   EntityConnectorProfile,
+  EntityConnectorStructure,
   EntityCallProjection,
   EntityConfigurationMode,
   EntityConfigurationRule,
@@ -145,6 +146,13 @@ function color(value: unknown, path: string): 'red' | 'green' {
 function direction(value: unknown, path: string): EntityConnectorDirection {
   if (value !== 'input' && value !== 'output' && value !== 'bidirectional') {
     invalid('EP1001', path, 'expected input, output, or bidirectional.');
+  }
+  return value;
+}
+
+function parseConnectorStructure(value: unknown, path: string): EntityConnectorStructure {
+  if (value !== 'unknown' && value !== 'complete') {
+    invalid('EP1001', path, 'expected unknown or complete.');
   }
   return value;
 }
@@ -452,6 +460,7 @@ export function canonicalizeEntityProfile(value: unknown): EntityProfile {
     [
       'ref',
       'connectors',
+      'connectorStructure',
       'features',
       'configurationRules',
       'defaultReadProjection',
@@ -477,6 +486,10 @@ export function canonicalizeEntityProfile(value: unknown): EntityProfile {
   const connectors = dataArray(record.connectors, '$.connectors').map((connectorValue, index) =>
     parseConnector(connectorValue, `$.connectors[${index}]`),
   );
+  const structure =
+    'connectorStructure' in record
+      ? parseConnectorStructure(record.connectorStructure, '$.connectorStructure')
+      : 'complete';
   duplicate(
     connectors.map(({ key }) => key),
     '$.connectors',
@@ -544,6 +557,7 @@ export function canonicalizeEntityProfile(value: unknown): EntityProfile {
   return deepFreeze({
     ref: parsedRef,
     connectors: Object.freeze([...connectors].sort((left, right) => compare(left.key, right.key))),
+    connectorStructure: structure,
     features: Object.freeze([...features].sort((left, right) => compare(left.key, right.key))),
     configurationRules: Object.freeze(
       [...configurationRules].sort((left, right) => compare(left.key, right.key)),

@@ -17,6 +17,10 @@ import {
 } from '@comblang/prototypes';
 import type { Diagnostic } from '@comblang/shared';
 import type { EntityPrototypeResolver } from '@comblang/runtime/entity-registry';
+import {
+  conservativeEntityProvisioningPolicy,
+  EntityProvisioningService,
+} from '@comblang/runtime/entity-provisioning';
 
 import { compileSource } from './compile-source.js';
 import type {
@@ -69,6 +73,7 @@ function profileFailure(error: unknown): Diagnostic {
 
 export class CompilerWorkerRuntime {
   readonly #profiles = new Map<string, LoadedPrototypeInput>();
+  readonly #entityProvisioning = new EntityProvisioningService();
   readonly #resolveEntityReplayContext:
     | ((transport: EntityReplayContextTransport) => CompilerWorkerEntityHostContext | undefined)
     | undefined;
@@ -196,6 +201,45 @@ export class CompilerWorkerRuntime {
         capabilities: loaded.prototypes.capabilities,
         warnings: loaded.warnings,
       });
+      const provisioned = this.#entityProvisioning.provision(
+        loaded.prototypes,
+        conservativeEntityProvisioningPolicy,
+      );
+      if (entityHostContext !== undefined) {
+        const trustedDatabase = entityHostContext.trustedEntityReplayContext.database;
+        if (
+          trustedDatabase.schemaVersion !== loaded.prototypes.schemaVersion ||
+          trustedDatabase.identity !== loaded.prototypes.identity
+        ) {
+          throw new EntityReplayContextError(
+            'ER1001',
+            '$.entityReplayContext.database',
+            'host-bound Entity context does not match the selected provider.',
+          );
+        }
+        entityHostContext = {
+          trustedEntityReplayContext: entityHostContext.trustedEntityReplayContext,
+          entityPrototypeResolver:
+            entityHostContext.entityPrototypeResolver ?? provisioned.entityPrototypeResolver,
+        };
+      } else {
+        if (
+          entityReplayContext !== undefined &&
+          entityReplayContextIdentity(entityReplayContext) !==
+            entityReplayContextIdentity(provisioned.entityReplayContext)
+        ) {
+          throw new EntityReplayContextError(
+            'ER1001',
+            '$.entityReplayContext',
+            'selected Entity replay identity does not match the loaded provider.',
+          );
+        }
+        entityReplayContext = provisioned.entityReplayContext;
+        entityHostContext = {
+          trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+          entityPrototypeResolver: provisioned.entityPrototypeResolver,
+        };
+      }
       return {
         kind: 'parsed',
         revision: request.revision,

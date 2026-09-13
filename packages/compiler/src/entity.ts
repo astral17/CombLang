@@ -83,6 +83,9 @@ export interface EntityConnectorProfile {
   readonly lanes: readonly EntityLaneProfile[];
 }
 
+/** Whether the profile makes a complete claim about the Entity connector structure. */
+export type EntityConnectorStructure = 'unknown' | 'complete';
+
 /** Features refer to declared connector/lane views; they do not create ports. */
 export interface EntityFeatureProfile {
   readonly key: EntityFeatureKey;
@@ -130,6 +133,8 @@ export interface EntityConfigurationRule {
 export interface EntityProfile {
   readonly ref: EntityProfileRef;
   readonly connectors: readonly EntityConnectorProfile[];
+  /** Omission keeps compatibility with older profiles and means complete. */
+  readonly connectorStructure?: EntityConnectorStructure;
   readonly features: readonly EntityFeatureProfile[];
   readonly configurationRules: readonly EntityConfigurationRule[];
   readonly defaultReadProjection: EntityDefaultReadProjection | null;

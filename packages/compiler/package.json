@@ -15,6 +15,7 @@
     "./entity-configuration": "./src/entity-configuration.ts",
     "./entity-fixtures": "./src/entity-fixtures.ts",
     "./entity-profile": "./src/entity-profile.ts",
+    "./entity-provisioning": "./src/entity-provisioning.ts",
     "./entity-replay-context": "./src/entity-replay-context.ts",
     "./entity-raw": "./src/entity-raw.ts",
     "./elaboration-transform": "./src/elaboration-transform.ts",

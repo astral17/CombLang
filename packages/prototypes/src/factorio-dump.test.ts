@@ -73,6 +73,7 @@ function dumpFixture(): unknown {
       assembler: {
         type: 'assembling-machine',
         name: 'assembler',
+        flags: ['placeable-player', 'player-creation'],
         collision_box: [
           [-1.2, -1.2],
           [1.2, 1.2],
@@ -691,7 +692,7 @@ describe('Factorio data-raw-dump normalizer', () => {
     const normalized = normalizeFactorioDataDump(dumpFixture(), metadata);
     const { database, prototypes } = await loadPrototypeDatabase(normalized.database);
 
-    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.9');
+    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.10');
     expect(prototypes.item.grenade?.stackSize).toBe(100);
     expect(prototypes.recipe['iron-plate']).toMatchObject({
       categories: ['crafting'],
@@ -706,6 +707,7 @@ describe('Factorio data-raw-dump normalizer', () => {
       products: [{ prototype: 'fluid:water', amount: 10, temperature: 100 }],
     });
     expect(prototypes.entity.assembler).toMatchObject({
+      blueprintEligible: true,
       tileWidth: 3,
       tileHeight: 3,
       crafting: { categories: ['crafting', 'crafting-with-fluid'], supportsFluids: true },
@@ -720,6 +722,48 @@ describe('Factorio data-raw-dump normalizer', () => {
       ]),
     );
     expect(prototypes.recipe['recipe-unknown']?.products).toEqual([]);
+  });
+
+  test('derives blueprint eligibility from raw flags, including the empty default', () => {
+    const dump = dumpFixture() as Record<string, Record<string, Record<string, unknown>>>;
+    dump.projectile = {
+      projectile: { type: 'projectile', name: 'projectile', flags: ['not-on-map'] },
+    };
+    dump.explosion = {
+      explosion: { type: 'explosion', name: 'explosion', flags: ['not-blueprintable'] },
+    };
+    const normalized = normalizeFactorioDataDump(dump, metadata).database;
+    expect(normalized.entities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ key: 'entity:assembler', blueprintEligible: true }),
+        expect.objectContaining({ key: 'entity:projectile', blueprintEligible: false }),
+        expect.objectContaining({ key: 'entity:explosion', blueprintEligible: false }),
+      ]),
+    );
+
+    delete dump['assembling-machine']!.assembler!.flags;
+    const legacy = normalizeFactorioDataDump(dump, metadata).database.entities.find(
+      ({ name }) => name === 'assembler',
+    );
+    expect(legacy).toMatchObject({ blueprintEligible: false });
+  });
+
+  test.each([
+    ['not-an-array', 'expected an array of flag names.'],
+    [['player-creation', 'player-creation'], 'duplicate flag name.'],
+    [['player-creation', 1], 'expected a non-empty flag name.'],
+  ] as const)('rejects malformed raw entity flags', (flags, message) => {
+    const dump = dumpFixture() as {
+      'assembling-machine': Record<string, Record<string, unknown>>;
+    };
+    dump['assembling-machine'].assembler!.flags = flags;
+    expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
+      expect.objectContaining({
+        code: 'PD1001',
+        path: expect.stringContaining('assembling-machine.assembler.flags'),
+        message: expect.stringContaining(message),
+      }),
+    );
   });
 
   test('prefers explicit tile dimensions and falls back per axis to the collision box', () => {

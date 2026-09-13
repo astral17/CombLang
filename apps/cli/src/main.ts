@@ -41,6 +41,10 @@ import {
   type ExecutedDirectPlan,
   type ExecutedEntityDirectPlan,
 } from '@comblang/runtime';
+import {
+  conservativeEntityProvisioningPolicy,
+  EntityProvisioningService,
+} from '@comblang/runtime/entity-provisioning';
 import { compileParsedSourceProgram } from '@comblang/runtime/source-compilation';
 import { offsetToPosition, type Diagnostic } from '@comblang/shared';
 import { resolveProjectOptions } from './project-profile.js';
@@ -75,6 +79,51 @@ export interface CliCompilationEnvironment {
   readonly prototypes?: PrototypeProvider;
   readonly entityReplayContext?: EntityReplayContextTransport;
   readonly trustedEntityReplayContext?: TrustedEntityReplayContext;
+}
+
+function provisionCliEnvironment(
+  environment: CliCompilationEnvironment,
+  prototypes: PrototypeProvider | undefined,
+): CliCompilationEnvironment {
+  if (prototypes === undefined) return environment;
+  if (environment.trustedEntityReplayContext !== undefined) {
+    const trustedTransport = entityReplayContextTransport(environment.trustedEntityReplayContext);
+    if (
+      trustedTransport.database.schemaVersion !== prototypes.schemaVersion ||
+      trustedTransport.database.identity !== prototypes.identity ||
+      (environment.entityReplayContext !== undefined &&
+        entityReplayContextIdentity(environment.entityReplayContext) !==
+          entityReplayContextIdentity(trustedTransport))
+    ) {
+      throw new EntityReplayContextError(
+        'ER1001',
+        '$.entityReplayContext',
+        'host-bound Entity context does not match the selected provider.',
+      );
+    }
+    return { ...environment, prototypes };
+  }
+  const provisioned = new EntityProvisioningService().provision(
+    prototypes,
+    conservativeEntityProvisioningPolicy,
+  );
+  if (
+    environment.entityReplayContext !== undefined &&
+    entityReplayContextIdentity(environment.entityReplayContext) !==
+      entityReplayContextIdentity(provisioned.entityReplayContext)
+  ) {
+    throw new EntityReplayContextError(
+      'ER1001',
+      '$.entityReplayContext',
+      'selected Entity replay identity does not match the loaded provider.',
+    );
+  }
+  return {
+    ...environment,
+    prototypes,
+    trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+    entityReplayContext: provisioned.entityReplayContext,
+  };
 }
 
 function environmentReport(environment: CliCompilationEnvironment) {
@@ -540,7 +589,7 @@ export async function run(
       );
     }
     const prototypes = await selectPrototypeProvider(options, environment.prototypes);
-    const selected = prototypes === undefined ? environment : { ...environment, prototypes };
+    const selected = provisionCliEnvironment(environment, prototypes);
     if (!json && prototypes !== undefined) {
       console.log(
         `Prototype environment: ${prototypes.identity} (Factorio ${prototypes.environment.factorioVersion}).`,

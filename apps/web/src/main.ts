@@ -1011,9 +1011,13 @@ function render(): void {
           prototypeProfile:
             workerPrototypeIdentity !== undefined &&
             workerPrototypeIdentity === activePrototypeProfile.identity
-              ? { identity: workerPrototypeIdentity }
+              ? {
+                  identity: workerPrototypeIdentity,
+                  kind: activePrototypeProfileIsBuiltin ? 'builtin' : 'custom',
+                }
               : {
                   source: activePrototypeProfile.source,
+                  kind: activePrototypeProfileIsBuiltin ? 'builtin' : 'custom',
                   ...(activePrototypeProfile.factorioDumpMetadata === undefined
                     ? {}
                     : { factorioDumpMetadata: activePrototypeProfile.factorioDumpMetadata }),
@@ -1366,6 +1370,9 @@ function pumpCompilerWorker(): void {
       ...request,
       prototypeProfile: {
         source: activePrototypeProfile.source,
+        ...(request.prototypeProfile.kind === undefined
+          ? {}
+          : { kind: request.prototypeProfile.kind }),
         ...(activePrototypeProfile.factorioDumpMetadata === undefined
           ? {}
           : { factorioDumpMetadata: activePrototypeProfile.factorioDumpMetadata }),

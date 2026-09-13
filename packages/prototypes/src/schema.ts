@@ -203,6 +203,8 @@ export interface EntityPrototype {
   readonly key: EntityPrototypeKey;
   readonly name: string;
   readonly type: string;
+  /** True only when raw flags prove player blueprint creation is allowed; omission is unknown. */
+  readonly blueprintEligible?: boolean;
   /** Omission means the raw source did not provide an ordinary placement footprint. */
   readonly tileWidth?: number;
   readonly tileHeight?: number;

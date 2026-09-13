@@ -6,6 +6,7 @@ export * from './debug-structure.js';
 export * from './entity-registry.js';
 export * from './entity-lowering.js';
 export * from './entity-object-adapter.js';
+export * from './entity-provisioning.js';
 export * from './entity-plan-validation.js';
 export * from './constant-signal-values.js';
 export * from './elaboration-program.js';

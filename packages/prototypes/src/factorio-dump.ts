@@ -330,6 +330,27 @@ function hasFluidBoxes(value: unknown): boolean {
   return typeof value === 'object' && value !== null && Object.keys(value).length > 0;
 }
 
+function blueprintEligibility(record: JsonObject, path: string): boolean | undefined {
+  // In raw prototype data the optional flags field defaults to an empty set.
+  // Unknown is reserved for older already-normalized databases which predate
+  // the blueprintEligible fact entirely.
+  if (record.flags === undefined) return false;
+  if (!Array.isArray(record.flags)) {
+    throw new FactorioDumpError(`${path}.flags`, 'expected an array of flag names.');
+  }
+  const flags = new Set<string>();
+  for (const [index, value] of record.flags.entries()) {
+    if (typeof value !== 'string' || value.length === 0) {
+      throw new FactorioDumpError(`${path}.flags[${index}]`, 'expected a non-empty flag name.');
+    }
+    if (flags.has(value)) {
+      throw new FactorioDumpError(`${path}.flags[${index}]`, 'duplicate flag name.');
+    }
+    flags.add(value);
+  }
+  return flags.has('player-creation') && !flags.has('not-blueprintable');
+}
+
 /** Converts Factorio's native data-raw-dump JSON shape into the validated v1 subset. */
 export function normalizeFactorioDataDump(
   value: unknown,
@@ -467,6 +488,7 @@ export function normalizeFactorioDataDump(
         );
       }
       const size = dimensions(record, `${table}.${name}`);
+      const blueprintEligible = blueprintEligibility(record, `${table}.${name}`);
       const categories = Array.isArray(record.crafting_categories)
         ? record.crafting_categories.map((category, index) =>
             nonEmptyString(category, `${table}.${name}.crafting_categories[${index}]`),
@@ -476,6 +498,7 @@ export function normalizeFactorioDataDump(
         key: `entity:${name}`,
         name,
         type: table,
+        ...(blueprintEligible === undefined ? {} : { blueprintEligible }),
         ...(size === undefined ? {} : { tileWidth: size[0], tileHeight: size[1] }),
         ...(categories === undefined
           ? {}
@@ -493,7 +516,7 @@ export function normalizeFactorioDataDump(
 
   const environment: PrototypeEnvironment = {
     ...metadata,
-    generatorVersion: 'comblang-factorio-data-dump-v1.9',
+    generatorVersion: 'comblang-factorio-data-dump-v1.10',
   };
   const candidate = {
     schemaVersion: 1,

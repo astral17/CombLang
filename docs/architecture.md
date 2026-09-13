@@ -40,9 +40,12 @@ the nominal `NativeCondition(...)` helper into the existing synthetic-only typed
 the same physical record. Both operations preserve one Entity identity and
 create no hidden Producer, Network, Decider, or tick. Typed facades, raw native
 import, and verified native import behavior remain pending; see [Entity v3](entity-v3.md).
-This is host-embedding functionality: the default website and ordinary CLI
-profile selection do not install a trusted Entity profile set, so they remain
-unable to construct a real Entity until a host injects that authority.
+The default website and ordinary CLI now provision a conservative, provider-
+bound zero-port fallback profile only for Entity records whose normalized
+`blueprintEligible: true` fact is explicit. Presence in `data.raw`, a familiar
+prototype type, or a safe-looking name is not enough. This grants construction
+and placement only; it does not invent connectors, configuration logic, or
+native behavior.
 
 The parser returns the official TypeScript AST plus CombLang-owned diagnostics and stable source spans. Both the CLI and browser workbench call that same API. The browser invokes it through a revisioned Web Worker protocol and ignores stale responses; later compiler phases can extend that protocol without moving heavy work back to the UI thread.
 

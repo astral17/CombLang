@@ -44,7 +44,11 @@ const rawSource = JSON.stringify({
   quality: { normal: { type: 'quality', name: 'normal', level: 0 } },
   'virtual-signal': { 'signal-A': { type: 'virtual-signal', name: 'signal-A' } },
   'assembling-machine': {
-    'footprint-less': { type: 'assembling-machine', name: 'footprint-less' },
+    'footprint-less': {
+      type: 'assembling-machine',
+      name: 'footprint-less',
+      flags: ['placeable-player', 'player-creation'],
+    },
   },
 });
 
@@ -139,6 +143,294 @@ describe('browser compiler Worker prototype profile', () => {
     expect(warm.prototypeEnvironment?.identity).toBe(generated.manifest.databaseIdentity);
     expect(warm.result.compilerDiagnostics).toEqual([
       expect.objectContaining({ code: 'CL2001', severity: 'warning' }),
+    ]);
+  });
+
+  test('provisions built-in Entity profiles only after the Worker loads the provider', async () => {
+    const generated = await generatePrototypeAsset(rawSource, rawMetadata);
+    const runtime = new CompilerWorkerRuntime();
+    const first = await runtime.handle({
+      kind: 'parse',
+      revision: 20,
+      file: {
+        path: 'builtin-entity.factorio.ts',
+        text: `const short = Entity('footprint-less');
+const canonical = Entity('entity:footprint-less');
+short.at(1, 2);`,
+      },
+      prototypeProfile: {
+        kind: 'builtin',
+        source: generated.databaseJson,
+        assetManifest: generated.manifestJson,
+        expectedIdentity: generated.manifest.databaseIdentity,
+      },
+    });
+
+    expect(first.result.compilerDiagnostics).toEqual([]);
+    expect(first.result.plan).toMatchObject({
+      version: 3,
+      entities: [
+        {
+          profile: {
+            prototypeKey: 'entity:footprint-less',
+            database: { identity: generated.manifest.databaseIdentity },
+          },
+          placement: { x: 1, y: 2 },
+        },
+        { profile: { prototypeKey: 'entity:footprint-less' } },
+      ],
+    });
+    expect(
+      first.result.plan && 'entities' in first.result.plan ? first.result.plan.entities : [],
+    ).toHaveLength(2);
+    expect(first.result).not.toHaveProperty('execution');
+    expect(JSON.stringify(first.result)).not.toMatch(/profiles|resolver|prototypeProvider/);
+    expect(structuredClone(first)).toEqual(first);
+
+    const ordinary = await runtime.handle({
+      kind: 'parse',
+      revision: 21,
+      file: { path: 'builtin-ordinary.factorio.ts', text: 'const output = new Network();' },
+      prototypeProfile: { kind: 'builtin', identity: generated.manifest.databaseIdentity },
+    });
+    expect(ordinary.result.compilerDiagnostics).toEqual([]);
+    expect(ordinary.result.plan).toMatchObject({ version: 2 });
+    expect(ordinary.result.plan).not.toHaveProperty('entities');
+    expect(ordinary.result.resolvedCircuit).toBeUndefined();
+  });
+
+  test('provisions a selected provider when routing kind is omitted, including warm identity use', async () => {
+    const generated = await generatePrototypeAsset(rawSource, rawMetadata);
+    const runtime = new CompilerWorkerRuntime();
+    const first = await runtime.handle({
+      kind: 'parse',
+      revision: 27,
+      file: {
+        path: 'kindless-entity.factorio.ts',
+        text: `const entity = Entity('footprint-less').at(2, 3);`,
+      },
+      prototypeProfile: {
+        source: generated.databaseJson,
+        assetManifest: generated.manifestJson,
+        expectedIdentity: generated.manifest.databaseIdentity,
+      },
+    });
+    expect(first.result.compilerDiagnostics).toEqual([]);
+    expect(first.result.plan).toMatchObject({
+      version: 3,
+      entities: [{ profile: { prototypeKey: 'entity:footprint-less' } }],
+    });
+
+    const warm = await runtime.handle({
+      kind: 'parse',
+      revision: 28,
+      file: {
+        path: 'kindless-warm-entity.factorio.ts',
+        text: `const entity = Entity('footprint-less');`,
+      },
+      prototypeProfile: { identity: generated.manifest.databaseIdentity },
+    });
+    expect(warm.result.compilerDiagnostics).toEqual([]);
+    expect(warm.result.plan).toMatchObject({
+      version: 3,
+      entities: [{ profile: { prototypeKey: 'entity:footprint-less' } }],
+    });
+  });
+
+  test('preserves a matching reviewed context instead of replacing it with fallback profiles', async () => {
+    const loaded = await loadPrototypeDatabase(syntheticPrototypeDatabase());
+    const reviewed = {
+      ...structuredClone(syntheticZeroPortEntityProfile),
+      ref: {
+        ...syntheticZeroPortEntityProfile.ref,
+        prototypeKey: 'entity:assembling-machine-3' as const,
+        database: {
+          schemaVersion: loaded.prototypes.schemaVersion,
+          identity: loaded.prototypes.identity,
+        },
+      },
+    };
+    const trusted = createTrustedEntityReplayContext({
+      database: reviewed.ref.database,
+      source: 'provider',
+      evidenceIdentity: 'reviewed-provider-evidence-v1',
+      policyIdentity: 'reviewed-provider-policy-v1',
+      profiles: [reviewed],
+    });
+    const runtime = new CompilerWorkerRuntime({
+      resolveEntityReplayContext: () => ({
+        trustedEntityReplayContext: trusted,
+        entityPrototypeResolver: {
+          database: reviewed.ref.database,
+          getEntity: (nameOrKey) => loaded.prototypes.getEntity(nameOrKey),
+        },
+      }),
+    });
+    const response = await runtime.handle({
+      kind: 'parse',
+      revision: 29,
+      file: {
+        path: 'reviewed-provider-entity.factorio.ts',
+        text: `const entity = Entity('assembling-machine-3');`,
+      },
+      prototypeProfile: {
+        kind: 'custom',
+        source: JSON.stringify(syntheticPrototypeDatabase()),
+        expectedIdentity: loaded.prototypes.identity,
+      },
+      entityReplayContext: entityReplayContextTransport(trusted),
+    });
+
+    expect(response.result.compilerDiagnostics).toEqual([]);
+    expect(response.result.plan).toMatchObject({
+      version: 3,
+      entities: [{ profile: reviewed.ref }],
+    });
+    expect(response.result.entityReplayContext).toEqual(entityReplayContextTransport(trusted));
+  });
+
+  test('rejects a reviewed context whose database does not match the selected provider', async () => {
+    const loaded = await loadPrototypeDatabase(syntheticPrototypeDatabase());
+    const mismatched = createTrustedEntityReplayContext({
+      database: { schemaVersion: loaded.prototypes.schemaVersion, identity: 'database-other' },
+      source: 'provider',
+      evidenceIdentity: 'mismatched-evidence-v1',
+      policyIdentity: 'mismatched-policy-v1',
+      profiles: [],
+    });
+    const response = await new CompilerWorkerRuntime({
+      resolveEntityReplayContext: () => ({ trustedEntityReplayContext: mismatched }),
+    }).handle({
+      kind: 'parse',
+      revision: 30,
+      file: { path: 'mismatched-provider.factorio.ts', text: `throw new Error('executed');` },
+      prototypeProfile: {
+        source: JSON.stringify(syntheticPrototypeDatabase()),
+        expectedIdentity: loaded.prototypes.identity,
+      },
+      entityReplayContext: entityReplayContextTransport(mismatched),
+    });
+
+    expect(response.result.plan).toBeUndefined();
+    expect(response.result.compilerDiagnostics).toEqual([
+      expect.objectContaining({ code: 'ER1001', severity: 'error' }),
+    ]);
+    expect(response.result.compilerDiagnostics[0]?.message).not.toContain('executed');
+  });
+
+  test('does not construct a non-blueprintable transient Entity', async () => {
+    const database = structuredClone(syntheticPrototypeDatabase()) as {
+      capabilities: { entityCircuitCapabilities: boolean };
+      entities: Array<Record<string, unknown>>;
+    };
+    database.capabilities.entityCircuitCapabilities = false;
+    database.entities.push({
+      key: 'entity:grenade',
+      name: 'grenade',
+      type: 'projectile',
+      blueprintEligible: false,
+    });
+    const response = await new CompilerWorkerRuntime().handle({
+      kind: 'parse',
+      revision: 31,
+      file: {
+        path: 'transient-entity.factorio.ts',
+        text: `const entity = Entity('grenade');
+throw new Error('source executed');`,
+      },
+      prototypeProfile: { source: JSON.stringify(database) },
+    });
+
+    expect(response.result.plan).toBeUndefined();
+    expect(response.result.compilerDiagnostics).toEqual([
+      expect.objectContaining({ code: 'RT2027', severity: 'error' }),
+    ]);
+    expect(response.result.compilerDiagnostics[0]?.message).not.toContain('source executed');
+  });
+
+  test('does not let a spoofed built-in pin grant Entity authority', async () => {
+    const generated = await generatePrototypeAsset(rawSource, rawMetadata);
+    const response = await new CompilerWorkerRuntime().handle({
+      kind: 'parse',
+      revision: 22,
+      file: {
+        path: 'builtin-spoofed-pin.factorio.ts',
+        text: `throw new Error('source executed');`,
+      },
+      prototypeProfile: {
+        kind: 'builtin',
+        source: generated.databaseJson,
+        assetManifest: generated.manifestJson,
+        expectedIdentity: 'comblang-prototypes-v1-sha256:' + '0'.repeat(64),
+      },
+    });
+
+    expect(response.prototypeEnvironment).toBeUndefined();
+    expect(response.result.plan).toBeUndefined();
+    expect(response.result.compilerDiagnostics).toEqual([
+      expect.objectContaining({ code: 'WP1001', severity: 'error' }),
+    ]);
+    expect(response.result.compilerDiagnostics[0]?.message).not.toContain('source executed');
+  });
+
+  test('provisions an imported raw provider without inheriting built-in Entity facts', async () => {
+    const runtime = new CompilerWorkerRuntime();
+    const imported = await runtime.handle({
+      kind: 'parse',
+      revision: 23,
+      file: {
+        path: 'imported-entity.factorio.ts',
+        text: `const entity = Entity('footprint-less').at(3, 4);`,
+      },
+      prototypeProfile: {
+        kind: 'custom',
+        source: rawSource,
+        factorioDumpMetadata: rawMetadata,
+      },
+    });
+
+    expect(imported.result.compilerDiagnostics).toEqual([]);
+    expect(imported.result.plan).toMatchObject({
+      version: 3,
+      entities: [{ profile: { prototypeKey: 'entity:footprint-less' } }],
+    });
+
+    const inherited = await runtime.handle({
+      kind: 'parse',
+      revision: 24,
+      file: {
+        path: 'imported-no-inheritance.factorio.ts',
+        text: `const entity = Entity('assembling-machine-3');
+throw new Error('source executed');`,
+      },
+      prototypeProfile: { kind: 'custom', identity: imported.prototypeEnvironment!.identity },
+    });
+    expect(inherited.result.plan).toBeUndefined();
+    expect(inherited.result.compilerDiagnostics).toEqual([
+      expect.objectContaining({ code: 'RT2027', severity: 'error' }),
+    ]);
+    expect(inherited.result.compilerDiagnostics[0]?.message).not.toContain('source executed');
+  });
+
+  test('keeps imported provider caches isolated across Worker runtimes and identities', async () => {
+    const first = new CompilerWorkerRuntime();
+    const second = new CompilerWorkerRuntime();
+    const firstLoaded = await first.handle({
+      kind: 'parse',
+      revision: 25,
+      file,
+      prototypeProfile: { kind: 'custom', source: rawSource, factorioDumpMetadata: rawMetadata },
+    });
+    const identity = firstLoaded.prototypeEnvironment!.identity;
+    const miss = await second.handle({
+      kind: 'parse',
+      revision: 26,
+      file,
+      prototypeProfile: { kind: 'custom', identity },
+    });
+    expect(miss.prototypeEnvironment).toBeUndefined();
+    expect(miss.result.compilerDiagnostics).toEqual([
+      expect.objectContaining({ code: 'WP1002', severity: 'error' }),
     ]);
   });
 

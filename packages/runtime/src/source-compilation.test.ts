@@ -1,5 +1,6 @@
 import {
   loadPrototypeDatabase,
+  loadPrototypeInputJson,
   syntheticPrototypeDatabase,
   type EntityPrototype,
 } from '@comblang/prototypes';
@@ -15,6 +16,7 @@ import {
   createTrustedEntityReplayContext,
   entityReplayContextTransport,
 } from '@comblang/compiler/entity-replay-context';
+import builtinPrototypeDatabase from '../../prototypes/generated/space-age-2.1.17.json';
 import { describe, expect, test } from 'vitest';
 
 import type { EntityPrototypeResolver } from './entity-registry.js';
@@ -25,7 +27,40 @@ import {
   type SourceCompilationStage,
 } from './source-compilation.js';
 import { elaborateEntityDirectPlan } from './direct-plan.js';
+import {
+  conservativeEntityProvisioningPolicy,
+  EntityProvisioningService,
+} from './entity-provisioning.js';
+import { createDebugDocument } from './debug-document.js';
 import { hydrateResolvedSourceCircuit } from './resolved-source-circuit.js';
+
+const importedEntitySource = JSON.stringify({
+  item: { 'iron-plate': { type: 'item', name: 'iron-plate', stack_size: 100 } },
+  fluid: { water: { type: 'fluid', name: 'water' } },
+  recipe: {
+    'iron-plate': {
+      type: 'recipe',
+      name: 'iron-plate',
+      ingredients: {},
+      results: [{ type: 'item', name: 'iron-plate', amount: 1 }],
+    },
+  },
+  'recipe-category': { crafting: { type: 'recipe-category', name: 'crafting' } },
+  quality: { normal: { type: 'quality', name: 'normal', level: 0 } },
+  'virtual-signal': { 'signal-A': { type: 'virtual-signal', name: 'signal-A' } },
+  'assembling-machine': {
+    'footprint-less': {
+      type: 'assembling-machine',
+      name: 'footprint-less',
+      flags: ['placeable-player', 'player-creation'],
+    },
+  },
+});
+const importedEntityMetadata = JSON.stringify({
+  factorioVersion: '2.1.17',
+  expansions: [],
+  mods: [{ name: 'base', version: '2.1.17' }],
+});
 
 function syntheticEntityHost(
   profile: EntityProfile,
@@ -236,6 +271,92 @@ output += Entity('synthetic-shared-two-color')(input);`,
     expect(tick.read(input.id)).toEqual(tick.read(output.id));
     expect(hydrated.ir.entities).toHaveLength(1);
   });
+
+  test.each([
+    {
+      label: 'the checked-in built-in provider',
+      prototypeName: 'assembling-machine-3',
+      load: async () => loadPrototypeDatabase(builtinPrototypeDatabase),
+    },
+    {
+      label: 'an imported raw provider',
+      prototypeName: 'footprint-less',
+      load: async () =>
+        loadPrototypeInputJson(importedEntitySource, {
+          factorioDumpMetadata: importedEntityMetadata,
+        }),
+    },
+  ])(
+    'accepts a zero-port Entity from $label through the public preview path',
+    async ({ label, prototypeName, load }) => {
+      const { prototypes } = await load();
+      const provisioned = new EntityProvisioningService().provision(
+        prototypes,
+        conservativeEntityProvisioningPolicy,
+      );
+      const compilation = compileSourceProgram(
+        {
+          path: `${prototypeName}-construction.factorio.ts`,
+          text: `const output = new Network();
+const entity = Entity('${prototypeName}').at(5, 6, 8);`,
+        },
+        {
+          prototypes,
+          trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+          entityPrototypeResolver: provisioned.entityPrototypeResolver,
+        },
+      );
+
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      const plan = compilation.plan;
+      const execution = compilation.execution;
+      const resolvedCircuit = compilation.resolvedCircuit;
+      if (
+        plan === undefined ||
+        plan.version !== 3 ||
+        execution === undefined ||
+        !('entityObject' in execution) ||
+        resolvedCircuit === undefined
+      ) {
+        throw new Error(`Expected a resolved zero-port Entity v3 compilation for ${label}.`);
+      }
+      expect(plan.entities).toHaveLength(1);
+      expect(plan.entities[0]).toMatchObject({
+        profile: { prototypeKey: `entity:${prototypeName}` },
+        placement: { x: 5, y: 6, direction: 8 },
+        connectorBindings: [],
+      });
+      expect(execution.circuit.ir.entities).toHaveLength(1);
+      expect(execution.circuit.graph.producers).toHaveLength(0);
+      expect(resolvedCircuit.ir.entities).toEqual(execution.circuit.ir.entities);
+      expect(structuredClone(resolvedCircuit)).toEqual(resolvedCircuit);
+
+      const blueprint = generateEntityBlueprintJson(execution.circuit.ir).blueprint;
+      expect(blueprint.entities).toEqual([
+        expect.objectContaining({
+          entity_number: 1,
+          name: prototypeName,
+          position: { x: 5, y: 6 },
+          direction: 8,
+        }),
+      ]);
+      expect(blueprint.entities[0]).not.toHaveProperty('control_behavior');
+
+      const debug = createDebugDocument(execution.debug, execution.circuit.graph);
+      expect(debug).toMatchObject({
+        format: 'comblang-debug',
+        version: 2,
+        scopes: [{ entities: [{ record: { placement: { x: 5, y: 6, direction: 8 } } }] }],
+      });
+
+      const hydrated = hydrateResolvedSourceCircuit(resolvedCircuit);
+      const output = hydrated.ir.networks.find(({ name }) => name === 'output');
+      if (output === undefined) throw new Error('Expected the output Network.');
+      const tick = hydrated.createSimulation().step();
+      expect(tick.tick).toBe(1);
+      expect(tick.read(output.id).size).toBe(0);
+    },
+  );
 
   test('evaluates the Entity prototype expression exactly once', () => {
     const host = syntheticEntityHost(syntheticZeroPortEntityProfile);

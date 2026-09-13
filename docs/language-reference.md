@@ -51,10 +51,12 @@ object, and `Signal('signal:v1/virtual/signal-A/')` still means an item with tha
 literal name. The canonical property-key form is accepted by `CC` dictionaries;
 an ordinary bare string key remains item shorthand.
 
-## Host-bound Entities
+## Provider- and host-bound Entities
 
-The current public Entity surface is intentionally small and requires a
-matching host-owned trusted replay context:
+The current public Entity surface is intentionally small. When a built-in or
+imported provider is selected, the Worker/CLI derives a trusted replay context
+and a conservative zero-port fallback profile only for each prototype whose
+normalized `blueprintEligible` fact is explicitly true:
 
 ```ts
 // In a host embedding with a matching reviewed profile:
@@ -66,12 +68,13 @@ machine.bind('circuit', 'red', input, 'input');
 const redPort = machine.port('circuit', 'red');
 ```
 
-The example assumes that the embedding host has installed a matching reviewed
-`TrustedEntityReplayContext`, profile set, and prototype resolver. The default
-website runtime and ordinary CLI profile selection do not install that Entity
-authority, so `assembling-machine-3` is not a runnable out-of-the-box example;
-host integrations and tests must inject the matching provider profile (or a
-clearly labelled synthetic fixture).
+The fallback profile is enough for `Entity(...)` construction and `.at(...)`
+placement, including the `assembling-machine-3` example. It deliberately has no
+connectors, call projection, configuration rules, or native behavior. A
+matching reviewed profile (or clearly labelled synthetic fixture) is still
+required for `port`, `bind`, callable Entities, and typed configuration. An
+omitted `blueprintEligible` fact in legacy normalized input is unknown and does
+not authorize construction.
 
 The accepted typed configuration and placement subset is:
 
@@ -95,8 +98,9 @@ host-embedding fixture, not a claim of native Factorio compatibility.
 `Entity(prototype)` accepts one or two arguments: a short prototype name (the
 preferred spelling), its internal canonical key, or the same object identity
 returned by the selected `prototypes.entity` table, optionally followed by the
-public configuration object shown above. The host resolves that prototype to
-one trusted profile before allocating a nominal physical Entity. `Entity` is
+public configuration object shown above. The selected provider resolves that
+prototype to one trusted fallback or reviewed profile before allocating a
+nominal physical Entity. `Entity` is
 reserved and only a direct identifier call has this meaning; ordinary object
 members such as `object.Entity`, `object.port`, and `object.bind` remain native
 JavaScript operations.
