@@ -19,6 +19,10 @@ import {
   compileSourceProgram,
   sourceCompilationArtifact,
 } from '@comblang/runtime/source-compilation';
+import {
+  conservativeEntityProvisioningPolicy,
+  EntityProvisioningService,
+} from '@comblang/runtime/entity-provisioning';
 
 import { run } from './main.js';
 
@@ -240,8 +244,53 @@ const input = CC(); const a = Double(input); const b = Double(input); const c = 
       producerCount: 0,
       entityReplayContext: {
         source: 'provider',
-        profileSetIdentity: expect.stringContaining('entity-profile-set-v1:'),
+        profileSetIdentity: expect.stringMatching(/^entity-profile-set-v2-sha256:[0-9a-f]{64}$/),
       },
+    });
+  });
+
+  test('retains provider prototype types for generic and family Entity paths', async () => {
+    const database = structuredClone(syntheticPrototypeDatabase()) as {
+      entities: Array<Record<string, unknown>>;
+    };
+    database.entities.push({
+      key: 'entity:fixture-lamp',
+      name: 'fixture-lamp',
+      type: 'lamp',
+      blueprintEligible: true,
+      circuit: {
+        read: false,
+        enableDisable: false,
+        readContents: false,
+        setFilters: false,
+        setRequests: false,
+        setRecipe: false,
+        readRecipe: false,
+        readFinishedCraft: false,
+        outputSignals: false,
+      },
+    });
+    const { prototypes } = await loadPrototypeDatabase(database);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    expect(
+      provisioned.profiles.find(({ ref }) => ref.prototypeKey === 'entity:assembling-machine-3'),
+    ).toMatchObject({ prototypeType: 'assembling-machine' });
+    expect(
+      provisioned.profiles.find(({ ref }) => ref.prototypeKey === 'entity:fixture-lamp'),
+    ).toMatchObject({ prototypeType: 'lamp' });
+
+    const source = await sourceFile(`const machine = Entity('assembling-machine-3');
+const lamp = Lamp('fixture-lamp');`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', source], { prototypes })).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      diagnostics: [],
+      producerCount: 0,
+      entityReplayContext: { source: 'provider' },
     });
   });
 

@@ -459,6 +459,7 @@ export function canonicalizeEntityProfile(value: unknown): EntityProfile {
     record,
     [
       'ref',
+      'prototypeType',
       'connectors',
       'connectorStructure',
       'features',
@@ -482,6 +483,8 @@ export function canonicalizeEntityProfile(value: unknown): EntityProfile {
     },
     profileId: stableIdentifier(ref.profileId, '$.ref.profileId') as EntityProfileId,
   };
+  const prototypeType =
+    'prototypeType' in record ? stringValue(record.prototypeType, '$.prototypeType') : undefined;
 
   const connectors = dataArray(record.connectors, '$.connectors').map((connectorValue, index) =>
     parseConnector(connectorValue, `$.connectors[${index}]`),
@@ -556,6 +559,7 @@ export function canonicalizeEntityProfile(value: unknown): EntityProfile {
 
   return deepFreeze({
     ref: parsedRef,
+    ...(prototypeType === undefined ? {} : { prototypeType }),
     connectors: Object.freeze([...connectors].sort((left, right) => compare(left.key, right.key))),
     connectorStructure: structure,
     features: Object.freeze([...features].sort((left, right) => compare(left.key, right.key))),

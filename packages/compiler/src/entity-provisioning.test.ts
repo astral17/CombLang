@@ -67,6 +67,7 @@ describe('Entity construction provisioning contract', () => {
     expect(first.configurationRules).toEqual([]);
     expect(first.defaultReadProjection).toBeNull();
     expect(first).not.toHaveProperty('callProjection');
+    expect(first.prototypeType).toBe('assembling-machine');
     expect(first.synthetic).toBe(false);
     expect(Object.isFrozen(first)).toBe(true);
     expect(Object.isFrozen(first.ref)).toBe(true);
@@ -96,6 +97,10 @@ describe('Entity construction provisioning contract', () => {
     expect(profiles.map(({ ref }) => ref.prototypeKey)).toEqual([
       'entity:assembling-machine-3',
       'entity:stone-furnace',
+    ]);
+    expect(profiles.map(({ prototypeType }) => prototypeType)).toEqual([
+      'assembling-machine',
+      'furnace',
     ]);
     expect(new Set(profiles.map(({ ref }) => ref.profileId)).size).toBe(2);
     expect(Object.isFrozen(profiles)).toBe(true);
@@ -155,5 +160,22 @@ describe('Entity construction provisioning contract', () => {
     ).toThrowError(
       expect.objectContaining({ code: 'EPV1001', path: '$.prototype.blueprintEligible' }),
     );
+  });
+
+  test('rejects an accessor at the normalized provider type seam without invoking it', () => {
+    let called = false;
+    const prototype = { ...assemblingMachine } as Record<string, unknown>;
+    Object.defineProperty(prototype, 'type', {
+      enumerable: true,
+      get: () => {
+        called = true;
+        return 'assembling-machine';
+      },
+    });
+
+    expect(() => normalizeBlueprintEntityPrototype(prototype)).toThrowError(
+      expect.objectContaining({ code: 'EPV1000', path: '$.prototype.type' }),
+    );
+    expect(called).toBe(false);
   });
 });

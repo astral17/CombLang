@@ -11,6 +11,7 @@ import {
   resolveEntityReplayProfile,
   type TrustedEntityReplayContext,
 } from './entity-replay-context.js';
+import { canonicalizeEntityProfile } from './entity-profile.js';
 import {
   syntheticSharedTwoColorEntityProfile,
   syntheticZeroPortEntityProfile,
@@ -125,6 +126,53 @@ describe('trusted Entity replay context', () => {
     const nonCallable = context([withoutProjection as never]);
 
     expect(callable.profileSetIdentity).not.toBe(nonCallable.profileSetIdentity);
+  });
+
+  test('retains trusted prototype type in profiles while keeping it out of replay transport', () => {
+    const typedProfile = {
+      ...syntheticZeroPortEntityProfile,
+      prototypeType: 'container',
+    };
+    const trusted = context([typedProfile]);
+    const changed = context([{ ...syntheticZeroPortEntityProfile, prototypeType: 'furnace' }]);
+
+    expect(resolveEntityReplayProfile(typedProfile.ref, trusted).prototypeType).toBe('container');
+    expect(trusted.profileSetIdentity).toMatch(/^entity-profile-set-v2-sha256:[0-9a-f]{64}$/);
+    expect(trusted.profileSetIdentity).not.toBe(changed.profileSetIdentity);
+    expect(() => resolveEntityReplayContext(entityReplayContextRef(changed), trusted)).toThrowError(
+      expect.objectContaining({ code: 'ER1001', path: '$.profileSetIdentity' }),
+    );
+    const transportJson = JSON.stringify(entityReplayContextTransport(trusted));
+    expect(transportJson).not.toContain('prototypeType');
+    expect(transportJson).not.toContain(typedProfile.ref.prototypeKey);
+    expect(transportJson).not.toContain('connectors');
+    expect(() =>
+      resolveEntityReplayProfile({ ...typedProfile.ref, prototypeType: 'furnace' }, trusted),
+    ).toThrowError(expect.objectContaining({ code: 'ER1000' }));
+  });
+
+  test('accepts the historical v1 profile-set identity only for the bound host context', () => {
+    const typedProfile = {
+      ...syntheticZeroPortEntityProfile,
+      prototypeType: 'container',
+    };
+    const trusted = context([typedProfile]);
+    const withoutPrototypeType = { ...typedProfile } as Record<string, unknown>;
+    delete withoutPrototypeType.prototypeType;
+    const legacyIdentity = `entity-profile-set-v1:${JSON.stringify([
+      canonicalizeEntityProfile(withoutPrototypeType),
+    ])}`;
+    const reference = entityReplayContextRef(trusted);
+
+    expect(
+      resolveEntityReplayContext({ ...reference, profileSetIdentity: legacyIdentity }, trusted),
+    ).toBe(trusted);
+    expect(() =>
+      resolveEntityReplayContext(
+        { ...reference, profileSetIdentity: `${legacyIdentity}tampered` },
+        trusted,
+      ),
+    ).toThrowError(expect.objectContaining({ code: 'ER1001', path: '$.profileSetIdentity' }));
   });
 
   test('reports structured errors at the identity boundary', () => {

@@ -197,6 +197,13 @@ export class EntityRegistry {
         `prototype ${profile.ref.prototypeKey} is not available in the selected database.`,
       );
     }
+    if (profile.prototypeType !== undefined && profile.prototypeType !== prototype.type) {
+      invalid(
+        'EN1003',
+        '$.profile.prototypeType',
+        `profile prototype type ${JSON.stringify(profile.prototypeType)} does not match provider prototype type ${JSON.stringify(prototype.type)}.`,
+      );
+    }
 
     const source = sourceSnapshot(request.source);
     const instancePath = pathSnapshot(request.instancePath, 'instancePath');

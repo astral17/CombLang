@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import {
   generatePrototypeAsset,
   loadPrototypeDatabase,
+  loadPrototypeInputJson,
   syntheticPrototypeDatabase,
   type EntityPrototype,
 } from '@comblang/prototypes';
@@ -11,6 +12,10 @@ import {
   createTrustedEntityReplayContext,
   entityReplayContextTransport,
 } from '@comblang/compiler/entity-replay-context';
+import {
+  conservativeEntityProvisioningPolicy,
+  EntityProvisioningService,
+} from '@comblang/runtime/entity-provisioning';
 
 import { CompilerWorkerRuntime, handleCompilerWorkerRequest } from './compiler-worker-request.js';
 import type { CompilerWorkerProgressStage, CompilerWorkerRequest } from './worker-protocol.js';
@@ -657,6 +662,43 @@ throw new Error('source executed');`,
       expect.objectContaining({ code: 'RT2027', severity: 'error' }),
     ]);
     expect(inherited.result.compilerDiagnostics[0]?.message).not.toContain('source executed');
+  });
+
+  test('retains imported prototype types for generic and family Entity paths without transporting them', async () => {
+    const loaded = await loadPrototypeInputJson(rawSource, {
+      factorioDumpMetadata: rawMetadata,
+    });
+    const provisioned = new EntityProvisioningService().provision(
+      loaded.prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    expect(
+      provisioned.profiles.find(({ ref }) => ref.prototypeKey === 'entity:footprint-less'),
+    ).toMatchObject({ prototypeType: 'assembling-machine' });
+    expect(
+      provisioned.profiles.find(({ ref }) => ref.prototypeKey === 'entity:fixture-lamp'),
+    ).toMatchObject({ prototypeType: 'lamp' });
+
+    const response = await new CompilerWorkerRuntime().handle({
+      kind: 'parse',
+      revision: 32,
+      file: {
+        path: 'imported-family-entities.factorio.ts',
+        text: `const machine = Entity('footprint-less');
+const lamp = Lamp('fixture-lamp');`,
+      },
+      prototypeProfile: {
+        kind: 'custom',
+        source: rawSource,
+        factorioDumpMetadata: rawMetadata,
+      },
+    });
+
+    expect(response.result.compilerDiagnostics).toEqual([]);
+    const plan = response.result.plan;
+    if (plan === undefined || plan.version !== 3) throw new Error('Expected an Entity v3 plan.');
+    expect(plan.entities).toHaveLength(2);
+    expect(JSON.stringify(response.result.resolvedCircuit)).not.toContain('prototypeType');
   });
 
   test('keeps imported provider caches isolated across Worker runtimes and identities', async () => {

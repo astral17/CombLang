@@ -132,6 +132,8 @@ export interface EntityConfigurationRule {
 
 export interface EntityProfile {
   readonly ref: EntityProfileRef;
+  /** Provider-derived prototype family; omission is legacy and means unknown. */
+  readonly prototypeType?: string;
   readonly connectors: readonly EntityConnectorProfile[];
   /** Omission keeps compatibility with older profiles and means complete. */
   readonly connectorStructure?: EntityConnectorStructure;

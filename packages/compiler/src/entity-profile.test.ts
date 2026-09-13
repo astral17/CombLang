@@ -27,6 +27,61 @@ describe('Entity capability profile boundary', () => {
     expect(reordered).toBe(forward);
   });
 
+  test('accepts trusted prototype type metadata and keeps legacy omission unknown', () => {
+    const input = jsonCopy(syntheticZeroPortEntityProfile) as Record<string, unknown>;
+    input.prototypeType = 'assembling-machine';
+    const canonical = canonicalizeEntityProfile(input);
+
+    expect(canonical.prototypeType).toBe('assembling-machine');
+    expect(Object.isFrozen(canonical)).toBe(true);
+    expect(canonicalizeEntityProfile(syntheticZeroPortEntityProfile)).not.toHaveProperty(
+      'prototypeType',
+    );
+    expect(canonicalEntityProfileJson(input)).not.toBe(
+      canonicalEntityProfileJson(syntheticZeroPortEntityProfile),
+    );
+  });
+
+  test('rejects malformed or misplaced prototype type metadata without invoking accessors', () => {
+    const wrongScalar = jsonCopy(syntheticZeroPortEntityProfile) as Record<string, unknown>;
+    wrongScalar.prototypeType = 42;
+    expect(() => canonicalizeEntityProfile(wrongScalar)).toThrowError(
+      expect.objectContaining({ code: 'EP1001', path: '$.prototypeType' }),
+    );
+
+    const misplaced = jsonCopy(syntheticZeroPortEntityProfile) as {
+      ref: Record<string, unknown>;
+    };
+    misplaced.ref.prototypeType = 'container';
+    expect(() => canonicalizeEntityProfile(misplaced)).toThrowError(
+      expect.objectContaining({ code: 'EP1000', path: '$.ref.prototypeType' }),
+    );
+
+    let called = false;
+    const accessor = jsonCopy(syntheticZeroPortEntityProfile) as Record<string, unknown>;
+    Object.defineProperty(accessor, 'prototypeType', {
+      enumerable: true,
+      get: () => {
+        called = true;
+        return 'container';
+      },
+    });
+    expect(() => canonicalizeEntityProfile(accessor)).toThrowError(
+      expect.objectContaining({ code: 'EP1001', path: '$.prototypeType' }),
+    );
+    expect(called).toBe(false);
+
+    const symbol = Symbol('prototypeType');
+    const symbolField = jsonCopy(syntheticZeroPortEntityProfile) as Record<
+      string | symbol,
+      unknown
+    >;
+    Object.defineProperty(symbolField, symbol, { enumerable: true, value: 'container' });
+    expect(() => canonicalizeEntityProfile(symbolField)).toThrowError(
+      expect.objectContaining({ code: 'EP1000', path: '$[Symbol(prototypeType)]' }),
+    );
+  });
+
   test('accepts one explicit callable input/output projection and keeps it data-only', () => {
     const canonical = canonicalizeEntityProfile(syntheticSharedTwoColorEntityProfile);
 

@@ -35,6 +35,18 @@ canonical, data-only descriptions of physical connectors, color lanes, and
 configuration features. Features do not create ports. A validated replay
 context contains a profile set, not one plan-wide profile: each Entity record
 selects its own `profileId`, so one plan may contain multiple Entity families.
+Provider-created profiles also retain the provider's exact normalized prototype
+`type` as trusted `prototypeType` metadata. This field is host-owned authority,
+is included in profile canonicalization and the current
+`entity-profile-set-v2-sha256:<64 lowercase hex>` identity, and is omitted from
+`EntityProfileRef`, plans, resolved transport, and profile-free NCIR. Older or
+synthetic profiles may omit it; omission means unknown rather than wildcard.
+The host accepts the historical v1 canonical-content identity only while
+replaying an already-bound v3 context; newly emitted refs and transports always
+use v2, and future computation-bearing v4 plans must require v2. Future exact
+family computation must require an exact match with the selected provider
+record. Prototype type alone does not prove connectors, capabilities, or native
+Factorio behavior.
 
 Evidence is attached to a capability, currently a configuration rule such as
 `native-single-condition`, rather than to the whole profile. `unknown`,

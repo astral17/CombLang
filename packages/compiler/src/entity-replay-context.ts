@@ -7,6 +7,7 @@ import type {
   EntityReplayContextSource,
   EntityReplayContextRef,
 } from './entity.js';
+import { sha256Utf8Hex } from '@comblang/shared';
 import { entitySemanticVersion } from './entity.js';
 import { canonicalizeEntityProfile } from './entity-profile.js';
 
@@ -121,10 +122,33 @@ function transportRecord(value: unknown): Record<string, unknown> {
   return record;
 }
 
+const legacyProfileSetIdentities = new WeakMap<
+  TrustedEntityReplayContext,
+  ReadonlySet<EntityProfileSetId>
+>();
+
 function profileSetIdentity(profiles: readonly EntityProfile[]): EntityProfileSetId {
   const entries = [...profiles]
-    .sort((left, right) => (left.ref.profileId < right.ref.profileId ? -1 : 1))
+    .sort((left, right) => {
+      if (left.ref.profileId < right.ref.profileId) return -1;
+      if (left.ref.profileId > right.ref.profileId) return 1;
+      return 0;
+    })
     .map((profile) => canonicalizeEntityProfile(profile));
+  return `entity-profile-set-v2-sha256:${sha256Utf8Hex(JSON.stringify(entries))}` as EntityProfileSetId;
+}
+
+function legacyProfileSetIdentity(profiles: readonly EntityProfile[]): EntityProfileSetId {
+  const entries = [...profiles]
+    .sort((left, right) => {
+      if (left.ref.profileId < right.ref.profileId) return -1;
+      if (left.ref.profileId > right.ref.profileId) return 1;
+      return 0;
+    })
+    .map((profile) => {
+      const { prototypeType: _prototypeType, ...legacyProfile } = profile;
+      return canonicalizeEntityProfile(legacyProfile);
+    });
   return `entity-profile-set-v1:${JSON.stringify(entries)}` as EntityProfileSetId;
 }
 
@@ -203,7 +227,7 @@ export function createTrustedEntityReplayContext(
     }
   }
 
-  return Object.freeze({
+  const trusted = Object.freeze({
     database,
     source: contextSource,
     profileSetIdentity: profileSetIdentity(profiles),
@@ -211,6 +235,11 @@ export function createTrustedEntityReplayContext(
     policyIdentity,
     profiles: Object.freeze(profiles),
   });
+  legacyProfileSetIdentities.set(
+    trusted,
+    new Set<EntityProfileSetId>([legacyProfileSetIdentity(profiles)]),
+  );
+  return trusted;
 }
 
 /** Validates the whole plan context before resolving any individual Entity profile. */
@@ -225,7 +254,11 @@ export function resolveEntityReplayContext(
   ) {
     invalid('ER1001', '$.database', 'plan database reference does not match replay context.');
   }
-  if (ref.profileSetIdentity !== context.profileSetIdentity) {
+  const legacyIdentities = legacyProfileSetIdentities.get(context);
+  if (
+    ref.profileSetIdentity !== context.profileSetIdentity &&
+    !legacyIdentities?.has(ref.profileSetIdentity)
+  ) {
     invalid('ER1001', '$.profileSetIdentity', 'plan profile set does not match replay context.');
   }
   if (ref.evidenceIdentity !== context.evidenceIdentity) {

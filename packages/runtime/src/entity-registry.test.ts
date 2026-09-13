@@ -300,6 +300,36 @@ describe('session-local Entity registry', () => {
     expect(mismatched.records()).toEqual([]);
   });
 
+  test('requires trusted prototype type agreement before allocation while accepting legacy omission', () => {
+    const typedProfile: EntityProfile = {
+      ...syntheticZeroPortEntityProfile,
+      prototypeType: 'furnace',
+    };
+    const validProfile: EntityProfile = {
+      ...syntheticSharedTwoColorEntityProfile,
+      prototypeType: 'container',
+    };
+    const registry = new EntityRegistry(
+      context([typedProfile, validProfile]),
+      createSyntheticEntityPrototypeResolver(),
+    );
+
+    expect(() => registry.create(request({ profile: typedProfile.ref }))).toThrowError(
+      expect.objectContaining({
+        code: 'EN1003',
+        path: '$.profile.prototypeType',
+        message: expect.stringContaining('does not match provider prototype type'),
+      }),
+    );
+    expect(registry.records()).toEqual([]);
+
+    const entity = registry.create(request({ profile: validProfile.ref }));
+    expect(registry.record(entity)).toMatchObject({ ordinal: 1, id: 'entity:1' });
+
+    const legacyRegistry = new EntityRegistry(context(), createSyntheticEntityPrototypeResolver());
+    expect(legacyRegistry.create(request()).id).toBe('entity:1');
+  });
+
   test('derives the production resolver identity and lookup from the selected provider', async () => {
     const loaded = await loadPrototypeDatabase(syntheticPrototypeDatabase());
     const profile = {

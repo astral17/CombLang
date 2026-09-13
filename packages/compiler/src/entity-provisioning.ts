@@ -155,6 +155,7 @@ export function createEntityFallbackProfile(
       database,
       profileId: fallbackProfileId(normalized.key),
     },
+    prototypeType: normalized.type,
     connectors: [],
     connectorStructure: 'unknown',
     features: [],

@@ -2585,6 +2585,50 @@ const entity = Entity('entity:synthetic-shared-two-color');`,
     });
   });
 
+  test('rolls back a caught provider prototype-type mismatch before the next Entity allocation', () => {
+    const mismatchedProfile: EntityProfile = {
+      ...syntheticSharedTwoColorEntityProfile,
+      prototypeType: 'furnace',
+    };
+    const trustedEntityReplayContext = createTrustedEntityReplayContext({
+      database: syntheticZeroPortEntityProfile.ref.database,
+      source: 'synthetic',
+      evidenceIdentity: 'comblang-synthetic-evidence-v1',
+      policyIdentity: 'comblang-entity-policy-v1',
+      profiles: [mismatchedProfile, syntheticZeroPortEntityProfile],
+    });
+    const entityPrototypeResolver: EntityPrototypeResolver = {
+      database: trustedEntityReplayContext.database,
+      getEntity(nameOrKey) {
+        const name = nameOrKey.replace('entity:', '');
+        return {
+          key: nameOrKey as EntityPrototype['key'],
+          name,
+          type: 'container',
+        };
+      },
+    };
+    const compilation = compileSourceProgram(
+      {
+        path: 'entity-prototype-type-caught.factorio.ts',
+        text: `let caught = false;
+try { Entity('entity:synthetic-shared-two-color'); } catch { caught = true; }
+if (!caught) throw new Error('prototype type mismatch was accepted');
+const entity = Entity('entity:synthetic-zero-port');`,
+      },
+      { trustedEntityReplayContext, entityPrototypeResolver },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3) throw new Error('Expected an Entity v3 plan.');
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.entities[0]).toMatchObject({
+      ordinal: 1,
+      profile: syntheticZeroPortEntityProfile.ref,
+    });
+  });
+
   test('rejects typed public configuration without verified positive evidence', () => {
     const profile: EntityProfile = {
       ...syntheticSharedTwoColorEntityProfile,
