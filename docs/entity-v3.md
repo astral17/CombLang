@@ -295,7 +295,16 @@ ordinal `n` encodes red as `2*n-1` and green as `2*n`. Zero-port Entities remain
 visible. The internal typed subset emits a readable native
 `control_behavior.circuit_condition` on the existing Entity, including the
 resolved concrete Signal, signed int32 constant, Factorio comparator spelling,
-and red/green input mask. Raw configuration is copied onto the existing Entity
+and red/green input mask. The public two-argument form also accepts a partial
+schema-checked BlueprintEntity fragment. It combines the catalog's common
+fields with the selected provider prototype's exact `type` variant, or uses a
+common-only schema when that type has no variant entry. Missing fields are not
+materialized, while explicit `false`, `0`, and empty JSON containers remain
+present. Same-session source `Signal(...)` values are detached at declared
+SignalID positions before the checked fragment becomes an existing raw
+physical payload. This is documented-shape validation only; it adds no schema,
+profile, connector, callable, simulation, or native-conformance authority.
+Raw configuration is copied onto the existing Entity
 before compiler-owned `entity_number`, `name`, `position`, and `direction` are
 added; it remains untyped and profile-free. The deprecated opaque v3 typed
 envelope is rejected there as well. Physical preview validation is profile-free

@@ -12,14 +12,44 @@ The catalog is structural data only. Its `documented` status means that the
 field or type exists in the pinned API snapshot; it does not grant Entity
 construction, connector, callable, simulation, or native-conformance
 authority. Implementation and native-evidence statuses are separate fields.
-Unknown lookup results are explicit, so a modded or unsupported variant is
-not silently treated as documented.
+Variant lookup remains exact: a missing variant is not evidence that a provider
+prototype exists or that its variant fields are documented. For an actual
+provider-owned prototype, the checked fragment resolver combines the common
+fields with that exact variant when present, and otherwise returns a
+common-only structural schema. This keeps a common-only built-in type usable
+without treating a familiar name as provider evidence.
 
 This catalog is different from the prototype database: prototype data records
 the concrete names, capabilities, and recipes in a captured Factorio data
 environment, while the catalog records the API shape of blueprint JSON. It is
 also different from the bounded `{ raw }` Entity escape hatch, which preserves
 caller-provided JSON without claiming schema validation or native semantics.
+
+## Checked Entity fragments
+
+`resolveBlueprintEntitySchema(prototype)` accepts the selected provider's actual
+prototype record and its `type`, then returns either `documented-variant` or
+`documented-common-only`. `validateBlueprintEntityFragment(...)` checks a
+partial plain JSON fragment against that result. It supports scalar literals,
+arrays, tuples, unions, dictionaries, object fields, and recursive named
+references with bounded depth, node, and UTF-8 byte budgets. Compiler-owned
+common fields are rejected at their JSON paths. Missing fields are not errors,
+and catalog defaults are not materialized by the compiler.
+
+The validation result is one of `valid` (documented shape), `invalid`, or
+`unassessed` (a safely uninterpretable scalar family). The latter is deliberately
+not a boolean “supported” claim and points callers to `{ raw: ... }`. The
+checked source form lowers to the existing bounded raw physical payload after
+validation. It carries no schema, catalog, profile, connector, callable,
+simulation, or native-conformance authority across Direct Plan, NCIR, Worker,
+or persistence boundaries.
+
+SignalID positions accept ordinary Blueprint data such as `{ name: 'signal-A' }`
+or `{ type: 'virtual', name: 'signal-A' }`. The source `Signal(...)` helper is
+the ergonomic nominal form; a same-session handle is detached only at a
+catalog-declared SignalID position. Foreign nominal handles, invalid field
+shapes, accessors, and symbol keys remain rejected without invoking caller
+coercion hooks.
 
 ## Regeneration
 

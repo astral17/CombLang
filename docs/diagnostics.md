@@ -226,6 +226,16 @@ footprint axes is retained with `tileWidth` and `tileHeight` omitted; no `1x1`,
 zero, selection-box, or runtime-probe fallback is fabricated. In normalized v1,
 the two footprint fields are all-or-nothing when present.
 
+Schema-checked Entity fragments use the data-only `@comblang/prototypes`
+validator. `BSV1000` identifies a malformed schema or unresolved reference,
+`BSV1001` an unknown field, `BSV1002` a wrong JSON shape/type, `BSV1003` a
+compiler-owned field or integer-range violation, `BSV1004` a documented scalar
+family that is structurally unassessed, and `BSV1005` a cycle, accessor,
+symbol, non-finite value, or depth/node/byte limit failure. `BSV1004` is not an
+invalidity claim; the public Entity runtime reports it with a `{ raw: ... }`
+suggestion. Successful checked fragments lower to the existing profile-free raw
+payload and do not claim native Factorio compatibility.
+
 Recipe quality transforms use `PT1001` for invalid booleans/int8 shifts, `PT1002`
 for malformed canonical quality keys, and `PT1004` for wrong component roles/types,
 unknown references under declared quality coverage, cyclic quality chains or bounds

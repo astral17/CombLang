@@ -34,13 +34,17 @@ validates and freezes that snapshot, then hydrates simulation and blueprint
 previews without profiles, replay, or Entity construction authority. The
 host-bound source subset now lowers direct `Entity(prototype)` calls and
 explicit `.port(...)`/`.bind(...)` operations into that same v3 path. Its
-public two-argument form translates exact `{ rule, lanes, condition }` data and
-the nominal `NativeCondition(...)` helper into the existing synthetic-only typed
-`control_behavior.circuit_condition` subset; `.at(...)` replaces placement on
-the same physical record. Both operations preserve one Entity identity and
-create no hidden Producer, Network, Decider, or tick. The same boundary accepts
-one bounded, profile-free `{ raw }` BlueprintEntity configuration, preserving
-unknown native fields without asserting native validity or simulation behavior.
+public two-argument form accepts three disjoint configuration forms: a partial
+schema-checked `BlueprintEntity` fragment resolved from the selected provider
+prototype's actual `type`, the bounded profile-free `{ raw }` form, or exact
+`{ rule, lanes, condition }` data with the nominal `NativeCondition(...)`
+helper. Checked fragments combine common fields with an exact variant when
+available and otherwise use a common-only structural schema; successful checks
+lower to the existing raw physical payload. Session `Signal(...)` handles are
+detached at declared SignalID positions. None of these checks assert native
+compatibility or simulation behavior. `.at(...)` replaces placement on the same
+physical record, and all forms preserve one Entity identity and create no
+hidden Producer, Network, Decider, or tick.
 Typed facades, raw native import, and verified native import behavior remain
 pending; see [Entity v3](entity-v3.md).
 The default website and ordinary CLI now provision a conservative, provider-

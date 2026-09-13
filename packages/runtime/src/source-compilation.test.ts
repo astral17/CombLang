@@ -715,16 +715,317 @@ selected.bind('shared', 'shared-red', input, 'input');`,
     });
   });
 
+  test('checks a direct Blueprint fragment, detaches Signal handles, and matches raw output', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'entity-checked-configuration.factorio.ts',
+        text: `const signal = Signal('virtual', 'signal-A');
+const checked = Entity('assembling-machine-3', {
+  recipe: 'iron-gear-wheel',
+  recipe_quality: 'normal',
+  control_behavior: { read_contents: false, working_signal: signal },
+}).at(10, 12, 0);
+const raw = Entity('assembling-machine-3', { raw: {
+  recipe: 'iron-gear-wheel',
+  recipe_quality: 'normal',
+  control_behavior: { read_contents: false, working_signal: { type: 'virtual', name: 'signal-A' } },
+}}).at(10, 12, 0);`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    const execution = compilation.execution;
+    if (
+      plan === undefined ||
+      plan.version !== 3 ||
+      execution === undefined ||
+      !('entityObject' in execution)
+    ) {
+      throw new Error('Expected checked Blueprint Entity compilation.');
+    }
+    expect(plan.entities).toHaveLength(2);
+    expect(plan.entities[0]?.configuration).toEqual(plan.entities[1]?.configuration);
+    expect(plan.entities[0]?.configuration).toEqual({
+      mode: 'raw',
+      payload: {
+        recipe: 'iron-gear-wheel',
+        recipe_quality: 'normal',
+        control_behavior: {
+          read_contents: false,
+          working_signal: { type: 'virtual', name: 'signal-A' },
+        },
+      },
+    });
+    const blueprint = generateEntityBlueprintJson(execution.circuit.ir).blueprint;
+    expect({ ...blueprint.entities[0], entity_number: 0 }).toEqual({
+      ...blueprint.entities[1],
+      entity_number: 0,
+    });
+    expect(blueprint.entities[0]).toMatchObject({
+      name: 'assembling-machine-3',
+      control_behavior: {
+        read_contents: false,
+        working_signal: { type: 'virtual', name: 'signal-A' },
+      },
+    });
+  });
+
+  test('accepts a provider-known common-only Blueprint Entity with an empty fragment', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      { path: 'entity-common-only-configuration.factorio.ts', text: `Entity('beacon', {});` },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3) {
+      throw new Error('Expected common-only Blueprint Entity compilation.');
+    }
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.entities[0]?.configuration).toEqual({ mode: 'raw', payload: {} });
+  });
+
+  test('preserves checked arrays, dictionaries, zero, false, and empty values in one Entity', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'entity-checked-containers.factorio.ts',
+        text: `const chest = Entity('steel-chest', {
+  filters: [],
+  tags: { count: 0, active: false, empty: [], label: 'kept' },
+  control_behavior: { read_contents: false },
+}).at(0, 0);`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3) {
+      throw new Error('Expected checked container Entity compilation.');
+    }
+    expect(plan.entities[0]?.configuration).toEqual({
+      mode: 'raw',
+      payload: {
+        filters: [],
+        tags: { count: 0, active: false, empty: [], label: 'kept' },
+        control_behavior: { read_contents: false },
+      },
+    });
+  });
+
+  test('detaches Signal handles through an actual catalog nested array and accepts plain SignalID data', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'entity-checked-nested-signals.factorio.ts',
+        text: `const signal = Signal('virtual', 'signal-A');
+const panel = Entity('display-panel', {
+  control_behavior: {
+    parameters: [{
+      condition: { first_signal: signal },
+      icon: { name: 'signal-B' },
+      text: 'signal status',
+    }, {
+      condition: { second_signal: { type: 'virtual', name: 'signal-C' } },
+      icon: { type: 'virtual', name: 'signal-D' },
+      text: 'explicit signal status',
+    }],
+  },
+});`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3) {
+      throw new Error('Expected checked nested Signal Blueprint Entity compilation.');
+    }
+    expect(plan.entities[0]?.configuration).toEqual({
+      mode: 'raw',
+      payload: {
+        control_behavior: {
+          parameters: [
+            {
+              condition: { first_signal: { type: 'virtual', name: 'signal-A' } },
+              icon: { name: 'signal-B' },
+              text: 'signal status',
+            },
+            {
+              condition: { second_signal: { type: 'virtual', name: 'signal-C' } },
+              icon: { type: 'virtual', name: 'signal-D' },
+              text: 'explicit signal status',
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  test('isolates a checked fragment from caller mutation after construction', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'entity-checked-mutation.factorio.ts',
+        text: `const config = {
+  recipe: 'iron-gear-wheel',
+  control_behavior: { read_contents: false },
+};
+const entity = Entity('assembling-machine-3', config);
+config.recipe = 'copper-cable';
+config.control_behavior.read_contents = true;`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3) {
+      throw new Error('Expected mutation-isolated checked Entity compilation.');
+    }
+    expect(plan.entities[0]?.configuration).toEqual({
+      mode: 'raw',
+      payload: {
+        recipe: 'iron-gear-wheel',
+        control_behavior: { read_contents: false },
+      },
+    });
+  });
+
   test.each([
     {
-      name: 'missing raw value',
-      source: `Entity('entity:synthetic-zero-port', {});`,
-      message: 'Entity configuration requires exactly rule, lanes, and condition.',
+      name: 'unknown field',
+      source: `Entity('assembling-machine-3', { unsupported: true });`,
+      message: '$.unsupported: field is not documented for this Blueprint schema.',
+    },
+    {
+      name: 'wrong scalar',
+      source: `Entity('assembling-machine-3', { recipe: 3 });`,
+      message: '$.recipe: expected a string.',
+    },
+    {
+      name: 'invalid SignalID type',
+      source: `Entity('assembling-machine-3', { control_behavior: { working_signal: { type: 'unsupported', name: 'signal-A' } } });`,
+      message: '$.control_behavior.working_signal.type: expected the literal "asteroid-chunk".',
+    },
+  ])(
+    'rejects invalid checked Blueprint configuration before allocation: $name',
+    async ({ source, message }) => {
+      const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+      const provisioned = new EntityProvisioningService().provision(
+        prototypes,
+        conservativeEntityProvisioningPolicy,
+      );
+      const compilation = compileSourceProgram(
+        { path: 'entity-checked-configuration-invalid.factorio.ts', text: source },
+        {
+          prototypes,
+          trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+          entityPrototypeResolver: provisioned.entityPrototypeResolver,
+        },
+      );
+
+      expect(compilation.plan).toBeUndefined();
+      expect(compilation.pipelineDiagnostics).toEqual([
+        expect.objectContaining({ code: 'RT2027', message: expect.stringContaining(message) }),
+      ]);
+      const diagnostic = compilation.pipelineDiagnostics[0];
+      const configurationStart = source.indexOf('{', source.indexOf('Entity'));
+      const configurationEnd = source.lastIndexOf('}') + 1;
+      expect(diagnostic?.span).toEqual({
+        fileId: 'file:entity-checked-configuration-invalid.factorio.ts',
+        start: configurationStart,
+        end: configurationEnd,
+      });
+    },
+  );
+
+  test('does not allocate an Entity when a checked fragment is caught before a later valid Entity', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'entity-checked-configuration-caught.factorio.ts',
+        text: `let caught = false;
+try { Entity('assembling-machine-3', { recipe: 3 }); } catch { caught = true; }
+if (!caught) throw new Error('checked configuration was accepted');
+Entity('assembling-machine-3', {});`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3) {
+      throw new Error('Expected caught checked Blueprint Entity compilation.');
+    }
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.entities[0]?.id).toBe('entity:1');
+  });
+
+  test.each([
+    {
+      name: 'unknown checked field',
+      source: `Entity('entity:synthetic-zero-port', { not_a_field: true });`,
+      message: '$.not_a_field: field is not documented for this Blueprint schema.',
     },
     {
       name: 'mixed raw and typed fields',
       source: `Entity('entity:synthetic-zero-port', { raw: {}, rule: 'ignored' });`,
-      message: 'Entity raw configuration cannot be mixed with typed configuration fields.',
+      message:
+        'Entity configuration envelope fields raw, rule, lanes, and condition must use one exact legacy form.',
     },
     {
       name: 'accessor',
@@ -789,7 +1090,8 @@ Entity('entity:synthetic-zero-port', { raw });`,
     {
       name: 'extra field',
       source: `const entity = Entity('entity:synthetic-shared-two-color', { rule: 'shared-circuit-condition', lanes: ['shared-red'], condition: NativeCondition(Signal('virtual', 'signal-A'), '>', 0), extra: true });`,
-      message: 'Entity configuration has unknown field "extra".',
+      message:
+        'Entity configuration envelope fields raw, rule, lanes, and condition must use one exact legacy form.',
     },
     {
       name: 'accessor field',

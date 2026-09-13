@@ -72,9 +72,46 @@ The fallback profile is enough for `Entity(...)` construction and `.at(...)`
 placement, including the `assembling-machine-3` example. It deliberately has no
 connectors, call projection, configuration rules, or native behavior. A
 matching reviewed profile (or clearly labelled synthetic fixture) is still
-required for `port`, `bind`, callable Entities, and typed configuration. An
-omitted `blueprintEligible` fact in legacy normalized input is unknown and does
-not authorize construction.
+required for `port`, `bind`, and callable Entities. An omitted `blueprintEligible`
+fact in legacy normalized input is unknown and does not authorize construction.
+
+The two-argument configuration has three disjoint forms:
+
+1. a schema-checked `BlueprintEntity` fragment, whose fields are the catalog's
+   common fields plus the exact variant selected by the provider prototype's
+   actual `type`;
+2. the bounded untyped `{ raw }` escape hatch; or
+3. the reviewed-profile `{ rule, lanes, condition: NativeCondition(...) }`
+   configuration.
+
+The ergonomic schema-checked form is data-only and partial: omitted fields are
+left to Factorio defaults, and explicit `false`, `0`, and empty arrays/objects
+are preserved. A provider-known prototype whose API type has no variant entry
+still accepts the common-only fragment; a missing variant does not by itself
+make the actual Entity invalid. Schema-valid means only “matches the documented
+shape”, not “verified by Factorio”, “native-compatible”, or “simulated”.
+
+```ts
+const signal = Signal('virtual', 'signal-A');
+const machine = Entity('assembling-machine-3', {
+  recipe: 'iron-gear-wheel',
+  recipe_quality: 'normal',
+  control_behavior: {
+    read_contents: false,
+    working_signal: signal,
+  },
+}).at(10, 12, 0);
+```
+
+At a catalog-declared SignalID position, a plain Blueprint SignalID object is
+valid structural data, including `{ name: 'signal-A' }` with an omitted `type`.
+`Signal(...)` is the ergonomic nominal spelling: a same-session source handle is
+detached to ordinary Blueprint data at that position. A nominal handle from a
+different execution session is rejected, while invalid SignalID fields,
+accessors, and symbols are still rejected by validation. Compiler-owned identity,
+placement, and topology fields remain unavailable to the fragment. A documented scalar
+family that the validator cannot safely interpret returns an “unassessed”
+diagnostic and suggests `{ raw }`; it is not treated as invalid.
 
 For an untyped native configuration escape hatch, use exactly one `raw` field:
 
@@ -90,7 +127,8 @@ const machine = Entity('assembling-machine-3', {
 `raw` must be a plain JSON object. The runtime copies and freezes it with bounds
 of 32 levels, 4096 nodes, and 262144 UTF-8 bytes. Accessors, symbols, cycles,
 non-finite numbers, root arrays, and scalar roots are rejected. The outer
-configuration cannot mix `raw` with the typed `rule`/`lanes`/`condition` form.
+configuration cannot mix `raw` with either checked fragment fields or the typed
+`rule`/`lanes`/`condition` form.
 Compiler-owned BlueprintEntity fields (`entity_id`, `entity_number`, `name`,
 `prototype`, `position`, `placement`, `direction`, `connections`, `connectors`,
 and `wires`) are rejected. Other fields are preserved for blueprint preview,

@@ -266,6 +266,24 @@ const input = CC(); const a = Double(input); const b = Double(input); const c = 
     });
   });
 
+  test('accepts schema-checked Entity fragments through the selected CLI provider', async () => {
+    const source = await sourceFile(`const signal = Signal('virtual', 'signal-A');
+const machine = Entity('assembling-machine-3', {
+  recipe: 'iron-gear-wheel',
+  recipe_quality: 'normal',
+  control_behavior: { read_contents: false, working_signal: signal },
+}).at(2, 3, 8);`);
+    const profile = await profileFile();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', '--prototypes', profile, source])).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      diagnostics: [],
+      producerCount: 0,
+      entityReplayContext: { source: 'provider' },
+    });
+  });
+
   test('does not provision an explicitly non-blueprintable CLI Entity', async () => {
     const database = structuredClone(syntheticPrototypeDatabase()) as {
       capabilities: { entityCircuitCapabilities: boolean };

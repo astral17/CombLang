@@ -25,6 +25,8 @@ export * from './factorio-prototype-catalog.js';
 export * from './blueprint-schema.js';
 export * from './blueprint-schema-loader.js';
 export * from './blueprint-schema-lookup.js';
+export * from './blueprint-schema-resolution.js';
+export * from './blueprint-schema-validation.js';
 export * from './generated-asset.js';
 export * from './identity.js';
 export * from './input.js';

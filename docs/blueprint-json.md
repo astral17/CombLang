@@ -52,6 +52,12 @@ input mask. Raw Entity configuration is copied onto the existing physical
 Entity before compiler-owned identity, placement, and direction fields are
 added. Its bounded JSON keys are preserved without native validation or
 simulation claims; compiler-owned collisions fail with source-aware `BP1001`.
+The source-level schema-checked BlueprintEntity fragment uses the same existing
+raw physical payload after structural validation, so its output is identical to
+an equivalent `{ raw: ... }` payload. It accepts common-only provider types and
+plain Blueprint SignalID data at declared SignalID positions, including omitted
+`type`; same-session `Signal(...)` values are detached there as the ergonomic
+nominal spelling. It does not make native-conformance or simulator claims.
 The typed path is synthetic-only until reviewed non-synthetic evidence
 and native import fixtures exist. The deprecated opaque v3 typed/payload
 envelope is accepted through replay as a compatibility snapshot but is also an

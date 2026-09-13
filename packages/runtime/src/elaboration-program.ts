@@ -32,7 +32,12 @@ import type {
   PlanDeciderCondition,
 } from '@comblang/compiler/direct-plan-schema';
 import { canonicalizeEntityRawObject, EntityRawJsonError } from '@comblang/compiler/entity-raw';
-import type { EntityPrototype, PrototypeProvider } from '@comblang/prototypes';
+import {
+  resolveBlueprintEntitySchema,
+  validateBlueprintEntityFragmentAgainstSchema,
+  type EntityPrototype,
+  type PrototypeProvider,
+} from '@comblang/prototypes';
 import type { Diagnostic, NetworkId, SourceFileId, SourceSpan } from '@comblang/shared';
 
 import {
@@ -98,6 +103,10 @@ import {
   type TrustedEntityReplayContext,
 } from '@comblang/compiler/entity-replay-context';
 import type { EntityPlacement } from '@comblang/compiler/ir';
+import {
+  BlueprintEntitySignalConversionError,
+  detachBlueprintEntitySignalHandles,
+} from './entity-blueprint-fragment.js';
 
 interface RawSpan {
   readonly start: number;
@@ -3094,12 +3103,16 @@ class ElaborationRecorder {
     }
     const configuration =
       arguments_.length === 2 && arguments_[1]!.value !== undefined
-        ? this.#publicEntityConfiguration(arguments_[1]!.value, arguments_[1]!.source)
+        ? this.#publicEntityConfiguration(arguments_[1]!.value, arguments_[1]!.source, prototype)
         : undefined;
     return this.#allocateEntity(matches[0]!.ref, configuration, undefined, rawSpan);
   }
 
-  #publicEntityConfiguration(value: unknown, rawSpan: RawSpan): EntityConfiguration {
+  #publicEntityConfiguration(
+    value: unknown,
+    rawSpan: RawSpan,
+    prototype: EntityPrototype,
+  ): EntityConfiguration {
     const source = this.#span(rawSpan);
     if (
       value === null ||
@@ -3114,18 +3127,10 @@ class ElaborationRecorder {
       );
     }
     const record = Object.create(null) as Record<string, unknown>;
-    const allowed = new Set(['raw', 'rule', 'lanes', 'condition']);
     for (const key of Reflect.ownKeys(value)) {
       if (typeof key !== 'string') {
         throw new ElaborationExecutionError(
           'Entity configuration cannot contain symbol fields.',
-          source,
-          'RT2027',
-        );
-      }
-      if (!allowed.has(key)) {
-        throw new ElaborationExecutionError(
-          `Entity configuration has unknown field ${JSON.stringify(key)}.`,
           source,
           'RT2027',
         );
@@ -3140,14 +3145,14 @@ class ElaborationRecorder {
       }
       record[key] = descriptor.value;
     }
-    if ('raw' in record) {
-      if (Object.keys(record).length !== 1) {
-        throw new ElaborationExecutionError(
-          'Entity raw configuration cannot be mixed with typed configuration fields.',
-          source,
-          'RT2027',
-        );
-      }
+    const keys = Object.keys(record);
+    const isExactRaw = keys.length === 1 && keys[0] === 'raw';
+    const isExactTyped =
+      keys.length === 3 &&
+      keys.includes('rule') &&
+      keys.includes('lanes') &&
+      keys.includes('condition');
+    if (isExactRaw) {
       try {
         return {
           mode: 'raw',
@@ -3162,27 +3167,80 @@ class ElaborationRecorder {
         throw error;
       }
     }
-    if (!('rule' in record) || !('lanes' in record) || !('condition' in record)) {
+    if (isExactTyped) {
+      const condition = record.condition;
+      if (!this.#isNativeCondition(condition)) {
+        throw new ElaborationExecutionError(
+          'Entity configuration condition must be a NativeCondition from this execution session.',
+          source,
+          'RT2027',
+        );
+      }
+      return {
+        mode: 'typed',
+        rule: record.rule as EntityBehaviorKey,
+        lanes: record.lanes as readonly EntityLaneKey[],
+        condition: condition.condition,
+      };
+    }
+    if (keys.some((key) => ['raw', 'rule', 'lanes', 'condition'].includes(key))) {
       throw new ElaborationExecutionError(
-        'Entity configuration requires exactly rule, lanes, and condition.',
+        'Entity configuration envelope fields raw, rule, lanes, and condition must use one exact legacy form.',
         source,
         'RT2027',
       );
     }
-    const condition = record.condition;
-    if (!this.#isNativeCondition(condition)) {
+    let schema;
+    try {
+      schema = resolveBlueprintEntitySchema(prototype);
+    } catch (error) {
       throw new ElaborationExecutionError(
-        'Entity configuration condition must be a NativeCondition from this execution session.',
+        error instanceof Error ? error.message : 'Entity Blueprint schema resolution failed.',
         source,
         'RT2027',
       );
     }
-    return {
-      mode: 'typed',
-      rule: record.rule as EntityBehaviorKey,
-      lanes: record.lanes as readonly EntityLaneKey[],
-      condition: condition.condition,
-    };
+    let detached: unknown;
+    try {
+      detached = detachBlueprintEntitySignalHandles(
+        value,
+        { kind: 'object', fields: schema.fields },
+        schema,
+        (candidate) => this.#isSignal(candidate),
+      );
+    } catch (error) {
+      if (error instanceof BlueprintEntitySignalConversionError) {
+        throw new ElaborationExecutionError(error.message, source, 'RT2027', undefined, {
+          cause: error,
+        });
+      }
+      throw error;
+    }
+    const validation = validateBlueprintEntityFragmentAgainstSchema(detached, schema);
+    if (validation.status !== 'valid') {
+      const detail =
+        validation.status === 'unassessed'
+          ? `${validation.path}: ${validation.message} ${validation.rawSuggestion}`
+          : `${validation.path}: ${validation.message}`;
+      throw new ElaborationExecutionError(
+        `Entity checked Blueprint configuration is not accepted. ${detail}`,
+        source,
+        'RT2027',
+      );
+    }
+    try {
+      return {
+        mode: 'raw',
+        payload: canonicalizeEntityRawObject(detached, undefined, '$.configuration'),
+      };
+    } catch (error) {
+      if (error instanceof EntityRawJsonError) {
+        throw new ElaborationExecutionError(error.message, source, 'RT2027', undefined, {
+          cause: error,
+        });
+      }
+      throw error;
+    }
   }
 
   #constructNativeCondition(

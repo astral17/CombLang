@@ -205,6 +205,36 @@ describe('browser compiler Worker prototype profile', () => {
     expect(structuredClone(warm)).toEqual(warm);
   });
 
+  test('accepts a schema-checked Entity fragment and detaches a source Signal in the Worker', async () => {
+    const runtime = new CompilerWorkerRuntime();
+    const response = await runtime.handle({
+      kind: 'parse',
+      revision: 17,
+      file: {
+        path: 'worker-checked-entity.factorio.ts',
+        text: `const signal = Signal('virtual', 'signal-A');
+const machine = Entity('footprint-less', {
+  recipe: 'iron-gear-wheel',
+  control_behavior: { read_contents: false, working_signal: signal },
+}).at(4, 5, 8);`,
+      },
+      prototypeProfile: { source: rawSource, factorioDumpMetadata: rawMetadata },
+    });
+
+    expect(response.result.compilerDiagnostics).toEqual([]);
+    expect(response.result.resolvedCircuit?.ir.entities[0]?.configuration).toEqual({
+      mode: 'raw',
+      payload: {
+        recipe: 'iron-gear-wheel',
+        control_behavior: {
+          read_contents: false,
+          working_signal: { type: 'virtual', name: 'signal-A' },
+        },
+      },
+    });
+    expect(structuredClone(response)).toEqual(response);
+  });
+
   test('provisions built-in Entity profiles only after the Worker loads the provider', async () => {
     const generated = await generatePrototypeAsset(rawSource, rawMetadata);
     const runtime = new CompilerWorkerRuntime();
