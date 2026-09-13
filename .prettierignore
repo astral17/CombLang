@@ -6,3 +6,4 @@ tools/factorio-api/fixtures/*/runtime-api.json
 tools/factorio-api/fixtures/*/prototype-api.json
 tools/factorio-api/generated/*.json
 packages/prototypes/generated/space-age-2.1.17.json
+packages/prototypes/generated/blueprint-schema-catalog-2.1.17.json

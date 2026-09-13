@@ -8,6 +8,11 @@
     "abstract": 3,
     "entityVariants": 47
   },
+  "expectedSchemaCatalogCounts": {
+    "entityVariants": 62,
+    "controlBehaviors": 37,
+    "referencedSchemas": 113
+  },
   "waves": {
     "foundation": [
       "LuaControlBehavior",

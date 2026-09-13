@@ -8,16 +8,20 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   codeUnitCompare,
   generateInventory,
+  generateSchemaCatalog,
   serializeInventory,
+  serializeSchemaCatalog,
   verifyFileHash,
 } from './generate-control-behavior-inventory.mjs';
 
 const temporaryDirectories = [];
 const executeFile = promisify(execFile);
 let inventory;
+let catalog;
 
 beforeAll(async () => {
   inventory = await generateInventory();
+  catalog = await generateSchemaCatalog();
 });
 
 afterEach(async () => {
@@ -94,6 +98,89 @@ describe('pinned Factorio API inventory', () => {
 
     await expect(generateInventory({ review })).rejects.toThrow(
       'No review wave for LuaRadarControlBehavior',
+    );
+  });
+});
+
+describe('pinned Blueprint schema catalog', () => {
+  it('retains the reviewed schema baseline', () => {
+    expect(catalog.source).toMatchObject({
+      snapshot: 'fixtures/2.1.17',
+      applicationVersion: '2.1.17',
+      apiVersion: 6,
+    });
+    expect(catalog.counts).toEqual({
+      entityVariants: 62,
+      controlBehaviors: 37,
+      referencedSchemas: 113,
+    });
+    expect(catalog.variants).toHaveLength(62);
+    expect(catalog.controlBehaviors).toHaveLength(37);
+  });
+
+  it('is deterministic and contains no API descriptions or local provenance', async () => {
+    const regenerated = await generateSchemaCatalog();
+    const serialized = serializeSchemaCatalog(regenerated);
+    expect(serialized).toBe(serializeSchemaCatalog(catalog));
+    expect(serialized).not.toMatch(/"description"\s*:|"examples?"\s*:|Analysis|[A-Z]:\\/i);
+    expect(catalog.common.fields.find(({ name }) => name === 'entity_number')).toMatchObject({
+      ownership: 'compiler',
+    });
+    expect(
+      catalog.controlBehaviors.find(({ name }) => name === 'LuaAssemblingMachineControlBehavior'),
+    ).toMatchObject({
+      blueprintType: 'AssemblingMachineBlueprintControlBehavior',
+      entityVariants: ['assembling-machine'],
+    });
+    expect(serialized).not.toMatch(/circuit_connector|connector_lanes|lane_count/);
+  });
+
+  it('covers representative variants and every reviewed wave', async () => {
+    const review = JSON.parse(
+      await readFile(new URL('control-behavior-review.json', import.meta.url), 'utf8'),
+    );
+    const variantNames = new Set(catalog.variants.map(({ name }) => name));
+    for (const name of [
+      'assembling-machine',
+      'container',
+      'inserter',
+      'lamp',
+      'roboport',
+      'train-stop',
+      'locomotive',
+      'cargo-wagon',
+      'car',
+      'underground-belt',
+      'linked-container',
+    ]) {
+      expect(variantNames.has(name)).toBe(true);
+    }
+    const behaviorNames = new Set(catalog.controlBehaviors.map(({ name }) => name));
+    for (const name of Object.values(review.waves).flat()) {
+      if (
+        ![
+          'LuaControlBehavior',
+          'LuaCombinatorControlBehavior',
+          'LuaGenericOnOffControlBehavior',
+        ].includes(name)
+      ) {
+        expect(behaviorNames.has(name)).toBe(true);
+      }
+    }
+    expect(
+      catalog.variants.filter(({ fields }) =>
+        fields.some(({ name }) => name === 'control_behavior'),
+      ),
+    ).toHaveLength(47);
+  });
+
+  it('rejects a review manifest with a changed schema catalog count', async () => {
+    const review = JSON.parse(
+      await readFile(new URL('control-behavior-review.json', import.meta.url), 'utf8'),
+    );
+    review.expectedSchemaCatalogCounts.entityVariants -= 1;
+    await expect(generateSchemaCatalog({ review })).rejects.toThrow(
+      'Reviewed Blueprint schema catalog counts',
     );
   });
 });

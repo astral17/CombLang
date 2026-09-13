@@ -4,6 +4,7 @@ import type { DirectElaborationPlanV3 } from '@comblang/compiler/entity';
 import { offsetToPosition, sourceFileId, sourceSpan, type Diagnostic } from '@comblang/shared';
 
 import { blueprintJsonForArtifact } from './blueprint-demo.js';
+import './blueprint-schema-catalog.js';
 import { builtinPrototypeAsset, fetchBuiltinPrototypeAsset } from './builtin-prototype-asset.js';
 import { createSourceEditor, type SourceEditorKind } from './code-editor.js';
 import {
