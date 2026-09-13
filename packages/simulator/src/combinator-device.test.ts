@@ -1,4 +1,4 @@
-import { signal, SparseBus } from '@comblang/factorio';
+import { constantConfigurationFromOutputs, signal, SparseBus } from '@comblang/factorio';
 import type { DeviceId, NetworkId } from '@comblang/shared';
 import { describe, expect, it } from 'vitest';
 
@@ -6,6 +6,7 @@ import {
   ArithmeticCombinatorDevice,
   ArithmeticValueCombinatorDevice,
   ConstantCombinatorDevice,
+  ConstantValueCombinatorDevice,
   DeciderCombinatorDevice,
   DeciderValueCombinatorDevice,
 } from './combinator-device.js';
@@ -80,13 +81,31 @@ describe('combinator simulation devices', () => {
       new ConstantCombinatorDevice({
         id: 'device:constant' as DeviceId,
         outputNetworks: [output, fanout],
-        values: new SparseBus([[a, 5]]),
+        configuration: constantConfigurationFromOutputs([{ signal: a, value: 5 }]),
       }),
     );
 
     expect(kernel.snapshot.read(output).get(a)).toBe(0);
     expect(kernel.step().read(output).get(a)).toBe(5);
     expect(kernel.step().read(fanout).get(a)).toBe(5);
+  });
+
+  it('broadcasts the same Constant configuration through the value kernel', () => {
+    const kernel = new ValueSimulationKernel();
+    kernel.addDevice(
+      new ConstantValueCombinatorDevice({
+        id: 'device:value-constant' as DeviceId,
+        outputNetworks: [output],
+        configuration: constantConfigurationFromOutputs([
+          { signal: a, value: 5 },
+          { signal: a, value: -2 },
+        ]),
+      }),
+    );
+
+    const value = kernel.step().read(output);
+    expect(value.kind).toBe('known');
+    if (value.kind === 'known') expect(value.bus.get(a)).toBe(3);
   });
 
   it('propagates Unknown through an arithmetic combinator', () => {

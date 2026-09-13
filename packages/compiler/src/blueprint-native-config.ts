@@ -1,4 +1,8 @@
-import type { SignalId } from '@comblang/factorio';
+import {
+  constantConfigurationFromOutputs,
+  type ConstantConfiguration,
+  type SignalId,
+} from '@comblang/factorio';
 import type { NetworkId, SourceSpan } from '@comblang/shared';
 
 import type {
@@ -161,9 +165,10 @@ function arithmeticEntity(
   };
 }
 
-function constantEntity(
-  producer: Extract<CircuitProducerNode, { kind: 'constant' }>,
-): NativeCombinatorEntityConfig {
+function constantEntity(configuration: ConstantConfiguration): NativeCombinatorEntityConfig {
+  const section = configuration.sections[0];
+  if (section === undefined)
+    throw new Error('A legacy Constant configuration requires one section.');
   return {
     name: 'constant-combinator',
     control_behavior: {
@@ -171,7 +176,7 @@ function constantEntity(
         sections: [
           {
             index: 1,
-            filters: producer.config.outputs.map((output, index) => ({
+            filters: section.filters.map((output, index) => ({
               index: index + 1,
               ...signalJson(output.signal),
               // BlueprintLogisticFilter uses an omitted quality to mean "any",
@@ -244,7 +249,7 @@ export function lowerNativeBlueprintConfig(
       producer.kind === 'arithmetic'
         ? arithmeticEntity(producer, selection)
         : producer.kind === 'constant'
-          ? constantEntity(producer)
+          ? constantEntity(constantConfigurationFromOutputs(producer.config.outputs))
           : deciderEntity(producer, selection, maxDeciderConditionRows);
     for (const network of producer.destinations) {
       if (!networkColors.has(network)) {

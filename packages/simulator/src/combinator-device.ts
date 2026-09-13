@@ -1,4 +1,12 @@
-import { readsGreen, readsRed, SparseBus, type CircuitNetworkSelection } from '@comblang/factorio';
+import {
+  constantConfigurationToSparseBus,
+  canonicalizeConstantConfiguration,
+  readsGreen,
+  readsRed,
+  SparseBus,
+  type CircuitNetworkSelection,
+  type ConstantConfiguration,
+} from '@comblang/factorio';
 import type { DeviceId, NetworkId } from '@comblang/shared';
 
 import { evaluateArithmetic, type ArithmeticCombinatorConfig } from './arithmetic.js';
@@ -40,7 +48,7 @@ export interface DeciderDeviceConfig extends DeviceNetworks {
 export interface ConstantDeviceConfig {
   readonly id: DeviceId;
   readonly outputNetworks: readonly NetworkId[];
-  readonly values: SparseBus;
+  readonly configuration: ConstantConfiguration;
 }
 
 function validateNetworks(config: DeviceNetworks): void {
@@ -204,13 +212,23 @@ export class ConstantCombinatorDevice implements SynchronousDevice {
   readonly #config: ConstantDeviceConfig;
 
   constructor(config: ConstantDeviceConfig) {
-    validateNetworks({ ...config, inputNetworks: {} });
+    validateNetworks({
+      id: config.id,
+      inputNetworks: {},
+      outputNetworks: config.outputNetworks,
+    });
     this.id = config.id;
-    this.#config = { ...config, values: config.values.clone() };
+    this.#config = {
+      ...config,
+      configuration: canonicalizeConstantConfiguration(config.configuration),
+    };
   }
 
   evaluate(_snapshot: SimulationReader): readonly NetworkOutput[] {
-    return broadcast(this.#config.values, this.#config.outputNetworks);
+    return broadcast(
+      constantConfigurationToSparseBus(this.#config.configuration),
+      this.#config.outputNetworks,
+    );
   }
 }
 
@@ -289,12 +307,22 @@ export class ConstantValueCombinatorDevice implements ValueSynchronousDevice {
   readonly #config: ConstantDeviceConfig;
 
   constructor(config: ConstantDeviceConfig) {
-    validateNetworks({ ...config, inputNetworks: {} });
+    validateNetworks({
+      id: config.id,
+      inputNetworks: {},
+      outputNetworks: config.outputNetworks,
+    });
     this.id = config.id;
-    this.#config = { ...config, values: config.values.clone() };
+    this.#config = {
+      ...config,
+      configuration: canonicalizeConstantConfiguration(config.configuration),
+    };
   }
 
   evaluate(_snapshot: ValueSimulationReader): readonly ValueNetworkOutput[] {
-    return valueBroadcast(knownBus(this.#config.values), this.#config.outputNetworks);
+    return valueBroadcast(
+      knownBus(constantConfigurationToSparseBus(this.#config.configuration)),
+      this.#config.outputNetworks,
+    );
   }
 }

@@ -17,7 +17,7 @@ import type {
   EntityPlacement,
 } from '@comblang/compiler/ir';
 import type { NativeCircuitIrV3 } from '@comblang/compiler/entity';
-import { SparseBus, type SignalId } from '@comblang/factorio';
+import { constantConfigurationFromOutputs, SparseBus, type SignalId } from '@comblang/factorio';
 import {
   ArithmeticCombinatorDevice,
   ArithmeticValueCombinatorDevice,
@@ -296,9 +296,7 @@ function simulationDevicesForIr(ir: SimulatableNativeCircuitIr): {
       const config = {
         id: producer.id as unknown as DeviceId,
         outputNetworks: producer.destinations,
-        values: new SparseBus(
-          producer.config.outputs.map((output) => [output.signal, output.value] as const),
-        ),
+        configuration: constantConfigurationFromOutputs(producer.config.outputs),
       };
       concrete.push(new ConstantCombinatorDevice(config));
       value.push(new ConstantValueCombinatorDevice(config));

@@ -51,6 +51,68 @@ describe('native blueprint configuration lowering', () => {
     });
   });
 
+  test('lowers ordered legacy Constant outputs with explicit normal quality and indices', () => {
+    const ir: NativeCircuitIr = {
+      format: 'comblang-ncir',
+      version: 2,
+      networks: [],
+      producers: [
+        {
+          id: producer(3),
+          kind: 'constant',
+          provenance,
+          destinations: [],
+          config: {
+            outputs: [
+              { signal: signal('virtual', 'signal-A'), value: 4 },
+              { signal: signal('virtual', 'signal-A', 'normal'), value: -2 },
+              { signal: signal('virtual', 'signal-B'), value: 0 },
+            ],
+          },
+        },
+      ],
+    };
+
+    expect(lowerNativeBlueprintConfig(ir, 1024).combinators[0]?.entity).toEqual({
+      name: 'constant-combinator',
+      control_behavior: {
+        sections: {
+          sections: [
+            {
+              index: 1,
+              filters: [
+                {
+                  index: 1,
+                  type: 'virtual',
+                  name: 'signal-A',
+                  quality: 'normal',
+                  comparator: '=',
+                  count: 4,
+                },
+                {
+                  index: 2,
+                  type: 'virtual',
+                  name: 'signal-A',
+                  quality: 'normal',
+                  comparator: '=',
+                  count: -2,
+                },
+                {
+                  index: 3,
+                  type: 'virtual',
+                  name: 'signal-B',
+                  quality: 'normal',
+                  comparator: '=',
+                  count: 0,
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+  });
+
   test('rejects an unresolved destination instead of silently selecting red', () => {
     const source = {
       fileId: 'file:destination.factorio.ts' as SourceFileId,

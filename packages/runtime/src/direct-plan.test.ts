@@ -484,8 +484,14 @@ out += CC(5 * A, -2 * B);`,
     const simulation = executed.circuit.createSimulation();
 
     expect(executed.circuit.graph.producers).toMatchObject([{ kind: 'constant' }]);
+    expect('entities' in executed.circuit.ir).toBe(false);
     expect(simulation.step().read(executed.network('out').id).get(A)).toBe(5);
     expect(simulation.step().read(executed.network('out').id).get(B)).toBe(-2);
+
+    const session = executed.circuit.createTestSession();
+    session.tick();
+    expect(session.read(executed.network('out')).get(A)).toBe(5);
+    expect(session.read(executed.network('out')).get(B)).toBe(-2);
   });
 
   test('fans one CC output bus into opposite-colored Networks', () => {
