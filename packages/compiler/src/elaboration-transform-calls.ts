@@ -108,6 +108,12 @@ export function transformCallOrElementNode(
         context.spanLiteral(node),
       ]);
     }
+    if (node.expression.text === 'Lamp') {
+      return context.dslCall('lampFromPrototype', [
+        callArguments(node.arguments),
+        context.spanLiteral(node),
+      ]);
+    }
     if (node.expression.text === 'NativeCondition') {
       return context.dslCall('nativeCondition', [
         callArguments(node.arguments),

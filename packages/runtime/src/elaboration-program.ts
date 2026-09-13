@@ -541,6 +541,10 @@ class ElaborationRecorder {
       this.#withTopologyTransaction(rawSpan, () =>
         this.#constructEntityFromPrototype(arguments_, rawSpan),
       ),
+    lampFromPrototype: (arguments_: readonly CallArgument[], rawSpan: RawSpan): EntityValue =>
+      this.#withTopologyTransaction(rawSpan, () =>
+        this.#constructEntityFromPrototype(arguments_, rawSpan, 'lamp'),
+      ),
     nativeCondition: (
       arguments_: readonly CallArgument[],
       rawSpan: RawSpan,
@@ -2987,17 +2991,36 @@ class ElaborationRecorder {
   #constructEntityFromPrototype(
     arguments_: readonly CallArgument[],
     rawSpan: RawSpan,
+    expectedType?: string,
   ): EntityValue {
     this.#recordDslCall();
     if (!isRawSpan(rawSpan)) throw new Error('t.entityFromPrototype(...) is missing provenance.');
+    const constructorName = expectedType === undefined ? 'Entity' : 'Lamp';
     if (!Array.isArray(arguments_) || (arguments_.length !== 1 && arguments_.length !== 2)) {
       throw new ElaborationExecutionError(
-        'Entity(prototype, configuration?) requires one or two arguments.',
+        `${constructorName}(prototype, configuration?) requires one or two arguments.`,
         this.#span(rawSpan),
         'RT2027',
       );
     }
-    const prototypeValue = arguments_[0]!.value;
+    const { prototype, profile } = this.#resolveEntityConstructionTarget(
+      arguments_[0]!,
+      rawSpan,
+      expectedType,
+    );
+    const configuration =
+      arguments_.length === 2 && arguments_[1]!.value !== undefined
+        ? this.#publicEntityConfiguration(arguments_[1]!.value, arguments_[1]!.source, prototype)
+        : undefined;
+    return this.#allocateEntity(profile.ref, configuration, undefined, rawSpan);
+  }
+
+  #resolveEntityConstructionTarget(
+    argument: CallArgument,
+    rawSpan: RawSpan,
+    expectedType?: string,
+  ): { readonly prototype: EntityPrototype; readonly profile: EntityProfile } {
+    const prototypeValue = argument.value;
     const context = this.#entityContext;
     const resolver = this.#entityPrototypeResolver;
     if (context === undefined || resolver === undefined) {
@@ -3086,6 +3109,13 @@ class ElaborationRecorder {
         'RT2027',
       );
     }
+    if (expectedType !== undefined && prototype.type !== expectedType) {
+      throw new ElaborationExecutionError(
+        `Lamp requires provider Entity type ${JSON.stringify(expectedType)}, but prototype ${JSON.stringify(prototype.key)} has actual type ${JSON.stringify(prototype.type)}.`,
+        this.#span(argument.source),
+        'RT2027',
+      );
+    }
     const matches = context.profiles.filter(({ ref }) => ref.prototypeKey === prototype.key);
     if (matches.length === 0) {
       throw new ElaborationExecutionError(
@@ -3101,11 +3131,7 @@ class ElaborationRecorder {
         'RT2027',
       );
     }
-    const configuration =
-      arguments_.length === 2 && arguments_[1]!.value !== undefined
-        ? this.#publicEntityConfiguration(arguments_[1]!.value, arguments_[1]!.source, prototype)
-        : undefined;
-    return this.#allocateEntity(matches[0]!.ref, configuration, undefined, rawSpan);
+    return { prototype, profile: matches[0]! };
   }
 
   #publicEntityConfiguration(

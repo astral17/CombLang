@@ -164,6 +164,16 @@ reserved and only a direct identifier call has this meaning; ordinary object
 members such as `object.Entity`, `object.port`, and `object.bind` remain native
 JavaScript operations.
 
+`Lamp(prototype, configuration?)` is the structural lamp-family facade. It
+accepts the same short name, canonical key, or exact provider record and the
+same checked, `{ raw }`, or profile-owned typed configuration forms as
+`Entity`. The resolved provider record must have actual type `lamp`; the call
+then delegates to the generic Entity construction path and returns the same
+nominal Entity value. There is no implicit `small-lamp` default, connector or
+call projection, convenience translation, extra physical record, Producer,
+Network, or tick. Checked schema support and synthetic fixtures are not native
+Factorio behavior evidence.
+
 `machine.port(connector, lane)` selects an explicit connector lane. The exact
 four-argument `machine.bind(connector, lane, network, direction)` form binds
 that lane to an existing Network, with `direction` equal to `input` or
@@ -187,8 +197,8 @@ output endpoint, so the inline form creates one physical Entity and no hidden
 Producer, Network, or tick. Identical repeat bindings are idempotent; conflicts,
 stale handles, profiles without a call projection, and invalid destinations are
 source-aware errors. Ordinary objects and structural lookalikes keep normal
-JavaScript call behavior. Typed facades and reviewed native import remain
-outside the current language surface.
+JavaScript call behavior. Further typed facades and reviewed native import
+remain outside the current language surface.
 
 The browser Worker request transports only replay identity metadata. Source
 Entity authority is available only when a host adapter resolves the detached

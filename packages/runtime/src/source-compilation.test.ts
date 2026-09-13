@@ -89,7 +89,460 @@ function syntheticEntityHost(
   return { trustedEntityReplayContext, entityPrototypeResolver };
 }
 
+function syntheticTypedLampHost() {
+  const prototypeKey = 'entity:synthetic-lamp' as EntityPrototype['key'];
+  const profile: EntityProfile = {
+    ...syntheticSharedTwoColorEntityProfile,
+    ref: { ...syntheticSharedTwoColorEntityProfile.ref, prototypeKey },
+  };
+  const prototype = {
+    key: prototypeKey,
+    name: 'synthetic-lamp',
+    type: 'lamp',
+  } satisfies EntityPrototype;
+  const trustedEntityReplayContext = createTrustedEntityReplayContext({
+    database: profile.ref.database,
+    source: 'synthetic',
+    evidenceIdentity: 'comblang-synthetic-evidence-v1',
+    policyIdentity: 'comblang-entity-policy-v1',
+    profiles: [profile],
+  });
+  const entityPrototypeResolver: EntityPrototypeResolver = {
+    database: profile.ref.database,
+    getEntity(nameOrKey) {
+      return nameOrKey === prototype.key || nameOrKey === prototype.name ? prototype : undefined;
+    },
+  };
+  return { trustedEntityReplayContext, entityPrototypeResolver };
+}
+
 describe('shared source compilation service', () => {
+  test('resolves Lamp from short, canonical, and exact provider-owned prototype forms', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'lamp-prototype-forms.factorio.ts',
+        text: `const short = Lamp('small-lamp');
+const canonical = Lamp('entity:small-lamp');
+const record = Lamp(prototypes.entity['small-lamp']);`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3) throw new Error('Expected a Lamp Entity plan.');
+    expect(plan.entities).toHaveLength(3);
+    expect(plan.entities.map(({ profile }) => profile.prototypeKey)).toEqual([
+      'entity:small-lamp',
+      'entity:small-lamp',
+      'entity:small-lamp',
+    ]);
+  });
+
+  test('evaluates Lamp arguments once in JavaScript order and allocates one Entity', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'lamp-argument-order.factorio.ts',
+        text: `let order = '';
+function selectPrototype() { order += 'p'; return 'small-lamp'; }
+function selectConfiguration() { order += 'c'; return { always_on: false }; }
+const lamp = Lamp(selectPrototype(), selectConfiguration());
+if (order !== 'pc') throw new Error('Lamp arguments changed order');`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3) throw new Error('Expected a Lamp Entity plan.');
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.entities[0]?.configuration).toEqual({
+      mode: 'raw',
+      payload: { always_on: false },
+    });
+  });
+
+  test.each([
+    {
+      name: 'missing prototype',
+      source: `Lamp('missing-lamp');`,
+      message: 'Entity prototype is malformed or unavailable',
+    },
+    {
+      name: 'foreign prototype record',
+      source: `Lamp({ key: 'entity:small-lamp', name: 'small-lamp', type: 'lamp' });`,
+      message: 'foreign or not owned by the selected host provider',
+    },
+  ])('rejects Lamp with a $name', async ({ source, message }) => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      { path: 'lamp-invalid-prototype.factorio.ts', text: source },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.plan).toBeUndefined();
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({ code: 'RT2027', message: expect.stringContaining(message) }),
+    ]);
+  });
+
+  test('rejects a non-lamp prototype at the prototype argument span', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const text = `Lamp('assembling-machine-3');`;
+    const compilation = compileSourceProgram(
+      { path: 'lamp-wrong-family.factorio.ts', text },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    const start = text.indexOf("'assembling-machine-3'");
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'RT2027',
+        message: expect.stringMatching(/expected|requires provider Entity type "lamp"/),
+        span: {
+          fileId: 'file:lamp-wrong-family.factorio.ts',
+          start,
+          end: start + "'assembling-machine-3'".length,
+        },
+      }),
+    ]);
+    expect(compilation.pipelineDiagnostics[0]?.message).toContain(
+      'actual type "assembling-machine"',
+    );
+  });
+
+  test.each([`Lamp();`, `Lamp('small-lamp', {}, 'extra');`])(
+    'validates public Lamp constructor arity at the call span: %s',
+    async (text) => {
+      const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+      const provisioned = new EntityProvisioningService().provision(
+        prototypes,
+        conservativeEntityProvisioningPolicy,
+      );
+      const compilation = compileSourceProgram(
+        { path: 'lamp-arity.factorio.ts', text },
+        {
+          prototypes,
+          trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+          entityPrototypeResolver: provisioned.entityPrototypeResolver,
+        },
+      );
+
+      expect(compilation.pipelineDiagnostics).toEqual([
+        expect.objectContaining({
+          code: 'RT2027',
+          message: 'Lamp(prototype, configuration?) requires one or two arguments.',
+          span: { fileId: 'file:lamp-arity.factorio.ts', start: 0, end: text.length - 1 },
+        }),
+      ]);
+    },
+  );
+
+  test('keeps Lamp and Entity physically identical through replay, IR, debug, and blueprint preview', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'lamp-physical-parity.factorio.ts',
+        text: `const signal = Signal('virtual', 'signal-A');
+const configuration = {
+  always_on: false,
+  color: { r: 0, g: 0.25, b: 1, a: 0 },
+  control_behavior: { circuit_enabled: false, use_colors: false, red_signal: signal },
+};
+const facade = Lamp('small-lamp', configuration).at(4, 5, 8);
+const aliases = [facade];
+if (!Object.is(aliases[0], facade)) throw new Error('Lamp alias changed identity');
+const generic = Entity('small-lamp', configuration).at(4, 5, 8);`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    const execution = compilation.execution;
+    if (
+      plan === undefined ||
+      plan.version !== 3 ||
+      execution === undefined ||
+      !('entityObject' in execution)
+    ) {
+      throw new Error('Expected a resolved Lamp Entity execution.');
+    }
+    expect(plan.entities).toHaveLength(2);
+    expect(plan.producers).toEqual([]);
+    expect(plan.networks).toEqual([]);
+    expect(plan.entities[0]?.profile).toEqual(plan.entities[1]?.profile);
+    expect(plan.entities[0]?.configuration).toEqual(plan.entities[1]?.configuration);
+    expect(plan.entities[0]?.placement).toEqual(plan.entities[1]?.placement);
+    expect(plan.entities.every(({ connectorBindings }) => connectorBindings.length === 0)).toBe(
+      true,
+    );
+
+    const resolved = compilation.resolvedCircuit;
+    if (resolved === undefined) throw new Error('Expected a resolved Lamp circuit.');
+    expect(resolved.ir.entities).toHaveLength(2);
+    expect(resolved.ir.producers).toEqual([]);
+    expect(resolved.ir.entities[0]?.profile).toEqual(resolved.ir.entities[1]?.profile);
+    expect(resolved.ir.entities[0]?.configuration).toEqual(resolved.ir.entities[1]?.configuration);
+    expect(resolved.ir.entities[0]?.placement).toEqual(resolved.ir.entities[1]?.placement);
+
+    const document = createDebugDocument(execution.debug, execution.circuit.graph);
+    expect(
+      document.scopes.flatMap((scope) => ('entities' in scope ? scope.entities : [])),
+    ).toHaveLength(2);
+    const blueprint = generateEntityBlueprintJson(execution.circuit.ir).blueprint;
+    expect(blueprint.entities).toHaveLength(2);
+    expect({ ...blueprint.entities[0], entity_number: 0 }).toEqual({
+      ...blueprint.entities[1],
+      entity_number: 0,
+    });
+  });
+
+  test('preserves checked and raw Lamp configuration while rejecting mixed envelopes', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'lamp-configuration-forms.factorio.ts',
+        text: `const signal = Signal('virtual', 'signal-A');
+const checked = Lamp('small-lamp', {
+  always_on: false,
+  color: [0, 0.5, 1, 0],
+  control_behavior: { circuit_enabled: false, red_signal: signal },
+});
+const raw = Lamp('small-lamp', { raw: { always_on: false } });`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3) throw new Error('Expected Lamp configurations.');
+    expect(plan.entities.map(({ configuration }) => configuration)).toEqual([
+      {
+        mode: 'raw',
+        payload: {
+          always_on: false,
+          color: [0, 0.5, 1, 0],
+          control_behavior: {
+            circuit_enabled: false,
+            red_signal: { type: 'virtual', name: 'signal-A' },
+          },
+        },
+      },
+      { mode: 'raw', payload: { always_on: false } },
+    ]);
+
+    const mixedText = `Lamp('small-lamp', { raw: {}, always_on: false });`;
+    const mixed = compileSourceProgram(
+      { path: 'lamp-mixed-configuration.factorio.ts', text: mixedText },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+    const configurationStart = mixedText.indexOf('{');
+    const configurationEnd = mixedText.lastIndexOf('}') + 1;
+    expect(mixed.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'RT2027',
+        message: expect.stringContaining('must use one exact legacy form'),
+        span: {
+          fileId: 'file:lamp-mixed-configuration.factorio.ts',
+          start: configurationStart,
+          end: configurationEnd,
+        },
+      }),
+    ]);
+  });
+
+  test('routes reviewed-profile typed Lamp configuration through the shared Entity path', () => {
+    const host = syntheticTypedLampHost();
+    const compilation = compileSourceProgram(
+      {
+        path: 'lamp-typed-configuration.factorio.ts',
+        text: `const lamp = Lamp('synthetic-lamp', {
+  rule: 'shared-circuit-condition',
+  lanes: ['shared-red'],
+  condition: NativeCondition(Signal('virtual', 'signal-A'), '>', 0),
+});`,
+      },
+      host,
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3) throw new Error('Expected typed Lamp Entity.');
+    expect(plan.entities[0]?.configuration).toMatchObject({
+      mode: 'typed',
+      rule: 'shared-circuit-condition',
+      lanes: ['shared-red'],
+    });
+  });
+
+  test.each([
+    {
+      name: 'unknown nested field',
+      configuration: `{ control_behavior: { invented: true } }`,
+      message: '$.control_behavior.invented',
+    },
+    {
+      name: 'wrong field type',
+      configuration: `{ always_on: 0 }`,
+      message: '$.always_on: expected a boolean',
+    },
+  ])('rejects Lamp checked configuration with an $name', async ({ configuration, message }) => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const text = `Lamp('small-lamp', ${configuration});`;
+    const compilation = compileSourceProgram(
+      { path: 'lamp-invalid-checked-configuration.factorio.ts', text },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    const configurationStart = text.indexOf(configuration);
+    expect(compilation.plan).toBeUndefined();
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'RT2027',
+        message: expect.stringContaining(message),
+        span: {
+          fileId: 'file:lamp-invalid-checked-configuration.factorio.ts',
+          start: configurationStart,
+          end: configurationStart + configuration.length,
+        },
+      }),
+    ]);
+  });
+
+  test('rolls back a caught Lamp configuration failure before allocating a valid Entity', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'lamp-configuration-rollback.factorio.ts',
+        text: `let caught = false;
+try { Lamp('assembling-machine-3'); } catch { caught = true; }
+try { Lamp('small-lamp', { always_on: 0 }); } catch { caught = true; }
+if (!caught) throw new Error('invalid Lamp configuration was accepted');
+Lamp('small-lamp', { always_on: false });`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3) throw new Error('Expected recovered Lamp plan.');
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.entities[0]?.id).toBe('entity:1');
+    expect(plan.networks).toEqual([]);
+    expect(plan.producers).toEqual([]);
+  });
+
+  test.each([
+    {
+      name: 'port',
+      source: `Lamp('small-lamp').port('circuit', 'red');`,
+      message: 'Unknown Entity connector',
+      code: 'RT2031',
+    },
+    {
+      name: 'bind',
+      source: `Lamp('small-lamp').bind('circuit', 'red', new Network(), 'input');`,
+      message: 'Unknown Entity connector',
+      code: 'RT2031',
+    },
+    {
+      name: 'call projection',
+      source: `Lamp('small-lamp')(new Network());`,
+      message: 'has no callable projection',
+      code: 'RT2027',
+    },
+  ])('does not grant fallback Lamp $name authority', async ({ source, message, code }) => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      { path: 'lamp-fallback-authority.factorio.ts', text: source },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.plan).toBeUndefined();
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({ code, message: expect.stringContaining(message) }),
+    ]);
+  });
+
   test('snapshots and hydrates canonical Decider copy input output data', () => {
     const host = syntheticEntityHost(syntheticZeroPortEntityProfile);
     const compilation = compileSourceProgram(

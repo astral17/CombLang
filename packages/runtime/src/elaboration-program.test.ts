@@ -47,7 +47,7 @@ function syntheticEntityExecutionContext() {
   });
 }
 
-function syntheticEntityResolver() {
+function syntheticEntityResolver(type = 'container') {
   const database = syntheticZeroPortEntityProfile.ref.database;
   const prototypeKeys = new Set([
     syntheticZeroPortEntityProfile.ref.prototypeKey,
@@ -60,7 +60,7 @@ function syntheticEntityResolver() {
       return {
         key: nameOrKey as EntityPrototype['key'],
         name: nameOrKey.replace('entity:', ''),
-        type: 'container',
+        type,
         tileWidth: 1,
         tileHeight: 1,
       };
@@ -682,6 +682,39 @@ if (alias !== first || first === second) throw new Error('Entity identity was no
       runtimeParameter: 't',
       containsUnsupportedAsync: false,
       code: `const entity = ${call}`,
+    };
+
+    const plan = executeElaborationProgramV3(program, {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: resolver,
+      dslCallBudget: 1,
+    });
+    if (plan.version !== 3) throw new Error('Expected an Entity v3 plan.');
+    expect(plan.entities).toHaveLength(1);
+
+    expect(() =>
+      executeElaborationProgramV3(
+        { ...program, code: `const first = ${call}\nconst second = ${call}` },
+        {
+          trustedEntityReplayContext: context,
+          entityPrototypeResolver: resolver,
+          dslCallBudget: 1,
+        },
+      ),
+    ).toThrow(ElaborationOperationLimitError);
+  });
+
+  test('charges one DSL call for each public Lamp construction', () => {
+    const context = syntheticEntityExecutionContext();
+    const resolver = syntheticEntityResolver('lamp');
+    const call = `t.lampFromPrototype([{ value: ${JSON.stringify(syntheticZeroPortEntityProfile.ref.prototypeKey)}, source: { start: 1, end: 8 } }], { start: 1, end: 8 });`;
+    const program = {
+      format: 'comblang-elaboration-js' as const,
+      version: 2 as const,
+      fileId: sourceFileId('lamp-call-budget.factorio.ts'),
+      runtimeParameter: 't',
+      containsUnsupportedAsync: false,
+      code: `const lamp = ${call}`,
     };
 
     const plan = executeElaborationProgramV3(program, {

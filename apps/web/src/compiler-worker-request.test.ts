@@ -51,6 +51,13 @@ const rawSource = JSON.stringify({
       flags: ['placeable-player', 'player-creation'],
     },
   },
+  lamp: {
+    'fixture-lamp': {
+      type: 'lamp',
+      name: 'fixture-lamp',
+      flags: ['placeable-player', 'player-creation'],
+    },
+  },
 });
 
 describe('browser compiler Worker prototype profile', () => {
@@ -232,6 +239,29 @@ const machine = Entity('footprint-less', {
         },
       },
     });
+    expect(structuredClone(response)).toEqual(response);
+  });
+
+  test('constructs and detaches a Lamp facade in the Worker', async () => {
+    const runtime = new CompilerWorkerRuntime();
+    const response = await runtime.handle({
+      kind: 'parse',
+      revision: 18,
+      file: {
+        path: 'worker-lamp.factorio.ts',
+        text: `const lamp = Lamp('fixture-lamp', { always_on: false }).at(4, 5, 8);`,
+      },
+      prototypeProfile: { source: rawSource, factorioDumpMetadata: rawMetadata },
+    });
+
+    expect(response.result.compilerDiagnostics).toEqual([]);
+    expect(response.result.resolvedCircuit?.ir.entities).toEqual([
+      expect.objectContaining({
+        profile: expect.objectContaining({ prototypeKey: 'entity:fixture-lamp' }),
+        placement: { x: 4, y: 5, direction: 8 },
+        configuration: { mode: 'raw', payload: { always_on: false } },
+      }),
+    ]);
     expect(structuredClone(response)).toEqual(response);
   });
 

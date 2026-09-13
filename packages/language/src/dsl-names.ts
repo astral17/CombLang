@@ -16,6 +16,7 @@ export type WildcardDslName = keyof typeof wildcardDslNames;
 export const freeDslFunctionNames = Object.freeze([
   'Signal',
   'Entity',
+  'Lamp',
   'NativeCondition',
   'Network',
   'CC',

@@ -134,6 +134,7 @@ entity.bind('circuit', 'red', input, 'input');
 const red = entity.port('circuit', 'red');
 const output = new Network();
 output += Entity('reviewed-callable-machine')(input);
+const lamp = Lamp('small-lamp', { always_on: false }).at(4, 5, 8);
 ```
 
 The browser Worker and CLI create the matching trusted replay context and narrow
@@ -142,6 +143,13 @@ profile is intentionally zero-port: it permits construction and `.at(...)`
 placement, but does not expose guessed connector lanes, call projections, or
 configuration rules. A reviewed provider profile or clearly labelled synthetic
 fixture is still required for typed configuration and connector operations.
+
+`Lamp(prototype, configuration?)` is a structural family facade over this same
+construction path. It accepts every prototype/configuration form accepted by
+`Entity`, requires the selected provider prototype's actual type to be `lamp`,
+and returns the same nominal Entity handle and one physical Entity record. It
+does not choose `small-lamp` implicitly, infer connector lanes or callable
+behavior, translate ergonomic fields, or provide native-conformance evidence.
 
 The additional accepted source form is intentionally limited to the typed
 single-condition slice:

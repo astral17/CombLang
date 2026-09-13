@@ -455,6 +455,7 @@ for (let i = 0; i < arr.length; i++) output += arr[i] * 2;`,
       path: 'reserved-builtins.ts',
       text: `function Signal(value: string) { return value; }
 function Entity(value: string) { return value; }
+function Lamp(value: string) { return value; }
 function NativeCondition(signal: unknown, comparator: string, constant: number) { return signal; }
 function CC() { return 1; }
 function join() { return 1; }
@@ -469,7 +470,7 @@ const prototypes = {};`,
     });
 
     const reserved = validateDslSemantics(parsed).filter(({ code }) => code === 'CL1045');
-    expect(reserved).toHaveLength(10);
+    expect(reserved).toHaveLength(11);
     expect(
       reserved.map(({ span }) =>
         span === undefined ? undefined : parsed.text.slice(span.start, span.end),
@@ -477,6 +478,7 @@ const prototypes = {};`,
     ).toEqual([
       'Signal',
       'Entity',
+      'Lamp',
       'NativeCondition',
       'CC',
       'join',
