@@ -65,6 +65,13 @@ const rawSource = JSON.stringify({
       flags: ['placeable-player', 'player-creation'],
     },
   },
+  'constant-combinator': {
+    'fixture-constant': {
+      type: 'constant-combinator',
+      name: 'fixture-constant',
+      flags: ['placeable-player', 'player-creation'],
+    },
+  },
 });
 
 describe('browser compiler Worker prototype profile', () => {
@@ -290,6 +297,35 @@ const machine = Entity('footprint-less', {
         profile: expect.objectContaining({ prototypeKey: 'entity:fixture-roboport' }),
         placement: { x: 4, y: 5, direction: 8 },
         configuration: { mode: 'raw', payload: { request_filters: { sections: [] } } },
+      }),
+    ]);
+    expect(structuredClone(response)).toEqual(response);
+  });
+
+  test('constructs and detaches a checked Constant Entity facade in the Worker', async () => {
+    const runtime = new CompilerWorkerRuntime();
+    const response = await runtime.handle({
+      kind: 'parse',
+      revision: 21,
+      file: {
+        path: 'worker-constant-entity.factorio.ts',
+        text: `const constant = Constant('fixture-constant', { player_description: 'worker fixture', control_behavior: { is_on: false, sections: { sections: [] } } }).at(4, 5, 8);`,
+      },
+      prototypeProfile: { source: rawSource, factorioDumpMetadata: rawMetadata },
+    });
+
+    expect(response.result.compilerDiagnostics).toEqual([]);
+    expect(response.result.resolvedCircuit?.ir.entities).toEqual([
+      expect.objectContaining({
+        profile: expect.objectContaining({ prototypeKey: 'entity:fixture-constant' }),
+        placement: { x: 4, y: 5, direction: 8 },
+        configuration: {
+          mode: 'raw',
+          payload: {
+            player_description: 'worker fixture',
+            control_behavior: { is_on: false, sections: { sections: [] } },
+          },
+        },
       }),
     ]);
     expect(structuredClone(response)).toEqual(response);

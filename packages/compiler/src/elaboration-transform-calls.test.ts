@@ -53,11 +53,15 @@ describe('elaboration call/member transform', () => {
 
   test('lowers direct DSL calls and preserves source-bearing ordinary spread arguments', () => {
     const code = transformCalls(
-      `Signal("signal-A"); Lamp(first, ...rest); CC(value); IF(test, yes, no); fn(first, ...rest);`,
+      `Signal("signal-A"); Lamp(first, ...rest); Roboport(value); Constant(...rest); CC(value); IF(test, yes, no); fn(first, ...rest);`,
     );
 
     expect(code).toContain('__dsl.signal("signal-A"');
     expect(code).toContain('__dsl.entityFamilyFromPrototype("Lamp", [{ value: first, source:');
+    expect(code).toContain('__dsl.entityFamilyFromPrototype("Roboport", [{ value: value, source:');
+    expect(code).toContain(
+      '__dsl.entityFamilyFromPrototype("Constant", [...__dsl.spreadCallArguments(rest',
+    );
     expect(code).toContain('__dsl.constant(value');
     expect(code).toContain('__dsl.deciderBranches(test, yes, no');
     expect(code).toContain('__dsl.invoke(fn, [{ value: first, source:');

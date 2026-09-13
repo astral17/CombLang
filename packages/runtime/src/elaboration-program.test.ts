@@ -707,6 +707,7 @@ if (alias !== first || first === second) throw new Error('Entity identity was no
   test.each([
     { constructorName: 'Lamp', prototypeType: 'lamp' },
     { constructorName: 'Roboport', prototypeType: 'roboport' },
+    { constructorName: 'Constant', prototypeType: 'constant-combinator' },
   ])(
     'charges one DSL call for each public $constructorName construction',
     ({ constructorName, prototypeType }) => {

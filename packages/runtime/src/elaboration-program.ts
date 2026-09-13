@@ -121,6 +121,7 @@ interface CallArgument {
 const entityFamilyConstructionTypes = Object.freeze({
   Lamp: 'lamp',
   Roboport: 'roboport',
+  Constant: 'constant-combinator',
 } as const) satisfies typeof entityFamilyDslNames;
 
 interface Invocation {
@@ -3036,6 +3037,7 @@ class ElaborationRecorder {
       arguments_[0]!,
       rawSpan,
       expectedType,
+      publicConstructorName,
     );
     const configuration =
       arguments_.length === 2 && arguments_[1]!.value !== undefined
@@ -3048,6 +3050,7 @@ class ElaborationRecorder {
     argument: CallArgument,
     rawSpan: RawSpan,
     expectedType?: string,
+    constructorName?: string,
   ): { readonly prototype: EntityPrototype; readonly profile: EntityProfile } {
     const prototypeValue = argument.value;
     const context = this.#entityContext;
@@ -3140,7 +3143,7 @@ class ElaborationRecorder {
     }
     if (expectedType !== undefined && prototype.type !== expectedType) {
       throw new ElaborationExecutionError(
-        `Lamp requires provider Entity type ${JSON.stringify(expectedType)}, but prototype ${JSON.stringify(prototype.key)} has actual type ${JSON.stringify(prototype.type)}.`,
+        `${constructorName ?? 'Entity'} requires provider Entity type ${JSON.stringify(expectedType)}, but prototype ${JSON.stringify(prototype.key)} has actual type ${JSON.stringify(prototype.type)}.`,
         this.#span(argument.source),
         'RT2027',
       );

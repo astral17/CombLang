@@ -182,6 +182,17 @@ record. It does not infer the vanilla `roboport`, expose readback or output
 Networks, invent connectors or callable behavior, translate convenience fields,
 or establish native Factorio behavior.
 
+`Constant(prototype, configuration?)` is the corresponding structural facade for
+provider prototypes whose actual type is `constant-combinator`. It accepts the
+same prototype and configuration forms, delegates to generic Entity
+construction, and returns one nominal Entity backed by one physical record. It
+does not become a readable Network or Combinator, infer an output connector or
+call projection, emit signals, or add a simulator device. The executable
+`CC(...)` constructor remains the separate ConstantCombinator source with its
+existing output Network, producer, attachment, and tick behavior. The exact
+`Constant({ isOn, sections })` form and any future shared physical
+representation remain outside this structural facade.
+
 `machine.port(connector, lane)` selects an explicit connector lane. The exact
 four-argument `machine.bind(connector, lane, network, direction)` form binds
 that lane to an existing Network, with `direction` equal to `input` or
@@ -205,8 +216,8 @@ output endpoint, so the inline form creates one physical Entity and no hidden
 Producer, Network, or tick. Identical repeat bindings are idempotent; conflicts,
 stale handles, profiles without a call projection, and invalid destinations are
 source-aware errors. Ordinary objects and structural lookalikes keep normal
-JavaScript call behavior. Remaining typed facades and reviewed native import
-remain outside the current language surface.
+JavaScript call behavior. Reviewed native import and exact Constant section
+semantics remain outside the current language surface.
 
 The browser Worker request transports only replay identity metadata. Source
 Entity authority is available only when a host adapter resolves the detached

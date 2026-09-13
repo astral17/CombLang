@@ -136,6 +136,7 @@ const output = new Network();
 output += Entity('reviewed-callable-machine')(input);
 const lamp = Lamp('small-lamp', { always_on: false }).at(4, 5, 8);
 const roboport = Roboport('roboport', { raw: { request_filters: { sections: [] } } });
+const constant = Constant('constant-combinator', { raw: { player_description: 'fixture' } });
 ```
 
 The browser Worker and CLI create the matching trusted replay context and narrow
@@ -157,6 +158,15 @@ provider prototypes whose actual type is `roboport`. It reuses every Entity
 prototype/configuration form and produces the same nominal handle and one
 physical record. It does not infer readback or output Networks, connectors,
 callable behavior, ergonomic translations, or native-conformance evidence.
+
+`Constant(prototype, configuration?)` is the structural facade for provider
+prototypes whose actual type is `constant-combinator`. It accepts the same
+prototype/configuration forms as `Entity`, returns one nominal Entity and one
+physical record, and adds no Network, Combinator, signal output, connector,
+call projection, or simulator authority. `CC(...)` remains the separate
+executable ConstantCombinator source with its existing producer and output
+Network behavior. Exact `Constant({ isOn, sections })` semantics and a future
+shared physical representation are deferred.
 
 The additional accepted source form is intentionally limited to the typed
 single-condition slice:
@@ -240,8 +250,8 @@ physical Entity to the declared output endpoint; the inline
 bindings and no hidden topology. Repeated identical bindings are idempotent;
 conflicts, stale handles, non-callable profiles, and invalid destinations fail
 with source-aware diagnostics. Ordinary objects and structural Entity lookalikes
-retain ordinary JavaScript call behavior. Further family facades, reviewed native
-import, and native Factorio behavior remain separate future work.
+retain ordinary JavaScript call behavior. Exact Constant section semantics,
+reviewed native import, and native Factorio behavior remain separate future work.
 
 ## Internal construction and validation
 

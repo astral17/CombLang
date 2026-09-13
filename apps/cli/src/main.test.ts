@@ -362,6 +362,45 @@ const machine = Entity('assembling-machine-3', {
     });
   });
 
+  test('constructs a Constant Entity facade through the selected CLI provider', async () => {
+    const database = structuredClone(syntheticPrototypeDatabase()) as {
+      entities: Array<Record<string, unknown>>;
+    };
+    database.entities.push({
+      key: 'entity:fixture-constant',
+      name: 'fixture-constant',
+      type: 'constant-combinator',
+      blueprintEligible: true,
+      circuit: {
+        read: false,
+        enableDisable: false,
+        readContents: false,
+        setFilters: false,
+        setRequests: false,
+        setRecipe: false,
+        readRecipe: false,
+        readFinishedCraft: false,
+        outputSignals: false,
+      },
+    });
+    const source = await sourceFile(
+      `const constant = Constant('fixture-constant', { player_description: 'cli fixture', control_behavior: { is_on: false, sections: { sections: [] } } }).at(2, 3, 8);`,
+    );
+    const profile = await profileFile(JSON.stringify(database));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const exitCode = await run(['check', '--json', '--prototypes', profile, source]);
+    const report = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect({ exitCode, report }).toMatchObject({
+      exitCode: 0,
+      report: {
+        diagnostics: [],
+        producerCount: 0,
+        entityReplayContext: { source: 'provider' },
+      },
+    });
+  });
+
   test('does not provision an explicitly non-blueprintable CLI Entity', async () => {
     const database = structuredClone(syntheticPrototypeDatabase()) as {
       capabilities: { entityCircuitCapabilities: boolean };

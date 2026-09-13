@@ -1132,11 +1132,11 @@ const output: Network = Wrapped(input);`,
   test('rejects a pure integer result where a Network producer is required', () => {
     const file = parseFile({
       path: 'constant-result.factorio.ts',
-      text: `function Constant(_input: Readonly<Network>): Network {
+      text: `function makeNetwork(_input: Readonly<Network>): Network {
   return 2 + 3;
 }
 const input = new Network<R>();
-const output: Network = Constant(input);`,
+const output: Network = makeNetwork(input);`,
     });
 
     expect(compileDirectPlan(file).diagnostics).toContainEqual(

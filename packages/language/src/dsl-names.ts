@@ -17,6 +17,7 @@ export type WildcardDslName = keyof typeof wildcardDslNames;
 export const entityFamilyDslNames = Object.freeze({
   Lamp: 'lamp',
   Roboport: 'roboport',
+  Constant: 'constant-combinator',
 } as const);
 
 export type EntityFamilyDslName = keyof typeof entityFamilyDslNames;

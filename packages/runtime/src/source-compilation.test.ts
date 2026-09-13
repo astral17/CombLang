@@ -893,6 +893,435 @@ output += Roboport('roboport');`,
     }
   });
 
+  test('resolves Constant from short, canonical, and exact provider-owned forms', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'constant-entity-prototype-forms.factorio.ts',
+        text: `const short = Constant('constant-combinator');
+const canonical = Constant('entity:constant-combinator');
+const record = Constant(prototypes.entity['constant-combinator']);`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3)
+      throw new Error('Expected a Constant Entity plan.');
+    expect(plan.entities).toHaveLength(3);
+    expect(plan.entities.map(({ profile }) => profile.prototypeKey)).toEqual([
+      'entity:constant-combinator',
+      'entity:constant-combinator',
+      'entity:constant-combinator',
+    ]);
+  });
+
+  test('evaluates Constant prototype and configuration exactly once in order', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const text = `let order = '';
+function selectPrototype() { order += 'p'; return 'constant-combinator'; }
+function selectConfiguration() { order += 'c'; return { raw: { player_description: 'ordered' } }; }
+const entity = Constant(selectPrototype(), selectConfiguration());
+if (order !== 'pc') throw new Error('Constant arguments were not evaluated once in order');`;
+    const compilation = compileSourceProgram(
+      { path: 'constant-entity-argument-order.factorio.ts', text },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.plan?.version).toBe(3);
+    expect(compilation.plan?.version === 3 ? compilation.plan.entities : undefined).toHaveLength(1);
+  });
+
+  test.each([
+    {
+      name: 'missing prototype',
+      source: `Constant('missing-constant');`,
+      message: 'Entity prototype is malformed or unavailable',
+    },
+    {
+      name: 'foreign prototype record',
+      source: `Constant({ key: 'entity:constant-combinator', name: 'constant-combinator', type: 'constant-combinator' });`,
+      message: 'foreign or not owned by the selected host provider',
+    },
+  ])('rejects Constant with a $name', async ({ source, message }) => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      { path: 'constant-entity-invalid-prototype.factorio.ts', text: source },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.plan).toBeUndefined();
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({ code: 'RT2027', message: expect.stringContaining(message) }),
+    ]);
+  });
+
+  test.each([`Constant();`, `Constant('constant-combinator', {}, {});`])(
+    'validates public Constant constructor arity at the call span: %s',
+    async (text) => {
+      const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+      const provisioned = new EntityProvisioningService().provision(
+        prototypes,
+        conservativeEntityProvisioningPolicy,
+      );
+      const compilation = compileSourceProgram(
+        { path: 'constant-entity-arity.factorio.ts', text },
+        {
+          prototypes,
+          trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+          entityPrototypeResolver: provisioned.entityPrototypeResolver,
+        },
+      );
+
+      expect(compilation.pipelineDiagnostics).toEqual([
+        expect.objectContaining({
+          code: 'RT2027',
+          message: 'Constant(prototype, configuration?) requires one or two arguments.',
+          span: {
+            fileId: 'file:constant-entity-arity.factorio.ts',
+            start: 0,
+            end: text.length - 1,
+          },
+        }),
+      ]);
+    },
+  );
+
+  test('rejects a mixed Constant configuration envelope at the configuration argument span', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const text = `Constant('constant-combinator', { raw: {}, player_description: 'x' });`;
+    const configuration = "{ raw: {}, player_description: 'x' }";
+    const compilation = compileSourceProgram(
+      { path: 'constant-entity-mixed-envelope.factorio.ts', text },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+    const start = text.indexOf(configuration);
+
+    expect(compilation.plan).toBeUndefined();
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'RT2027',
+        message: expect.stringContaining(
+          'Entity configuration envelope fields raw, rule, lanes, and condition must use one exact legacy form.',
+        ),
+        span: {
+          fileId: 'file:constant-entity-mixed-envelope.factorio.ts',
+          start,
+          end: start + configuration.length,
+        },
+      }),
+    ]);
+  });
+
+  test('preserves the checked Constant Blueprint shape including ordered sections and filters', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'constant-entity-configuration.factorio.ts',
+        text: `const entity = Constant('constant-combinator', {
+  player_description: 'reviewed fixture',
+  control_behavior: {
+    is_on: false,
+    sections: {
+      trash_not_requested: false,
+      sections: [{
+        index: 0,
+        active: false,
+        group: 'first',
+        multiplier: 0,
+        filters: [
+          { index: 0, name: 'iron-plate', type: 'item', count: 0, comparator: '>=', quality: 'normal' },
+          { index: 1, name: 'copper-plate', type: 'item', count: 2 },
+        ],
+      }, {
+        index: 1,
+        active: true,
+        group: 'second',
+        multiplier: 1.5,
+        filters: [{ index: 0, name: 'signal-A', type: 'virtual', count: 3 }],
+      }],
+    },
+  },
+});`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3)
+      throw new Error('Expected a Constant Entity plan.');
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.producers).toEqual([]);
+    expect(plan.networks).toEqual([]);
+    expect(plan.entities[0]?.configuration).toEqual({
+      mode: 'raw',
+      payload: {
+        player_description: 'reviewed fixture',
+        control_behavior: {
+          is_on: false,
+          sections: {
+            trash_not_requested: false,
+            sections: [
+              {
+                index: 0,
+                active: false,
+                group: 'first',
+                multiplier: 0,
+                filters: [
+                  {
+                    index: 0,
+                    name: 'iron-plate',
+                    type: 'item',
+                    count: 0,
+                    comparator: '>=',
+                    quality: 'normal',
+                  },
+                  { index: 1, name: 'copper-plate', type: 'item', count: 2 },
+                ],
+              },
+              {
+                index: 1,
+                active: true,
+                group: 'second',
+                multiplier: 1.5,
+                filters: [{ index: 0, name: 'signal-A', type: 'virtual', count: 3 }],
+              },
+            ],
+          },
+        },
+      },
+    });
+  });
+
+  test('keeps Constant and CC in separate Entity and Combinator categories', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'constant-entity-and-cc.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const structural = Constant('constant-combinator', { raw: {
+  player_description: 'structural',
+  control_behavior: { is_on: false, sections: { sections: [] } },
+} }).at(4, 5, 8);
+const aliases = [structural];
+const output = new Network();
+output += CC(2 * A);`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    const resolved = compilation.resolvedCircuit;
+    const execution = compilation.execution;
+    if (
+      plan === undefined ||
+      plan.version !== 3 ||
+      resolved === undefined ||
+      execution === undefined
+    ) {
+      throw new Error('Expected Constant and CC v3 artifacts.');
+    }
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.entities[0]?.profile.prototypeKey).toBe('entity:constant-combinator');
+    expect(plan.entities[0]?.placement).toEqual({ x: 4, y: 5, direction: 8 });
+    expect(plan.producers).toHaveLength(1);
+    expect(plan.producers[0]).toMatchObject({ kind: 'constant' });
+    expect(plan.networks).toHaveLength(2);
+    expect(resolved.ir.entities).toHaveLength(1);
+    expect(resolved.ir.producers).toHaveLength(1);
+    expect(resolved.ir.producers[0]).toMatchObject({ kind: 'constant' });
+    const blueprint = generateEntityBlueprintJson(resolved.ir).blueprint;
+    expect(blueprint.entities).toHaveLength(2);
+    expect(blueprint.entities.filter(({ name }) => name === 'constant-combinator')).toHaveLength(2);
+    const document = createDebugDocument(execution.debug, execution.circuit.graph);
+    expect(
+      document.scopes.flatMap((scope) => ('entities' in scope ? scope.entities : [])),
+    ).toHaveLength(1);
+  });
+
+  test.each([
+    {
+      name: 'non-constant prototype',
+      source: `Constant('assembling-machine-3');`,
+      message: 'requires provider Entity type "constant-combinator"',
+      spanText: "'assembling-machine-3'",
+    },
+    {
+      name: 'wrong nested type',
+      source: `Constant('constant-combinator', { control_behavior: { is_on: 0, sections: { sections: [] } } });`,
+      message: '$.control_behavior.is_on: expected a boolean',
+      spanText: '{ control_behavior: { is_on: 0, sections: { sections: [] } } }',
+    },
+    {
+      name: 'unknown nested field',
+      source: `Constant('constant-combinator', { control_behavior: { unsupported: true, sections: { sections: [] } } });`,
+      message: '$.control_behavior.unsupported: field is not documented',
+      spanText: '{ control_behavior: { unsupported: true, sections: { sections: [] } } }',
+    },
+  ])(
+    'rejects Constant $name with a source-aware diagnostic',
+    async ({ source, message, spanText }) => {
+      const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+      const provisioned = new EntityProvisioningService().provision(
+        prototypes,
+        conservativeEntityProvisioningPolicy,
+      );
+      const compilation = compileSourceProgram(
+        { path: 'constant-entity-invalid.factorio.ts', text: source },
+        {
+          prototypes,
+          trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+          entityPrototypeResolver: provisioned.entityPrototypeResolver,
+        },
+      );
+      const start = source.indexOf(spanText);
+      expect(compilation.plan).toBeUndefined();
+      expect(compilation.pipelineDiagnostics).toEqual([
+        expect.objectContaining({
+          code: 'RT2027',
+          message: expect.stringContaining(message),
+          span: expect.objectContaining({
+            fileId: 'file:constant-entity-invalid.factorio.ts',
+            start,
+            end: start + spanText.length,
+          }),
+        }),
+      ]);
+    },
+  );
+
+  test('rolls back caught Constant failures without shifting Entity identity', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'constant-entity-rollback.factorio.ts',
+        text: `let caught = 0;
+try { Constant('assembling-machine-3'); } catch { caught += 1; }
+try { Constant('constant-combinator', { control_behavior: { is_on: 0, sections: { sections: [] } } }); } catch { caught += 1; }
+if (caught !== 2) throw new Error('Constant failures were accepted');
+Constant('constant-combinator', { raw: { control_behavior: { is_on: false, sections: { sections: [] } } } });`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3)
+      throw new Error('Expected recovered Constant plan.');
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.entities[0]?.id).toBe('entity:1');
+    expect(plan.networks).toEqual([]);
+    expect(plan.producers).toEqual([]);
+  });
+
+  test.each([
+    {
+      name: 'output attachment',
+      source: `const output = new Network();
+output += Constant('constant-combinator');`,
+      message: 'has no callable projection',
+      code: 'RT2027',
+    },
+    {
+      name: 'call syntax',
+      source: `Constant('constant-combinator')(new Network());`,
+      message: 'has no callable projection',
+      code: 'RT2027',
+    },
+    {
+      name: 'connector projection',
+      source: `Constant('constant-combinator').port('circuit', 'red');`,
+      message: 'Unknown Entity connector',
+      code: 'RT2031',
+    },
+    {
+      name: 'connector binding',
+      source: `Constant('constant-combinator').bind('circuit', 'red', new Network(), 'input');`,
+      message: 'Unknown Entity connector',
+      code: 'RT2031',
+    },
+  ])(
+    'does not grant Constant $name authority under the fallback profile',
+    async ({ source, message, code }) => {
+      const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+      const provisioned = new EntityProvisioningService().provision(
+        prototypes,
+        conservativeEntityProvisioningPolicy,
+      );
+      const compilation = compileSourceProgram(
+        { path: 'constant-entity-authority.factorio.ts', text: source },
+        {
+          prototypes,
+          trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+          entityPrototypeResolver: provisioned.entityPrototypeResolver,
+        },
+      );
+      expect(compilation.plan).toBeUndefined();
+      expect(compilation.pipelineDiagnostics).toEqual([
+        expect.objectContaining({ code, message: expect.stringContaining(message) }),
+      ]);
+    },
+  );
+
   test('snapshots and hydrates canonical Decider copy input output data', () => {
     const host = syntheticEntityHost(syntheticZeroPortEntityProfile);
     const compilation = compileSourceProgram(
