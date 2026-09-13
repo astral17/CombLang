@@ -2013,6 +2013,159 @@ const raw = Entity('assembling-machine-3', { raw: {
     });
   });
 
+  test('compiles representative schema families through generic Entity to Blueprint output', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'entity-schema-family-coverage.factorio.ts',
+        text: `const logistics = Entity('storage-chest', {
+  request_filters: {
+    request_from_buffers: false,
+    trash_not_requested: false,
+    sections: [{
+      active: true,
+      index: 0,
+      group: 'logistics',
+      multiplier: 1,
+      filters: [{ index: 0, name: 'iron-plate', type: 'item', count: 1, request_from: 'all' }],
+    }],
+  },
+}).at(1, 2, 0);
+const belts = Entity('transport-belt', {
+  control_behavior: {
+    circuit_enabled: true,
+    circuit_read_hand_contents: false,
+    circuit_contents_read_mode: 'hold',
+    connect_to_logistic_network: true,
+    input_networks: { red: true, green: false },
+    output_networks: { red: false, green: true },
+  },
+}).at(3, 4, 0);
+const trains = Entity('train-stop', {
+  station: 'Main station',
+  priority: 1,
+  manual_trains_limit: 2,
+  color: { r: 0.2, g: 0.4, b: 0.6, a: 1 },
+  control_behavior: {
+    circuit_enabled: true,
+    connect_to_logistic_network: false,
+    input_networks: { red: true, green: false },
+    output_networks: { red: false, green: true },
+    read_from_train: true,
+    read_trains_count: true,
+    set_trains_limit: true,
+    train_stopped_signal: { type: 'virtual', name: 'signal-A' },
+  },
+}).at(5, 6, 0);`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    const resolved = compilation.resolvedCircuit;
+    if (plan === undefined || plan.version !== 3 || resolved === undefined) {
+      throw new Error('Expected representative schema-family Entity artifacts.');
+    }
+    expect(plan.entities).toHaveLength(3);
+    expect(plan.entities.map(({ id, profile }) => [id, profile.prototypeKey])).toEqual([
+      ['entity:1', 'entity:storage-chest'],
+      ['entity:2', 'entity:transport-belt'],
+      ['entity:3', 'entity:train-stop'],
+    ]);
+    expect(plan.entities.map(({ placement }) => placement)).toEqual([
+      { x: 1, y: 2, direction: 0 },
+      { x: 3, y: 4, direction: 0 },
+      { x: 5, y: 6, direction: 0 },
+    ]);
+    expect(plan.entities.map(({ configuration }) => configuration?.mode)).toEqual([
+      'raw',
+      'raw',
+      'raw',
+    ]);
+    expect(plan.entities[0]?.configuration).toMatchObject({
+      mode: 'raw',
+      payload: {
+        request_filters: {
+          sections: [{ filters: [{ index: 0, name: 'iron-plate', type: 'item', count: 1 }] }],
+        },
+      },
+    });
+    expect(plan.entities[1]?.configuration).toMatchObject({
+      mode: 'raw',
+      payload: { control_behavior: { circuit_contents_read_mode: 'hold' } },
+    });
+    expect(plan.entities[2]?.configuration).toMatchObject({
+      mode: 'raw',
+      payload: { station: 'Main station', control_behavior: { read_from_train: true } },
+    });
+
+    expect(resolved.ir.entities.map(({ id, profile }) => [id, profile.prototypeKey])).toEqual([
+      ['entity:1', 'entity:storage-chest'],
+      ['entity:2', 'entity:transport-belt'],
+      ['entity:3', 'entity:train-stop'],
+    ]);
+    const blueprint = generateEntityBlueprintJson(resolved.ir).blueprint;
+    expect(blueprint.entities).toHaveLength(3);
+    expect(blueprint.entities).toMatchObject([
+      {
+        entity_number: 1,
+        name: 'storage-chest',
+        position: { x: 1, y: 2 },
+        request_filters: {
+          request_from_buffers: false,
+          trash_not_requested: false,
+          sections: [
+            {
+              active: true,
+              index: 0,
+              group: 'logistics',
+              multiplier: 1,
+              filters: [
+                { index: 0, name: 'iron-plate', type: 'item', count: 1, request_from: 'all' },
+              ],
+            },
+          ],
+        },
+      },
+      {
+        entity_number: 2,
+        name: 'transport-belt',
+        position: { x: 3, y: 4 },
+        direction: 0,
+        control_behavior: {
+          circuit_enabled: true,
+          circuit_contents_read_mode: 'hold',
+          input_networks: { red: true, green: false },
+          output_networks: { red: false, green: true },
+        },
+      },
+      {
+        entity_number: 3,
+        name: 'train-stop',
+        position: { x: 5, y: 6 },
+        station: 'Main station',
+        priority: 1,
+        manual_trains_limit: 2,
+        color: { r: 0.2, g: 0.4, b: 0.6, a: 1 },
+        control_behavior: {
+          read_from_train: true,
+          read_trains_count: true,
+          set_trains_limit: true,
+          train_stopped_signal: { type: 'virtual', name: 'signal-A' },
+        },
+      },
+    ]);
+  });
+
   test('accepts a provider-known common-only Blueprint Entity with an empty fragment', async () => {
     const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
     const provisioned = new EntityProvisioningService().provision(

@@ -1,11 +1,16 @@
 import { describe, expect, test } from 'vitest';
+import { blueprintSchemaCatalog } from './blueprint-schema-loader.js';
 import { resolveBlueprintEntitySchema } from './blueprint-schema-resolution.js';
 import {
   validateBlueprintEntityFragment,
   validateBlueprintEntityFragmentAgainstSchema,
   type BlueprintSchemaValidationLimits,
 } from './blueprint-schema-validation.js';
-import type { BlueprintSchemaDescriptor, BlueprintSchemaField } from './blueprint-schema.js';
+import type {
+  BlueprintSchemaCatalog,
+  BlueprintSchemaDescriptor,
+  BlueprintSchemaField,
+} from './blueprint-schema.js';
 
 function field(name: string, type: BlueprintSchemaDescriptor): BlueprintSchemaField {
   return { name, type, optional: true };
@@ -30,7 +35,388 @@ function syntheticSchema(
   };
 }
 
+interface DescriptorGraphCharacterization {
+  readonly descriptorKinds: readonly BlueprintSchemaDescriptor['kind'][];
+  readonly scalarNames: readonly string[];
+  readonly reachableReferences: readonly string[];
+  readonly referenceCycles: readonly (readonly string[])[];
+}
+
+function characterizeDescriptorGraph(
+  roots: readonly BlueprintSchemaDescriptor[],
+  catalog: Pick<BlueprintSchemaCatalog, 'references'>,
+): DescriptorGraphCharacterization {
+  const references = new Map(
+    catalog.references.map((reference) => [reference.name, reference.type]),
+  );
+  const descriptorKinds = new Set<BlueprintSchemaDescriptor['kind']>();
+  const scalarNames = new Set<string>();
+  const reachableReferences = new Set<string>();
+  const referenceStack: string[] = [];
+  const referenceCycles: string[][] = [];
+
+  const visit = (descriptor: BlueprintSchemaDescriptor): void => {
+    descriptorKinds.add(descriptor.kind);
+    switch (descriptor.kind) {
+      case 'scalar':
+        scalarNames.add(descriptor.name);
+        return;
+      case 'literal':
+        return;
+      case 'array':
+        visit(descriptor.items);
+        return;
+      case 'tuple':
+        descriptor.items.forEach(visit);
+        return;
+      case 'union':
+        descriptor.options.forEach(visit);
+        return;
+      case 'dictionary':
+        visit(descriptor.keys);
+        visit(descriptor.values);
+        return;
+      case 'object':
+        descriptor.fields.forEach((field) => visit(field.type));
+        return;
+      case 'reference': {
+        const target = references.get(descriptor.name);
+        if (target === undefined) {
+          throw new Error(`Missing Blueprint schema reference ${JSON.stringify(descriptor.name)}.`);
+        }
+        const cycleStart = referenceStack.indexOf(descriptor.name);
+        if (cycleStart >= 0) {
+          referenceCycles.push([...referenceStack.slice(cycleStart), descriptor.name]);
+          return;
+        }
+        if (reachableReferences.has(descriptor.name)) return;
+        reachableReferences.add(descriptor.name);
+        referenceStack.push(descriptor.name);
+        visit(target);
+        referenceStack.pop();
+        return;
+      }
+    }
+  };
+
+  roots.forEach(visit);
+  return {
+    descriptorKinds: [...descriptorKinds].sort(),
+    scalarNames: [...scalarNames].sort(),
+    reachableReferences: [...reachableReferences].sort(),
+    referenceCycles: referenceCycles.map((cycle) => [...cycle]),
+  };
+}
+
+function characterizeEntityVariants(catalog: BlueprintSchemaCatalog) {
+  const common = catalog.common;
+  if (common.kind !== 'object') throw new Error('Expected a common object descriptor.');
+  return catalog.variants.map((variant) => {
+    const graph = characterizeDescriptorGraph(
+      [common, ...variant.fields.map((field) => field.type)],
+      catalog,
+    );
+    return {
+      name: variant.name,
+      fieldNames: [...common.fields, ...variant.fields].map((field) => field.name).sort(),
+      ...graph,
+    };
+  });
+}
+
+const schemaFamilyFixtures = [
+  {
+    family: 'logistics',
+    prototypeType: 'logistic-container',
+    fragment: {
+      request_filters: {
+        request_from_buffers: false,
+        trash_not_requested: false,
+        sections: [
+          {
+            active: true,
+            index: 0,
+            group: 'logistics',
+            multiplier: 1,
+            filters: [
+              { index: 0, name: 'iron-plate', type: 'item', count: 1, request_from: 'all' },
+            ],
+          },
+        ],
+      },
+    },
+    invalidFragment: {
+      request_filters: {
+        sections: [
+          {
+            filters: [{ index: -1, name: 'iron-plate', type: 'item', count: 1 }],
+          },
+        ],
+      },
+    },
+    badPath: '$.request_filters.sections[0].filters[0].index',
+  },
+  {
+    family: 'belts',
+    prototypeType: 'transport-belt',
+    fragment: {
+      control_behavior: {
+        circuit_enabled: true,
+        circuit_read_hand_contents: false,
+        circuit_contents_read_mode: 'hold',
+        connect_to_logistic_network: true,
+        input_networks: { red: true, green: false },
+        output_networks: { red: false, green: true },
+      },
+    },
+    invalidFragment: {
+      control_behavior: { circuit_contents_read_mode: 'invalid' },
+    },
+    badPath: '$.control_behavior.circuit_contents_read_mode',
+  },
+  {
+    family: 'displays',
+    prototypeType: 'display-panel',
+    fragment: {
+      always_show: false,
+      show_in_chart: true,
+      text: 'status',
+      icon: { type: 'virtual', name: 'signal-A' },
+      control_behavior: {
+        parameters: [
+          {
+            text: 'message',
+            icon: { name: 'signal-B' },
+            condition: {
+              comparator: '=',
+              constant: 0,
+              first_signal: { type: 'virtual', name: 'signal-A' },
+            },
+          },
+        ],
+      },
+    },
+    invalidFragment: {
+      control_behavior: {
+        parameters: [{ text: 'message', condition: { comparator: '??' } }],
+      },
+    },
+    badPath: '$.control_behavior.parameters[0].condition.comparator',
+  },
+  {
+    family: 'train stops',
+    prototypeType: 'train-stop',
+    fragment: {
+      station: 'Main station',
+      priority: 0,
+      manual_trains_limit: 2,
+      color: { r: 0.2, g: 0.4, b: 0.6, a: 1 },
+      control_behavior: {
+        circuit_enabled: true,
+        connect_to_logistic_network: false,
+        input_networks: { red: true, green: false },
+        output_networks: { red: false, green: true },
+        read_from_train: true,
+        read_stopped_train: false,
+        read_trains_count: true,
+        send_to_train: false,
+        set_priority: false,
+        set_trains_limit: true,
+        train_stopped_signal: { type: 'virtual', name: 'signal-A' },
+      },
+    },
+    invalidFragment: { priority: 256 },
+    badPath: '$.priority',
+  },
+  {
+    family: 'filters',
+    prototypeType: 'inserter',
+    fragment: {
+      filter_mode: 'whitelist',
+      use_filters: true,
+      override_stack_size: 1,
+      pickup_position: { x: 0, y: -1 },
+      drop_position: { x: 0, y: 1 },
+      filters: [{ index: 0, name: 'iron-plate', quality: 'normal' }],
+    },
+    invalidFragment: { filters: [{ index: -1, name: 'iron-plate' }] },
+    badPath: '$.filters[0].index',
+  },
+  {
+    family: 'recipes',
+    prototypeType: 'assembling-machine',
+    fragment: {
+      recipe: 'iron-gear-wheel',
+      recipe_quality: 'normal',
+      control_behavior: {
+        circuit_enabled: false,
+        read_contents: true,
+        set_recipe: true,
+        input_networks: { red: true, green: true },
+        output_networks: { red: false, green: true },
+      },
+    },
+    invalidFragment: { recipe_quality: 0 },
+    badPath: '$.recipe_quality',
+  },
+  {
+    family: 'transport settings',
+    prototypeType: 'loader',
+    fragment: {
+      belt_stack_size_override: 2,
+      type: 'output',
+      filter_mode: 'whitelist',
+      filters: [{ index: 0, name: 'iron-plate' }],
+    },
+    invalidFragment: { type: 'sideways' },
+    badPath: '$.type',
+  },
+] as const;
+
 describe('Blueprint Entity schema validation', () => {
+  test('characterizes every generated Entity variant and its complete descriptor closure', () => {
+    const characterization = characterizeEntityVariants(blueprintSchemaCatalog);
+    expect(blueprintSchemaCatalog.counts).toEqual({
+      entityVariants: 62,
+      controlBehaviors: 37,
+      referencedSchemas: 113,
+    });
+    expect(characterization).toHaveLength(blueprintSchemaCatalog.counts.entityVariants);
+    expect(characterization.map(({ name }) => name)).toEqual(
+      blueprintSchemaCatalog.variants.map(({ name }) => name),
+    );
+    for (const entry of characterization) {
+      const variant = blueprintSchemaCatalog.variants.find(({ name }) => name === entry.name);
+      if (variant === undefined) throw new Error(`Missing characterization for ${entry.name}.`);
+      const resolved = resolveBlueprintEntitySchema({ type: variant.name }, blueprintSchemaCatalog);
+      expect(entry.fieldNames).toEqual(resolved.fields.map((field) => field.name).sort());
+      expect(entry.descriptorKinds).toEqual([
+        'array',
+        'dictionary',
+        'literal',
+        'object',
+        'reference',
+        'scalar',
+        'tuple',
+        'union',
+      ]);
+      expect(entry.reachableReferences.length).toBeGreaterThan(0);
+    }
+    const reachableReferences = new Set(
+      characterization.flatMap(({ reachableReferences: refs }) => refs),
+    );
+    expect([...reachableReferences].sort()).toEqual(
+      blueprintSchemaCatalog.references.map(({ name }) => name).sort(),
+    );
+
+    const scalarNames = new Set(characterization.flatMap(({ scalarNames: names }) => names));
+    expect([...scalarNames].sort()).toEqual([
+      'EquipmentIDAndQualityIDPair',
+      'LuaEquipment',
+      'LuaEquipmentPrototype',
+      'LuaItem',
+      'LuaItemPrototype',
+      'LuaItemStack',
+      'LuaQualityPrototype',
+      'boolean',
+      'double',
+      'float',
+      'int32',
+      'number',
+      'string',
+      'table',
+      'uint16',
+      'uint32',
+      'uint8',
+    ]);
+    const scalarStatuses = [...scalarNames].map((name) => {
+      const witness = name === 'boolean' ? false : name === 'string' ? 'value' : 0;
+      const result = validateBlueprintEntityFragmentAgainstSchema(
+        { value: witness },
+        syntheticSchema([{ name: 'value', type: { kind: 'scalar', name }, optional: true }]),
+      );
+      return [name, result.status] as const;
+    });
+    expect(
+      scalarStatuses
+        .filter(([, status]) => status === 'valid')
+        .map(([name]) => name)
+        .sort(),
+    ).toEqual([
+      'boolean',
+      'double',
+      'float',
+      'int32',
+      'number',
+      'string',
+      'table',
+      'uint16',
+      'uint32',
+      'uint8',
+    ]);
+    expect(
+      scalarStatuses
+        .filter(([, status]) => status === 'unassessed')
+        .map(([name]) => name)
+        .sort(),
+    ).toEqual([
+      'EquipmentIDAndQualityIDPair',
+      'LuaEquipment',
+      'LuaEquipmentPrototype',
+      'LuaItem',
+      'LuaItemPrototype',
+      'LuaItemStack',
+      'LuaQualityPrototype',
+    ]);
+    expect(scalarStatuses.some(([, status]) => status === 'invalid')).toBe(false);
+  });
+
+  test('terminates and records cycles in named reference graphs', () => {
+    const catalog = {
+      references: [
+        {
+          name: 'A',
+          type: {
+            kind: 'object' as const,
+            fields: [
+              { name: 'next', type: { kind: 'reference' as const, name: 'B' }, optional: true },
+            ],
+          },
+        },
+        {
+          name: 'B',
+          type: {
+            kind: 'object' as const,
+            fields: [
+              { name: 'next', type: { kind: 'reference' as const, name: 'A' }, optional: true },
+            ],
+          },
+        },
+      ],
+    } as unknown as BlueprintSchemaCatalog;
+    expect(characterizeDescriptorGraph([{ kind: 'reference', name: 'A' }], catalog)).toMatchObject({
+      reachableReferences: ['A', 'B'],
+      referenceCycles: [['A', 'B', 'A']],
+    });
+  });
+
+  test.each(schemaFamilyFixtures)(
+    'validates the $family schema fixture and reports its bad value path',
+    ({ prototypeType, fragment, invalidFragment, badPath }) => {
+      expect(validateBlueprintEntityFragment(fragment, { type: prototypeType })).toEqual({
+        status: 'valid',
+        structuralStatus: 'documented',
+      });
+      expect(
+        validateBlueprintEntityFragment(invalidFragment, { type: prototypeType }),
+      ).toMatchObject({
+        status: 'invalid',
+        structuralStatus: 'documented',
+        path: badPath,
+      });
+    },
+  );
+
   test('accepts documented partial fragments and common-only prototypes', () => {
     expect(
       validateBlueprintEntityFragment(

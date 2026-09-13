@@ -72,6 +72,13 @@ const rawSource = JSON.stringify({
       flags: ['placeable-player', 'player-creation'],
     },
   },
+  'logistic-container': {
+    'fixture-logistics': {
+      type: 'logistic-container',
+      name: 'fixture-logistics',
+      flags: ['placeable-player', 'player-creation'],
+    },
+  },
 });
 
 describe('browser compiler Worker prototype profile', () => {
@@ -324,6 +331,60 @@ const machine = Entity('footprint-less', {
           payload: {
             player_description: 'worker fixture',
             control_behavior: { is_on: false, sections: { sections: [] } },
+          },
+        },
+      }),
+    ]);
+    expect(structuredClone(response)).toEqual(response);
+  });
+
+  test('constructs and detaches a checked logistics Entity in the Worker', async () => {
+    const runtime = new CompilerWorkerRuntime();
+    const response = await runtime.handle({
+      kind: 'parse',
+      revision: 22,
+      file: {
+        path: 'worker-logistics-entity.factorio.ts',
+        text: `const chest = Entity('fixture-logistics', {
+  request_filters: {
+    request_from_buffers: false,
+    trash_not_requested: false,
+    sections: [{
+      active: true,
+      index: 0,
+      group: 'logistics',
+      multiplier: 1,
+      filters: [{ index: 0, name: 'iron-plate', type: 'item', count: 1, request_from: 'all' }],
+    }],
+  },
+}).at(4, 5, 8);`,
+      },
+      prototypeProfile: { source: rawSource, factorioDumpMetadata: rawMetadata },
+    });
+
+    expect(response.result.compilerDiagnostics).toEqual([]);
+    expect(response.result.resolvedCircuit?.ir.entities).toEqual([
+      expect.objectContaining({
+        profile: expect.objectContaining({ prototypeKey: 'entity:fixture-logistics' }),
+        placement: { x: 4, y: 5, direction: 8 },
+        configuration: {
+          mode: 'raw',
+          payload: {
+            request_filters: {
+              request_from_buffers: false,
+              trash_not_requested: false,
+              sections: [
+                {
+                  active: true,
+                  index: 0,
+                  group: 'logistics',
+                  multiplier: 1,
+                  filters: [
+                    { index: 0, name: 'iron-plate', type: 'item', count: 1, request_from: 'all' },
+                  ],
+                },
+              ],
+            },
           },
         },
       }),

@@ -51,6 +51,30 @@ catalog-declared SignalID position. Foreign nominal handles, invalid field
 shapes, accessors, and symbol keys remain rejected without invoking caller
 coercion hooks.
 
+## Schema-family coverage
+
+The generated catalog characterization covers all 62 entity variants and the
+complete 113-reference closure. The following matrix records the current
+representative checked evidence without treating it as a native Factorio
+compatibility claim:
+
+| Family             | Structural catalog coverage            | Checked validation evidence                               | Raw fallback | Native evidence |
+| ------------------ | -------------------------------------- | --------------------------------------------------------- | ------------ | --------------- |
+| Logistics          | Full generated variant/reference graph | `logistic-container` request sections and filters         | Available    | Not captured    |
+| Belts              | Full generated variant/reference graph | `transport-belt` network settings and read mode           | Available    | Not captured    |
+| Displays           | Full generated variant/reference graph | `display-panel` text, icon, and nested parameters         | Available    | Not captured    |
+| Train stops        | Full generated variant/reference graph | `train-stop` station, color, limits, and control behavior | Available    | Not captured    |
+| Filters            | Full generated variant/reference graph | `inserter` filter mode, positions, and item filters       | Available    | Not captured    |
+| Recipes            | Full generated variant/reference graph | `assembling-machine` recipe and control behavior          | Available    | Not captured    |
+| Transport settings | Full generated variant/reference graph | `loader` connection type, filter mode, and filters        | Available    | Not captured    |
+
+These representatives are table-driven tests against the generated descriptors,
+not a claim that every field is implemented. Known scalar families are checked
+by the structural validator; unfamiliar scalar descriptors are reported as
+`unassessed` and require the explicit `{ raw: ... }` form. `raw` preserves a
+bounded caller payload, but it does not add schema, simulation, or native
+authority.
+
 ## Regeneration
 
 The generator verifies the SHA-256 manifest for the checked-in 2.1.17 runtime

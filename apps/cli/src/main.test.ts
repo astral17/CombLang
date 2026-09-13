@@ -284,6 +284,55 @@ const machine = Entity('assembling-machine-3', {
     });
   });
 
+  test('accepts a schema-checked logistics Entity through the selected CLI provider', async () => {
+    const database = structuredClone(syntheticPrototypeDatabase()) as {
+      entities: Array<Record<string, unknown>>;
+    };
+    database.entities.push({
+      key: 'entity:fixture-logistics',
+      name: 'fixture-logistics',
+      type: 'logistic-container',
+      blueprintEligible: true,
+      circuit: {
+        read: false,
+        enableDisable: false,
+        readContents: false,
+        setFilters: false,
+        setRequests: false,
+        setRecipe: false,
+        readRecipe: false,
+        readFinishedCraft: false,
+        outputSignals: false,
+      },
+    });
+    const source = await sourceFile(`const chest = Entity('fixture-logistics', {
+  request_filters: {
+    request_from_buffers: false,
+    trash_not_requested: false,
+    sections: [{
+      active: true,
+      index: 0,
+      group: 'logistics',
+      multiplier: 1,
+      filters: [{ index: 0, name: 'iron-plate', type: 'item', count: 1, request_from: 'all' }],
+    }],
+  },
+}).at(2, 3, 8);`);
+    const profile = await profileFile(JSON.stringify(database));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const exitCode = await run(['check', '--json', '--prototypes', profile, source]);
+    const report = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect({ exitCode, report }).toMatchObject({
+      exitCode: 0,
+      report: {
+        diagnostics: [],
+        producerCount: 0,
+        entityReplayContext: { source: 'provider' },
+      },
+    });
+  });
+
   test('constructs a Lamp facade through the selected CLI provider', async () => {
     const database = structuredClone(syntheticPrototypeDatabase()) as {
       entities: Array<Record<string, unknown>>;
