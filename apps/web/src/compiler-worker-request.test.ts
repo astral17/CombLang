@@ -6,6 +6,7 @@ import {
   type EntityPrototype,
 } from '@comblang/prototypes';
 import { syntheticZeroPortEntityProfile } from '@comblang/compiler/entity-fixtures';
+import { generateEntityBlueprintJson } from '@comblang/compiler/blueprint-json';
 import {
   createTrustedEntityReplayContext,
   entityReplayContextTransport,
@@ -146,6 +147,64 @@ describe('browser compiler Worker prototype profile', () => {
     ]);
   });
 
+  test('preserves raw Entity configuration through imported Worker and warm identity requests', async () => {
+    const runtime = new CompilerWorkerRuntime();
+    const source = {
+      path: 'worker-raw-entity.factorio.ts',
+      text: `const machine = Entity('footprint-less', {
+  raw: {
+    recipe: 'iron-gear-wheel',
+    control_behavior: { read_contents: true, enabled: false },
+    sections: [{ filters: [{ name: 'iron-plate', count: 0 }], active: false }],
+    modded_field: { empty: [], zero: 0, disabled: false },
+  },
+}).at(4, 5, 8);`,
+    };
+    const first = await runtime.handle({
+      kind: 'parse',
+      revision: 15,
+      file: source,
+      prototypeProfile: { source: rawSource, factorioDumpMetadata: rawMetadata },
+    });
+
+    expect(first.result.compilerDiagnostics).toEqual([]);
+    const firstCircuit = first.result.resolvedCircuit;
+    if (firstCircuit === undefined) throw new Error('Expected a Worker resolved source circuit.');
+    expect(firstCircuit.ir.entities[0]?.configuration).toEqual({
+      mode: 'raw',
+      payload: {
+        recipe: 'iron-gear-wheel',
+        control_behavior: { read_contents: true, enabled: false },
+        sections: [{ filters: [{ name: 'iron-plate', count: 0 }], active: false }],
+        modded_field: { empty: [], zero: 0, disabled: false },
+      },
+    });
+    expect(generateEntityBlueprintJson(firstCircuit.ir).blueprint.entities[0]).toMatchObject({
+      recipe: 'iron-gear-wheel',
+      control_behavior: { read_contents: true, enabled: false },
+      sections: [{ filters: [{ name: 'iron-plate', count: 0 }], active: false }],
+      modded_field: { empty: [], zero: 0, disabled: false },
+      entity_number: 1,
+      name: 'footprint-less',
+      position: { x: 4, y: 5 },
+      direction: 8,
+    });
+    expect(JSON.stringify(first.result)).not.toMatch(/profiles|resolver|prototypeProvider/);
+    expect(structuredClone(first)).toEqual(first);
+
+    const warm = await runtime.handle({
+      kind: 'parse',
+      revision: 16,
+      file: source,
+      prototypeProfile: { identity: first.prototypeEnvironment!.identity },
+    });
+    expect(warm.result.compilerDiagnostics).toEqual([]);
+    expect(warm.result.resolvedCircuit?.ir.entities[0]?.configuration).toEqual(
+      firstCircuit.ir.entities[0]?.configuration,
+    );
+    expect(structuredClone(warm)).toEqual(warm);
+  });
+
   test('provisions built-in Entity profiles only after the Worker loads the provider', async () => {
     const generated = await generatePrototypeAsset(rawSource, rawMetadata);
     const runtime = new CompilerWorkerRuntime();
@@ -154,7 +213,7 @@ describe('browser compiler Worker prototype profile', () => {
       revision: 20,
       file: {
         path: 'builtin-entity.factorio.ts',
-        text: `const short = Entity('footprint-less');
+        text: `const short = Entity('footprint-less', { raw: { recipe: 'iron-gear-wheel' } });
 const canonical = Entity('entity:footprint-less');
 short.at(1, 2);`,
       },
@@ -176,6 +235,7 @@ short.at(1, 2);`,
             database: { identity: generated.manifest.databaseIdentity },
           },
           placement: { x: 1, y: 2 },
+          configuration: { mode: 'raw', payload: { recipe: 'iron-gear-wheel' } },
         },
         { profile: { prototypeKey: 'entity:footprint-less' } },
       ],

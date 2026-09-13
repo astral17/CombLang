@@ -791,17 +791,33 @@ describe('physical Entity preview vertical slice', () => {
     ).toHaveLength(1);
   });
 
-  test('rejects raw configuration at preview instead of dropping it', () => {
+  test('emits raw configuration at preview instead of dropping it', () => {
     const { plan, context } = fixture();
     const configured = {
       ...plan,
-      entities: [{ ...entity(), configuration: { mode: 'raw' as const, payload: {} } }],
+      entities: [
+        {
+          ...entity(),
+          configuration: {
+            mode: 'raw' as const,
+            payload: { recipe: 'iron-gear-wheel', control_behavior: { read_contents: true } },
+          },
+        },
+      ],
     };
     const execution = elaborateEntityDirectPlan(configured, context);
-    expect(execution.entity(1).configuration).toEqual({ mode: 'raw', payload: {} });
-    expect(() => generateEntityBlueprintJson(execution.circuit.ir)).toThrow(
-      /configuration.*unsupported/,
-    );
+    expect(execution.entity(1).configuration).toEqual({
+      mode: 'raw',
+      payload: { recipe: 'iron-gear-wheel', control_behavior: { read_contents: true } },
+    });
+    expect(generateEntityBlueprintJson(execution.circuit.ir).blueprint.entities[1]).toMatchObject({
+      recipe: 'iron-gear-wheel',
+      control_behavior: { read_contents: true },
+      entity_number: 2,
+      name: 'synthetic-zero-port',
+      position: { x: 2.5, y: 0.5 },
+      direction: 4,
+    });
   });
 
   test('accepts deprecated opaque typed v3 configuration until preview and rejects it explicitly', () => {

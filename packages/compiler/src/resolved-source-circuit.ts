@@ -5,7 +5,11 @@ import {
   canonicalizeEntityNativeSingleCondition,
   EntityConfigurationError,
 } from './entity-configuration.js';
-import { canonicalizeEntityRawJson, EntityRawJsonError } from './entity-raw.js';
+import {
+  canonicalizeEntityRawObject,
+  canonicalizeEntityRawJson,
+  EntityRawJsonError,
+} from './entity-raw.js';
 import type {
   EntityPhysicalConfiguration,
   EntityPhysicalRecord,
@@ -543,10 +547,12 @@ function physicalConfiguration(value: unknown, path: string): EntityPhysicalConf
   if (record.mode === 'raw') {
     exactKeys(record, ['mode', 'payload'], path);
     try {
-      return Object.freeze({ mode: 'raw', payload: canonicalizeEntityRawJson(record.payload) });
+      return Object.freeze({
+        mode: 'raw',
+        payload: canonicalizeEntityRawObject(record.payload, undefined, `${path}.payload`),
+      });
     } catch (error) {
-      if (error instanceof EntityRawJsonError)
-        invalid(`${path}${error.path.slice(1)}`, error.message);
+      if (error instanceof EntityRawJsonError) invalid(error.path, error.detail);
       throw error;
     }
   }

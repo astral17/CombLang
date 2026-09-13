@@ -14,7 +14,11 @@ import type {
   EntityRawConfiguration,
   EntityTypedConfiguration,
 } from './entity.js';
-import { canonicalizeEntityRawJson, EntityRawJsonError } from './entity-raw.js';
+import {
+  canonicalizeEntityRawJson,
+  canonicalizeEntityRawObject,
+  EntityRawJsonError,
+} from './entity-raw.js';
 
 type DataRecord = Record<string, unknown>;
 
@@ -280,12 +284,11 @@ function rawConfiguration(record: DataRecord, path: string): EntityRawConfigurat
   try {
     return Object.freeze({
       mode: 'raw',
-      payload: canonicalizeEntityRawJson(record.payload),
+      payload: canonicalizeEntityRawObject(record.payload, undefined, `${path}.payload`),
     });
   } catch (error) {
     if (error instanceof EntityRawJsonError) {
-      const suffix = error.path === '$' ? '' : error.path.slice(1);
-      invalid('EC1001', `${path}.payload${suffix}`, error.message);
+      invalid('EC1001', error.path, error.detail);
     }
     throw error;
   }

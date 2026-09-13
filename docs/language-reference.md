@@ -76,6 +76,27 @@ required for `port`, `bind`, callable Entities, and typed configuration. An
 omitted `blueprintEligible` fact in legacy normalized input is unknown and does
 not authorize construction.
 
+For an untyped native configuration escape hatch, use exactly one `raw` field:
+
+```ts
+const machine = Entity('assembling-machine-3', {
+  raw: {
+    recipe: 'iron-gear-wheel',
+    control_behavior: { read_contents: true },
+  },
+});
+```
+
+`raw` must be a plain JSON object. The runtime copies and freezes it with bounds
+of 32 levels, 4096 nodes, and 262144 UTF-8 bytes. Accessors, symbols, cycles,
+non-finite numbers, root arrays, and scalar roots are rejected. The outer
+configuration cannot mix `raw` with the typed `rule`/`lanes`/`condition` form.
+Compiler-owned BlueprintEntity fields (`entity_id`, `entity_number`, `name`,
+`prototype`, `position`, `placement`, `direction`, `connections`, `connectors`,
+and `wires`) are rejected. Other fields are preserved for blueprint preview,
+but are not checked against Factorio and do not add connectors, call authority,
+or simulation behavior; Entity objects remain inert/Unknown.
+
 The accepted typed configuration and placement subset is:
 
 ```ts
@@ -128,7 +149,7 @@ output endpoint, so the inline form creates one physical Entity and no hidden
 Producer, Network, or tick. Identical repeat bindings are idempotent; conflicts,
 stale handles, profiles without a call projection, and invalid destinations are
 source-aware errors. Ordinary objects and structural lookalikes keep normal
-JavaScript call behavior. Typed facades and raw native payloads are also
+JavaScript call behavior. Typed facades and reviewed native import remain
 outside the current language surface.
 
 The browser Worker request transports only replay identity metadata. Source

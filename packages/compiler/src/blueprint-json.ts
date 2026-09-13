@@ -6,12 +6,14 @@ import {
   canonicalizeEntityNativeSingleCondition,
   EntityConfigurationError,
 } from './entity-configuration.js';
+import { canonicalizeEntityRawObject, EntityRawJsonError } from './entity-raw.js';
 import type {
   EntityBehaviorKey,
   EntityConnectorKey,
   EntityFeatureKey,
   EntityLaneKey,
   EntityNativeField,
+  EntityRawJsonObject,
   EntityPhysicalRecord,
   EntityPhysicalTypedConfiguration,
   NativeCircuitIrV3,
@@ -285,6 +287,7 @@ function generatePreview(
   const ids = new Set<string>();
   const ordinals = new Set<number>();
   const typedConfigurations = new Map<string, EntityPhysicalTypedConfiguration>();
+  const rawConfigurations = new Map<string, EntityRawJsonObject>();
   for (const [index, entity] of sortedEntities.entries()) {
     const fail = (message: string): never => {
       throw new BlueprintJsonError(message, entity.provenance.source);
@@ -295,13 +298,28 @@ function generatePreview(
     ordinals.add(entity.ordinal);
     if (entity.configuration !== undefined) {
       const configuration = dataRecord(entity.configuration, '$.configuration', fail);
-      if (configuration.mode === 'raw')
-        fail('Raw Entity configuration preview lowering is unsupported.');
-      if (configuration.mode !== 'typed')
-        fail('$.configuration.mode: unsupported configuration mode.');
-      if ('payload' in configuration)
-        fail('Raw/typed Entity configuration preview lowering is unsupported.');
-      typedConfigurations.set(entity.id, validateEntityTypedConfiguration(configuration, fail));
+      if (configuration.mode === 'raw') {
+        exactKeys(configuration, ['mode', 'payload'], '$.configuration', fail);
+        try {
+          rawConfigurations.set(
+            entity.id,
+            canonicalizeEntityRawObject(
+              configuration.payload,
+              undefined,
+              '$.configuration.payload',
+            ),
+          );
+        } catch (error) {
+          if (error instanceof EntityRawJsonError) fail(error.message);
+          throw error;
+        }
+      } else {
+        if (configuration.mode !== 'typed')
+          fail('$.configuration.mode: unsupported configuration mode.');
+        if ('payload' in configuration)
+          fail('Raw/typed Entity configuration preview lowering is unsupported.');
+        typedConfigurations.set(entity.id, validateEntityTypedConfiguration(configuration, fail));
+      }
     }
     if (
       !/^[^:\s]+$/.test(entity.prototypeName) ||
@@ -356,6 +374,7 @@ function generatePreview(
   let automaticIndex = ir.producers.length;
   for (const [index, entity] of sortedEntities.entries()) {
     const typedConfiguration = typedConfigurations.get(entity.id);
+    const rawConfiguration = rawConfigurations.get(entity.id);
     let position = entity.placement
       ? { x: entity.placement.x, y: entity.placement.y }
       : { x: automaticIndex * 2 + 0.5, y: 0.5 };
@@ -366,6 +385,7 @@ function generatePreview(
     }
     occupied.add(JSON.stringify(position));
     entities.push({
+      ...(rawConfiguration ?? {}),
       entity_number: ir.producers.length + index + 1,
       name: entity.prototypeName,
       ...(typedConfiguration !== undefined

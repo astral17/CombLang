@@ -71,10 +71,27 @@ describe('typed Entity configuration boundary', () => {
 
   test('keeps raw and opaque v3 configurations separate from typed fields', () => {
     const raw = canonicalizeEntityConfiguration(
-      { mode: 'raw', payload: { enabled: false } },
+      { mode: 'raw', payload: { recipe: 'iron-gear-wheel', enabled: false } },
       syntheticSharedTwoColorEntityProfile,
     );
-    expect(raw).toEqual({ mode: 'raw', payload: { enabled: false } });
+    expect(raw).toEqual({
+      mode: 'raw',
+      payload: { recipe: 'iron-gear-wheel', enabled: false },
+    });
+
+    expect(() =>
+      canonicalizeEntityConfiguration(
+        { mode: 'raw', payload: { entity_number: 1 } },
+        syntheticSharedTwoColorEntityProfile,
+      ),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'EC1001',
+        path: '$.payload.entity_number',
+        message:
+          '$.payload.entity_number: compiler-owned BlueprintEntity fields must stay separate.',
+      }),
+    );
 
     const opaque = canonicalizeEntityConfiguration(
       { mode: 'typed', payload: { legacy: true } },

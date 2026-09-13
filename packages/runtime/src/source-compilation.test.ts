@@ -8,6 +8,7 @@ import { sourceFileId, sourceSpan, type Diagnostic } from '@comblang/shared';
 import { SparseBus } from '@comblang/factorio';
 import { generateEntityBlueprintJson } from '@comblang/compiler/blueprint-json';
 import type { EntityProfile } from '@comblang/compiler/entity';
+import { resolvedSourceCircuitPlanFingerprint } from '@comblang/compiler/resolved-source-circuit';
 import {
   syntheticSharedTwoColorEntityProfile,
   syntheticZeroPortEntityProfile,
@@ -635,6 +636,153 @@ selected.bind('shared', 'shared-red', input, 'input');`,
     );
     expect(replay.circuit.ir.entities).toEqual(execution.circuit.ir.entities);
     expect(replay.circuit.ir.networks).toEqual(execution.circuit.ir.networks);
+  });
+
+  test('carries bounded raw Entity configuration through plan, IR, and blueprint output', () => {
+    const host = syntheticEntityHost(syntheticZeroPortEntityProfile);
+    const compilation = compileSourceProgram(
+      {
+        path: 'entity-raw-configuration.factorio.ts',
+        text: `const machine = Entity('entity:synthetic-zero-port', {
+  raw: {
+    recipe: 'iron-gear-wheel',
+    quality: 'normal',
+    control_behavior: { read_contents: true, enabled: false },
+    sections: [{ filters: [{ name: 'iron-plate', count: 0 }], active: false }],
+    modded_field: { empty: [], zero: 0, disabled: false },
+  },
+}).at(10.5, -2, 8);`,
+      },
+      host,
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    const resolvedCircuit = compilation.resolvedCircuit;
+    const execution = compilation.execution;
+    if (
+      plan === undefined ||
+      plan.version !== 3 ||
+      resolvedCircuit === undefined ||
+      execution === undefined ||
+      !('entityObject' in execution)
+    ) {
+      throw new Error('Expected a raw Entity v3 compilation.');
+    }
+    const expectedRaw = {
+      recipe: 'iron-gear-wheel',
+      quality: 'normal',
+      control_behavior: { read_contents: true, enabled: false },
+      sections: [{ filters: [{ name: 'iron-plate', count: 0 }], active: false }],
+      modded_field: { empty: [], zero: 0, disabled: false },
+    };
+    expect(plan.entities[0]?.configuration).toEqual({ mode: 'raw', payload: expectedRaw });
+    expect(structuredClone(plan)).toEqual(plan);
+    expect(resolvedCircuit.ir.entities[0]?.configuration).toEqual({
+      mode: 'raw',
+      payload: expectedRaw,
+    });
+    expect(structuredClone(resolvedCircuit)).toEqual(resolvedCircuit);
+    expect(resolvedCircuit.planFingerprint).toBe(resolvedSourceCircuitPlanFingerprint(plan));
+
+    const blueprint = generateEntityBlueprintJson(resolvedCircuit.ir).blueprint;
+    expect(blueprint.entities).toHaveLength(1);
+    expect(blueprint.entities[0]).toEqual({
+      ...expectedRaw,
+      entity_number: 1,
+      name: 'synthetic-zero-port',
+      position: { x: 10.5, y: -2 },
+      direction: 8,
+    });
+
+    const collision = structuredClone(resolvedCircuit.ir) as any;
+    collision.entities[0].configuration.payload.name = 'spoofed-name';
+    expect(() => generateEntityBlueprintJson(collision)).toThrowError(
+      expect.objectContaining({ code: 'BP1001', span: expect.any(Object) }),
+    );
+    const extraConfigurationField = structuredClone(resolvedCircuit.ir) as any;
+    extraConfigurationField.entities[0].configuration.extra = true;
+    expect(() => generateEntityBlueprintJson(extraConfigurationField)).toThrowError(
+      expect.objectContaining({
+        code: 'BP1001',
+        message: expect.stringContaining('$.configuration.extra'),
+        span: expect.any(Object),
+      }),
+    );
+    expect(execution.entityObject(execution.createTestSession(), 1)).toMatchObject({
+      adapterId: 'entity-physical-v3',
+      connectors: [],
+    });
+  });
+
+  test.each([
+    {
+      name: 'missing raw value',
+      source: `Entity('entity:synthetic-zero-port', {});`,
+      message: 'Entity configuration requires exactly rule, lanes, and condition.',
+    },
+    {
+      name: 'mixed raw and typed fields',
+      source: `Entity('entity:synthetic-zero-port', { raw: {}, rule: 'ignored' });`,
+      message: 'Entity raw configuration cannot be mixed with typed configuration fields.',
+    },
+    {
+      name: 'accessor',
+      source: `const raw = {};
+Object.defineProperty(raw, 'recipe', { enumerable: true, get() { throw new Error('accessor evaluated'); } });
+Entity('entity:synthetic-zero-port', { raw });`,
+      message: '$.raw.recipe: accessors are not allowed in raw JSON.',
+    },
+    {
+      name: 'symbol',
+      source: `const raw = {};
+raw[Symbol('extra')] = true;
+Entity('entity:synthetic-zero-port', { raw });`,
+      message: '$.raw[Symbol(extra)]: symbol keys are not allowed.',
+    },
+    {
+      name: 'array',
+      source: `Entity('entity:synthetic-zero-port', { raw: [] });`,
+      message: '$.raw: raw Entity configuration must be a JSON object.',
+    },
+    {
+      name: 'scalar',
+      source: `Entity('entity:synthetic-zero-port', { raw: 1 });`,
+      message: '$.raw: raw Entity configuration must be a JSON object.',
+    },
+    {
+      name: 'cycle',
+      source: `const raw = {};
+raw.self = raw;
+Entity('entity:synthetic-zero-port', { raw });`,
+      message: '$.raw.self: cycles are not allowed.',
+    },
+    {
+      name: 'byte limit',
+      source: `const raw = { value: 'x'.repeat(262200) };
+Entity('entity:synthetic-zero-port', { raw });`,
+      message: 'raw JSON exceeds the byte limit of 262144.',
+    },
+    {
+      name: 'compiler-owned field',
+      source: `Entity('entity:synthetic-zero-port', { raw: { name: 'spoofed-name' } });`,
+      message: '$.raw.name: compiler-owned BlueprintEntity fields must stay separate.',
+    },
+  ])('rejects malformed public raw Entity configuration: $name', ({ source, message }) => {
+    const host = syntheticEntityHost(syntheticZeroPortEntityProfile);
+    const compilation = compileSourceProgram(
+      { path: 'entity-raw-configuration-invalid.factorio.ts', text: source },
+      host,
+    );
+
+    expect(compilation.plan).toBeUndefined();
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'RT2027',
+        message: expect.stringContaining(message),
+        span: expect.any(Object),
+      }),
+    ]);
   });
 
   test.each([

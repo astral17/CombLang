@@ -12,14 +12,32 @@ export type EntityRawJsonErrorCode = 'ERAW1000' | 'ERAW1001' | 'ERAW1002' | 'ERA
 export class EntityRawJsonError extends Error {
   readonly code: EntityRawJsonErrorCode;
   readonly path: string;
+  readonly detail: string;
 
   constructor(code: EntityRawJsonErrorCode, path: string, message: string) {
     super(`${path}: ${message}`);
     this.name = 'EntityRawJsonError';
     this.code = code;
     this.path = path;
+    this.detail = message;
   }
 }
+
+/** BlueprintEntity fields whose values belong to the compiler, not raw config. */
+export const entityRawCompilerOwnedKeys = Object.freeze([
+  'entity_id',
+  'entity_number',
+  'name',
+  'prototype',
+  'position',
+  'placement',
+  'direction',
+  'connections',
+  'connectors',
+  'wires',
+] as const);
+
+const entityRawCompilerOwnedKeySet = new Set<string>(entityRawCompilerOwnedKeys);
 
 function invalid(code: EntityRawJsonErrorCode, path: string, message: string): never {
   throw new EntityRawJsonError(code, path, message);
@@ -167,13 +185,36 @@ function deepFreeze<T>(value: T): T {
 export function canonicalizeEntityRawJson(
   value: unknown,
   configuration: EntityRawJsonLimits = entityRawJsonLimits,
+  path = '$',
 ): EntityRawJson {
-  const canonical = walk(value, '$', 0, { seen: new WeakSet(), nodes: 0 }, limits(configuration));
+  const canonical = walk(value, path, 0, { seen: new WeakSet(), nodes: 0 }, limits(configuration));
   const bytes = new TextEncoder().encode(JSON.stringify(canonical)).byteLength;
   if (bytes > configuration.maxBytes) {
-    invalid('ERAW1002', '$', `raw JSON exceeds the byte limit of ${configuration.maxBytes}.`);
+    invalid('ERAW1002', path, `raw JSON exceeds the byte limit of ${configuration.maxBytes}.`);
   }
   return deepFreeze(canonical);
+}
+
+/** Canonicalizes one top-level BlueprintEntity field object and rejects compiler-owned keys. */
+export function canonicalizeEntityRawObject(
+  value: unknown,
+  configuration: EntityRawJsonLimits = entityRawJsonLimits,
+  path = '$',
+): EntityRawJsonObject {
+  const canonical = canonicalizeEntityRawJson(value, configuration, path);
+  if (canonical === null || typeof canonical !== 'object' || Array.isArray(canonical)) {
+    invalid('ERAW1001', path, 'raw Entity configuration must be a JSON object.');
+  }
+  for (const key of Object.keys(canonical)) {
+    if (entityRawCompilerOwnedKeySet.has(key)) {
+      invalid(
+        'ERAW1003',
+        `${path}.${key}`,
+        'compiler-owned BlueprintEntity fields must stay separate.',
+      );
+    }
+  }
+  return canonical as EntityRawJsonObject;
 }
 
 function stableText(value: unknown, path: string): string {
@@ -215,16 +256,6 @@ function placement(value: unknown, path: string): EntityPlacement {
   };
 }
 
-const compilerOwnedNativeKeys = new Set([
-  'entity_id',
-  'entity_number',
-  'position',
-  'placement',
-  'connections',
-  'connectors',
-  'wires',
-]);
-
 /** Separates compiler-owned topology fields from an otherwise lossless native JSON payload. */
 export function canonicalizeEntityRawPayload(
   value: unknown,
@@ -237,15 +268,7 @@ export function canonicalizeEntityRawPayload(
       invalid('ERAW1000', `$.${key}`, 'unknown raw Entity field.');
     }
   }
-  const native = canonicalizeEntityRawJson(record.native, configuration);
-  if (native === null || typeof native !== 'object' || Array.isArray(native)) {
-    invalid('ERAW1001', '$.native', 'native payload must be a JSON record.');
-  }
-  for (const key of Object.keys(native)) {
-    if (compilerOwnedNativeKeys.has(key)) {
-      invalid('ERAW1003', `$.native.${key}`, 'compiler-owned topology fields must stay separate.');
-    }
-  }
+  const native = canonicalizeEntityRawObject(record.native, configuration, '$.native');
   return deepFreeze({
     prototype: stableText(record.prototype, '$.prototype'),
     native: native as EntityRawJsonObject,

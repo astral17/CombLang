@@ -31,6 +31,7 @@ import type {
   PlanArithmeticOperand,
   PlanDeciderCondition,
 } from '@comblang/compiler/direct-plan-schema';
+import { canonicalizeEntityRawObject, EntityRawJsonError } from '@comblang/compiler/entity-raw';
 import type { EntityPrototype, PrototypeProvider } from '@comblang/prototypes';
 import type { Diagnostic, NetworkId, SourceFileId, SourceSpan } from '@comblang/shared';
 
@@ -3113,7 +3114,7 @@ class ElaborationRecorder {
       );
     }
     const record = Object.create(null) as Record<string, unknown>;
-    const allowed = new Set(['rule', 'lanes', 'condition']);
+    const allowed = new Set(['raw', 'rule', 'lanes', 'condition']);
     for (const key of Reflect.ownKeys(value)) {
       if (typeof key !== 'string') {
         throw new ElaborationExecutionError(
@@ -3138,6 +3139,28 @@ class ElaborationRecorder {
         );
       }
       record[key] = descriptor.value;
+    }
+    if ('raw' in record) {
+      if (Object.keys(record).length !== 1) {
+        throw new ElaborationExecutionError(
+          'Entity raw configuration cannot be mixed with typed configuration fields.',
+          source,
+          'RT2027',
+        );
+      }
+      try {
+        return {
+          mode: 'raw',
+          payload: canonicalizeEntityRawObject(record.raw, undefined, '$.raw'),
+        };
+      } catch (error) {
+        if (error instanceof EntityRawJsonError) {
+          throw new ElaborationExecutionError(error.message, source, 'RT2027', undefined, {
+            cause: error,
+          });
+        }
+        throw error;
+      }
     }
     if (!('rule' in record) || !('lanes' in record) || !('condition' in record)) {
       throw new ElaborationExecutionError(

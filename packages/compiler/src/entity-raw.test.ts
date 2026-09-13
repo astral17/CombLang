@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 
 import {
   canonicalizeEntityRawJson,
+  canonicalizeEntityRawObject,
   canonicalizeEntityRawPayload,
   EntityRawJsonError,
 } from './entity-raw.js';
@@ -22,14 +23,14 @@ describe('strict raw Entity payload', () => {
     const input = {
       prototype: 'synthetic-entity',
       native: JSON.parse(
-        '{"name":"synthetic-entity","__proto__":{"polluted":true},"enabled":false,"optional":null}',
+        '{"recipe":"iron-gear-wheel","__proto__":{"polluted":true},"enabled":false,"optional":null}',
       ),
       placement: { x: 0, y: 1, direction: 2 },
       entityNumber: 7,
     };
     const payload = canonicalizeEntityRawPayload(input, entityRawJsonLimits);
 
-    expect(Object.keys(payload.native)).toEqual(['name', '__proto__', 'enabled', 'optional']);
+    expect(Object.keys(payload.native)).toEqual(['recipe', '__proto__', 'enabled', 'optional']);
     expect(payload.native['__proto__']).toEqual({ polluted: true });
     expect(Object.prototype).not.toHaveProperty('polluted');
     expect(payload.native.enabled).toBe(false);
@@ -114,14 +115,30 @@ describe('strict raw Entity payload', () => {
       ),
     ).toMatchObject({ code: 'ERAW1002', path: '$' });
 
-    expect(
-      errorOf(() =>
-        canonicalizeEntityRawPayload(
-          { prototype: 'synthetic-entity', native: { entity_number: 1 } },
-          entityRawJsonLimits,
+    for (const key of [
+      'entity_id',
+      'entity_number',
+      'name',
+      'prototype',
+      'position',
+      'placement',
+      'direction',
+      'connections',
+      'connectors',
+      'wires',
+    ]) {
+      expect(
+        errorOf(() => canonicalizeEntityRawObject({ [key]: 1 }, entityRawJsonLimits)),
+      ).toMatchObject({ code: 'ERAW1003', path: `$.${key}` });
+      expect(
+        errorOf(() =>
+          canonicalizeEntityRawPayload(
+            { prototype: 'synthetic-entity', native: { [key]: 1 } },
+            entityRawJsonLimits,
+          ),
         ),
-      ),
-    ).toMatchObject({ code: 'ERAW1003', path: '$.native.entity_number' });
+      ).toMatchObject({ code: 'ERAW1003', path: `$.native.${key}` });
+    }
     expect(
       errorOf(() =>
         canonicalizeEntityRawPayload(

@@ -176,7 +176,7 @@ export interface EntityRawPayload {
 
 export interface EntityRawConfiguration {
   readonly mode: 'raw';
-  readonly payload: EntityRawJson;
+  readonly payload: EntityRawJsonObject;
 }
 
 /** @deprecated Compatibility-only opaque v3 configuration; it has no typed capability authority. */

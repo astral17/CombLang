@@ -38,8 +38,11 @@ public two-argument form translates exact `{ rule, lanes, condition }` data and
 the nominal `NativeCondition(...)` helper into the existing synthetic-only typed
 `control_behavior.circuit_condition` subset; `.at(...)` replaces placement on
 the same physical record. Both operations preserve one Entity identity and
-create no hidden Producer, Network, Decider, or tick. Typed facades, raw native
-import, and verified native import behavior remain pending; see [Entity v3](entity-v3.md).
+create no hidden Producer, Network, Decider, or tick. The same boundary accepts
+one bounded, profile-free `{ raw }` BlueprintEntity configuration, preserving
+unknown native fields without asserting native validity or simulation behavior.
+Typed facades, raw native import, and verified native import behavior remain
+pending; see [Entity v3](entity-v3.md).
 The default website and ordinary CLI now provision a conservative, provider-
 bound zero-port fallback profile only for Entity records whose normalized
 `blueprintEligible: true` fact is explicit. Presence in `data.raw`, a familiar

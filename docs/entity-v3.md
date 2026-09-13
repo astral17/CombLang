@@ -161,6 +161,33 @@ that detached comparison directly onto the Entity's declared native field,
 without a Decider combinator or a tick. The synthetic example proves the
 compiler path only; it is not native Factorio conformance evidence.
 
+The untyped native escape hatch is a separate public form:
+
+```ts
+const machine = Entity('assembling-machine-3', {
+  raw: {
+    recipe: 'iron-gear-wheel',
+    control_behavior: { read_contents: true },
+  },
+});
+```
+
+The outer object must contain exactly `raw`; it cannot mix `raw` with `rule`,
+`lanes`, or `condition`. `raw` must be a plain JSON object and is copied into a
+frozen, profile-free Entity configuration. The bounded canonicalizer permits at
+most 32 nesting levels, 4096 JSON nodes, and 262144 UTF-8 bytes. It rejects
+accessors, symbols, cycles, non-finite numbers, arrays as the root, and scalar
+roots at the source argument span.
+
+The raw object maps to fields of one output `BlueprintEntity`. The compiler owns
+`entity_id`, `entity_number`, `name`, `prototype`, `position`, `placement`,
+`direction`, `connections`, `connectors`, and `wires`; those keys are rejected
+with source-aware `RT2027` during source construction and `BP1001` at the
+profile-free preview boundary. Other keys, including nested control behavior,
+recipes, qualities, sections, filters, false/zero/empty values, and modded keys,
+are preserved without validation against Factorio and without granting connector
+or callable authority. Entity simulation remains inert/Unknown.
+
 `Entity` is a reserved direct DSL value. Its first argument is either a short
 prototype name (the preferred spelling) or canonical key resolved by the host
 resolver, or the exact
@@ -181,8 +208,8 @@ injectable host callback remains available for explicitly host-bound contexts.
 The main-thread preview consumes the resolved physical snapshot returned by a
 successful Worker compilation and does not require the host resolver again.
 
-`Entity(prototype)` also accepts one public configuration object with exactly
-`rule`, `lanes`, and `condition` fields. The condition must be the nominal
+`Entity(prototype)` also accepts one public configuration object. The typed form
+has exactly `rule`, `lanes`, and `condition` fields. The condition must be the nominal
 `NativeCondition(signal, comparator, constant)` value created in the same
 execution session; the runtime translates it to the existing typed
 `control_behavior.circuit_condition` configuration before profile validation.
@@ -198,7 +225,7 @@ physical Entity to the declared output endpoint; the inline
 bindings and no hidden topology. Repeated identical bindings are idempotent;
 conflicts, stale handles, non-callable profiles, and invalid destinations fail
 with source-aware diagnostics. Ordinary objects and structural Entity lookalikes
-retain ordinary JavaScript call behavior. Typed facades, raw native payloads,
+retain ordinary JavaScript call behavior. Typed facades, reviewed native import,
 and native Factorio behavior remain separate future work.
 
 ## Internal construction and validation
@@ -218,10 +245,13 @@ are rejected. Configuration, placement, source span, dynamic instance path,
 creation revision, and ordinal are snapshotted and frozen. A zero-port Entity
 remains a physical record even when it has no producer.
 
-Raw Entity payloads accept only the native data plus explicit prototype,
-entity-number, and placement fields. Connector maps, bindings, wires, support
-claims, and internal IDs are compiler-owned; topology-shaped fields are
-rejected both at the payload boundary and inside the native object.
+The compatibility raw-payload import seam accepts native data plus explicit
+prototype, entity-number, and placement fields. Connector maps, bindings,
+wires, support claims, and internal IDs are compiler-owned; topology-shaped
+fields are rejected both at that payload boundary and inside the native object.
+The public `{ raw }` form is narrower: it supplies only the native
+`BlueprintEntity` fields and leaves prototype identity and placement to the
+compiler.
 
 [V3 validation](../packages/runtime/src/entity-plan-validation.ts) resolves
 the trusted context and profile before Entity allocation, validates raw JSON,
@@ -265,11 +295,13 @@ ordinal `n` encodes red as `2*n-1` and green as `2*n`. Zero-port Entities remain
 visible. The internal typed subset emits a readable native
 `control_behavior.circuit_condition` on the existing Entity, including the
 resolved concrete Signal, signed int32 constant, Factorio comparator spelling,
-and red/green input mask. Raw configuration remains explicitly rejected at
-preview generation. The deprecated opaque v3 typed envelope is rejected there
-as well. Physical preview validation is profile-free and rejects malformed or
-forged native fields, lane masks, Signals, comparators, and signed int32
-constants with source-aware `BP1001`. Synthetic fixtures establish these
+and red/green input mask. Raw configuration is copied onto the existing Entity
+before compiler-owned `entity_number`, `name`, `position`, and `direction` are
+added; it remains untyped and profile-free. The deprecated opaque v3 typed
+envelope is rejected there as well. Physical preview validation is profile-free
+and rejects malformed or forged native fields, lane masks, Signals, comparators,
+signed int32 constants, and compiler-owned raw keys with source-aware `BP1001`.
+Synthetic fixtures establish these
 internal contracts, not Factorio import compatibility. The producer-only v2
 execution and blueprint paths remain unchanged.
 
@@ -298,14 +330,14 @@ and zero-port Entities have no synthetic output connector.
 
 The remaining implementation boundary covers:
 
-1. raw native payload lowering and native import fixtures;
+1. reviewed raw native import fixtures and Factorio conformance for raw fields;
 2. reviewed non-synthetic evidence and Factorio conformance for the native
    single-comparison condition;
 3. additional typed/generic acceptance beyond the host-bound source subset;
 4. later typed facades and any native-verified claims.
 
-The fallback construction and placement forms documented above are implemented
-for selected built-in and imported providers. Raw payload lowering, broader
+The fallback construction, raw configuration, and placement forms documented
+above are implemented for selected built-in and imported providers. Broader
 typed facades, reviewed connector/configuration profile wiring, and
 native-verified behavior are not implied by this source subset. Without a
 selected provider, ordinary circuit-only compilation remains unchanged and
