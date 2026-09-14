@@ -6,8 +6,12 @@ import {
 } from '@comblang/prototypes';
 import { sourceFileId, sourceSpan, type Diagnostic } from '@comblang/shared';
 import { SparseBus } from '@comblang/factorio';
-import { generateEntityBlueprintJson } from '@comblang/compiler/blueprint-json';
-import type { EntityProfile } from '@comblang/compiler/entity';
+import {
+  generateEntityBlueprintJson,
+  generateEntityComputationBlueprintJson,
+} from '@comblang/compiler/blueprint-json';
+import type { EntityProfile, NativeCircuitIrV3 } from '@comblang/compiler/entity';
+import type { NativeCircuitIrV4 } from '@comblang/compiler/entity-v4';
 import { resolvedSourceCircuitPlanFingerprint } from '@comblang/compiler/resolved-source-circuit';
 import {
   syntheticSharedTwoColorEntityProfile,
@@ -332,7 +336,9 @@ const generic = Entity('small-lamp', configuration).at(4, 5, 8);`,
     expect(
       document.scopes.flatMap((scope) => ('entities' in scope ? scope.entities : [])),
     ).toHaveLength(2);
-    const blueprint = generateEntityBlueprintJson(execution.circuit.ir).blueprint;
+    const blueprint = generateEntityBlueprintJson(
+      execution.circuit.ir as NativeCircuitIrV3,
+    ).blueprint;
     expect(blueprint.entities).toHaveLength(2);
     expect({ ...blueprint.entities[0], entity_number: 0 }).toEqual({
       ...blueprint.entities[1],
@@ -671,7 +677,7 @@ const generic = Entity('roboport', selectConfiguration()).at(4, 5, 8);`;
     expect(
       document.scopes.flatMap((scope) => ('entities' in scope ? scope.entities : [])),
     ).toHaveLength(2);
-    const blueprint = generateEntityBlueprintJson(resolved.ir).blueprint;
+    const blueprint = generateEntityBlueprintJson(resolved.ir as NativeCircuitIrV3).blueprint;
     expect(blueprint.entities).toHaveLength(2);
     expect({ ...blueprint.entities[0], entity_number: 0 }).toEqual({
       ...blueprint.entities[1],
@@ -959,7 +965,7 @@ if (order !== 'pc') throw new Error('Constant arguments were not evaluated once 
     {
       name: 'foreign prototype record',
       source: `Constant({ key: 'entity:constant-combinator', name: 'constant-combinator', type: 'constant-combinator' });`,
-      message: 'foreign or not owned by the selected host provider',
+      message: '$.configuration.key',
     },
   ])('rejects Constant with a $name', async ({ source, message }) => {
     const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
@@ -1001,8 +1007,9 @@ if (order !== 'pc') throw new Error('Constant arguments were not evaluated once 
 
       expect(compilation.pipelineDiagnostics).toEqual([
         expect.objectContaining({
-          code: 'RT2027',
-          message: 'Constant(prototype, configuration?) requires one or two arguments.',
+          code: 'CL1014',
+          message:
+            'Constant(configuration) or Constant(prototype, configuration?) requires one or two arguments.',
           span: {
             fileId: 'file:constant-entity-arity.factorio.ts',
             start: 0,
@@ -1136,7 +1143,7 @@ if (order !== 'pc') throw new Error('Constant arguments were not evaluated once 
     });
   });
 
-  test('keeps Constant and CC in separate Entity and Combinator categories', async () => {
+  test('unifies Constant and CC over two physical constant-combinator Entities', async () => {
     const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
     const provisioned = new EntityProvisioningService().provision(
       prototypes,
@@ -1167,28 +1174,32 @@ output += CC(2 * A);`,
     const execution = compilation.execution;
     if (
       plan === undefined ||
-      plan.version !== 3 ||
+      plan.version !== 4 ||
       resolved === undefined ||
       execution === undefined
     ) {
-      throw new Error('Expected Constant and CC v3 artifacts.');
+      throw new Error('Expected Constant and CC v4 artifacts.');
     }
-    expect(plan.entities).toHaveLength(1);
+    expect(plan.entities).toHaveLength(2);
     expect(plan.entities[0]?.profile.prototypeKey).toBe('entity:constant-combinator');
     expect(plan.entities[0]?.placement).toEqual({ x: 4, y: 5, direction: 8 });
+    expect(plan.entities[1]?.configuration).toMatchObject({ mode: 'constant' });
     expect(plan.producers).toHaveLength(1);
     expect(plan.producers[0]).toMatchObject({ kind: 'constant' });
     expect(plan.networks).toHaveLength(2);
-    expect(resolved.ir.entities).toHaveLength(1);
+    expect(resolved.format).toBe('comblang-resolved-entity-v4');
+    expect(resolved.ir.entities).toHaveLength(2);
     expect(resolved.ir.producers).toHaveLength(1);
     expect(resolved.ir.producers[0]).toMatchObject({ kind: 'constant' });
-    const blueprint = generateEntityBlueprintJson(resolved.ir).blueprint;
+    const blueprint = generateEntityComputationBlueprintJson(
+      resolved.ir as NativeCircuitIrV4,
+    ).blueprint;
     expect(blueprint.entities).toHaveLength(2);
     expect(blueprint.entities.filter(({ name }) => name === 'constant-combinator')).toHaveLength(2);
     const document = createDebugDocument(execution.debug, execution.circuit.graph);
     expect(
       document.scopes.flatMap((scope) => ('entities' in scope ? scope.entities : [])),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
   });
 
   test.each([
@@ -1278,8 +1289,8 @@ Constant('constant-combinator', { raw: { control_behavior: { is_on: false, secti
       name: 'output attachment',
       source: `const output = new Network();
 output += Constant('constant-combinator');`,
-      message: 'has no callable projection',
-      code: 'RT2027',
+      message: 'Network += requires a combinator producer',
+      code: 'CL1034',
     },
     {
       name: 'call syntax',
@@ -1564,7 +1575,9 @@ const entity = Entity('${prototypeName}').at(5, 6, 8);`,
       expect(resolvedCircuit.ir.entities).toEqual(execution.circuit.ir.entities);
       expect(structuredClone(resolvedCircuit)).toEqual(resolvedCircuit);
 
-      const blueprint = generateEntityBlueprintJson(execution.circuit.ir).blueprint;
+      const blueprint = generateEntityBlueprintJson(
+        execution.circuit.ir as NativeCircuitIrV3,
+      ).blueprint;
       expect(blueprint.entities).toEqual([
         expect.objectContaining({
           entity_number: 1,
@@ -1846,7 +1859,9 @@ selected.bind('shared', 'shared-red', input, 'input');`,
       connectors: ['shared'],
     });
 
-    const blueprint = generateEntityBlueprintJson(execution.circuit.ir).blueprint;
+    const blueprint = generateEntityBlueprintJson(
+      execution.circuit.ir as NativeCircuitIrV3,
+    ).blueprint;
     expect(blueprint.entities).toHaveLength(1);
     expect(blueprint.entities[0]).toMatchObject({
       entity_number: 1,
@@ -1917,7 +1932,9 @@ selected.bind('shared', 'shared-red', input, 'input');`,
     expect(structuredClone(resolvedCircuit)).toEqual(resolvedCircuit);
     expect(resolvedCircuit.planFingerprint).toBe(resolvedSourceCircuitPlanFingerprint(plan));
 
-    const blueprint = generateEntityBlueprintJson(resolvedCircuit.ir).blueprint;
+    const blueprint = generateEntityBlueprintJson(
+      resolvedCircuit.ir as NativeCircuitIrV3,
+    ).blueprint;
     expect(blueprint.entities).toHaveLength(1);
     expect(blueprint.entities[0]).toEqual({
       ...expectedRaw,
@@ -1999,7 +2016,9 @@ const raw = Entity('assembling-machine-3', { raw: {
         },
       },
     });
-    const blueprint = generateEntityBlueprintJson(execution.circuit.ir).blueprint;
+    const blueprint = generateEntityBlueprintJson(
+      execution.circuit.ir as NativeCircuitIrV3,
+    ).blueprint;
     expect({ ...blueprint.entities[0], entity_number: 0 }).toEqual({
       ...blueprint.entities[1],
       entity_number: 0,
@@ -2113,7 +2132,7 @@ const trains = Entity('train-stop', {
       ['entity:2', 'entity:transport-belt'],
       ['entity:3', 'entity:train-stop'],
     ]);
-    const blueprint = generateEntityBlueprintJson(resolved.ir).blueprint;
+    const blueprint = generateEntityBlueprintJson(resolved.ir as NativeCircuitIrV3).blueprint;
     expect(blueprint.entities).toHaveLength(3);
     expect(blueprint.entities).toMatchObject([
       {

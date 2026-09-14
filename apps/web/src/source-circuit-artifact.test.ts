@@ -1,9 +1,21 @@
 import { signal } from '@comblang/factorio';
+import { loadPrototypeDatabase } from '@comblang/prototypes';
+import builtinPrototypeDatabase from '../../../packages/prototypes/generated/space-age-2.1.17.json';
 import type { DirectElaborationPlanV3 } from '@comblang/compiler/entity';
+import type { NativeCircuitIrV4 } from '@comblang/compiler/entity-v4';
+import type { ResolvedSourceCircuit } from '@comblang/compiler/resolved-source-circuit';
 import { syntheticSharedTwoColorEntityProfile } from '@comblang/compiler/entity-fixtures';
 import { createTrustedEntityReplayContext } from '@comblang/compiler/entity-replay-context';
+import {
+  generateEntityBlueprintJson,
+  generateEntityComputationBlueprintJson,
+} from '@comblang/compiler/blueprint-json';
 import type { EntityPrototype } from '@comblang/prototypes';
 import type { EntityPrototypeResolver } from '@comblang/runtime/entity-registry';
+import {
+  conservativeEntityProvisioningPolicy,
+  EntityProvisioningService,
+} from '@comblang/runtime/entity-provisioning';
 import { describe, expect, test } from 'vitest';
 
 import { blueprintJsonForArtifact, blueprintJsonForPlan } from './blueprint-demo.js';
@@ -15,6 +27,16 @@ import {
   runSourcePlanDemo,
   SourceSimulationController,
 } from './source-demo.js';
+
+function assertResolvedV3(value: unknown): asserts value is ResolvedSourceCircuit {
+  if (
+    value === null ||
+    typeof value !== 'object' ||
+    (value as { readonly format?: unknown }).format !== 'comblang-resolved-source-circuit'
+  ) {
+    throw new Error('Expected a resolved v3 source circuit.');
+  }
+}
 
 describe('source circuit artifact', () => {
   test('requires a correlated resolved circuit for every v3 artifact consumer at compile time', () => {
@@ -28,6 +50,10 @@ describe('source circuit artifact', () => {
       new SourceSimulationController(plan);
       // @ts-expect-error Bare v3 demo convenience must not be callable.
       runSourcePlanDemo(plan);
+      const v4 = {} as NativeCircuitIrV4;
+      // @ts-expect-error v4 linked Constant IR requires the dedicated adapter.
+      generateEntityBlueprintJson(v4);
+      generateEntityComputationBlueprintJson(v4);
     }
     expect(true).toBe(true);
   });
@@ -66,7 +92,7 @@ describe('source circuit artifact', () => {
     const plan = compiled.plan;
     if (plan === undefined || plan.version !== 3) throw new Error('Expected a v3 source plan.');
     const resolvedCircuit = compiled.resolvedCircuit;
-    if (resolvedCircuit === undefined) throw new Error('Expected a resolved v3 source circuit.');
+    assertResolvedV3(resolvedCircuit);
     const artifact = createSourceCircuitArtifact(plan, resolvedCircuit);
     const controller = new SourceSimulationController(artifact);
     const demo = runSourceCircuitDemo(artifact, 0, 0);
@@ -91,6 +117,68 @@ describe('source circuit artifact', () => {
       }),
     ]);
     expect(demo.combinators).toBe(0);
+    expect(controller.timeline).toHaveLength(1);
+  });
+
+  test('hydrates a v4 Constant artifact without provider authority or a duplicate blueprint object', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compiled = compileSource(
+      {
+        path: 'exact-constant-preview.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const exact = Constant({ isOn: false, sections: [{ active: false, filters: [[A, 2], [A, 0]] }] }).at(3.5, -1, 8);
+const output = new Network();
+const alias: Network = output;
+output += exact;`,
+      },
+      {
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+    if (
+      compiled.plan === undefined ||
+      compiled.plan.version !== 4 ||
+      compiled.resolvedCircuit?.format !== 'comblang-resolved-entity-v4'
+    ) {
+      throw new Error('Expected a resolved v4 Constant artifact.');
+    }
+
+    const artifact = createSourceCircuitArtifact(compiled.plan, compiled.resolvedCircuit);
+    const controller = new SourceSimulationController(artifact);
+    const entity = artifact.blueprint.blueprint.entities[0];
+
+    expect(artifact.execution.circuit.ir.version).toBe(4);
+    expect(artifact.execution.debug.scopes).toEqual([
+      { networks: [{ planName: 'output', id: artifact.execution.network('output').id }] },
+    ]);
+    expect(artifact.execution.network('alias')).toBe(artifact.execution.network('output'));
+    expect(artifact.blueprint.blueprint.entities).toHaveLength(1);
+    expect(entity).toMatchObject({
+      entity_number: 1,
+      name: 'constant-combinator',
+      position: { x: 3.5, y: -1 },
+      direction: 8,
+      control_behavior: {
+        is_on: false,
+        sections: {
+          sections: [
+            {
+              index: 1,
+              active: false,
+              filters: [
+                { index: 1, type: 'virtual', name: 'signal-A', quality: 'normal', count: 2 },
+                { index: 2, type: 'virtual', name: 'signal-A', quality: 'normal', count: 0 },
+              ],
+            },
+          ],
+        },
+      },
+    });
     expect(controller.timeline).toHaveLength(1);
   });
 
@@ -139,10 +227,10 @@ output += input + ${bias};`,
     if (
       firstPlan === undefined ||
       firstPlan.version !== 3 ||
-      firstResolved === undefined ||
+      firstResolved?.format !== 'comblang-resolved-source-circuit' ||
       secondPlan === undefined ||
       secondPlan.version !== 3 ||
-      secondResolved === undefined
+      secondResolved?.format !== 'comblang-resolved-source-circuit'
     ) {
       throw new Error('Expected two resolved v3 source compilations.');
     }
@@ -202,7 +290,11 @@ const output: Network = input + 1;`,
     );
     const plan = compiled.plan;
     const resolvedCircuit = compiled.resolvedCircuit;
-    if (plan === undefined || plan.version !== 3 || resolvedCircuit === undefined) {
+    if (
+      plan === undefined ||
+      plan.version !== 3 ||
+      resolvedCircuit?.format !== 'comblang-resolved-source-circuit'
+    ) {
       throw new Error('Expected a resolved mixed v3 source compilation.');
     }
 
@@ -246,7 +338,11 @@ const output: Network = input + 1;`,
     );
     const plan = compiled.plan;
     const resolvedCircuit = compiled.resolvedCircuit;
-    if (plan === undefined || plan.version !== 3 || resolvedCircuit === undefined) {
+    if (
+      plan === undefined ||
+      plan.version !== 3 ||
+      resolvedCircuit?.format !== 'comblang-resolved-source-circuit'
+    ) {
       throw new Error('Expected a resolved Entity source compilation.');
     }
 

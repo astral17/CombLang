@@ -55,10 +55,52 @@ function isPlainObject(value: object): boolean {
   return prototype === Object.prototype || prototype === null;
 }
 
+function assertDataArray(value: unknown, path: string): asserts value is readonly unknown[] {
+  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+    fail(path, 'expected a plain array.');
+  }
+  const length = Object.getOwnPropertyDescriptor(value, 'length')?.value;
+  if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0) {
+    fail(`${path}.length`, 'array length must be a non-negative safe integer.');
+  }
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string')
+      fail(`${path}[${String(key)}]`, 'enumerable symbol keys are not supported.');
+    if (key === 'length') continue;
+    if (!/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= length) {
+      fail(`${path}.${key}`, 'unknown array field.');
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !('value' in descriptor)) {
+      fail(`${path}[${key}]`, 'accessors are not supported.');
+    }
+  }
+  for (let index = 0; index < length; index += 1) {
+    if (Object.getOwnPropertyDescriptor(value, String(index)) === undefined) {
+      fail(`${path}[${index}]`, 'array holes are not supported.');
+    }
+  }
+}
+
+function dataObjectKeys(value: object, path: string): readonly string[] {
+  const keys: string[] = [];
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string')
+      fail(`${path}[${String(key)}]`, 'enumerable symbol keys are not supported.');
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !('value' in descriptor)) {
+      fail(`${path}.${key}`, 'accessors are not supported.');
+    }
+    if (descriptor.enumerable) keys.push(key);
+  }
+  return keys;
+}
+
 /** Normalizes CC source values without sorting, merging, or dropping zero rows. */
 export function normalizeSignalValueSources(
   sources: readonly unknown[],
   context: SignalValueSourceContext,
+  sourcePath = 'args',
 ): readonly SignalCountEntry[] {
   const entries: SignalCountEntry[] = [];
   const active = new Set<object>();
@@ -95,6 +137,7 @@ export function normalizeSignalValueSources(
       return;
     }
     if (Array.isArray(value)) {
+      assertDataArray(value, path);
       const tupleCandidate =
         value.length === 2 && (context.isSignal(value[0]) || typeof value[0] === 'string');
       if (tupleCandidate) {
@@ -120,19 +163,19 @@ export function normalizeSignalValueSources(
       return;
     }
     if (typeof value === 'object' && value !== null && isPlainObject(value)) {
-      const symbols = Object.getOwnPropertySymbols(value).filter(
-        (key) => Object.getOwnPropertyDescriptor(value, key)?.enumerable === true,
-      );
-      if (symbols.length !== 0) fail(path, 'enumerable symbol keys are not supported.');
-      for (const key of Object.keys(value)) {
+      for (const key of dataObjectKeys(value, path)) {
         const entryPath = `${path}.object[${JSON.stringify(key)}]`;
-        append(signalKey(key, `${entryPath}.key`, context), Reflect.get(value, key), entryPath);
+        append(
+          signalKey(key, `${entryPath}.key`, context),
+          (value as Record<string, unknown>)[key],
+          entryPath,
+        );
       }
       return;
     }
     fail(path, 'expected a typed signal count, tuple, array, Map, or plain object.');
   };
 
-  sources.forEach((source, index) => visit(source, `args[${index}]`, 0));
+  sources.forEach((source, index) => visit(source, `${sourcePath}[${index}]`, 0));
   return Object.freeze(entries);
 }

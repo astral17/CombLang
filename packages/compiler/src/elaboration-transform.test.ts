@@ -27,7 +27,7 @@ const condition = NativeCondition(Signal('virtual', 'signal-A'), '>', 0);`,
     expect(code).toContain('__dsl.entityFromPrototype(');
     expect(code).toContain('__dsl.entityFamilyFromPrototype("Lamp",');
     expect(code).toContain('__dsl.entityFamilyFromPrototype("Roboport",');
-    expect(code).toContain('__dsl.entityFamilyFromPrototype("Constant",');
+    expect(code).toContain('__dsl.constantOverload(');
     expect(code).toContain("'entity:assembling-machine-3'");
     expect(code).toContain("'entity:small-lamp'");
     expect(code).toContain('__dsl.invokePrepared(__dsl.prepareMember(objects, "Entity"');
@@ -40,9 +40,7 @@ const condition = NativeCondition(Signal('virtual', 'signal-A'), '>', 0);`,
     expect(code).toContain(
       '__dsl.entityFamilyFromPrototype("Lamp", [...__dsl.spreadCallArguments(',
     );
-    expect(code).toContain(
-      '__dsl.entityFamilyFromPrototype("Constant", [...__dsl.spreadCallArguments(',
-    );
+    expect(code).toContain('__dsl.constantOverload([...__dsl.spreadCallArguments(');
     expect(code).toContain('__dsl.nativeCondition([{ value: __dsl.signal(');
   });
 

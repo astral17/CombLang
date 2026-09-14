@@ -1,6 +1,7 @@
 import { transformElaborationModule } from '@comblang/compiler/elaboration-transform';
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
 import type { DirectElaborationPlanV3 } from '@comblang/compiler/entity';
+import type { DirectElaborationPlanV4 } from '@comblang/compiler/entity-v4';
 import {
   cloneEntityReplayContextTransport,
   entityReplayContextIdentity,
@@ -27,6 +28,7 @@ import {
   type ExecutedDirectPlan,
   type ExecutedEntityDirectPlan,
 } from './direct-plan.js';
+import { tryElaborateEntityV4DirectPlan, type ExecutedEntityDirectPlanV4 } from './entity-v4.js';
 import { executeElaborationProgram, executeElaborationProgramV3 } from './elaboration-program.js';
 import type { EntityPrototypeResolver } from './entity-registry.js';
 import { executionFailureDiagnostic } from './execution-diagnostic.js';
@@ -35,6 +37,7 @@ import {
   snapshotResolvedSourceCircuit,
   type ResolvedSourceCircuit,
 } from '@comblang/compiler/resolved-source-circuit';
+import type { ResolvedEntityV4Circuit } from '@comblang/compiler/resolved-entity-v4';
 
 export interface SourceCompilationEnvironment {
   readonly prototypes?: PrototypeProvider;
@@ -58,14 +61,14 @@ export interface SourceCompilationArtifact extends ParseWorkerResult {
   /** Future result-cache identity; no compilation-result cache consumes it yet. */
   readonly entityReplayIdentity?: string;
   readonly elaborationJavaScript?: string;
-  readonly plan?: DirectElaborationPlan | DirectElaborationPlanV3;
-  /** Detached physical v3 IR; present only after host-authorized lowering succeeds. */
-  readonly resolvedCircuit?: ResolvedSourceCircuit;
+  readonly plan?: DirectElaborationPlan | DirectElaborationPlanV3 | DirectElaborationPlanV4;
+  /** Detached physical v3/v4 IR; present only after host-authorized lowering succeeds. */
+  readonly resolvedCircuit?: ResolvedSourceCircuit | ResolvedEntityV4Circuit;
 }
 
 /** Host-local compilation state. Runtime handles never enter the transport artifact. */
 export interface LocalSourceCompilation extends SourceCompilationArtifact {
-  readonly execution?: ExecutedDirectPlan | ExecutedEntityDirectPlan;
+  readonly execution?: ExecutedDirectPlan | ExecutedEntityDirectPlan | ExecutedEntityDirectPlanV4;
 }
 
 export type SourceCompilationStage = 'parse' | 'semantic' | 'transform' | 'execute' | 'lower';
@@ -122,9 +125,10 @@ function compileParsedSource(
   observe?: SourceCompilationObserver,
 ): LocalSourceCompilation {
   const entityReplayContext = replayTransport(environment);
-  let plan: DirectElaborationPlan | DirectElaborationPlanV3 | undefined;
-  let execution: ExecutedDirectPlan | ExecutedEntityDirectPlan | undefined;
-  let resolvedCircuit: ResolvedSourceCircuit | undefined;
+  let plan: DirectElaborationPlan | DirectElaborationPlanV3 | DirectElaborationPlanV4 | undefined;
+  let execution:
+    ExecutedDirectPlan | ExecutedEntityDirectPlan | ExecutedEntityDirectPlanV4 | undefined;
+  let resolvedCircuit: ResolvedSourceCircuit | ResolvedEntityV4Circuit | undefined;
   let elaborationJavaScript: string | undefined;
   observe?.('semantic');
   const semanticDiagnostics = validateDslSemantics(parsed);
@@ -146,36 +150,53 @@ function compileParsedSource(
       elaborationJavaScript = program.code;
       if (!compilerDiagnostics.some(({ severity }) => severity === 'error')) {
         observe?.('execute');
-        plan =
+        const executedPlan =
           environment.trustedEntityReplayContext === undefined
             ? executeElaborationProgram(program, environment)
             : executeElaborationProgramV3(program, {
                 ...environment,
                 trustedEntityReplayContext: environment.trustedEntityReplayContext,
               });
+        plan = executedPlan;
         observe?.('lower');
         const lowered =
-          plan.version === 3
+          executedPlan.version === 4
             ? environment.trustedEntityReplayContext === undefined
               ? (() => {
                   throw new EntityReplayContextError(
                     'ER1001',
                     '$.entityReplayContext',
-                    'Entity v3 plans require a host-bound trusted profile-set context.',
+                    'Entity v4 plans require a host-bound trusted profile-set context.',
                   );
                 })()
-              : tryElaborateEntityDirectPlan(plan, environment.trustedEntityReplayContext)
-            : tryElaborateDirectPlan(plan);
+              : tryElaborateEntityV4DirectPlan(executedPlan, environment.trustedEntityReplayContext)
+            : executedPlan.version === 3
+              ? environment.trustedEntityReplayContext === undefined
+                ? (() => {
+                    throw new EntityReplayContextError(
+                      'ER1001',
+                      '$.entityReplayContext',
+                      'Entity v3 plans require a host-bound trusted profile-set context.',
+                    );
+                  })()
+                : tryElaborateEntityDirectPlan(executedPlan, environment.trustedEntityReplayContext)
+              : tryElaborateDirectPlan(executedPlan);
         execution = lowered.execution;
-        if (plan.version === 3 && execution !== undefined) {
+        if (
+          executedPlan.version === 4 &&
+          'resolvedCircuit' in lowered &&
+          lowered.resolvedCircuit !== undefined
+        ) {
+          resolvedCircuit = lowered.resolvedCircuit;
+        } else if (executedPlan.version === 3 && execution !== undefined) {
           resolvedCircuit = snapshotResolvedSourceCircuit({
             format: 'comblang-resolved-source-circuit',
             version: 1,
-            planFingerprint: resolvedSourceCircuitPlanFingerprint(plan),
-            ir: execution.circuit.ir,
+            planFingerprint: resolvedSourceCircuitPlanFingerprint(executedPlan),
+            ir: (execution as ExecutedEntityDirectPlan).circuit.ir,
           });
         }
-        appendCompilerDiagnostics(plan.diagnostics ?? []);
+        appendCompilerDiagnostics(executedPlan.diagnostics ?? []);
         appendCompilerDiagnostics(lowered.diagnostics);
       }
     } catch (error) {

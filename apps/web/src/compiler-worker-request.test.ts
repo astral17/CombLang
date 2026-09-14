@@ -71,6 +71,11 @@ const rawSource = JSON.stringify({
     },
   },
   'constant-combinator': {
+    'constant-combinator': {
+      type: 'constant-combinator',
+      name: 'constant-combinator',
+      flags: ['placeable-player', 'player-creation'],
+    },
     'fixture-constant': {
       type: 'constant-combinator',
       name: 'fixture-constant',
@@ -202,7 +207,9 @@ describe('browser compiler Worker prototype profile', () => {
 
     expect(first.result.compilerDiagnostics).toEqual([]);
     const firstCircuit = first.result.resolvedCircuit;
-    if (firstCircuit === undefined) throw new Error('Expected a Worker resolved source circuit.');
+    if (firstCircuit?.format !== 'comblang-resolved-source-circuit') {
+      throw new Error('Expected a Worker resolved v3 source circuit.');
+    }
     expect(firstCircuit.ir.entities[0]?.configuration).toEqual({
       mode: 'raw',
       payload: {
@@ -236,6 +243,51 @@ describe('browser compiler Worker prototype profile', () => {
       firstCircuit.ir.entities[0]?.configuration,
     );
     expect(structuredClone(warm)).toEqual(warm);
+  });
+
+  test('transports a linked exact Constant as profile-free v4 data', async () => {
+    const response = await new CompilerWorkerRuntime().handle({
+      kind: 'parse',
+      revision: 18,
+      file: {
+        path: 'worker-exact-constant.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const exact = Constant({ isOn: false, sections: [{ active: true, filters: [[A, 0]] }] }).at(4, 5);
+const output = new Network();
+output += exact;`,
+      },
+      prototypeProfile: { source: rawSource, factorioDumpMetadata: rawMetadata },
+    });
+
+    expect(response.result.compilerDiagnostics).toEqual([]);
+    expect(response.result.plan).toMatchObject({
+      version: 4,
+      entities: [
+        {
+          configuration: {
+            mode: 'constant',
+            value: { isOn: false },
+          },
+        },
+      ],
+    });
+    expect(response.result.resolvedCircuit).toMatchObject({
+      format: 'comblang-resolved-entity-v4',
+      version: 1,
+      ir: { version: 4 },
+    });
+    expect(response.result.resolvedCircuit?.format).toBe('comblang-resolved-entity-v4');
+    if (response.result.resolvedCircuit?.format === 'comblang-resolved-entity-v4') {
+      expect(response.result.resolvedCircuit.ir.entities).toHaveLength(1);
+      expect(response.result.resolvedCircuit.ir.entities[0]?.configuration).toMatchObject({
+        mode: 'constant',
+      });
+    }
+    expect(JSON.stringify(response.result)).not.toMatch(
+      /profiles|resolver|prototypeProvider|trustedEntityReplayContext/,
+    );
+    expect(response.result).not.toHaveProperty('execution');
+    expect(structuredClone(response)).toEqual(response);
   });
 
   test('accepts a schema-checked Entity fragment and detaches a source Signal in the Worker', async () => {

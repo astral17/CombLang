@@ -59,9 +59,7 @@ describe('elaboration call/member transform', () => {
     expect(code).toContain('__dsl.signal("signal-A"');
     expect(code).toContain('__dsl.entityFamilyFromPrototype("Lamp", [{ value: first, source:');
     expect(code).toContain('__dsl.entityFamilyFromPrototype("Roboport", [{ value: value, source:');
-    expect(code).toContain(
-      '__dsl.entityFamilyFromPrototype("Constant", [...__dsl.spreadCallArguments(rest',
-    );
+    expect(code).toContain('__dsl.constantOverload([...__dsl.spreadCallArguments(rest');
     expect(code).toContain('__dsl.constant(value');
     expect(code).toContain('__dsl.deciderBranches(test, yes, no');
     expect(code).toContain('__dsl.invoke(fn, [{ value: first, source:');

@@ -44,6 +44,11 @@ export interface EntityConstructionRequest {
   readonly creationRevision: number;
 }
 
+export interface EntityRegistrySnapshot {
+  readonly nextId: number;
+  readonly recordCount: number;
+}
+
 /** Narrow prototype lookup boundary; production instances are derived from a provider. */
 export interface EntityPrototypeResolver {
   readonly database: EntityProfileRef['database'];
@@ -273,6 +278,25 @@ export class EntityRegistry {
 
   records(): readonly EntityPlanRecord[] {
     return Object.freeze([...this.#allRecords]);
+  }
+
+  snapshot(): EntityRegistrySnapshot {
+    return { nextId: this.#ids.checkpoint(), recordCount: this.#allRecords.length };
+  }
+
+  restore(snapshot: EntityRegistrySnapshot): void {
+    if (
+      !Number.isSafeInteger(snapshot.recordCount) ||
+      snapshot.recordCount < 0 ||
+      snapshot.recordCount > this.#allRecords.length
+    ) {
+      throw new RangeError('Invalid Entity registry record checkpoint.');
+    }
+    for (const record of this.#allRecords.slice(snapshot.recordCount)) {
+      this.#canonicalRecords.delete(record.id);
+    }
+    this.#allRecords.length = snapshot.recordCount;
+    this.#ids.restore(snapshot.nextId);
   }
 
   /** Replaces compiler-owned endpoint bindings without changing physical identity. */

@@ -188,10 +188,10 @@ same prototype and configuration forms, delegates to generic Entity
 construction, and returns one nominal Entity backed by one physical record. It
 does not become a readable Network or Combinator, infer an output connector or
 call projection, emit signals, or add a simulator device. The executable
-`CC(...)` constructor remains the separate ConstantCombinator source with its
-existing output Network, producer, attachment, and tick behavior. The exact
-`Constant({ isOn, sections })` form and any future shared physical
-representation remain outside this structural facade.
+`CC(...)` constructor and exact `Constant({ isOn, sections })` constructor are
+the computation-bearing Constant views. In a trusted provider context they
+share one physical constant-combinator Entity representation; the structural
+overload remains an Entity and does not gain producer operations.
 
 `machine.port(connector, lane)` selects an explicit connector lane. The exact
 four-argument `machine.bind(connector, lane, network, direction)` form binds
@@ -422,7 +422,21 @@ Constant surface and reviewed compatibility fixtures.
 
 `CC()` is valid and creates one empty physical constant combinator. It emits no signals but can still be placed and attached, for example `CC().at(1, 2).to(out)`. An empty generated list in `CC(...entries)` has the same meaning. Like any other combinator, an unattached standalone `CC()` receives `CL2001`, not an error.
 
-This implemented form creates one default Factorio 2.1 section. Multiple sections, section `multiplier`/`group`/`active`, and the entity-wide `isOn` switch are planned for the Phase 7 exact Constant surface. Their accepted design is documented in [Native objects, Deciders, and blueprint parameters](native-objects-deciders-and-parameters.md); `CC.section(...)` is not executable syntax yet.
+`Constant({ isOn, sections })` is the exact section-based form. It accepts an
+exact plain configuration object (including `{}`), ordered sections, `active`,
+duplicate and zero filters, explicit or omitted Signal quality, and the
+entity-wide `isOn` switch. Omitted section `active` and `multiplier` default to
+`true` and `1`; omitted quality is canonicalized to ordinary `normal` Signal
+identity. Each exact Constant creates one Constant producer and, with trusted
+canonical base `entity:constant-combinator` Entity authority, one linked physical
+constant-combinator Entity. Other same-type modded prototypes do not make this
+selection ambiguous.
+Section `group` and non-unit `multiplier` values are rejected as explicit
+unsupported diagnostics until their native semantics are evidenced. `CC`
+continues to accept its existing raw signal-value forms and is linked through
+the same supported configuration boundary when that authority is present;
+without it, `CC` retains its legacy v2 producer-only path. `CC.section(...)`
+and any-quality filter syntax are not executable syntax.
 
 ## Combinators and output connections
 

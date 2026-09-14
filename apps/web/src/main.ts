@@ -1,6 +1,9 @@
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
 import { signal, type SignalId, type SignalType } from '@comblang/factorio';
 import type { DirectElaborationPlanV3 } from '@comblang/compiler/entity';
+import type { DirectElaborationPlanV4 } from '@comblang/compiler/entity-v4';
+import type { ResolvedEntityV4Circuit } from '@comblang/compiler/resolved-entity-v4';
+import type { ResolvedSourceCircuit } from '@comblang/compiler/resolved-source-circuit';
 import { offsetToPosition, sourceFileId, sourceSpan, type Diagnostic } from '@comblang/shared';
 
 import { blueprintJsonForArtifact } from './blueprint-demo.js';
@@ -707,7 +710,7 @@ function renderProofPending(): void {
 
 function renderProofError(
   message: string,
-  compiledPlan?: DirectElaborationPlan | DirectElaborationPlanV3,
+  compiledPlan?: DirectElaborationPlan | DirectElaborationPlanV3 | DirectElaborationPlanV4,
 ): void {
   pauseSimulation();
   currentPlan = compiledPlan?.version === 2 ? compiledPlan : undefined;
@@ -752,18 +755,20 @@ function renderProofError(
 }
 
 function renderSourceProof(
-  plan: DirectElaborationPlan | DirectElaborationPlanV3,
+  plan: DirectElaborationPlan | DirectElaborationPlanV3 | DirectElaborationPlanV4,
   foldedOperations: number,
   resolvedCircuit?: NonNullable<CompilerWorkerParsedResponse['result']['resolvedCircuit']>,
 ): void {
   pauseSimulation();
-  if (plan.version === 3 && resolvedCircuit === undefined) {
-    throw new Error('Entity v3 source compiled without a resolved circuit.');
+  if ((plan.version === 3 || plan.version === 4) && resolvedCircuit === undefined) {
+    throw new Error(`Entity v${plan.version} source compiled without a resolved circuit.`);
   }
   const artifact =
-    plan.version === 3
-      ? createSourceCircuitArtifact(plan, resolvedCircuit!)
-      : createSourceCircuitArtifact(plan);
+    plan.version === 4
+      ? createSourceCircuitArtifact(plan, resolvedCircuit as ResolvedEntityV4Circuit)
+      : plan.version === 3
+        ? createSourceCircuitArtifact(plan, resolvedCircuit as ResolvedSourceCircuit)
+        : createSourceCircuitArtifact(plan);
   const controller = new SourceSimulationController(artifact);
   sourceSimulation = controller;
   selectedSimulationTick = 0;

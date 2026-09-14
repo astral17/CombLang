@@ -4591,6 +4591,98 @@ const values = Duplicate(input);`,
     );
   });
 
+  test('charges one DSL call for dynamic Constant structural and invalid-arity dispatch', () => {
+    const context = syntheticEntityExecutionContext();
+    const resolver = syntheticEntityResolver('constant-combinator');
+    const one = transformElaborationModule(
+      parseFile({
+        path: 'dynamic-constant-budget.factorio.ts',
+        text: `function selectPrototype() { return 'entity:synthetic-zero-port'; }
+const entity = Constant(selectPrototype());`,
+      }),
+    );
+    const plan = executeElaborationProgramV3(one, {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: resolver,
+      dslCallBudget: 1,
+    });
+    expect(plan.version).toBe(3);
+
+    const two = transformElaborationModule(
+      parseFile({
+        path: 'dynamic-constant-budget-two.factorio.ts',
+        text: `function selectPrototype() { return 'entity:synthetic-zero-port'; }
+const first = Constant(selectPrototype());
+const second = Constant(selectPrototype());`,
+      }),
+    );
+    expect(() =>
+      executeElaborationProgramV3(two, {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: resolver,
+        dslCallBudget: 1,
+      }),
+    ).toThrow(ElaborationOperationLimitError);
+
+    const invalid = transformElaborationModule(
+      parseFile({ path: 'invalid-constant-budget.factorio.ts', text: 'Constant();' }),
+    );
+    expect(() =>
+      executeElaborationProgramV3(invalid, {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: resolver,
+        dslCallBudget: 1,
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'RT2027' }));
+  });
+
+  test('retains CL2001 for an unattached exact Constant producer', () => {
+    const profile = {
+      ...syntheticZeroPortEntityProfile,
+      ref: {
+        ...syntheticZeroPortEntityProfile.ref,
+        prototypeKey: 'entity:constant-combinator',
+        profileId:
+          'profile:exact-constant-budget' as typeof syntheticZeroPortEntityProfile.ref.profileId,
+      },
+      prototypeType: 'constant-combinator',
+    };
+    const context = createTrustedEntityReplayContext({
+      database: profile.ref.database,
+      source: 'synthetic',
+      evidenceIdentity: 'exact-constant-budget-evidence',
+      policyIdentity: 'exact-constant-budget-policy',
+      profiles: [profile],
+    });
+    const program = transformElaborationModule(
+      parseFile({
+        path: 'unattached-exact-constant.factorio.ts',
+        text: 'const exact: ConstantCombinator = Constant({ sections: [] });',
+      }),
+    );
+    const plan = executeElaborationProgramV3(program, {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: {
+        database: context.database,
+        getEntity(nameOrKey) {
+          return nameOrKey === 'entity:constant-combinator'
+            ? {
+                key: 'entity:constant-combinator' as EntityPrototype['key'],
+                name: 'constant-combinator',
+                type: 'constant-combinator',
+                tileWidth: 1,
+                tileHeight: 1,
+              }
+            : undefined;
+        },
+      },
+    });
+    expect(plan.version).toBe(4);
+    expect(plan.diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'CL2001', severity: 'warning' }),
+    );
+  });
+
   test('keeps callback-local returns inside the surrounding borrow lifetime', () => {
     const parsed = parseFile({
       path: 'callback-borrow.factorio.ts',

@@ -175,12 +175,11 @@ callable behavior, ergonomic translations, or native-conformance evidence.
 prototypes whose actual type is `constant-combinator`. It accepts the same
 prototype/configuration forms as `Entity`, returns one nominal Entity and one
 physical record, and adds no Network, Combinator, signal output, connector,
-call projection, or simulator authority. `CC(...)` remains the separate
-executable ConstantCombinator source with its existing producer and output
-Network behavior. Exact `Constant({ isOn, sections })` semantics and a future
-shared physical representation are deferred for the public source surface;
-the internal linked computation foundation is documented separately in
-[Entity v4](entity-v4.md).
+call projection, or simulator authority. `CC(...)` and the exact
+`Constant({ isOn, sections })` form are the executable Constant views; when
+trusted base `entity:constant-combinator` authority is available they share the v4 linked physical
+representation documented separately in [Entity v4](entity-v4.md). The
+structural overload remains an Entity and never gains producer operations.
 
 The additional accepted source form is intentionally limited to the typed
 single-condition slice:

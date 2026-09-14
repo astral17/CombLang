@@ -102,7 +102,7 @@ This is an early preview rather than the Phase 8 codec:
 - entity defaults and schema details will be tightened against Factorio import tests;
 - verified typed Entity import/export and native raw-field conformance remain pending;
 - omission/defaulting rules outside the implemented default-item `Signal(name)` case still need captured import/export conformance fixtures;
-- public Constant source construction and native import/export conformance remain pending; the internal v4 adapter exports canonical supported sections, active state, and `is_on`, while groups and non-unit multipliers remain explicitly unsupported;
+- native Constant import/export conformance remains pending; the public exact Constant and linked CC paths export canonical supported sections, active state, and `is_on`, while groups and non-unit multipliers remain explicitly unsupported;
 - source Networks without a physical producing endpoint cannot create an external blueprint connection by themselves.
 
 The workbench shows and copies this readable JSON, but it is still a preview rather than a finished exchange-string export or verified round-trip codec.

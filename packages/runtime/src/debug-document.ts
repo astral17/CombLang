@@ -1,6 +1,7 @@
 import type { EntityPhysicalRecord } from '@comblang/compiler/entity';
 import type { CircuitProducerNode, ElaborationGraph, EntityPlacement } from '@comblang/compiler/ir';
 import type { ElaborationGraphV3 } from '@comblang/compiler/entity';
+import type { ElaborationGraphV4 } from '@comblang/compiler/entity-v4';
 import type { NetworkId } from '@comblang/shared';
 
 import type {
@@ -48,7 +49,7 @@ export type DebugDocument = DebugDocumentV1 | DebugDocumentV2;
 /** Serialize IDs from this execution's EG, never by matching array ordinals. */
 export function createDebugDocument(
   index: DebugIndex,
-  graph: ElaborationGraph | ElaborationGraphV3,
+  graph: ElaborationGraph | ElaborationGraphV3 | ElaborationGraphV4,
 ): DebugDocument {
   const byId = new Map(graph.producers.map((producer) => [producer.id, producer]));
   const scopes = index.scopes.map((scope) => ({
@@ -67,7 +68,7 @@ export function createDebugDocument(
     }),
   }));
   const document: DebugDocument =
-    graph.version === 3
+    graph.version === 3 || graph.version === 4
       ? {
           format: 'comblang-debug',
           version: 2,

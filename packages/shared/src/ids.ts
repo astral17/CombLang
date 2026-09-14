@@ -41,4 +41,17 @@ export class StableIdAllocator<const Namespace extends string> {
     this.#next += 1;
     return id;
   }
+
+  /** Saves the next deterministic ordinal for a caller-owned transaction. */
+  checkpoint(): number {
+    return this.#next;
+  }
+
+  /** Restores a previously captured ordinal after a failed speculative allocation. */
+  restore(checkpoint: number): void {
+    if (!Number.isSafeInteger(checkpoint) || checkpoint < 0) {
+      throw new RangeError('The allocator checkpoint must be a non-negative safe integer.');
+    }
+    this.#next = checkpoint;
+  }
 }

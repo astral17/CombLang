@@ -112,6 +112,26 @@ export function transformCallOrElementNode(
         context.spanLiteral(node),
       ]);
     }
+    // Constant has two public overload families. Keep the statically certain
+    // string/prototype-plus-configuration form on the existing Entity bridge;
+    // all other forms retain their evaluated arguments for runtime dispatch.
+    if (
+      node.expression.text === 'Constant' &&
+      (node.arguments.length === 2 ||
+        (node.arguments.length === 1 && ts.isStringLiteral(node.arguments[0]!)))
+    ) {
+      return context.dslCall('entityFamilyFromPrototype', [
+        factory.createStringLiteral(node.expression.text),
+        callArguments(node.arguments),
+        context.spanLiteral(node),
+      ]);
+    }
+    if (node.expression.text === 'Constant') {
+      return context.dslCall('constantOverload', [
+        callArguments(node.arguments),
+        context.spanLiteral(node),
+      ]);
+    }
     const entityFamily = Object.prototype.hasOwnProperty.call(
       entityFamilyDslNames,
       node.expression.text,

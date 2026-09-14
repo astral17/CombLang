@@ -662,6 +662,31 @@ const fallback: DeciderCombinator = when(input > 0).else(input);`,
     expect(validateDslSemantics(parsed)).toEqual([]);
   });
 
+  test('classifies exact Constant as a producer while keeping structural Constant non-producer', () => {
+    const parsed = parseFile({
+      path: 'constant-overloads.ts',
+      text: `function make(): ConstantCombinator {
+  return Constant({ sections: [] });
+}
+const exact: ConstantCombinator = make();
+const structural = Constant('constant-combinator');
+const output = new Network();
+output += exact;
+output += Constant('constant-combinator');`,
+    });
+
+    const diagnostics = validateDslSemantics(parsed);
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'CL1034',
+        message: expect.stringContaining('Network += requires a combinator producer'),
+      }),
+    ]);
+    expect(parsed.text.slice(diagnostics[0]!.span!.start, diagnostics[0]!.span!.end)).toBe(
+      "output += Constant('constant-combinator')",
+    );
+  });
+
   test('continues enum constants and rejects implicit values after dynamic initializers', () => {
     const valid = parseFile({
       path: 'constant-enum.ts',

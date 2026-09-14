@@ -69,7 +69,7 @@ Call provenance is associated with the executed function identity, not its textu
 | `CL1001` | unsupported function call shape in the bootstrap compiler                 | use the executed path for ordinary functions or a supported bootstrap form              |
 | `CL1008` | circuit constant cannot be normalized from a finite safe integer          | remove fractions/non-finite values or keep JavaScript arithmetic safe                   |
 | `CL1010` | circular local binding                                                    | remove the cycle between local `const` bindings                                         |
-| `CL1014` | unsupported compact `IF` condition or output                              | use a documented Network/signal/wildcard form                                           |
+| `CL1014` | invalid fixed-arity DSL call, including `IF` or `Constant`                | use the documented argument count and overload form                                     |
 | `CL1016` | unknown attachment Network                                                | declare the destination before `+=`                                                     |
 | `CL1017` | bootstrap path inferred an implicit Network merge/owned copy              | use an alias, a producer, or explicit `destination.take(source)` transfer               |
 | `CL1019` | invalid Signal declaration or Network signal selection                    | use `Signal(name)` or `Signal(type, name, quality?)`                                    |

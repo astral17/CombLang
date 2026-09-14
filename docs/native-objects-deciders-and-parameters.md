@@ -1,6 +1,10 @@
 # Native objects, Deciders, and blueprint parameters
 
-This document records accepted post-Phase-3 design constraints for Phases 6–8. It does not describe syntax implemented by the current compiler. Candidate spellings remain provisional until backed by executable tests and captured Factorio 2.1 blueprint fixtures.
+This document records accepted post-Phase-3 design constraints for Phases 6–8.
+Most candidate native-object spellings remain provisional, but the exact
+`Constant({ isOn, sections })` slice described below is implemented and backed
+by executable tests. Captured Factorio 2.1 blueprint fixtures are still
+required before claiming native import/export conformance.
 
 Phase 4 fixed the declaration rule before these objects are implemented: a typed-object constructor returns a separately branded Entity handle and inferred declarations preserve that identity. It must not be encoded as a Combinator merely because it exposes circuit ports. A `Network` context may project exactly one schema-declared default circuit view without creating hardware; otherwise source selects an explicit port. See [Combinator and Entity value policy](producer-materialization-policy.md) for the current value categories and rationale.
 
@@ -119,21 +123,26 @@ const constants: ConstantCombinator = CC(
 
 Raw filters remain the one-section shorthand. A call uses either only raw filters or only `CC.section(...)` values; mixing the two forms is rejected instead of guessing which section owns a filter. Section indices come from source order. Multiplication outside the constructor, such as `2 * CC(...)`, is not section configuration because it would read as circuit arithmetic.
 
-The planned exact form keeps native configuration visible:
+The implemented exact form keeps native configuration visible:
 
 ```ts
 const constants = Constant({
   isOn: true,
   sections: [
     {
-      multiplier: 2,
+      multiplier: 1,
       filters: [5 * A, 7 * B],
     },
   ],
 });
 ```
 
-`multiplier` accepts a finite JavaScript number at elaboration time, but its exact Factorio float conversion and count-rounding behavior must be locked with exported blueprint and reviewed compatibility fixtures before implementation in Phase 7. The convenience and exact forms must still create one physical entity and no ticks.
+The first executable slice accepts unit `multiplier` only. `group` and
+non-unit `multiplier` are source-aware unsupported diagnostics until their
+Factorio semantics are locked with exported blueprints and reviewed
+compatibility fixtures. Supported convenience and exact forms create one
+physical constant-combinator Entity when trusted authority is available and no
+extra topology or tick; legacy `CC` remains usable without that authority.
 
 ## Blueprint parameter values
 

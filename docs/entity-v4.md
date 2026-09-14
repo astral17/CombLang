@@ -44,10 +44,14 @@ Factorio conformance.
 signature, integrity proof, or source of authority. It can correlate a resolved
 snapshot with the canonical plan and linked Constant configuration, but cannot
 detect a valid physical placement change. The production source compiler, CLI,
-and browser Worker still emit and consume v3 artifacts only; this document
-describes internal callable helpers rather than a new Worker/CLI protocol or
-cold source-replay behavior.
+and browser Worker carry the v4 result when the trusted base
+`entity:constant-combinator` profile is available; same-type modded profiles do
+not make that selection ambiguous. Their transport contains only the profile-free resolved
+snapshot and identity metadata; the provider, profile set, and resolver remain
+host-local authority.
 
-This is an internal foundation. Public `Constant({ isOn, sections })` source
-syntax and unifying that facade with `CC(...)` are intentionally deferred to a
-later batch; no public DSL overload or UI control is introduced here.
+The public `Constant({ isOn, sections })` overload now uses this foundation and
+shares the physical Constant representation with `CC(...)`. The supported
+slice is limited to ordered sections with active state, duplicate/zero rows,
+ordinary Signal quality, and unit multipliers without groups; unsupported
+section semantics remain explicit diagnostics.

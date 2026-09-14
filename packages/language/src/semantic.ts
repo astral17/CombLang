@@ -448,6 +448,17 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     return false;
   };
   type ProducerCertainty = 'producer' | 'non-producer' | 'runtime';
+  const constantOverloadCertainty = (node: ts.CallExpression): ProducerCertainty => {
+    if (!isDslBuiltin('Constant')) return 'runtime';
+    if (node.arguments.length === 1) {
+      const argument = node.arguments[0]!;
+      if (ts.isStringLiteral(argument)) return 'non-producer';
+      if (ts.isObjectLiteralExpression(argument)) return 'producer';
+      return 'runtime';
+    }
+    if (node.arguments.length === 2) return 'non-producer';
+    return 'runtime';
+  };
   const producerCertainty = (node: ts.Expression): ProducerCertainty => {
     if (ts.isParenthesizedExpression(node)) return producerCertainty(node.expression);
     if (ts.isIdentifier(node) && lookupProducerSlot(node.text)?.direct !== undefined) {
@@ -469,6 +480,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     }
     if (ts.isCallExpression(node)) {
       if (ts.isIdentifier(node.expression)) {
+        if (node.expression.text === 'Constant') return constantOverloadCertainty(node);
         return (node.expression.text === 'CC' && isDslBuiltin('CC')) ||
           (node.expression.text === 'IF' && isDslBuiltin('IF')) ||
           (node.expression.text === 'when' && isDslBuiltin('when')) ||
@@ -514,6 +526,9 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     }
     if (!ts.isCallExpression(node)) return undefined;
     if (ts.isIdentifier(node.expression)) {
+      if (node.expression.text === 'Constant') {
+        return constantOverloadCertainty(node) === 'producer' ? 'constant' : undefined;
+      }
       if (node.expression.text === 'CC' && isDslBuiltin('CC')) return 'constant';
       if (node.expression.text === 'IF' && isDslBuiltin('IF')) return 'decider';
       if (node.expression.text === 'when' && isDslBuiltin('when')) return 'decider';
@@ -1080,6 +1095,17 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
         node.arguments.some(isDefinitelyNotString)
       ) {
         report('CL1019', 'Signal(...) arguments must evaluate to strings.', node);
+      }
+      if (
+        name === 'Constant' &&
+        isDslBuiltin(name) &&
+        (node.arguments.length < 1 || node.arguments.length > 2)
+      ) {
+        report(
+          'CL1014',
+          'Constant(configuration) or Constant(prototype, configuration?) requires one or two arguments.',
+          node,
+        );
       }
       if (
         name === 'IF' &&

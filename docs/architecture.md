@@ -48,19 +48,21 @@ hidden Producer, Network, Decider, or tick.
 Typed facades, raw native import, and verified native import behavior remain
 pending; see [Entity v3](entity-v3.md).
 
-The internal Phase 7 computation foundation uses a separate Entity v4 envelope.
-Only a Constant producer view may reference an Entity, and the trusted profile
-must carry the exact `prototypeType: "constant-combinator"` fact. The v4
-validator requires the current SHA-256 profile-set identity, checks the
-canonical Constant configuration against `constantConfigurationToSparseBus`,
-and rejects linked producer placement because placement belongs to the Entity.
-Validated v4 plans reuse the v2 topology engine transiently, then restore the
-association in v4 graph/NCIR without creating a second physical object. The
-profile-free resolved v4 snapshot and hydration path carry identity-only
-context, not profiles, providers, or resolver authority. Public
-`Constant({ isOn, sections })` source syntax and `CC` unification remain a
-later batch; synthetic/internal tests do not establish native Factorio
-conformance.
+The Phase 7 computation slice uses a separate Entity v4 envelope. Only a
+Constant producer view may reference an Entity, and the trusted profile must
+carry the exact `prototypeType: "constant-combinator"` fact. The v4 validator
+requires the current SHA-256 profile-set identity, checks the canonical
+Constant configuration against `constantConfigurationToSparseBus`, and rejects
+linked producer placement because placement belongs to the Entity. Validated
+v4 plans reuse the v2 topology engine transiently, then restore the association
+in v4 graph/NCIR without creating a second physical object. The profile-free
+resolved v4 snapshot and hydration path carry identity-only context, not
+profiles, providers, or resolver authority. The public
+`Constant({ isOn, sections })` form and `CC` now share this linked physical
+representation when the trusted base `entity:constant-combinator` profile is
+available; other same-type modded prototypes do not make that selection
+ambiguous. Without base authority, legacy `CC` keeps its v2 producer-only behavior. Synthetic/internal
+tests do not establish native Factorio conformance.
 The default website and ordinary CLI now provision a conservative, provider-
 bound zero-port fallback profile only for Entity records whose normalized
 `blueprintEligible: true` fact is explicit. Presence in `data.raw`, a familiar

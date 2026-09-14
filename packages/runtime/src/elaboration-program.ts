@@ -1,5 +1,7 @@
 import {
   circuitConstant,
+  constantConfigurationFromOutputs,
+  constantConfigurationToSparseBus,
   encodeSignalPropertyKey,
   sameSignal,
   Signal,
@@ -7,6 +9,7 @@ import {
 } from '@comblang/factorio';
 import type {
   DirectElaborationPlanV3,
+  DirectElaborationPlanV4,
   ElaborationJavaScript,
   EntityBehaviorKey,
   EntityConfiguration,
@@ -20,7 +23,9 @@ import type {
   EntityPlanDebugValue,
   EntityProfile,
   EntityProfileRef,
+  EntityId,
 } from '@comblang/compiler';
+import type { EntityV4ConstantConfiguration } from '@comblang/compiler/entity-v4';
 import { entityFamilyDslNames, type DslParameterContract } from '@comblang/language';
 import type {
   DirectElaborationPlan,
@@ -49,6 +54,10 @@ import { ElaborationColorConstraints } from './elaboration-color-constraints.js'
 import { ElaborationProvenanceFormatter } from './elaboration-provenance.js';
 import { CombinatorRegistry, type CombinatorRegistrySnapshot } from './combinator-registry.js';
 import { normalizeSignalValueSources } from './constant-signal-values.js';
+import {
+  ConstantConfigurationSourceError,
+  normalizeConstantConfigurationSource,
+} from './constant-configuration-source.js';
 import {
   RuntimeValueRegistry,
   type CombinatorDescriptor,
@@ -94,6 +103,7 @@ import {
   EntityRegistry,
   EntityRegistryError,
   entityPrototypeResolverFromProvider,
+  type EntityRegistrySnapshot,
   type EntityValue,
   type EntityPrototypeResolver,
 } from './entity-registry.js';
@@ -182,6 +192,10 @@ interface TopologySnapshot {
   readonly combinators: CombinatorRegistrySnapshot;
   readonly ownership: readonly NetworkOwnershipSnapshot[];
   readonly colors: ElaborationColorConstraints;
+  readonly entityRegistry?: EntityRegistrySnapshot;
+  readonly entityRevision: number;
+  readonly entityAuthoritiesLength: number;
+  readonly linkedConstantsLength: number;
 }
 
 interface EntityFacetAuthority {
@@ -198,6 +212,11 @@ interface EntityAuthorityView {
   owner: symbol | 'top-level' | 'retired';
   retiredAt?: SourceSpan;
   readonly facets: Map<string, EntityFacetAuthority>;
+}
+
+interface LinkedConstantAssociation {
+  readonly entity: EntityValue;
+  readonly configuration: import('@comblang/factorio').ConstantConfiguration;
 }
 
 export interface ElaborationExecutionOptions {
@@ -281,6 +300,11 @@ class ElaborationRecorder {
   readonly #entityRegistry: EntityRegistry | undefined;
   readonly #entityAuthorities = new WeakMap<object, EntityAuthorityView>();
   readonly #entityAuthorityList: EntityAuthorityView[] = [];
+  readonly #linkedConstantByIdentity = new WeakMap<object, LinkedConstantAssociation>();
+  readonly #linkedConstants: {
+    readonly producer: CombinatorValue;
+    readonly association: LinkedConstantAssociation;
+  }[] = [];
   #entityRevision = 0;
   #entityOperationOrdinal = 0;
   #dslCalls = 0;
@@ -612,23 +636,88 @@ class ElaborationRecorder {
       return this.#selectedValue(readable, value);
     },
     constant: (...args: unknown[]): CombinatorValue => {
-      this.#recordDslCall();
       const rawSpan = args.at(-1);
       if (!isRawSpan(rawSpan)) throw new Error('Constant combinator is missing provenance.');
-      const outputs = normalizeSignalValueSources(args.slice(0, -1), {
-        isSignal: (value): value is SignalHandle => this.#isSignal(value),
-        isSignalValue: (value): value is SignalValue => this.#isSignalValue(value),
+      return this.#withTopologyTransaction(rawSpan, () => {
+        this.#recordDslCall();
+        const outputs = normalizeSignalValueSources(args.slice(0, -1), {
+          isSignal: (value): value is SignalHandle => this.#isSignal(value),
+          isSignalValue: (value): value is SignalValue => this.#isSignalValue(value),
+        });
+        const configuration = constantConfigurationFromOutputs(
+          outputs.map(({ signal, value }) => ({ signal: this.#signalSnapshot(signal), value })),
+        );
+        return this.#createConstantProducer(
+          configuration,
+          rawSpan,
+          outputs.map(({ signal, value }) => ({ signal, value })),
+          false,
+        );
       });
-      return this.#createCombinator(
-        {
-          kind: 'constant',
-          outputs: outputs.map(({ signal, value }) => ({ signal, value })),
-          source: this.#span(rawSpan),
-          instancePath: this.#path(),
-        },
-        rawSpan,
-      );
     },
+    constantOverload: (
+      arguments_: readonly CallArgument[],
+      rawSpan: RawSpan,
+    ): CombinatorValue | EntityValue =>
+      this.#withTopologyTransaction(rawSpan, () => {
+        this.#recordDslCall();
+        if (!Array.isArray(arguments_)) {
+          throw new ElaborationExecutionError(
+            'Constant(...) arguments must be an evaluated argument list.',
+            this.#span(rawSpan),
+            'RT2027',
+          );
+        }
+        const first = arguments_[0];
+        const structural =
+          first !== undefined &&
+          (typeof first.value === 'string' || this.#isTrustedPrototypeRecord(first.value));
+        if (
+          structural ||
+          arguments_.length === 0 ||
+          arguments_.length > 2 ||
+          arguments_.length === 2
+        ) {
+          return this.#constructEntityFromPrototype(
+            arguments_,
+            rawSpan,
+            'constant-combinator',
+            'Constant',
+            false,
+          );
+        }
+        if (arguments_.length !== 1) {
+          throw new ElaborationExecutionError(
+            'Constant(configuration) requires exactly one configuration argument, or use Constant(prototype, configuration?) for an Entity.',
+            this.#span(rawSpan),
+            'RT2027',
+          );
+        }
+        let configuration;
+        try {
+          configuration = normalizeConstantConfigurationSource(
+            first!.value,
+            {
+              isSignal: (value): value is SignalHandle => this.#isSignal(value),
+              isSignalValue: (value): value is SignalValue => this.#isSignalValue(value),
+            },
+            '$.configuration',
+          );
+        } catch (error) {
+          if (error instanceof ConstantConfigurationSourceError) {
+            throw new ElaborationExecutionError(
+              error.message,
+              this.#span(first!.source),
+              'RT2027',
+              undefined,
+              { cause: error },
+            );
+          }
+          throw error;
+        }
+        const outputs = constantConfigurationToSparseBus(configuration).toJSON();
+        return this.#createConstantProducer(configuration, rawSpan, outputs, true);
+      }),
     network: (
       name: string | undefined,
       fixedColor: 'red' | 'green' | undefined,
@@ -1468,6 +1557,66 @@ class ElaborationRecorder {
         }
         return (producer as { at: (...values: unknown[]) => unknown }).at(...args.slice(1, -1));
       }
+      const linked = this.#linkedConstantByIdentity.get(producer.identity);
+      if (linked !== undefined) {
+        this.#recordDslCall();
+        if (args.length !== 4 && args.length !== 5) {
+          throw new ElaborationExecutionError(
+            '.at(x, y, direction?) requires two or three arguments.',
+            this.#span(rawSpan),
+            'RT2027',
+          );
+        }
+        if (
+          typeof x !== 'number' ||
+          !Number.isFinite(x) ||
+          typeof y !== 'number' ||
+          !Number.isFinite(y)
+        ) {
+          throw new ElaborationExecutionError(
+            '.at(x, y, direction?) requires finite numeric coordinates.',
+            this.#span(rawSpan),
+            'RT2027',
+          );
+        }
+        if (
+          direction !== undefined &&
+          (typeof direction !== 'number' ||
+            !Number.isInteger(direction) ||
+            direction < 0 ||
+            direction > 15)
+        ) {
+          throw new ElaborationExecutionError(
+            '.at(...) direction must be an integer from 0 through 15.',
+            this.#span(rawSpan),
+            'RT2027',
+          );
+        }
+        const registry = this.#entityRegistry;
+        if (registry === undefined) {
+          throw new ElaborationExecutionError(
+            'Linked Constant placement requires a trusted Entity registry.',
+            this.#span(rawSpan),
+            'RT2027',
+          );
+        }
+        try {
+          registry.replacePlacement(linked.entity, {
+            x,
+            y,
+            ...(direction === undefined ? {} : { direction }),
+          });
+        } catch (error) {
+          throw new ElaborationExecutionError(
+            error instanceof Error ? error.message : 'Linked Constant placement failed.',
+            this.#span(rawSpan),
+            'RT2027',
+            undefined,
+            { cause: error },
+          );
+        }
+        return producer;
+      }
       this.#recordDslCall();
       if (args.length !== 4 && args.length !== 5) {
         throw new Error('.at(x, y, direction?) requires two or three arguments.');
@@ -1584,7 +1733,7 @@ class ElaborationRecorder {
     },
   });
 
-  plan(): DirectElaborationPlan | DirectElaborationPlanV3 {
+  plan(): DirectElaborationPlan | DirectElaborationPlanV3 | DirectElaborationPlanV4 {
     if (this.#status === 'failed') throw this.#firstFailure;
     if (this.#status === 'sealed') {
       throw new Error('The elaboration runtime has already been sealed.');
@@ -1628,7 +1777,13 @@ class ElaborationRecorder {
         networkPairs: Object.freeze([...this.#networkPairs]),
         capabilityUses: Object.freeze([...this.#capabilityUses]),
         producers: Object.freeze(
-          this.#combinators.states().map((state) => this.#combinators.toPlan(state)),
+          this.#combinators.states().map((state) => {
+            const producer = this.#combinators.toPlan(state);
+            const linked = this.#linkedConstantByIdentity.get(state.identity);
+            return linked === undefined
+              ? producer
+              : Object.freeze({ ...producer, entityId: linked.entity.id });
+          }),
         ),
         diagnostics: Object.freeze([...this.#diagnostics]),
       };
@@ -1639,18 +1794,25 @@ class ElaborationRecorder {
         }
       }
       const entities = this.#entityRegistry?.records() ?? [];
-      const plan: DirectElaborationPlan | DirectElaborationPlanV3 =
-        entities.length === 0
+      const v4Entities = entities.map((entity) => {
+        const linked = this.#linkedConstants.find(
+          ({ association }) => association.entity.id === entity.id,
+        );
+        return linked === undefined
+          ? entity
+          : Object.freeze({
+              ...entity,
+              configuration: {
+                mode: 'constant' as const,
+                value: linked.association.configuration,
+              } satisfies EntityV4ConstantConfiguration,
+            });
+      });
+      const plan: DirectElaborationPlan | DirectElaborationPlanV3 | DirectElaborationPlanV4 =
+        this.#linkedConstants.length !== 0
           ? {
               ...common,
-              version: 2 as const,
-              debugInstances: Object.freeze([
-                ...this.#debugInstances,
-              ]) as readonly DirectPlanDebugInstance[],
-            }
-          : {
-              ...common,
-              version: 3 as const,
+              version: 4 as const,
               debugInstances: Object.freeze([
                 ...this.#debugInstances,
               ]) as readonly EntityPlanDebugInstance[],
@@ -1667,8 +1829,37 @@ class ElaborationRecorder {
                   });
                 }),
               ),
-              entities: Object.freeze([...entities]),
-            };
+              entities: Object.freeze(v4Entities),
+            }
+          : entities.length === 0
+            ? {
+                ...common,
+                version: 2 as const,
+                debugInstances: Object.freeze([
+                  ...this.#debugInstances,
+                ]) as readonly DirectPlanDebugInstance[],
+              }
+            : {
+                ...common,
+                version: 3 as const,
+                debugInstances: Object.freeze([
+                  ...this.#debugInstances,
+                ]) as readonly EntityPlanDebugInstance[],
+                context: entityReplayContextRef(this.#entityContext!),
+                networks: Object.freeze(
+                  this.#networks.map((network) => {
+                    const state = this.#networkStates.get(network.name);
+                    return Object.freeze({
+                      ...network,
+                      generation: state?.ownership.generation ?? 0,
+                      ...(state?.ownership.consumedAt === undefined
+                        ? {}
+                        : { consumedAt: state.ownership.consumedAt }),
+                    });
+                  }),
+                ),
+                entities: Object.freeze([...entities]),
+              };
       this.#status = 'sealed';
       return plan;
     } catch (error) {
@@ -2504,6 +2695,12 @@ class ElaborationRecorder {
       combinators: this.#combinators.snapshot(),
       ownership: [...ownership.values()],
       colors: this.#colors.clone(),
+      ...(this.#entityRegistry === undefined
+        ? {}
+        : { entityRegistry: this.#entityRegistry.snapshot() }),
+      entityRevision: this.#entityRevision,
+      entityAuthoritiesLength: this.#entityAuthorityList.length,
+      linkedConstantsLength: this.#linkedConstants.length,
     };
   }
 
@@ -2537,6 +2734,12 @@ class ElaborationRecorder {
       else state.mutableBorrow = saved.mutableBorrow;
     }
     this.#colors.restore(snapshot.colors);
+    if (this.#entityRegistry !== undefined && snapshot.entityRegistry !== undefined) {
+      this.#entityRegistry.restore(snapshot.entityRegistry);
+    }
+    this.#entityRevision = snapshot.entityRevision;
+    this.#entityAuthorityList.length = snapshot.entityAuthoritiesLength;
+    this.#linkedConstants.length = snapshot.linkedConstantsLength;
   }
 
   #withTopologyTransaction<T>(rawSpan: RawSpan, operation: () => T): T {
@@ -2957,6 +3160,120 @@ class ElaborationRecorder {
     return this.#runtimeValues.brandSignal(handle);
   }
 
+  #signalSnapshot(value: SignalId): SignalId {
+    return Object.freeze({
+      type: value.type,
+      name: value.name,
+      ...(value.quality === undefined ? {} : { quality: value.quality }),
+    });
+  }
+
+  #isTrustedPrototypeRecord(value: unknown): boolean {
+    if (
+      this.#prototypes === undefined ||
+      value === null ||
+      typeof value !== 'object' ||
+      typeof (value as { key?: unknown }).key !== 'string'
+    ) {
+      return false;
+    }
+    return this.#prototypes.getEntity((value as { key: string }).key) === value;
+  }
+
+  #resolveCanonicalConstantProfile(rawSpan: RawSpan): EntityProfile | undefined {
+    const context = this.#entityContext;
+    const resolver = this.#entityPrototypeResolver;
+    if (context === undefined || resolver === undefined) return undefined;
+    const candidates = context.profiles.filter(
+      ({ ref }) => ref.prototypeKey === 'entity:constant-combinator',
+    );
+    if (candidates.length === 0) return undefined;
+    if (candidates.length > 1) {
+      throw new ElaborationExecutionError(
+        'The trusted provider exposes ambiguous base constant-combinator profiles.',
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    const profile = candidates[0]!;
+    if (profile.prototypeType !== 'constant-combinator') {
+      throw new ElaborationExecutionError(
+        'The trusted base constant-combinator profile does not assert prototypeType "constant-combinator".',
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    let prototype: EntityPrototype | undefined;
+    try {
+      prototype = resolver.getEntity(profile.ref.prototypeKey);
+    } catch (error) {
+      throw new ElaborationExecutionError(
+        error instanceof Error ? error.message : 'Constant prototype lookup failed.',
+        this.#span(rawSpan),
+        'RT2027',
+        undefined,
+        { cause: error },
+      );
+    }
+    if (prototype === undefined) {
+      throw new ElaborationExecutionError(
+        `Trusted Constant profile ${JSON.stringify(profile.ref.prototypeKey)} is not available in the selected provider.`,
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    if (
+      prototype.key !== profile.ref.prototypeKey ||
+      prototype.name !== 'constant-combinator' ||
+      prototype.type !== 'constant-combinator'
+    ) {
+      throw new ElaborationExecutionError(
+        `Trusted Constant profile ${JSON.stringify(profile.ref.prototypeKey)} does not match base provider prototype data.`,
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    return profile;
+  }
+
+  #createConstantProducer(
+    configuration: import('@comblang/factorio').ConstantConfiguration,
+    rawSpan: RawSpan,
+    outputs: readonly { readonly signal: SignalId; readonly value: number }[],
+    exact: boolean,
+  ): CombinatorValue {
+    const profile = this.#resolveCanonicalConstantProfile(rawSpan);
+    if (profile === undefined && exact) {
+      throw new ElaborationExecutionError(
+        'Exact Constant configuration requires a trusted base entity:constant-combinator Entity profile.',
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    const entity =
+      profile === undefined
+        ? undefined
+        : this.#allocateEntity(profile.ref, undefined, undefined, rawSpan);
+    const producer = this.#createCombinator(
+      {
+        kind: 'constant',
+        outputs: outputs.map(({ signal, value }) => ({
+          signal: this.#signalSnapshot(signal),
+          value,
+        })),
+        source: this.#span(rawSpan),
+        instancePath: this.#path(),
+      },
+      rawSpan,
+    );
+    if (entity !== undefined) {
+      const association = { entity, configuration } satisfies LinkedConstantAssociation;
+      this.#linkedConstantByIdentity.set(producer.identity, association);
+      this.#linkedConstants.push({ producer, association });
+    }
+    return producer;
+  }
+
   #constructEntity(
     profile: unknown,
     configuration: unknown,
@@ -3022,8 +3339,9 @@ class ElaborationRecorder {
     rawSpan: RawSpan,
     expectedType?: string,
     constructorName?: string,
+    recordCall = true,
   ): EntityValue {
-    this.#recordDslCall();
+    if (recordCall) this.#recordDslCall();
     if (!isRawSpan(rawSpan)) throw new Error('t.entityFromPrototype(...) is missing provenance.');
     const publicConstructorName = constructorName ?? 'Entity';
     if (!Array.isArray(arguments_) || (arguments_.length !== 1 && arguments_.length !== 2)) {
@@ -3956,7 +4274,7 @@ class ElaborationRecorder {
 function executeElaborationProgramInternal(
   program: ElaborationJavaScript,
   options: ElaborationExecutionOptions = {},
-): DirectElaborationPlan | DirectElaborationPlanV3 {
+): DirectElaborationPlan | DirectElaborationPlanV3 | DirectElaborationPlanV4 {
   if (program.format !== 'comblang-elaboration-js' || program.version !== 2) {
     throw new Error('Unsupported elaboration JavaScript format.');
   }
@@ -4009,6 +4327,6 @@ export function executeElaborationProgramV3(
     readonly trustedEntityReplayContext: TrustedEntityReplayContext;
     readonly entityPrototypeResolver?: EntityPrototypeResolver;
   },
-): DirectElaborationPlan | DirectElaborationPlanV3 {
+): DirectElaborationPlan | DirectElaborationPlanV3 | DirectElaborationPlanV4 {
   return executeElaborationProgramInternal(program, options);
 }

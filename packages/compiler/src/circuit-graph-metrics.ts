@@ -1,6 +1,7 @@
 import type { NetworkId, ProducerId } from '@comblang/shared';
 
 import type { NativeCircuitIrV3 } from './entity.js';
+import type { NativeCircuitIrV4 } from './entity-v4.js';
 import type { CircuitProducerNode, NativeCircuitIr } from './ir.js';
 import { producerInputNetworkIds } from './producer-network-references.js';
 
@@ -85,7 +86,7 @@ function stronglyConnectedComponents(
 
 /** Computes order-independent structural timing and feedback facts from resolved NCIR. */
 export function analyzeCircuitGraph(
-  circuit: NativeCircuitIr | NativeCircuitIrV3,
+  circuit: NativeCircuitIr | NativeCircuitIrV3 | NativeCircuitIrV4,
   latency: ProducerLatencyResolver = nativeCombinatorLatency,
 ): CircuitGraphMetrics {
   const drivers = new Map<NetworkId, number[]>();
