@@ -178,7 +178,9 @@ physical record, and adds no Network, Combinator, signal output, connector,
 call projection, or simulator authority. `CC(...)` remains the separate
 executable ConstantCombinator source with its existing producer and output
 Network behavior. Exact `Constant({ isOn, sections })` semantics and a future
-shared physical representation are deferred.
+shared physical representation are deferred for the public source surface;
+the internal linked computation foundation is documented separately in
+[Entity v4](entity-v4.md).
 
 The additional accepted source form is intentionally limited to the typed
 single-condition slice:
@@ -350,6 +352,12 @@ signed int32 constants, and compiler-owned raw keys with source-aware `BP1001`.
 Synthetic fixtures establish these
 internal contracts, not Factorio import compatibility. The producer-only v2
 execution and blueprint paths remain unchanged.
+
+The v4 computation adapter is intentionally outside this v3 transport. It
+accepts only a separately versioned linked Constant/Entity plan, requires the
+current exact profile-set identity and trusted Constant family, and emits one
+physical v4 Entity/producer view. Its profile-free resolved snapshot and
+one-object blueprint lowering are specified in [Entity v4](entity-v4.md).
 
 The executed v3 plan also exposes `execution.debug` Entity entries. Each exact
 scope has `entities`, `entity(index | id)`, `entityByGlobalOrdinal`, and

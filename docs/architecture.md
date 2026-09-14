@@ -47,6 +47,20 @@ physical record, and all forms preserve one Entity identity and create no
 hidden Producer, Network, Decider, or tick.
 Typed facades, raw native import, and verified native import behavior remain
 pending; see [Entity v3](entity-v3.md).
+
+The internal Phase 7 computation foundation uses a separate Entity v4 envelope.
+Only a Constant producer view may reference an Entity, and the trusted profile
+must carry the exact `prototypeType: "constant-combinator"` fact. The v4
+validator requires the current SHA-256 profile-set identity, checks the
+canonical Constant configuration against `constantConfigurationToSparseBus`,
+and rejects linked producer placement because placement belongs to the Entity.
+Validated v4 plans reuse the v2 topology engine transiently, then restore the
+association in v4 graph/NCIR without creating a second physical object. The
+profile-free resolved v4 snapshot and hydration path carry identity-only
+context, not profiles, providers, or resolver authority. Public
+`Constant({ isOn, sections })` source syntax and `CC` unification remain a
+later batch; synthetic/internal tests do not establish native Factorio
+conformance.
 The default website and ordinary CLI now provision a conservative, provider-
 bound zero-port fallback profile only for Entity records whose normalized
 `blueprintEligible: true` fact is explicit. Presence in `data.raw`, a familiar
@@ -190,6 +204,12 @@ The checked-in API baseline is Factorio Runtime API 2.1.17 / API version 6. Gene
 ## Early blueprint JSON preview
 
 `generateBlueprintJson` converts resolved NCIR directly into readable Factorio 2.x blueprint JSON. It creates one entity per arithmetic, decider, or constant producer; maps native control behavior; assigns deterministic row positions; and emits `wires` from resolved logical Network colors and producer connector sides. The web workbench displays this object without exchange-string compression.
+
+`generateEntityComputationBlueprintJson` is the additive v4 adapter. For a
+linked Constant it combines the producer's resolved wire endpoints with the
+Entity prototype, Entity-owned placement, and canonical Constant sections, so
+the output contains one native object number. Unlinked producers and
+structural Entities retain the existing separate-object mapping.
 
 This is deliberately pre-FCIR. Placement is a deterministic preview rather than a reach-aware layout, entity-number stability is local to one generation, and import/export semantic round trips remain Phase 8 work. Keeping this boundary explicit prevents the temporary row placer from becoming part of the eventual blueprint codec contract.
 

@@ -24,6 +24,12 @@ interface DirectElaborationPlan {
 
 `format` identifies the transport family. `version` changes when an existing reader cannot safely interpret the descriptor. Optional fields may be added only when their absence has a defined meaning for the current version. Consumers must not silently reinterpret an unsupported version.
 
+The internal computation-bearing Entity slice is version 4, with separate
+plan/graph/NCIR types. A v4 producer may reference one physical `EntityId`, but
+the association is only valid for a trusted `constant-combinator` profile and
+does not add a second placement or hardware record. v2/v3 validators and
+resolved readers intentionally reject v4.
+
 The runtime remains the authoritative validator: `tryElaborateDirectPlan()` returns structured diagnostics, while `elaborateDirectPlan()` throws the same diagnostic for exception-oriented callers. A TypeScript type assertion or deserialized JSON is not proof that a plan is valid.
 
 `validateDirectPlanEnvelope(value)` is the transport-facing first stage. It accepts `unknown` and exhaustively checks the format/version envelope, Network declarations, Producer unions and references, bounded Decider/debug trees, optional metadata, and embedded diagnostics before a runtime graph is allocated. A successful result contains a known-field-only, deeply frozen canonical plan plus prepared declaration/alias/capability lookups. Runtime replay consumes that canonical copy, never the caller-owned payload.
@@ -40,6 +46,17 @@ resolved circuit together. The v1 envelope also carries a deterministic
 authority. A main-thread consumer must validate the resolved envelope and use
 its frozen physical IR rather than replaying a v3 plan without the trusted
 profile authority.
+
+The v4 computation envelope is a separate `comblang-resolved-entity-v4`
+transport. It carries only canonical physical linkage, producer topology,
+Entity-owned placement/configuration, and identity-only replay context. Its
+hydrator does not receive profiles, providers, resolver functions, or runtime
+handles; exact Constant support is limited to the existing conservative
+`constantConfigurationToSparseBus` model. Its deterministic `planFingerprint`
+is stale-response correlation only, not a cryptographic integrity or authority
+claim; a valid physical placement change is outside the fingerprint's plan
+comparison scope. The source compiler, CLI, and browser Worker do not yet emit
+or transport this internal v4 envelope.
 
 ## Descriptor groups
 

@@ -1,4 +1,4 @@
-import type { SignalId } from '@comblang/factorio';
+import type { ConstantConfiguration, SignalId } from '@comblang/factorio';
 import type { NetworkId, ProducerId } from '@comblang/shared';
 
 import { lowerNativeBlueprintConfig, BlueprintJsonError } from './blueprint-native-config.js';
@@ -18,6 +18,7 @@ import type {
   EntityPhysicalTypedConfiguration,
   NativeCircuitIrV3,
 } from './entity.js';
+import type { EntityPhysicalRecordV4, NativeCircuitIrV4 } from './entity-v4.js';
 
 import type { CircuitColor, CircuitProducerNode, NativeCircuitIr } from './ir.js';
 
@@ -207,6 +208,27 @@ function entityControlBehavior(
   };
 }
 
+function constantEntityControlBehavior(
+  configuration: ConstantConfiguration,
+): Record<string, unknown> {
+  return {
+    is_on: configuration.isOn,
+    sections: {
+      sections: configuration.sections.map((section, sectionIndex) => ({
+        index: sectionIndex + 1,
+        active: section.active,
+        filters: section.filters.map((filter, filterIndex) => ({
+          index: filterIndex + 1,
+          ...signalJson(filter.signal),
+          quality: filter.signal.quality ?? 'normal',
+          comparator: '=',
+          count: filter.value,
+        })),
+      })),
+    },
+  };
+}
+
 interface WireEndpoint {
   readonly entity: number;
   readonly connector: number;
@@ -241,10 +263,33 @@ export function generateEntityBlueprintJson(
   );
 }
 
+/** Internal v4 preview path; linked Constant views share their Entity object number. */
+export function generateEntityComputationBlueprintJson(
+  ir: NativeCircuitIrV4,
+  options: BlueprintJsonOptions = {},
+): FactorioBlueprintJson {
+  const entitiesById = new Map(ir.entities.map((entity) => [entity.id, entity]));
+  const linked = new Map<ProducerId, EntityPhysicalRecordV4>();
+  for (const producer of ir.producers) {
+    if (producer.entityId === undefined) continue;
+    const entity = entitiesById.get(producer.entityId);
+    if (entity === undefined)
+      throw new BlueprintJsonError(`Missing physical Entity for linked producer ${producer.id}.`);
+    linked.set(producer.id, entity);
+  }
+  return generatePreview(
+    { format: 'comblang-ncir', version: 2, networks: ir.networks, producers: ir.producers },
+    options,
+    ir.entities,
+    linked,
+  );
+}
+
 function generatePreview(
   ir: NativeCircuitIr,
   options: BlueprintJsonOptions,
-  physicalEntities: readonly EntityPhysicalRecord[],
+  physicalEntities: readonly (EntityPhysicalRecord | EntityPhysicalRecordV4)[],
+  linkedEntities: ReadonlyMap<ProducerId, EntityPhysicalRecordV4> = new Map(),
 ): FactorioBlueprintJson {
   const maxRows = options.maxDeciderConditionRows ?? 1024;
   if (!Number.isSafeInteger(maxRows) || maxRows < 1) {
@@ -296,7 +341,11 @@ function generatePreview(
       fail('Duplicate physical Entity identity or ordinal.');
     ids.add(entity.id);
     ordinals.add(entity.ordinal);
-    if (entity.configuration !== undefined) {
+    const linked = [...linkedEntities.values()].find(({ id }) => id === entity.id);
+    if (linked !== undefined) {
+      if (entity.configuration?.mode !== 'constant')
+        fail('Linked v4 Entity requires constant configuration.');
+    } else if (entity.configuration !== undefined) {
       const configuration = dataRecord(entity.configuration, '$.configuration', fail);
       if (configuration.mode === 'raw') {
         exactKeys(configuration, ['mode', 'payload'], '$.configuration', fail);
@@ -338,8 +387,14 @@ function generatePreview(
         fail('Missing or invalid native Entity connector ordinal.');
       if (lowered.networkColors.get(binding.network) !== binding.endpoint.color)
         fail('Entity endpoint requires a matching resolved Network color.');
+      const linkedProducer = ir.producers.find(
+        (producer) => linkedEntities.get(producer.id)?.id === entity.id,
+      );
       addEndpoint(binding.network, {
-        entity: ir.producers.length + index + 1,
+        entity:
+          linkedProducer === undefined
+            ? ir.producers.length + index + 1
+            : numbers.get(linkedProducer.id)!,
         connector: ordinal! * 2 - (binding.endpoint.color === 'red' ? 1 : 0),
       });
     }
@@ -355,15 +410,34 @@ function generatePreview(
   }
 
   const entities: Record<string, unknown>[] = lowered.combinators.map(
-    ({ producer, entity }, index) => ({
-      entity_number: numbers.get(producer.id)!,
-      ...entity,
-      position:
-        producer.placement === undefined
-          ? { x: index * 2 + 0.5, y: 0.5 }
-          : { x: producer.placement.x, y: producer.placement.y },
-      direction: producer.placement?.direction ?? 4,
-    }),
+    ({ producer, entity }, index) => {
+      const linked = linkedEntities.get(producer.id);
+      if (linked === undefined) {
+        return {
+          entity_number: numbers.get(producer.id)!,
+          ...entity,
+          position:
+            producer.placement === undefined
+              ? { x: index * 2 + 0.5, y: 0.5 }
+              : { x: producer.placement.x, y: producer.placement.y },
+          direction: producer.placement?.direction ?? 4,
+        };
+      }
+      if (linked.configuration?.mode !== 'constant')
+        throw new BlueprintJsonError(
+          'Linked v4 Entity requires constant configuration.',
+          linked.provenance.source,
+        );
+      return {
+        entity_number: numbers.get(producer.id)!,
+        name: linked.prototypeName,
+        control_behavior: constantEntityControlBehavior(linked.configuration.value),
+        position: linked.placement
+          ? { x: linked.placement.x, y: linked.placement.y }
+          : { x: index * 2 + 0.5, y: 0.5 },
+        direction: linked.placement?.direction ?? 4,
+      };
+    },
   );
 
   const occupied = new Set(entities.map((entity) => JSON.stringify(entity.position)));
@@ -373,6 +447,7 @@ function generatePreview(
   }
   let automaticIndex = ir.producers.length;
   for (const [index, entity] of sortedEntities.entries()) {
+    if ([...linkedEntities.values()].some((linked) => linked.id === entity.id)) continue;
     const typedConfiguration = typedConfigurations.get(entity.id);
     const rawConfiguration = rawConfigurations.get(entity.id);
     let position = entity.placement

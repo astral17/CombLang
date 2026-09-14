@@ -64,6 +64,16 @@ envelope is accepted through replay as a compatibility snapshot but is also an
 explicit `BP1001` preview failure. The profile-free physical boundary rejects
 malformed or forged typed fields before emission.
 
+The internal Entity v4 preview uses `generateEntityComputationBlueprintJson`.
+For a linked Constant, the producer remains the topology/output view while the
+Entity supplies the one native prototype, placement, and canonical section
+configuration. The linked pair therefore emits exactly one
+`constant-combinator` object; it does not emit an Entity plus a second default
+combinator. Ordinary unlinked producers and structural Entities remain
+separate. The v4 simulator and blueprint adapter share the existing
+conservative Constant support boundary, so unsupported groups or non-unit
+section multipliers are diagnostics rather than guessed native behavior.
+
 The generator emits plain JSON only. It does not prepend the exchange-string version byte, deflate, or base64-encode the result.
 
 Nested Decider conditions are lowered to OR-connected groups of AND comparisons.
@@ -92,7 +102,7 @@ This is an early preview rather than the Phase 8 codec:
 - entity defaults and schema details will be tightened against Factorio import tests;
 - verified typed Entity import/export and native raw-field conformance remain pending;
 - omission/defaulting rules outside the implemented default-item `Signal(name)` case still need captured import/export conformance fixtures;
-- constant combinators currently export one default section; multiple sections, groups, section multipliers/active state, and entity-wide `is_on` await the Phase 7 exact Constant model and fixtures;
+- public Constant source construction and native import/export conformance remain pending; the internal v4 adapter exports canonical supported sections, active state, and `is_on`, while groups and non-unit multipliers remain explicitly unsupported;
 - source Networks without a physical producing endpoint cannot create an external blueprint connection by themselves.
 
 The workbench shows and copies this readable JSON, but it is still a preview rather than a finished exchange-string export or verified round-trip codec.
