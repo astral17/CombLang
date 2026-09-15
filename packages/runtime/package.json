@@ -9,6 +9,8 @@
     "./entity-provisioning": "./src/entity-provisioning.ts",
     "./resolved-source-circuit": "./src/resolved-source-circuit.ts",
     "./resolved-entity-v4": "./src/resolved-entity-v4.ts",
+    "./resolved-entity-v5": "./src/resolved-entity-v5.ts",
+    "./entity-v5": "./src/entity-v5.ts",
     "./entity-registry": "./src/entity-registry.ts",
     "./source-compilation": "./src/source-compilation.ts"
   },

@@ -74,6 +74,15 @@ separate. The v4 simulator and blueprint adapter share the existing
 conservative Constant support boundary, so unsupported groups or non-unit
 section multipliers are diagnostics rather than guessed native behavior.
 
+The cumulative Entity v5 preview uses
+`generateEntityComputationBlueprintJsonV5`. A linked Arithmetic combines the
+producer's resolved control behavior with the linked Entity's trusted
+`arithmetic-combinator` prototype and Entity-owned placement, emitting exactly
+one native arithmetic-combinator object. Mixed linked Constant+Arithmetic
+plans are supported by the same adapter. This remains readable synthetic
+preview output and does not establish native Factorio import/export
+conformance.
+
 The generator emits plain JSON only. It does not prepend the exchange-string version byte, deflate, or base64-encode the result.
 
 Nested Decider conditions are lowered to OR-connected groups of AND comparisons.

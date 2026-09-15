@@ -20,6 +20,7 @@ import {
   elaborateEntityDirectPlan,
   tryElaborateDirectPlan,
 } from './direct-plan.js';
+import { tryElaborateEntityV5DirectPlan } from './entity-v5.js';
 import { validateEntityDirectPlan } from './entity-plan-validation.js';
 import { RuntimeDiagnosticError } from './elaboration.js';
 import {
@@ -4681,6 +4682,135 @@ const second = Constant(selectPrototype());`,
     expect(plan.diagnostics).toContainEqual(
       expect.objectContaining({ code: 'CL2001', severity: 'warning' }),
     );
+  });
+
+  test('constructs exact Arithmetic as one linked native Entity in cumulative v5', () => {
+    const profile = {
+      ...syntheticZeroPortEntityProfile,
+      ref: {
+        ...syntheticZeroPortEntityProfile.ref,
+        prototypeKey: 'entity:arithmetic-combinator',
+        profileId:
+          'profile:exact-arithmetic-v5' as typeof syntheticZeroPortEntityProfile.ref.profileId,
+      },
+      prototypeType: 'arithmetic-combinator',
+    };
+    const context = createTrustedEntityReplayContext({
+      database: profile.ref.database,
+      source: 'synthetic',
+      evidenceIdentity: 'exact-arithmetic-v5-evidence',
+      policyIdentity: 'exact-arithmetic-v5-policy',
+      profiles: [profile],
+    });
+    const resolver = {
+      database: context.database,
+      getEntity(nameOrKey: string): EntityPrototype | undefined {
+        return nameOrKey === 'entity:arithmetic-combinator'
+          ? {
+              key: 'entity:arithmetic-combinator' as EntityPrototype['key'],
+              name: 'arithmetic-combinator',
+              type: 'arithmetic-combinator',
+              tileWidth: 1,
+              tileHeight: 1,
+            }
+          : undefined;
+      },
+    };
+    const parsed = parseFile({
+      path: 'exact-arithmetic-v5.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const comb: ArithmeticCombinator = Arithmetic({ left: input[A], operation: 'multiply', right: 2, output: A });
+const output = new Network();
+output += comb;`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const plan = executeElaborationProgramV3(transformElaborationModule(parsed), {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: resolver,
+    });
+    expect(plan.version).toBe(5);
+    if (plan.version !== 5) throw new Error('Expected a v5 plan.');
+    expect(plan.producers).toMatchObject([
+      {
+        kind: 'arithmetic',
+        entityId: expect.any(String),
+        operation: 'multiply',
+        left: { kind: 'signal', network: 'input' },
+        right: { kind: 'constant', value: 2 },
+        output: { kind: 'signal', signal: { name: 'signal-A' } },
+      },
+    ]);
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.entities[0]?.configuration).toMatchObject({ mode: 'arithmetic' });
+    const lowered = tryElaborateEntityV5DirectPlan(plan, context);
+    expect(lowered.diagnostics).toEqual([]);
+    expect(lowered.execution?.circuit.ir.version).toBe(5);
+    expect(lowered.execution?.circuit.ir.entities[0]?.configuration).toMatchObject({
+      mode: 'arithmetic',
+      left: { kind: 'signal', network: expect.stringMatching(/^network:/) },
+    });
+    expect(lowered.resolvedCircuit?.format).toBe('comblang-resolved-entity-v5');
+  });
+
+  test('rolls back a caught exact Arithmetic failure before the next valid allocation', () => {
+    const profile = {
+      ...syntheticZeroPortEntityProfile,
+      ref: {
+        ...syntheticZeroPortEntityProfile.ref,
+        prototypeKey: 'entity:arithmetic-combinator',
+        profileId:
+          'profile:exact-arithmetic-rollback' as typeof syntheticZeroPortEntityProfile.ref.profileId,
+      },
+      prototypeType: 'arithmetic-combinator' as const,
+    };
+    const context = createTrustedEntityReplayContext({
+      database: profile.ref.database,
+      source: 'synthetic',
+      evidenceIdentity: 'exact-arithmetic-rollback-evidence',
+      policyIdentity: 'exact-arithmetic-rollback-policy',
+      profiles: [profile],
+    });
+    const resolver = {
+      database: context.database,
+      getEntity(nameOrKey: string): EntityPrototype | undefined {
+        return nameOrKey === 'entity:arithmetic-combinator'
+          ? {
+              key: 'entity:arithmetic-combinator' as EntityPrototype['key'],
+              name: 'arithmetic-combinator',
+              type: 'arithmetic-combinator',
+              tileWidth: 1,
+              tileHeight: 1,
+            }
+          : undefined;
+      },
+    };
+    const parsed = parseFile({
+      path: 'exact-arithmetic-rollback.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+let caught = 0;
+try { Arithmetic({ left: input[A], operation: 'multiply', right: 2, output: 'wrong' }); } catch { caught += 1; }
+if (caught !== 1) throw new Error('invalid exact Arithmetic was accepted');
+const valid: ArithmeticCombinator = Arithmetic({ left: input[A], operation: 'multiply', right: 2, output: A });
+const output = new Network();
+output += valid;`,
+    });
+    const plan = executeElaborationProgramV3(transformElaborationModule(parsed), {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: resolver,
+    });
+
+    expect(plan.version).toBe(5);
+    if (plan.version !== 5) throw new Error('Expected a v5 plan.');
+    expect(plan.producers).toHaveLength(1);
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.entities[0]?.ordinal).toBe(1);
+    expect(plan.producers[0]).toMatchObject({
+      kind: 'arithmetic',
+      entityId: expect.any(String),
+      operation: 'multiply',
+    });
   });
 
   test('keeps callback-local returns inside the surrounding borrow lifetime', () => {

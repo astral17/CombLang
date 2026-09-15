@@ -29,6 +29,7 @@ export const freeDslFunctionNames = Object.freeze([
   'NativeCondition',
   'Network',
   'CC',
+  'Arithmetic',
   'IF',
   'to',
   'when',

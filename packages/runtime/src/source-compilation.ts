@@ -2,6 +2,7 @@ import { transformElaborationModule } from '@comblang/compiler/elaboration-trans
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
 import type { DirectElaborationPlanV3 } from '@comblang/compiler/entity';
 import type { DirectElaborationPlanV4 } from '@comblang/compiler/entity-v4';
+import type { DirectElaborationPlanV5 } from '@comblang/compiler/entity-v5';
 import {
   cloneEntityReplayContextTransport,
   entityReplayContextIdentity,
@@ -29,6 +30,7 @@ import {
   type ExecutedEntityDirectPlan,
 } from './direct-plan.js';
 import { tryElaborateEntityV4DirectPlan, type ExecutedEntityDirectPlanV4 } from './entity-v4.js';
+import { tryElaborateEntityV5DirectPlan, type ExecutedEntityDirectPlanV5 } from './entity-v5.js';
 import { executeElaborationProgram, executeElaborationProgramV3 } from './elaboration-program.js';
 import type { EntityPrototypeResolver } from './entity-registry.js';
 import { executionFailureDiagnostic } from './execution-diagnostic.js';
@@ -38,6 +40,7 @@ import {
   type ResolvedSourceCircuit,
 } from '@comblang/compiler/resolved-source-circuit';
 import type { ResolvedEntityV4Circuit } from '@comblang/compiler/resolved-entity-v4';
+import type { ResolvedEntityV5Circuit } from '@comblang/compiler/resolved-entity-v5';
 
 export interface SourceCompilationEnvironment {
   readonly prototypes?: PrototypeProvider;
@@ -61,14 +64,23 @@ export interface SourceCompilationArtifact extends ParseWorkerResult {
   /** Future result-cache identity; no compilation-result cache consumes it yet. */
   readonly entityReplayIdentity?: string;
   readonly elaborationJavaScript?: string;
-  readonly plan?: DirectElaborationPlan | DirectElaborationPlanV3 | DirectElaborationPlanV4;
-  /** Detached physical v3/v4 IR; present only after host-authorized lowering succeeds. */
-  readonly resolvedCircuit?: ResolvedSourceCircuit | ResolvedEntityV4Circuit;
+  readonly plan?:
+    | DirectElaborationPlan
+    | DirectElaborationPlanV3
+    | DirectElaborationPlanV4
+    | DirectElaborationPlanV5;
+  /** Detached physical v3/v4/v5 IR; present only after host-authorized lowering succeeds. */
+  readonly resolvedCircuit?:
+    ResolvedSourceCircuit | ResolvedEntityV4Circuit | ResolvedEntityV5Circuit;
 }
 
 /** Host-local compilation state. Runtime handles never enter the transport artifact. */
 export interface LocalSourceCompilation extends SourceCompilationArtifact {
-  readonly execution?: ExecutedDirectPlan | ExecutedEntityDirectPlan | ExecutedEntityDirectPlanV4;
+  readonly execution?:
+    | ExecutedDirectPlan
+    | ExecutedEntityDirectPlan
+    | ExecutedEntityDirectPlanV4
+    | ExecutedEntityDirectPlanV5;
 }
 
 export type SourceCompilationStage = 'parse' | 'semantic' | 'transform' | 'execute' | 'lower';
@@ -125,10 +137,20 @@ function compileParsedSource(
   observe?: SourceCompilationObserver,
 ): LocalSourceCompilation {
   const entityReplayContext = replayTransport(environment);
-  let plan: DirectElaborationPlan | DirectElaborationPlanV3 | DirectElaborationPlanV4 | undefined;
+  let plan:
+    | DirectElaborationPlan
+    | DirectElaborationPlanV3
+    | DirectElaborationPlanV4
+    | DirectElaborationPlanV5
+    | undefined;
   let execution:
-    ExecutedDirectPlan | ExecutedEntityDirectPlan | ExecutedEntityDirectPlanV4 | undefined;
-  let resolvedCircuit: ResolvedSourceCircuit | ResolvedEntityV4Circuit | undefined;
+    | ExecutedDirectPlan
+    | ExecutedEntityDirectPlan
+    | ExecutedEntityDirectPlanV4
+    | ExecutedEntityDirectPlanV5
+    | undefined;
+  let resolvedCircuit:
+    ResolvedSourceCircuit | ResolvedEntityV4Circuit | ResolvedEntityV5Circuit | undefined;
   let elaborationJavaScript: string | undefined;
   observe?.('semantic');
   const semanticDiagnostics = validateDslSemantics(parsed);
@@ -160,30 +182,46 @@ function compileParsedSource(
         plan = executedPlan;
         observe?.('lower');
         const lowered =
-          executedPlan.version === 4
+          executedPlan.version === 5
             ? environment.trustedEntityReplayContext === undefined
               ? (() => {
                   throw new EntityReplayContextError(
                     'ER1001',
                     '$.entityReplayContext',
-                    'Entity v4 plans require a host-bound trusted profile-set context.',
+                    'Entity v5 plans require a host-bound trusted profile-set context.',
                   );
                 })()
-              : tryElaborateEntityV4DirectPlan(executedPlan, environment.trustedEntityReplayContext)
-            : executedPlan.version === 3
+              : tryElaborateEntityV5DirectPlan(executedPlan, environment.trustedEntityReplayContext)
+            : executedPlan.version === 4
               ? environment.trustedEntityReplayContext === undefined
                 ? (() => {
                     throw new EntityReplayContextError(
                       'ER1001',
                       '$.entityReplayContext',
-                      'Entity v3 plans require a host-bound trusted profile-set context.',
+                      'Entity v4 plans require a host-bound trusted profile-set context.',
                     );
                   })()
-                : tryElaborateEntityDirectPlan(executedPlan, environment.trustedEntityReplayContext)
-              : tryElaborateDirectPlan(executedPlan);
+                : tryElaborateEntityV4DirectPlan(
+                    executedPlan,
+                    environment.trustedEntityReplayContext,
+                  )
+              : executedPlan.version === 3
+                ? environment.trustedEntityReplayContext === undefined
+                  ? (() => {
+                      throw new EntityReplayContextError(
+                        'ER1001',
+                        '$.entityReplayContext',
+                        'Entity v3 plans require a host-bound trusted profile-set context.',
+                      );
+                    })()
+                  : tryElaborateEntityDirectPlan(
+                      executedPlan,
+                      environment.trustedEntityReplayContext,
+                    )
+                : tryElaborateDirectPlan(executedPlan);
         execution = lowered.execution;
         if (
-          executedPlan.version === 4 &&
+          (executedPlan.version === 4 || executedPlan.version === 5) &&
           'resolvedCircuit' in lowered &&
           lowered.resolvedCircuit !== undefined
         ) {

@@ -459,6 +459,24 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     if (node.arguments.length === 2) return 'non-producer';
     return 'runtime';
   };
+  const arithmeticOverloadCertainty = (node: ts.CallExpression): ProducerCertainty => {
+    if (!isDslBuiltin('Arithmetic')) return 'runtime';
+    if (node.arguments.length === 1) {
+      const argument = node.arguments[0]!;
+      if (ts.isObjectLiteralExpression(argument)) return 'producer';
+      if (
+        ts.isNumericLiteral(argument) ||
+        ts.isStringLiteral(argument) ||
+        argument.kind === ts.SyntaxKind.TrueKeyword ||
+        argument.kind === ts.SyntaxKind.FalseKeyword ||
+        argument.kind === ts.SyntaxKind.NullKeyword ||
+        ts.isArrayLiteralExpression(argument)
+      ) {
+        return 'non-producer';
+      }
+    }
+    return 'runtime';
+  };
   const producerCertainty = (node: ts.Expression): ProducerCertainty => {
     if (ts.isParenthesizedExpression(node)) return producerCertainty(node.expression);
     if (ts.isIdentifier(node) && lookupProducerSlot(node.text)?.direct !== undefined) {
@@ -481,6 +499,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     if (ts.isCallExpression(node)) {
       if (ts.isIdentifier(node.expression)) {
         if (node.expression.text === 'Constant') return constantOverloadCertainty(node);
+        if (node.expression.text === 'Arithmetic') return arithmeticOverloadCertainty(node);
         return (node.expression.text === 'CC' && isDslBuiltin('CC')) ||
           (node.expression.text === 'IF' && isDslBuiltin('IF')) ||
           (node.expression.text === 'when' && isDslBuiltin('when')) ||
@@ -528,6 +547,9 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     if (ts.isIdentifier(node.expression)) {
       if (node.expression.text === 'Constant') {
         return constantOverloadCertainty(node) === 'producer' ? 'constant' : undefined;
+      }
+      if (node.expression.text === 'Arithmetic') {
+        return arithmeticOverloadCertainty(node) === 'producer' ? 'arithmetic' : undefined;
       }
       if (node.expression.text === 'CC' && isDslBuiltin('CC')) return 'constant';
       if (node.expression.text === 'IF' && isDslBuiltin('IF')) return 'decider';
@@ -1104,6 +1126,13 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
         report(
           'CL1014',
           'Constant(configuration) or Constant(prototype, configuration?) requires one or two arguments.',
+          node,
+        );
+      }
+      if (name === 'Arithmetic' && isDslBuiltin(name) && node.arguments.length !== 1) {
+        report(
+          'CL1014',
+          'Arithmetic(configuration) requires exactly one configuration argument.',
           node,
         );
       }

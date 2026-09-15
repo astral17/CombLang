@@ -10,6 +10,7 @@ import {
 import type {
   DirectElaborationPlanV3,
   DirectElaborationPlanV4,
+  DirectElaborationPlanV5,
   ElaborationJavaScript,
   EntityBehaviorKey,
   EntityConfiguration,
@@ -26,9 +27,11 @@ import type {
   EntityId,
 } from '@comblang/compiler';
 import type { EntityV4ConstantConfiguration } from '@comblang/compiler/entity-v4';
+import type { EntityV5ArithmeticConfiguration } from '@comblang/compiler/entity-v5';
 import { entityFamilyDslNames, type DslParameterContract } from '@comblang/language';
 import type {
   DirectElaborationPlan,
+  DirectPlanArithmetic,
   DirectPlanDebugInstance,
   DirectPlanDebugValue,
   DirectPlanProducer,
@@ -113,6 +116,7 @@ import {
   type TrustedEntityReplayContext,
 } from '@comblang/compiler/entity-replay-context';
 import type { EntityPlacement } from '@comblang/compiler/ir';
+import type { ArithmeticOperation, LogicalArithmeticOutput } from '@comblang/compiler/ir';
 import {
   BlueprintEntitySignalConversionError,
   detachBlueprintEntitySignalHandles,
@@ -195,7 +199,7 @@ interface TopologySnapshot {
   readonly entityRegistry?: EntityRegistrySnapshot;
   readonly entityRevision: number;
   readonly entityAuthoritiesLength: number;
-  readonly linkedConstantsLength: number;
+  readonly linkedProducersLength: number;
 }
 
 interface EntityFacetAuthority {
@@ -215,9 +219,18 @@ interface EntityAuthorityView {
 }
 
 interface LinkedConstantAssociation {
+  readonly kind: 'constant';
   readonly entity: EntityValue;
   readonly configuration: import('@comblang/factorio').ConstantConfiguration;
 }
+
+interface LinkedArithmeticAssociation {
+  readonly kind: 'arithmetic';
+  readonly entity: EntityValue;
+  readonly configuration: EntityV5ArithmeticConfiguration;
+}
+
+type LinkedProducerAssociation = LinkedConstantAssociation | LinkedArithmeticAssociation;
 
 export interface ElaborationExecutionOptions {
   readonly dslCallBudget?: number;
@@ -250,6 +263,31 @@ function isRawSpan(value: unknown): value is RawSpan {
     typeof (value as RawSpan).start === 'number' &&
     typeof (value as RawSpan).end === 'number'
   );
+}
+
+const exactArithmeticOperations = Object.freeze([
+  'add',
+  'subtract',
+  'multiply',
+  'divide',
+  'modulo',
+  'power',
+  'left-shift',
+  'right-shift',
+  'bit-and',
+  'bit-or',
+  'bit-xor',
+] as const satisfies readonly ArithmeticOperation[]);
+
+function isPlainDataRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  return Reflect.ownKeys(value).every((key) => {
+    if (typeof key !== 'string') return false;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return descriptor !== undefined && 'value' in descriptor;
+  });
 }
 
 class ElaborationRecorder {
@@ -300,10 +338,10 @@ class ElaborationRecorder {
   readonly #entityRegistry: EntityRegistry | undefined;
   readonly #entityAuthorities = new WeakMap<object, EntityAuthorityView>();
   readonly #entityAuthorityList: EntityAuthorityView[] = [];
-  readonly #linkedConstantByIdentity = new WeakMap<object, LinkedConstantAssociation>();
-  readonly #linkedConstants: {
+  readonly #linkedProducerByIdentity = new WeakMap<object, LinkedProducerAssociation>();
+  readonly #linkedProducers: {
     readonly producer: CombinatorValue;
-    readonly association: LinkedConstantAssociation;
+    readonly association: LinkedProducerAssociation;
   }[] = [];
   #entityRevision = 0;
   #entityOperationOrdinal = 0;
@@ -717,6 +755,38 @@ class ElaborationRecorder {
         }
         const outputs = constantConfigurationToSparseBus(configuration).toJSON();
         return this.#createConstantProducer(configuration, rawSpan, outputs, true);
+      }),
+    arithmeticOverload: (arguments_: readonly CallArgument[], rawSpan: RawSpan): CombinatorValue =>
+      this.#withTopologyTransaction(rawSpan, () => {
+        this.#recordDslCall();
+        if (!Array.isArray(arguments_) || arguments_.length !== 1) {
+          throw new ElaborationExecutionError(
+            'Arithmetic(configuration) requires exactly one configuration argument.',
+            this.#span(rawSpan),
+            'RT2027',
+          );
+        }
+        const argument = arguments_[0]!;
+        const configuration = this.#normalizeArithmeticConfigurationSource(
+          argument.value,
+          argument.source,
+        );
+        if (this.#resolveCanonicalArithmeticProfile(rawSpan) === undefined) {
+          throw new ElaborationExecutionError(
+            'Exact Arithmetic configuration requires a trusted base entity:arithmetic-combinator Entity profile.',
+            this.#span(rawSpan),
+            'RT2027',
+          );
+        }
+        return this.#createCombinator(
+          {
+            kind: 'arithmetic',
+            ...configuration,
+            source: this.#span(rawSpan),
+            instancePath: this.#path(),
+          },
+          rawSpan,
+        );
       }),
     network: (
       name: string | undefined,
@@ -1557,7 +1627,7 @@ class ElaborationRecorder {
         }
         return (producer as { at: (...values: unknown[]) => unknown }).at(...args.slice(1, -1));
       }
-      const linked = this.#linkedConstantByIdentity.get(producer.identity);
+      const linked = this.#linkedProducerByIdentity.get(producer.identity);
       if (linked !== undefined) {
         this.#recordDslCall();
         if (args.length !== 4 && args.length !== 5) {
@@ -1595,7 +1665,7 @@ class ElaborationRecorder {
         const registry = this.#entityRegistry;
         if (registry === undefined) {
           throw new ElaborationExecutionError(
-            'Linked Constant placement requires a trusted Entity registry.',
+            'Linked combinator placement requires a trusted Entity registry.',
             this.#span(rawSpan),
             'RT2027',
           );
@@ -1608,7 +1678,7 @@ class ElaborationRecorder {
           });
         } catch (error) {
           throw new ElaborationExecutionError(
-            error instanceof Error ? error.message : 'Linked Constant placement failed.',
+            error instanceof Error ? error.message : 'Linked combinator placement failed.',
             this.#span(rawSpan),
             'RT2027',
             undefined,
@@ -1733,7 +1803,11 @@ class ElaborationRecorder {
     },
   });
 
-  plan(): DirectElaborationPlan | DirectElaborationPlanV3 | DirectElaborationPlanV4 {
+  plan():
+    | DirectElaborationPlan
+    | DirectElaborationPlanV3
+    | DirectElaborationPlanV4
+    | DirectElaborationPlanV5 {
     if (this.#status === 'failed') throw this.#firstFailure;
     if (this.#status === 'sealed') {
       throw new Error('The elaboration runtime has already been sealed.');
@@ -1779,7 +1853,7 @@ class ElaborationRecorder {
         producers: Object.freeze(
           this.#combinators.states().map((state) => {
             const producer = this.#combinators.toPlan(state);
-            const linked = this.#linkedConstantByIdentity.get(state.identity);
+            const linked = this.#linkedProducerByIdentity.get(state.identity);
             return linked === undefined
               ? producer
               : Object.freeze({ ...producer, entityId: linked.entity.id });
@@ -1795,42 +1869,67 @@ class ElaborationRecorder {
       }
       const entities = this.#entityRegistry?.records() ?? [];
       const v4Entities = entities.map((entity) => {
-        const linked = this.#linkedConstants.find(
+        const linked = this.#linkedProducers.find(
+          ({ association }) =>
+            association.kind === 'constant' && association.entity.id === entity.id,
+        );
+        if (linked === undefined || linked.association.kind !== 'constant') return entity;
+        return Object.freeze({
+          ...entity,
+          configuration: {
+            mode: 'constant' as const,
+            value: linked.association.configuration,
+          } satisfies EntityV4ConstantConfiguration,
+        });
+      });
+      const v5Entities = entities.map((entity) => {
+        const linked = this.#linkedProducers.find(
           ({ association }) => association.entity.id === entity.id,
         );
         return linked === undefined
           ? entity
-          : Object.freeze({
-              ...entity,
-              configuration: {
-                mode: 'constant' as const,
-                value: linked.association.configuration,
-              } satisfies EntityV4ConstantConfiguration,
-            });
+          : linked.association.kind === 'constant'
+            ? Object.freeze({
+                ...entity,
+                configuration: {
+                  mode: 'constant' as const,
+                  value: linked.association.configuration,
+                } satisfies EntityV4ConstantConfiguration,
+              })
+            : Object.freeze({
+                ...entity,
+                configuration: linked.association.configuration,
+              });
       });
-      const plan: DirectElaborationPlan | DirectElaborationPlanV3 | DirectElaborationPlanV4 =
-        this.#linkedConstants.length !== 0
-          ? {
-              ...common,
-              version: 4 as const,
-              debugInstances: Object.freeze([
-                ...this.#debugInstances,
-              ]) as readonly EntityPlanDebugInstance[],
-              context: entityReplayContextRef(this.#entityContext!),
-              networks: Object.freeze(
-                this.#networks.map((network) => {
-                  const state = this.#networkStates.get(network.name);
-                  return Object.freeze({
-                    ...network,
-                    generation: state?.ownership.generation ?? 0,
-                    ...(state?.ownership.consumedAt === undefined
-                      ? {}
-                      : { consumedAt: state.ownership.consumedAt }),
-                  });
-                }),
-              ),
-              entities: Object.freeze(v4Entities),
-            }
+      const entityCommon = () => ({
+        ...common,
+        debugInstances: Object.freeze([
+          ...this.#debugInstances,
+        ]) as readonly EntityPlanDebugInstance[],
+        context: entityReplayContextRef(this.#entityContext!),
+        networks: Object.freeze(
+          this.#networks.map((network) => {
+            const state = this.#networkStates.get(network.name);
+            return Object.freeze({
+              ...network,
+              generation: state?.ownership.generation ?? 0,
+              ...(state?.ownership.consumedAt === undefined
+                ? {}
+                : { consumedAt: state.ownership.consumedAt }),
+            });
+          }),
+        ),
+      });
+      const plan:
+        | DirectElaborationPlan
+        | DirectElaborationPlanV3
+        | DirectElaborationPlanV4
+        | DirectElaborationPlanV5 = this.#linkedProducers.some(
+        ({ association }) => association.kind === 'arithmetic',
+      )
+        ? { ...entityCommon(), version: 5 as const, entities: Object.freeze(v5Entities) }
+        : this.#linkedProducers.some(({ association }) => association.kind === 'constant')
+          ? { ...entityCommon(), version: 4 as const, entities: Object.freeze(v4Entities) }
           : entities.length === 0
             ? {
                 ...common,
@@ -1839,27 +1938,7 @@ class ElaborationRecorder {
                   ...this.#debugInstances,
                 ]) as readonly DirectPlanDebugInstance[],
               }
-            : {
-                ...common,
-                version: 3 as const,
-                debugInstances: Object.freeze([
-                  ...this.#debugInstances,
-                ]) as readonly EntityPlanDebugInstance[],
-                context: entityReplayContextRef(this.#entityContext!),
-                networks: Object.freeze(
-                  this.#networks.map((network) => {
-                    const state = this.#networkStates.get(network.name);
-                    return Object.freeze({
-                      ...network,
-                      generation: state?.ownership.generation ?? 0,
-                      ...(state?.ownership.consumedAt === undefined
-                        ? {}
-                        : { consumedAt: state.ownership.consumedAt }),
-                    });
-                  }),
-                ),
-                entities: Object.freeze([...entities]),
-              };
+            : { ...entityCommon(), version: 3 as const, entities: Object.freeze([...entities]) };
       this.#status = 'sealed';
       return plan;
     } catch (error) {
@@ -2267,6 +2346,14 @@ class ElaborationRecorder {
   }
 
   #createCombinator(descriptor: CombinatorDescriptor, rawSpan: RawSpan): CombinatorValue {
+    // A provider-backed arithmetic producer is the ergonomic spelling of the
+    // exact Arithmetic constructor. Resolve its trusted base before creating
+    // any topology so malformed or ambiguous authority cannot fall through to
+    // a modded profile.
+    const arithmeticProfile =
+      descriptor.kind === 'arithmetic'
+        ? this.#resolveCanonicalArithmeticProfile(rawSpan)
+        : undefined;
     const ordinal = ++this.#combinatorOrdinal;
     const primary = this.#network(`$combinator:${ordinal}:primary`, rawSpan);
     const value = this.#runtimeValue<CombinatorValue>({ kind: 'combinator', identity: {} });
@@ -2277,6 +2364,25 @@ class ElaborationRecorder {
     });
     this.#combinatorByOutput.set(this.#networkState(primary).ownership, value);
     this.#colors.registerCombinatorInputs(value.identity, descriptor);
+    if (arithmeticProfile !== undefined && descriptor.kind === 'arithmetic') {
+      const entity = this.#allocateEntity(arithmeticProfile.ref, undefined, undefined, rawSpan);
+      const association = {
+        kind: 'arithmetic' as const,
+        entity,
+        configuration: {
+          mode: 'arithmetic' as const,
+          left: this.#canonicalArithmeticOperand(descriptor.left),
+          operation: descriptor.operation,
+          right: this.#canonicalArithmeticOperand(descriptor.right),
+          output:
+            descriptor.output.kind === 'signal'
+              ? { kind: 'signal' as const, signal: this.#signalSnapshot(descriptor.output.signal) }
+              : descriptor.output,
+        },
+      } satisfies LinkedArithmeticAssociation;
+      this.#linkedProducerByIdentity.set(value.identity, association);
+      this.#linkedProducers.push({ producer: value, association });
+    }
     return value;
   }
 
@@ -2700,7 +2806,7 @@ class ElaborationRecorder {
         : { entityRegistry: this.#entityRegistry.snapshot() }),
       entityRevision: this.#entityRevision,
       entityAuthoritiesLength: this.#entityAuthorityList.length,
-      linkedConstantsLength: this.#linkedConstants.length,
+      linkedProducersLength: this.#linkedProducers.length,
     };
   }
 
@@ -2739,7 +2845,10 @@ class ElaborationRecorder {
     }
     this.#entityRevision = snapshot.entityRevision;
     this.#entityAuthorityList.length = snapshot.entityAuthoritiesLength;
-    this.#linkedConstants.length = snapshot.linkedConstantsLength;
+    while (this.#linkedProducers.length > snapshot.linkedProducersLength) {
+      const removed = this.#linkedProducers.pop();
+      if (removed !== undefined) this.#linkedProducerByIdentity.delete(removed.producer.identity);
+    }
   }
 
   #withTopologyTransaction<T>(rawSpan: RawSpan, operation: () => T): T {
@@ -3180,6 +3289,142 @@ class ElaborationRecorder {
     return this.#prototypes.getEntity((value as { key: string }).key) === value;
   }
 
+  #normalizeArithmeticConfigurationSource(
+    value: unknown,
+    source: RawSpan,
+  ): Omit<
+    Extract<DirectPlanArithmetic, { readonly kind: 'arithmetic' }>,
+    | 'kind'
+    | 'destinations'
+    | 'source'
+    | 'instancePath'
+    | 'bindingName'
+    | 'debugCaptureIds'
+    | 'placement'
+  > {
+    if (!isPlainDataRecord(value)) {
+      throw new ElaborationExecutionError(
+        'Arithmetic configuration must be a plain data record.',
+        this.#span(source),
+        'RT2027',
+      );
+    }
+    const allowed = new Set(['left', 'operation', 'right', 'output']);
+    const keys = Reflect.ownKeys(value);
+    if (keys.some((key) => typeof key !== 'string' || !allowed.has(key))) {
+      throw new ElaborationExecutionError(
+        'Arithmetic configuration must contain exactly left, operation, right, and output fields.',
+        this.#span(source),
+        'RT2027',
+      );
+    }
+    for (const key of allowed) {
+      if (!Object.prototype.hasOwnProperty.call(value, key)) {
+        throw new ElaborationExecutionError(
+          `Arithmetic configuration is missing required field ${JSON.stringify(key)}.`,
+          this.#span(source),
+          'RT2027',
+        );
+      }
+    }
+    const operation = value.operation;
+    if (
+      typeof operation !== 'string' ||
+      !exactArithmeticOperations.includes(operation as (typeof exactArithmeticOperations)[number])
+    ) {
+      throw new ElaborationExecutionError(
+        `Arithmetic configuration operation must be one of ${exactArithmeticOperations.join(', ')}.`,
+        this.#span(source),
+        'RT2027',
+      );
+    }
+    let left: PlanArithmeticOperand;
+    let right: PlanArithmeticOperand;
+    try {
+      left = this.#arithmeticOperand(value.left as DslValue, source);
+      right = this.#arithmeticOperand(value.right as DslValue, source);
+    } catch (error) {
+      if (error instanceof ElaborationExecutionError) throw error;
+      throw new ElaborationExecutionError(
+        error instanceof Error ? error.message : 'Invalid Arithmetic operand.',
+        this.#span(source),
+        'RT2027',
+        undefined,
+        { cause: error },
+      );
+    }
+    const outputValue = value.output;
+    let output: LogicalArithmeticOutput;
+    if (this.#isSignal(outputValue)) {
+      output = { kind: 'signal', signal: this.#signalSnapshot(outputValue) };
+    } else if (this.#isWildcardToken(outputValue) && outputValue.value === 'each') {
+      output = { kind: 'each' };
+    } else {
+      throw new ElaborationExecutionError(
+        'Arithmetic configuration output must be a concrete Signal or Each/EACH.',
+        this.#span(source),
+        'RT2027',
+      );
+    }
+    return { left, operation: operation as ArithmeticOperation, right, output };
+  }
+
+  #resolveCanonicalArithmeticProfile(rawSpan: RawSpan): EntityProfile | undefined {
+    const context = this.#entityContext;
+    const resolver = this.#entityPrototypeResolver;
+    if (context === undefined || resolver === undefined) return undefined;
+    const candidates = context.profiles.filter(
+      ({ ref }) => ref.prototypeKey === 'entity:arithmetic-combinator',
+    );
+    if (candidates.length === 0) return undefined;
+    if (candidates.length > 1) {
+      throw new ElaborationExecutionError(
+        'The trusted provider exposes ambiguous base arithmetic-combinator profiles.',
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    const profile = candidates[0]!;
+    if (profile.prototypeType !== 'arithmetic-combinator') {
+      throw new ElaborationExecutionError(
+        'The trusted base arithmetic-combinator profile does not assert prototypeType "arithmetic-combinator".',
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    let prototype: EntityPrototype | undefined;
+    try {
+      prototype = resolver.getEntity(profile.ref.prototypeKey);
+    } catch (error) {
+      throw new ElaborationExecutionError(
+        error instanceof Error ? error.message : 'Arithmetic prototype lookup failed.',
+        this.#span(rawSpan),
+        'RT2027',
+        undefined,
+        { cause: error },
+      );
+    }
+    if (prototype === undefined) {
+      throw new ElaborationExecutionError(
+        `Trusted Arithmetic profile ${JSON.stringify(profile.ref.prototypeKey)} is not available in the selected provider.`,
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    if (
+      prototype.key !== profile.ref.prototypeKey ||
+      prototype.name !== 'arithmetic-combinator' ||
+      prototype.type !== 'arithmetic-combinator'
+    ) {
+      throw new ElaborationExecutionError(
+        `Trusted Arithmetic profile ${JSON.stringify(profile.ref.prototypeKey)} does not match base provider prototype data.`,
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    return profile;
+  }
+
   #resolveCanonicalConstantProfile(rawSpan: RawSpan): EntityProfile | undefined {
     const context = this.#entityContext;
     const resolver = this.#entityPrototypeResolver;
@@ -3267,9 +3512,13 @@ class ElaborationRecorder {
       rawSpan,
     );
     if (entity !== undefined) {
-      const association = { entity, configuration } satisfies LinkedConstantAssociation;
-      this.#linkedConstantByIdentity.set(producer.identity, association);
-      this.#linkedConstants.push({ producer, association });
+      const association = {
+        kind: 'constant' as const,
+        entity,
+        configuration,
+      } satisfies LinkedConstantAssociation;
+      this.#linkedProducerByIdentity.set(producer.identity, association);
+      this.#linkedProducers.push({ producer, association });
     }
     return producer;
   }
@@ -4095,6 +4344,12 @@ class ElaborationRecorder {
     throw new Error('Circuit arithmetic currently requires a Network or numeric operand.');
   }
 
+  #canonicalArithmeticOperand(value: PlanArithmeticOperand): PlanArithmeticOperand {
+    return value.kind === 'signal'
+      ? { ...value, signal: this.#signalSnapshot(value.signal) }
+      : value;
+  }
+
   #isCondition(value: unknown): value is ConditionValue {
     return this.#hasRuntimeKind(value, 'condition');
   }
@@ -4274,7 +4529,11 @@ class ElaborationRecorder {
 function executeElaborationProgramInternal(
   program: ElaborationJavaScript,
   options: ElaborationExecutionOptions = {},
-): DirectElaborationPlan | DirectElaborationPlanV3 | DirectElaborationPlanV4 {
+):
+  | DirectElaborationPlan
+  | DirectElaborationPlanV3
+  | DirectElaborationPlanV4
+  | DirectElaborationPlanV5 {
   if (program.format !== 'comblang-elaboration-js' || program.version !== 2) {
     throw new Error('Unsupported elaboration JavaScript format.');
   }
@@ -4327,6 +4586,10 @@ export function executeElaborationProgramV3(
     readonly trustedEntityReplayContext: TrustedEntityReplayContext;
     readonly entityPrototypeResolver?: EntityPrototypeResolver;
   },
-): DirectElaborationPlan | DirectElaborationPlanV3 | DirectElaborationPlanV4 {
+):
+  | DirectElaborationPlan
+  | DirectElaborationPlanV3
+  | DirectElaborationPlanV4
+  | DirectElaborationPlanV5 {
   return executeElaborationProgramInternal(program, options);
 }

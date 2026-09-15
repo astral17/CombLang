@@ -438,6 +438,34 @@ the same supported configuration boundary when that authority is present;
 without it, `CC` retains its legacy v2 producer-only path. `CC.section(...)`
 and any-quality filter syntax are not executable syntax.
 
+The exact arithmetic-combinator form is `Arithmetic({ left, operation, right,
+output })`. It is a semantic configuration, not raw Blueprint JSON:
+
+```ts
+const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const comb: ArithmeticCombinator = Arithmetic({
+  left: input[A],
+  operation: 'multiply',
+  right: 2,
+  output: A,
+});
+const out = new Network();
+out += comb;
+```
+
+The four keys are required and no other keys are accepted. Operations are the
+canonical `add`, `subtract`, `multiply`, `divide`, `modulo`, `power`,
+`left-shift`, `right-shift`, `bit-and`, `bit-or`, and `bit-xor` names. Operands
+are safe integer constants or readable concrete-signal/Network/Pair/Combinator
+and `Each` sources; `Anything` and `Everything` are rejected. The output is a
+concrete Signal or `Each`/`EACH`. Numeric values use the same signed-int32
+normalization as ordinary arithmetic. Exact Arithmetic requires the trusted
+base `entity:arithmetic-combinator` profile and creates one linked physical
+Entity; provider-backed ergonomic arithmetic also links when that base
+authority is present, while profile-free arithmetic remains v2. See
+[Entity v5](entity-v5.md) for the version matrix and replay boundary.
+
 ## Combinators and output connections
 
 Every hardware-producing expression creates its physical combinator immediately. It also creates a canonical primary output `Network`; there is no later materialization step:

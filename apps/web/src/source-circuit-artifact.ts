@@ -1,6 +1,7 @@
 import {
   generateBlueprintJson,
   generateEntityComputationBlueprintJson,
+  generateEntityComputationBlueprintJsonV5,
   generateEntityBlueprintJson,
 } from '@comblang/compiler/blueprint-json';
 import { resolvedSourceCircuitPlanFingerprint } from '@comblang/compiler/resolved-source-circuit';
@@ -9,6 +10,11 @@ import {
   resolvedEntityV4CircuitPlanFingerprint,
   type ResolvedEntityV4Circuit,
 } from '@comblang/compiler/resolved-entity-v4';
+import {
+  assertResolvedEntityV5CircuitMatchesPlan,
+  resolvedEntityV5CircuitPlanFingerprint,
+  type ResolvedEntityV5Circuit,
+} from '@comblang/compiler/resolved-entity-v5';
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
 import type { DirectElaborationPlanV3 } from '@comblang/compiler/entity';
 import type {
@@ -16,10 +22,16 @@ import type {
   ElaborationGraphV4,
   NativeCircuitIrV4,
 } from '@comblang/compiler/entity-v4';
+import type {
+  DirectElaborationPlanV5,
+  ElaborationGraphV5,
+  NativeCircuitIrV5,
+} from '@comblang/compiler/entity-v5';
 import {
   elaborateDirectPlan,
   hydrateResolvedSourceCircuit,
   hydrateResolvedEntityV4Circuit,
+  hydrateResolvedEntityV5Circuit,
   type NetworkHandle,
   type SimulationInitialValue,
   type ResolvedSourceCircuitRuntime,
@@ -29,7 +41,11 @@ import type { SimulationKernel } from '@comblang/simulator';
 import type { ElaborationGraphV3, NativeCircuitIrV3 } from '@comblang/compiler/entity';
 import type { NetworkId } from '@comblang/shared';
 
-export type SourcePlan = DirectElaborationPlan | DirectElaborationPlanV3 | DirectElaborationPlanV4;
+export type SourcePlan =
+  | DirectElaborationPlan
+  | DirectElaborationPlanV3
+  | DirectElaborationPlanV4
+  | DirectElaborationPlanV5;
 export type SourceExecution = ExecutedDirectPlan | ResolvedSourceCircuitExecution;
 
 /**
@@ -59,15 +75,23 @@ export interface EntityComputationSourceCircuitArtifact {
   readonly blueprint: ReturnType<typeof generateEntityComputationBlueprintJson>;
 }
 
+export interface EntityCumulativeSourceCircuitArtifact {
+  readonly plan: DirectElaborationPlanV5;
+  readonly resolvedCircuit: ResolvedEntityV5Circuit;
+  readonly execution: ResolvedSourceCircuitExecution;
+  readonly blueprint: ReturnType<typeof generateEntityComputationBlueprintJsonV5>;
+}
+
 export type SourceCircuitArtifact =
   | LegacySourceCircuitArtifact
   | EntitySourceCircuitArtifact
-  | EntityComputationSourceCircuitArtifact;
+  | EntityComputationSourceCircuitArtifact
+  | EntityCumulativeSourceCircuitArtifact;
 
 export interface ResolvedSourceCircuitExecution {
   readonly circuit: {
-    readonly graph: ElaborationGraphV3 | ElaborationGraphV4;
-    readonly ir: NativeCircuitIrV3 | NativeCircuitIrV4;
+    readonly graph: ElaborationGraphV3 | ElaborationGraphV4 | ElaborationGraphV5;
+    readonly ir: NativeCircuitIrV3 | NativeCircuitIrV4 | NativeCircuitIrV5;
     createSimulation(initial?: readonly SimulationInitialValue[]): SimulationKernel;
   };
   readonly debug: {
@@ -90,9 +114,31 @@ export function createSourceCircuitArtifact(
   resolvedCircuit: ResolvedEntityV4Circuit,
 ): EntityComputationSourceCircuitArtifact;
 export function createSourceCircuitArtifact(
+  plan: DirectElaborationPlanV5,
+  resolvedCircuit: ResolvedEntityV5Circuit,
+): EntityCumulativeSourceCircuitArtifact;
+export function createSourceCircuitArtifact(
   plan: SourcePlan,
-  resolvedCircuit?: ResolvedSourceCircuitRuntime['artifact'] | ResolvedEntityV4Circuit,
+  resolvedCircuit?:
+    ResolvedSourceCircuitRuntime['artifact'] | ResolvedEntityV4Circuit | ResolvedEntityV5Circuit,
 ): SourceCircuitArtifact {
+  if (plan.version === 5) {
+    if (resolvedCircuit === undefined || resolvedCircuit.format !== 'comblang-resolved-entity-v5') {
+      throw new Error('Entity v5 preview requires the matching resolved circuit.');
+    }
+    if (resolvedCircuit.planFingerprint !== resolvedEntityV5CircuitPlanFingerprint(plan)) {
+      throw new Error('Resolved Entity v5 circuit fingerprint does not match the compiled plan.');
+    }
+    assertResolvedEntityV5CircuitMatchesPlan(plan, resolvedCircuit);
+    const runtime = hydrateResolvedEntityV5Circuit(resolvedCircuit);
+    const execution = resolvedEntityV5Execution(plan, runtime);
+    return Object.freeze({
+      plan,
+      resolvedCircuit: runtime.artifact,
+      execution,
+      blueprint: generateEntityComputationBlueprintJsonV5(runtime.ir),
+    });
+  }
   if (plan.version === 4) {
     if (resolvedCircuit === undefined || resolvedCircuit.format !== 'comblang-resolved-entity-v4') {
       throw new Error('Entity v4 preview requires the matching resolved circuit.');
@@ -247,6 +293,50 @@ function resolvedEntityV4Execution(
   const graph: ElaborationGraphV4 = Object.freeze({
     format: 'comblang-eg',
     version: 4,
+    context: runtime.ir.context,
+    networks: Object.freeze(
+      runtime.ir.networks.map(({ color: _color, ...candidate }) => Object.freeze(candidate)),
+    ),
+    producers: runtime.ir.producers,
+    attachments: Object.freeze(
+      runtime.ir.producers.flatMap((producer) =>
+        producer.destinations.map((destination) =>
+          Object.freeze({
+            producer: producer.id,
+            network: destination,
+            provenance: producer.provenance,
+          }),
+        ),
+      ),
+    ),
+    entities: runtime.ir.entities,
+  });
+  return Object.freeze({
+    circuit: Object.freeze({
+      graph,
+      ir: runtime.ir,
+      createSimulation(initial: readonly SimulationInitialValue[] = []) {
+        return runtime.createSimulation(
+          initial.map((value) => ({
+            network: runtime.network(value.network.id),
+            values: value.values,
+          })),
+        );
+      },
+    }),
+    debug,
+    network,
+  });
+}
+
+function resolvedEntityV5Execution(
+  plan: DirectElaborationPlanV5,
+  runtime: ReturnType<typeof hydrateResolvedEntityV5Circuit>,
+): ResolvedSourceCircuitExecution {
+  const { network, debug } = resolvedNetworkViews(plan, runtime);
+  const graph: ElaborationGraphV5 = Object.freeze({
+    format: 'comblang-eg',
+    version: 5,
     context: runtime.ir.context,
     networks: Object.freeze(
       runtime.ir.networks.map(({ color: _color, ...candidate }) => Object.freeze(candidate)),

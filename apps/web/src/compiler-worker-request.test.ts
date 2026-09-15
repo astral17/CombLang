@@ -82,6 +82,13 @@ const rawSource = JSON.stringify({
       flags: ['placeable-player', 'player-creation'],
     },
   },
+  'arithmetic-combinator': {
+    'arithmetic-combinator': {
+      type: 'arithmetic-combinator',
+      name: 'arithmetic-combinator',
+      flags: ['placeable-player', 'player-creation'],
+    },
+  },
   'logistic-container': {
     'fixture-logistics': {
       type: 'logistic-container',
@@ -283,6 +290,39 @@ output += exact;`,
         mode: 'constant',
       });
     }
+    expect(JSON.stringify(response.result)).not.toMatch(
+      /profiles|resolver|prototypeProvider|trustedEntityReplayContext/,
+    );
+    expect(response.result).not.toHaveProperty('execution');
+    expect(structuredClone(response)).toEqual(response);
+  });
+
+  test('transports a linked exact Arithmetic as profile-free v5 data', async () => {
+    const response = await new CompilerWorkerRuntime().handle({
+      kind: 'parse',
+      revision: 20,
+      file: {
+        path: 'worker-exact-arithmetic.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const exact: ArithmeticCombinator = Arithmetic({ left: input[A], operation: 'multiply', right: 2, output: A }).at(4, 5);
+const output = new Network();
+output += exact;`,
+      },
+      prototypeProfile: { source: rawSource, factorioDumpMetadata: rawMetadata },
+    });
+
+    expect(response.result.compilerDiagnostics).toEqual([]);
+    expect(response.result.plan).toMatchObject({
+      version: 5,
+      producers: [{ kind: 'arithmetic', entityId: expect.any(String) }],
+      entities: [{ configuration: { mode: 'arithmetic', operation: 'multiply' } }],
+    });
+    expect(response.result.resolvedCircuit).toMatchObject({
+      format: 'comblang-resolved-entity-v5',
+      version: 1,
+      ir: { version: 5 },
+    });
     expect(JSON.stringify(response.result)).not.toMatch(
       /profiles|resolver|prototypeProvider|trustedEntityReplayContext/,
     );

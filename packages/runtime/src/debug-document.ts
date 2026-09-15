@@ -2,6 +2,7 @@ import type { EntityPhysicalRecord } from '@comblang/compiler/entity';
 import type { CircuitProducerNode, ElaborationGraph, EntityPlacement } from '@comblang/compiler/ir';
 import type { ElaborationGraphV3 } from '@comblang/compiler/entity';
 import type { ElaborationGraphV4 } from '@comblang/compiler/entity-v4';
+import type { ElaborationGraphV5, EntityPhysicalRecordV5 } from '@comblang/compiler/entity-v5';
 import type { NetworkId } from '@comblang/shared';
 
 import type {
@@ -20,7 +21,7 @@ export interface DebugDocumentProducer extends Omit<DebugProducerEntry, 'descrip
 }
 
 export interface DebugDocumentEntity extends Omit<DebugEntityEntry, 'record'> {
-  readonly record: EntityPhysicalRecord;
+  readonly record: EntityPhysicalRecord | EntityPhysicalRecordV5;
 }
 
 interface DebugDocumentScopeV1 {
@@ -49,7 +50,7 @@ export type DebugDocument = DebugDocumentV1 | DebugDocumentV2;
 /** Serialize IDs from this execution's EG, never by matching array ordinals. */
 export function createDebugDocument(
   index: DebugIndex,
-  graph: ElaborationGraph | ElaborationGraphV3 | ElaborationGraphV4,
+  graph: ElaborationGraph | ElaborationGraphV3 | ElaborationGraphV4 | ElaborationGraphV5,
 ): DebugDocument {
   const byId = new Map(graph.producers.map((producer) => [producer.id, producer]));
   const scopes = index.scopes.map((scope) => ({
@@ -68,7 +69,7 @@ export function createDebugDocument(
     }),
   }));
   const document: DebugDocument =
-    graph.version === 3 || graph.version === 4
+    graph.version === 3 || graph.version === 4 || graph.version === 5
       ? {
           format: 'comblang-debug',
           version: 2,

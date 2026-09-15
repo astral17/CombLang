@@ -10,6 +10,11 @@ trusted Entity whose profile has the exact `prototypeType` value
 may carry one `EntityId`; it is not another physical object. Placement belongs
 only to the Entity record, so a linked producer must omit `placement`.
 
+The cumulative v5 envelope extends this boundary for linked Arithmetic and
+mixed linked Constant+Arithmetic plans. Constant-only plans remain v4 and
+retain this byte-level contract; see [Entity v5](entity-v5.md) for the new
+association and version-selection rules.
+
 Before allocation, the v4 validator requires the exact current
 `entity-profile-set-v2-sha256:<digest>` replay identity, canonicalizes the
 Constant configuration with the Factorio package, and checks that the producer

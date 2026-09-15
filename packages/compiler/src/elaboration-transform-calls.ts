@@ -132,6 +132,12 @@ export function transformCallOrElementNode(
         context.spanLiteral(node),
       ]);
     }
+    if (node.expression.text === 'Arithmetic') {
+      return context.dslCall('arithmeticOverload', [
+        callArguments(node.arguments),
+        context.spanLiteral(node),
+      ]);
+    }
     const entityFamily = Object.prototype.hasOwnProperty.call(
       entityFamilyDslNames,
       node.expression.text,

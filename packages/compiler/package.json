@@ -13,17 +13,20 @@
     "./direct-plan-schema": "./src/direct-plan-schema.ts",
     "./entity": "./src/entity.ts",
     "./entity-v4": "./src/entity-v4.ts",
+    "./entity-v5": "./src/entity-v5.ts",
     "./entity-configuration": "./src/entity-configuration.ts",
     "./entity-fixtures": "./src/entity-fixtures.ts",
     "./entity-profile": "./src/entity-profile.ts",
     "./entity-provisioning": "./src/entity-provisioning.ts",
     "./entity-replay-context": "./src/entity-replay-context.ts",
     "./entity-raw": "./src/entity-raw.ts",
+    "./immutable": "./src/immutable.ts",
     "./elaboration-transform": "./src/elaboration-transform.ts",
     "./ir": "./src/ir.ts",
     "./producer-network-references": "./src/producer-network-references.ts",
     "./resolved-source-circuit": "./src/resolved-source-circuit.ts",
-    "./resolved-entity-v4": "./src/resolved-entity-v4.ts"
+    "./resolved-entity-v4": "./src/resolved-entity-v4.ts",
+    "./resolved-entity-v5": "./src/resolved-entity-v5.ts"
   },
   "dependencies": {
     "@comblang/factorio": "0.0.0",

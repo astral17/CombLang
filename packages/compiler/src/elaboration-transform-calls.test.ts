@@ -66,6 +66,16 @@ describe('elaboration call/member transform', () => {
     expect(code).toContain('...__dsl.spreadCallArguments(rest');
   });
 
+  test('routes exact Arithmetic through the runtime overload boundary', () => {
+    const code = transformCalls(
+      `Arithmetic({ left: input[A], operation: 'multiply', right: 2, output: A });`,
+    );
+
+    expect(code).toContain('__dsl.arithmeticOverload([{ value: {');
+    expect(code).toContain("operation: 'multiply'");
+    expect(code).toContain('source: { start:');
+  });
+
   test('instruments computed and returned-call callees at the executed boundary', () => {
     const code = transformCalls(
       `const called = Entity('entity:synthetic')(input); getFactory()(value);`,

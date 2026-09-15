@@ -182,6 +182,54 @@ output += exact;`,
     expect(controller.timeline).toHaveLength(1);
   });
 
+  test('hydrates cumulative v5 Arithmetic preview with one native blueprint object', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compiled = compileSource(
+      {
+        path: 'exact-arithmetic-preview.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const exact: ArithmeticCombinator = Arithmetic({ left: input[A], operation: 'multiply', right: 2, output: A }).at(3.5, -1, 8);
+const output = new Network();
+output += exact;`,
+      },
+      {
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+    if (
+      compiled.plan === undefined ||
+      compiled.plan.version !== 5 ||
+      compiled.resolvedCircuit?.format !== 'comblang-resolved-entity-v5'
+    ) {
+      throw new Error('Expected a resolved v5 Arithmetic artifact.');
+    }
+    const artifact = createSourceCircuitArtifact(compiled.plan, compiled.resolvedCircuit);
+    const controller = new SourceSimulationController(artifact);
+    expect(artifact.execution.circuit.ir.version).toBe(5);
+    expect(artifact.blueprint.blueprint.entities).toHaveLength(1);
+    expect(artifact.blueprint.blueprint.entities[0]).toMatchObject({
+      entity_number: 1,
+      name: 'arithmetic-combinator',
+      position: { x: 3.5, y: -1 },
+      direction: 8,
+      control_behavior: {
+        arithmetic_conditions: {
+          operation: '*',
+          first_signal: { type: 'virtual', name: 'signal-A' },
+          second_constant: 2,
+          output_signal: { type: 'virtual', name: 'signal-A' },
+        },
+      },
+    });
+    expect(controller.timeline).toHaveLength(1);
+  });
+
   test('rejects stale and modified v3 plans even when context and record counts match', () => {
     const profile = syntheticSharedTwoColorEntityProfile;
     const trustedEntityReplayContext = createTrustedEntityReplayContext({

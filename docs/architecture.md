@@ -48,21 +48,23 @@ hidden Producer, Network, Decider, or tick.
 Typed facades, raw native import, and verified native import behavior remain
 pending; see [Entity v3](entity-v3.md).
 
-The Phase 7 computation slice uses a separate Entity v4 envelope. Only a
-Constant producer view may reference an Entity, and the trusted profile must
-carry the exact `prototypeType: "constant-combinator"` fact. The v4 validator
-requires the current SHA-256 profile-set identity, checks the canonical
-Constant configuration against `constantConfigurationToSparseBus`, and rejects
-linked producer placement because placement belongs to the Entity. Validated
-v4 plans reuse the v2 topology engine transiently, then restore the association
-in v4 graph/NCIR without creating a second physical object. The profile-free
-resolved v4 snapshot and hydration path carry identity-only context, not
-profiles, providers, or resolver authority. The public
-`Constant({ isOn, sections })` form and `CC` now share this linked physical
-representation when the trusted base `entity:constant-combinator` profile is
-available; other same-type modded prototypes do not make that selection
-ambiguous. Without base authority, legacy `CC` keeps its v2 producer-only behavior. Synthetic/internal
-tests do not establish native Factorio conformance.
+The Phase 7 computation slice uses separate Entity v4 and cumulative v5
+envelopes. v4 remains Constant-only; v5 is selected when any Arithmetic
+producer is linked and may mix linked Constant and Arithmetic. Exact
+`Arithmetic({ left, operation, right, output })` requires trusted base
+`entity:arithmetic-combinator` authority with matching prototype type. The v5
+validator requires the current SHA-256 profile-set identity, checks exact
+family/configuration/association equality, and rejects linked producer
+placement because placement belongs to the Entity. Validated v4/v5 plans reuse
+the v2 topology engine transiently, then restore their association in graph and
+NCIR without creating a second physical object. Their profile-free resolved
+snapshots and hydration paths carry identity-only context, not profiles,
+providers, or resolver authority. The public exact Constant/Arithmetic forms
+and provider-backed `CC`/ergonomic Arithmetic share their linked physical
+representation when the matching trusted base profile is available; without
+that authority, profile-free behavior retains its legacy envelope. Synthetic/
+internal tests and readable blueprint preview do not establish native Factorio
+conformance.
 The default website and ordinary CLI now provision a conservative, provider-
 bound zero-port fallback profile only for Entity records whose normalized
 `blueprintEligible: true` fact is explicit. Presence in `data.raw`, a familiar
@@ -212,6 +214,10 @@ linked Constant it combines the producer's resolved wire endpoints with the
 Entity prototype, Entity-owned placement, and canonical Constant sections, so
 the output contains one native object number. Unlinked producers and
 structural Entities retain the existing separate-object mapping.
+
+`generateEntityComputationBlueprintJsonV5` is the cumulative adapter for
+linked Constant and Arithmetic. It uses the Entity prototype/placement and the
+producer's resolved native configuration to emit one object per linked device.
 
 This is deliberately pre-FCIR. Placement is a deterministic preview rather than a reach-aware layout, entity-number stability is local to one generation, and import/export semantic round trips remain Phase 8 work. Keeping this boundary explicit prevents the temporary row placer from becoming part of the eventual blueprint codec contract.
 

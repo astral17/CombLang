@@ -24,11 +24,12 @@ interface DirectElaborationPlan {
 
 `format` identifies the transport family. `version` changes when an existing reader cannot safely interpret the descriptor. Optional fields may be added only when their absence has a defined meaning for the current version. Consumers must not silently reinterpret an unsupported version.
 
-The internal computation-bearing Entity slice is version 4, with separate
-plan/graph/NCIR types. A v4 producer may reference one physical `EntityId`, but
-the association is only valid for a trusted `constant-combinator` profile and
-does not add a second placement or hardware record. v2/v3 validators and
-resolved readers intentionally reject v4.
+The internal computation-bearing Entity slices use separate plan/graph/NCIR
+types. Version 4 is the Constant-only envelope; version 5 is cumulative for
+linked Constant and Arithmetic. A linked producer may reference one physical
+`EntityId`, but the association does not add a second placement or hardware
+record. v2/v3 validators and resolved readers intentionally reject v4/v5,
+while the v4 and v5 readers remain strict and separate.
 
 The runtime remains the authoritative validator: `tryElaborateDirectPlan()` returns structured diagnostics, while `elaborateDirectPlan()` throws the same diagnostic for exception-oriented callers. A TypeScript type assertion or deserialized JSON is not proof that a plan is valid.
 
@@ -48,15 +49,15 @@ its frozen physical IR rather than replaying a v3 plan without the trusted
 profile authority.
 
 The v4 computation envelope is a separate `comblang-resolved-entity-v4`
-transport. It carries only canonical physical linkage, producer topology,
-Entity-owned placement/configuration, and identity-only replay context. Its
-hydrator does not receive profiles, providers, resolver functions, or runtime
-handles; exact Constant support is limited to the existing conservative
-`constantConfigurationToSparseBus` model. Its deterministic `planFingerprint`
-is stale-response correlation only, not a cryptographic integrity or authority
-claim; a valid physical placement change is outside the fingerprint's plan
-comparison scope. The source compiler, CLI, and browser Worker do not yet emit
-or transport this internal v4 envelope.
+transport, and v5 uses `comblang-resolved-entity-v5`. Both carry only
+canonical physical linkage, producer topology, Entity-owned
+placement/configuration, and identity-only replay context. Their hydrators do
+not receive profiles, providers, resolver functions, or runtime handles. v5
+adds strict Arithmetic configuration and mixed Constant/Arithmetic
+associations; exact Constant support remains limited to the existing
+conservative `constantConfigurationToSparseBus` model. Each deterministic
+`planFingerprint` is stale-response correlation only, not a cryptographic
+integrity or authority claim.
 
 ## Descriptor groups
 

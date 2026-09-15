@@ -19,6 +19,7 @@ import {
   type ExecutedDirectPlan,
 } from './direct-plan.js';
 import type { ExecutedEntityDirectPlanV4 } from './entity-v4.js';
+import type { ExecutedEntityDirectPlanV5 } from './entity-v5.js';
 import type { NetworkHandle } from './elaboration.js';
 
 export type DirectPlanTestFailureKind = 'assertion' | 'debug-query' | 'structure' | 'runtime';
@@ -48,7 +49,11 @@ export interface DirectPlanTestRun {
 }
 
 export interface DirectPlanTestApi {
-  readonly execution: ExecutedDirectPlan | ExecutedEntityDirectPlan | ExecutedEntityDirectPlanV4;
+  readonly execution:
+    | ExecutedDirectPlan
+    | ExecutedEntityDirectPlan
+    | ExecutedEntityDirectPlanV4
+    | ExecutedEntityDirectPlanV5;
   readonly session: TestSession<DirectPlanTestTarget>;
   network(name: string): NetworkHandle;
   drive(network: NetworkHandle, values: TestBusInput): void;
@@ -133,7 +138,11 @@ function failure(
 }
 
 function runTestsWithExecution(
-  getExecution: () => ExecutedDirectPlan | ExecutedEntityDirectPlan | ExecutedEntityDirectPlanV4,
+  getExecution: () =>
+    | ExecutedDirectPlan
+    | ExecutedEntityDirectPlan
+    | ExecutedEntityDirectPlanV4
+    | ExecutedEntityDirectPlanV5,
   source: string,
   options: DirectPlanTestRunnerOptions = {},
 ): DirectPlanTestRun {
@@ -171,7 +180,11 @@ function runTestsWithExecution(
   }
 
   const results = registered.map((registeredTest): DirectPlanTestCaseResult => {
-    let execution: ExecutedDirectPlan | ExecutedEntityDirectPlan | ExecutedEntityDirectPlanV4;
+    let execution:
+      | ExecutedDirectPlan
+      | ExecutedEntityDirectPlan
+      | ExecutedEntityDirectPlanV4
+      | ExecutedEntityDirectPlanV5;
     try {
       execution = getExecution();
     } catch (error) {
@@ -247,7 +260,11 @@ function runTestsWithExecution(
 
 /** Runs tests with a circuit already produced by the shared compilation service. */
 export function runExecutedDirectPlanTests(
-  execution: ExecutedDirectPlan | ExecutedEntityDirectPlan | ExecutedEntityDirectPlanV4,
+  execution:
+    | ExecutedDirectPlan
+    | ExecutedEntityDirectPlan
+    | ExecutedEntityDirectPlanV4
+    | ExecutedEntityDirectPlanV5,
   source: string,
   options: DirectPlanTestRunnerOptions = {},
 ): DirectPlanTestRun {

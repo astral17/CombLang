@@ -41,6 +41,7 @@ import {
   type ExecutedDirectPlan,
   type ExecutedEntityDirectPlan,
   type ExecutedEntityDirectPlanV4,
+  type ExecutedEntityDirectPlanV5,
 } from '@comblang/runtime';
 import {
   conservativeEntityProvisioningPolicy,
@@ -270,7 +271,11 @@ async function testCircuit(
   const file = [...project.files.values()][0];
   const diagnostics: Diagnostic[] = [...projectOnlyDiagnostics(project)];
   let execution:
-    ExecutedDirectPlan | ExecutedEntityDirectPlan | ExecutedEntityDirectPlanV4 | undefined;
+    | ExecutedDirectPlan
+    | ExecutedEntityDirectPlan
+    | ExecutedEntityDirectPlanV4
+    | ExecutedEntityDirectPlanV5
+    | undefined;
 
   if (file !== undefined && !diagnostics.some(({ severity }) => severity === 'error')) {
     const compiled = compileParsedSourceProgram(file, environment);

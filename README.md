@@ -33,6 +33,7 @@ The current repository implements the completed Phase 0–6 foundation, from the
 - [ ] Phase 7 — exact constructors and native-config stress: Arithmetic, full Decider normal/else output lists, duplicate outputs, `Everything`, Selector, LUTs, and large generated configurations.
   - [x] Internal callable v4 computation-bearing Entity foundation: exact Constant projection, one physical linked Entity, profile-free replay, blueprint/simulator adapters, and boundary tests.
   - [x] Add public `Constant({ isOn, sections })` source syntax and unify the Entity facade and `CC(...)` over one physical constant device representation. The supported first slice keeps ordinary omitted Signal quality equal to `normal`; any-quality filters, section groups, and non-unit multipliers remain outside the executable surface.
+  - [x] Add exact `Arithmetic({ left, operation, right, output })` and cumulative v5 linked Constant/Arithmetic transport. The trusted arithmetic base profile, one-device placement ownership, profile-free hydration, and native preview remain separate from native Factorio conformance.
   - [x] Validate the currently implemented `Each`/`Everything` output compatibility against the final post-execution Decider descriptor, including dynamically generated rows and conditions.
   - [ ] Verify Each-to-concrete copy-count behavior, constant-row interaction, duplicate multiplicity, conditional subsets, and `pair(red, green)` selections against exported Factorio fixtures; never lower these rows as a sum/reduce.
   - [ ] Preserve per-output source span, dynamic instance path, ordinal, and implicit/explicit/exact syntax intent through the final generated Decider descriptor; extend authoritative post-execution validation as the exact surface grows.
@@ -67,6 +68,7 @@ Later phases cover reviewed prototype capabilities, typed Factorio objects, exac
 - [Combinator and Entity value policy](docs/producer-materialization-policy.md) — eager combinator output lanes, Network narrowing, and future typed-object identity.
 - [Entity v3 foundation](docs/entity-v3.md) — implemented internal Entity contract, synthetic profiles, replay transport, registry, and explicit v2 migration boundary.
 - [Entity v4 computation foundation](docs/entity-v4.md) — internal linked Constant/Entity identity, exact configuration projection, profile-free replay, and one-object blueprint adapter.
+- [Entity v5 cumulative computation](docs/entity-v5.md) — exact Arithmetic, linked Constant/Arithmetic associations, version selection, resolved hydration, and preview boundary.
 - [Diagnostics](docs/diagnostics.md) — compiler/runtime code families and the most common actionable errors.
 - [Blueprint JSON preview](docs/blueprint-json.md) — generated structure, wiring model, and current limitations.
 - [Architecture notes](docs/architecture.md) — package boundaries, lowering decisions, runtime invariants, and implementation status.

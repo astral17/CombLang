@@ -687,6 +687,30 @@ output += Constant('constant-combinator');`,
     );
   });
 
+  test('classifies exact Arithmetic records without rejecting dynamic configuration records', () => {
+    const parsed = parseFile({
+      path: 'arithmetic-overload.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const exact: ArithmeticCombinator = Arithmetic({ left: input[A], operation: 'multiply', right: 2, output: A });
+function make(): ArithmeticCombinator {
+  return Arithmetic({ left: input[A], operation: 'add', right: 1, output: A });
+}
+const dynamic = makeConfig();
+const runtime = Arithmetic(dynamic);
+input += runtime;
+Arithmetic();`,
+    });
+
+    const diagnostics = validateDslSemantics(parsed);
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'CL1014',
+        message: 'Arithmetic(configuration) requires exactly one configuration argument.',
+      }),
+    ]);
+  });
+
   test('continues enum constants and rejects implicit values after dynamic initializers', () => {
     const valid = parseFile({
       path: 'constant-enum.ts',
