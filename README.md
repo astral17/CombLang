@@ -35,8 +35,9 @@ The current repository implements the completed Phase 0–6 foundation, from the
   - [x] Add public `Constant({ isOn, sections })` source syntax and unify the Entity facade and `CC(...)` over one physical constant device representation. The supported first slice keeps ordinary omitted Signal quality equal to `normal`; any-quality filters, section groups, and non-unit multipliers remain outside the executable surface.
   - [x] Add exact `Arithmetic({ left, operation, right, output })` and cumulative v5 linked Constant/Arithmetic transport. The trusted arithmetic base profile, one-device placement ownership, profile-free hydration, and native preview remain separate from native Factorio conformance.
   - [x] Validate the currently implemented `Each`/`Everything` output compatibility against the final post-execution Decider descriptor, including dynamically generated rows and conditions.
+  - [x] Add exact `Decider({ condition, outputs, elseOutputs })` and cumulative v6 linked Constant/Arithmetic/Decider transport. Exact rows preserve order, duplicates, branch identity, and bounded source provenance; trusted preview/simulation remains separate from native Factorio conformance.
   - [ ] Verify Each-to-concrete copy-count behavior, constant-row interaction, duplicate multiplicity, conditional subsets, and `pair(red, green)` selections against exported Factorio fixtures; never lower these rows as a sum/reduce.
-  - [ ] Preserve per-output source span, dynamic instance path, ordinal, and implicit/explicit/exact syntax intent through the final generated Decider descriptor; extend authoritative post-execution validation as the exact surface grows.
+  - [x] Preserve per-output source span, dynamic instance path, ordinal, and implicit/explicit/exact syntax intent through the final generated Decider descriptor for the current IF/when/exact slice; extend authoritative post-execution validation as the exact surface grows.
   - [ ] Decide whether the provisional `input.into(A)` spelling is valid only in final Each-mode after conformance evidence; keep it Decider-output-specific and leave raw `input[A]` legal.
   - [ ] Add configurable diagnostic levels and visibility, stable semantic rule IDs, categories, per-rule overrides, generated-diagnostic grouping/deduplication, and bounded provenance details before enabling `decider.each-concrete-copy` as a note/hint.
 - [ ] Phase 8 — parameter-ready configuration IR, placement-time `BlueprintFormula`, dependent blueprint parameters, FCIR, and the Factorio 2.1 codec with fixture-backed semantic round trips.
@@ -69,6 +70,7 @@ Later phases cover reviewed prototype capabilities, typed Factorio objects, exac
 - [Entity v3 foundation](docs/entity-v3.md) — implemented internal Entity contract, synthetic profiles, replay transport, registry, and explicit v2 migration boundary.
 - [Entity v4 computation foundation](docs/entity-v4.md) — internal linked Constant/Entity identity, exact configuration projection, profile-free replay, and one-object blueprint adapter.
 - [Entity v5 cumulative computation](docs/entity-v5.md) — exact Arithmetic, linked Constant/Arithmetic associations, version selection, resolved hydration, and preview boundary.
+- [Entity v6 cumulative computation](docs/entity-v6.md) — exact Decider, linked Constant/Arithmetic/Decider associations, row provenance, version selection, hydration, and preview boundary.
 - [Diagnostics](docs/diagnostics.md) — compiler/runtime code families and the most common actionable errors.
 - [Blueprint JSON preview](docs/blueprint-json.md) — generated structure, wiring model, and current limitations.
 - [Architecture notes](docs/architecture.md) — package boundaries, lowering decisions, runtime invariants, and implementation status.

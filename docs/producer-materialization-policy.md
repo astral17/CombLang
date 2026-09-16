@@ -66,7 +66,11 @@ Untyped parameters remain ordinary JavaScript parameters and are checked dynamic
 
 ## Mutable decider builder
 
-`when(condition)` creates a `DeciderCombinator` immediately. `.then(...)` and `.else(...)` mutate that registered physical object and return the same handle. Either branch may be configured first. Repeated calls replace that branch rather than creating another combinator.
+`when(condition)` creates a `DeciderCombinator` immediately. `.then(...)` and
+`.else(...)` mutate that registered physical object and return the same handle.
+Either branch may be configured first. Repeated calls append rows to the
+selected branch rather than creating another combinator; the final linked
+Entity configuration is derived from that one descriptor when the plan seals.
 
 ## Future Entity values
 

@@ -2,7 +2,8 @@
 
 Entity v5 is the cumulative computation-bearing transport for a linked
 `Constant` or `Arithmetic` producer. It is separate from Direct Plan v2,
-Entity v3, and the Constant-only Entity v4 envelope. A v5 plan carries
+Entity v3, the Constant-only Entity v4 envelope, and the Decider-capable Entity
+v6 envelope. A v5 plan carries
 plan-network references; its graph and NCIR carry resolved physical Network
 references. The v5 resolved artifact is
 `comblang-resolved-entity-v5` and is hydrated without provider methods or
@@ -65,7 +66,8 @@ retains the topology/output view and carries the association ID; the Entity
 owns configuration, identity, and placement. A linked producer must not also
 carry placement. v5 accepts only Arithmetic and Constant links, checks the
 trusted context, profile family, exact configuration, and one-to-one
-association before lowering. Linked Deciders remain outside this contract.
+association before lowering. Linked Deciders remain outside this contract; see
+[Entity v6](entity-v6.md).
 
 Execution reuses the existing topology engine, arithmetic simulator, debug
 queries, and native control-behavior preview. The linked Arithmetic blueprint

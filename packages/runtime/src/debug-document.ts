@@ -3,7 +3,9 @@ import type { CircuitProducerNode, ElaborationGraph, EntityPlacement } from '@co
 import type { ElaborationGraphV3 } from '@comblang/compiler/entity';
 import type { ElaborationGraphV4 } from '@comblang/compiler/entity-v4';
 import type { ElaborationGraphV5, EntityPhysicalRecordV5 } from '@comblang/compiler/entity-v5';
+import type { ElaborationGraphV6, EntityPhysicalRecordV6 } from '@comblang/compiler/entity-v6';
 import type { NetworkId } from '@comblang/shared';
+import type { DeciderOutputOrigin } from '@comblang/compiler/direct-plan-schema';
 
 import type {
   DebugEntityEntry,
@@ -18,10 +20,12 @@ export interface DebugDocumentProducer extends Omit<DebugProducerEntry, 'descrip
   readonly outputs: readonly NetworkId[];
   readonly config: CircuitProducerNode['config'];
   readonly placement?: EntityPlacement;
+  readonly outputOrigins?: readonly DeciderOutputOrigin[];
+  readonly elseOutputOrigins?: readonly DeciderOutputOrigin[];
 }
 
 export interface DebugDocumentEntity extends Omit<DebugEntityEntry, 'record'> {
-  readonly record: EntityPhysicalRecord | EntityPhysicalRecordV5;
+  readonly record: EntityPhysicalRecord | EntityPhysicalRecordV5 | EntityPhysicalRecordV6;
 }
 
 interface DebugDocumentScopeV1 {
@@ -50,7 +54,12 @@ export type DebugDocument = DebugDocumentV1 | DebugDocumentV2;
 /** Serialize IDs from this execution's EG, never by matching array ordinals. */
 export function createDebugDocument(
   index: DebugIndex,
-  graph: ElaborationGraph | ElaborationGraphV3 | ElaborationGraphV4 | ElaborationGraphV5,
+  graph:
+    | ElaborationGraph
+    | ElaborationGraphV3
+    | ElaborationGraphV4
+    | ElaborationGraphV5
+    | ElaborationGraphV6,
 ): DebugDocument {
   const byId = new Map(graph.producers.map((producer) => [producer.id, producer]));
   const scopes = index.scopes.map((scope) => ({
@@ -65,11 +74,19 @@ export function createDebugDocument(
         outputs: producer.destinations,
         config: producer.config,
         ...(producer.placement === undefined ? {} : { placement: producer.placement }),
+        ...(producer.kind === 'decider' && 'outputOrigins' in producer
+          ? {
+              outputOrigins: producer.outputOrigins,
+              ...(producer.elseOutputOrigins === undefined
+                ? {}
+                : { elseOutputOrigins: producer.elseOutputOrigins }),
+            }
+          : {}),
       };
     }),
   }));
   const document: DebugDocument =
-    graph.version === 3 || graph.version === 4 || graph.version === 5
+    graph.version === 3 || graph.version === 4 || graph.version === 5 || graph.version === 6
       ? {
           format: 'comblang-debug',
           version: 2,

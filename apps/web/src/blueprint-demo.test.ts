@@ -1,9 +1,50 @@
 import { compileDirectPlan } from '@comblang/compiler/direct-plan';
+import type { EntityProfile } from '@comblang/compiler/entity';
+import { syntheticZeroPortEntityProfile } from '@comblang/compiler/entity-fixtures';
+import { createTrustedEntityReplayContext } from '@comblang/compiler/entity-replay-context';
 import { parseFile } from '@comblang/language';
+import type { EntityPrototype } from '@comblang/prototypes';
+import type { EntityPrototypeResolver } from '@comblang/runtime/entity-registry';
 import { describe, expect, test } from 'vitest';
 
-import { blueprintJsonForPlan } from './blueprint-demo.js';
+import { blueprintJsonForArtifact, blueprintJsonForPlan } from './blueprint-demo.js';
 import { compileSource } from './compile-source.js';
+import { createSourceCircuitArtifact } from './source-circuit-artifact.js';
+
+function exactDeciderEnvironment() {
+  const profile: EntityProfile = {
+    ...structuredClone(syntheticZeroPortEntityProfile),
+    ref: {
+      ...syntheticZeroPortEntityProfile.ref,
+      prototypeKey: 'entity:decider-combinator',
+      profileId: 'profile:blueprint-demo-decider-v6' as EntityProfile['ref']['profileId'],
+    },
+    prototypeType: 'decider-combinator',
+  };
+  const trustedEntityReplayContext = createTrustedEntityReplayContext({
+    database: profile.ref.database,
+    source: 'synthetic',
+    evidenceIdentity: 'blueprint-demo-decider-v6-evidence',
+    policyIdentity: 'blueprint-demo-decider-v6-policy',
+    profiles: [profile],
+  });
+  const prototype: EntityPrototype = {
+    key: 'entity:decider-combinator',
+    name: 'decider-combinator',
+    type: 'decider-combinator',
+    tileWidth: 1,
+    tileHeight: 2,
+  };
+  return {
+    trustedEntityReplayContext,
+    entityPrototypeResolver: {
+      database: profile.ref.database,
+      getEntity(nameOrKey: string) {
+        return nameOrKey === prototype.key || nameOrKey === prototype.name ? prototype : undefined;
+      },
+    } as EntityPrototypeResolver,
+  };
+}
 
 describe('source blueprint JSON preview', () => {
   test('retains executed operand colors, output selection, and nested condition groups', () => {
@@ -65,5 +106,41 @@ const output: Network = constants * 2;`,
       'arithmetic-combinator',
     ]);
     expect(generated.blueprint.wires).toHaveLength(1);
+  });
+
+  test('previews a hydrated exact Decider v6 as one native object', () => {
+    const compiled = compileSource(
+      {
+        path: 'blueprint-exact-decider.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const gate: DeciderCombinator = Decider({ condition: input[A] > 0, outputs: [input[A]], elseOutputs: [1 * A] }).at(4, 5, 8);
+const output = new Network();
+output += gate;`,
+      },
+      exactDeciderEnvironment(),
+    );
+    if (
+      compiled.plan === undefined ||
+      compiled.plan.version !== 6 ||
+      compiled.resolvedCircuit?.format !== 'comblang-resolved-entity-v6'
+    ) {
+      throw new Error('Expected a resolved v6 Decider source compilation.');
+    }
+    const generated = blueprintJsonForArtifact(
+      createSourceCircuitArtifact(compiled.plan, compiled.resolvedCircuit),
+    );
+    expect(generated.blueprint.entities).toHaveLength(1);
+    expect(generated.blueprint.entities[0]).toMatchObject({
+      name: 'decider-combinator',
+      position: { x: 4, y: 5 },
+      direction: 8,
+      control_behavior: {
+        decider_conditions: {
+          outputs: [expect.objectContaining({})],
+          else_outputs: [expect.objectContaining({})],
+        },
+      },
+    });
   });
 });

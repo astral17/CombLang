@@ -48,21 +48,24 @@ hidden Producer, Network, Decider, or tick.
 Typed facades, raw native import, and verified native import behavior remain
 pending; see [Entity v3](entity-v3.md).
 
-The Phase 7 computation slice uses separate Entity v4 and cumulative v5
-envelopes. v4 remains Constant-only; v5 is selected when any Arithmetic
-producer is linked and may mix linked Constant and Arithmetic. Exact
+The Phase 7 computation slice uses separate Entity v4, cumulative v5, and
+cumulative v6 envelopes. v4 remains Constant-only; v5 is selected when any
+Arithmetic producer is linked and may mix linked Constant and Arithmetic. v6
+is selected when any Decider producer is linked and may mix linked Constant,
+Arithmetic, and Decider. Exact
 `Arithmetic({ left, operation, right, output })` requires trusted base
 `entity:arithmetic-combinator` authority with matching prototype type. The v5
 validator requires the current SHA-256 profile-set identity, checks exact
 family/configuration/association equality, and rejects linked producer
-placement because placement belongs to the Entity. Validated v4/v5 plans reuse
+placement because placement belongs to the Entity. Validated v4/v5/v6 plans reuse
 the v2 topology engine transiently, then restore their association in graph and
 NCIR without creating a second physical object. Their profile-free resolved
 snapshots and hydration paths carry identity-only context, not profiles,
-providers, or resolver authority. The public exact Constant/Arithmetic forms
-and provider-backed `CC`/ergonomic Arithmetic share their linked physical
-representation when the matching trusted base profile is available; without
-that authority, profile-free behavior retains its legacy envelope. Synthetic/
+providers, or resolver authority. The public exact Constant/Arithmetic/Decider
+forms and provider-backed `CC`/ergonomic Arithmetic/IF/when share their linked
+physical representation when the matching trusted base profile is available;
+without that authority, profile-free behavior retains its legacy envelope
+(exact Decider rejects the missing authority). Synthetic/
 internal tests and readable blueprint preview do not establish native Factorio
 conformance.
 The default website and ordinary CLI now provision a conservative, provider-
@@ -180,7 +183,7 @@ Arithmetic and compact-decider output signals are bound only at a destination: `
 
 `combinator-attachment-policy` validates each output connection request before lane allocation: one or two distinct writable destination Network facets. A shared runtime resolver maps direct Networks and Combinators to their primary facet and rejects pair views; `CombinatorRegistry` then supplies the next unconsumed lane, creating secondary lazily. `RT2003` through `RT2005` cover request cardinality and duplicates; `RT2028` identifies the exact third sequential request. `RT2006` single-attachment semantics no longer exist.
 
-Executed multi-output Deciders retain their normal and else output lists verbatim. Repeated SignalIDs are not deduplicated: native output rows for the same signal intentionally sum on the destination Network. The simulator and executed-runtime tests cover `then(input[A], 2 * A)` producing `input(A) + 2`, `when(condition).else(...)`, and `when(condition).then(...).else(...)`. Complete exact native Decider configuration remains Phase 7 work.
+Executed multi-output Deciders retain their normal and else output lists verbatim. Repeated SignalIDs are not deduplicated: native output rows for the same signal intentionally sum on the destination Network. The simulator and executed-runtime tests cover `then(input[A], 2 * A)` producing `input(A) + 2`, `when(condition).else(...)`, and `when(condition).then(...).else(...)`. Exact `Decider({ condition, outputs, elseOutputs })` additionally accepts scalar or recursively nested plain containers, preserves row origins, validates the final descriptor, and links one trusted Entity in v6. Repeated `.then/.else` calls append to the same branch and retain one physical Decider.
 
 Blueprint preview has a separate native-configuration lowering boundary. `blueprint-native-config` resolves NCIR Network references into red/green selections, expands logical Decider trees into the native flat condition rows, translates operations and SignalIDs, and records the complete input Network set for wiring. `blueprint-json` only numbers and places the already-lowered combinators, joins their physical endpoints, and assembles the outer Factorio blueprint object. Missing colors on either an input reference or destination are `BP1001`; the serializer never guesses red as a fallback.
 
@@ -219,13 +222,21 @@ structural Entities retain the existing separate-object mapping.
 linked Constant and Arithmetic. It uses the Entity prototype/placement and the
 producer's resolved native configuration to emit one object per linked device.
 
+`generateEntityComputationBlueprintJsonV6` is the cumulative adapter for
+linked Constant, Arithmetic, and Decider. It uses the Entity prototype/
+placement and the producer's resolved Decider condition/output configuration
+to emit one object per linked device. Row origins remain producer/debug
+metadata. The adapter and v6 simulator are structural preview surfaces, not
+Factorio conformance claims.
+
 This is deliberately pre-FCIR. Placement is a deterministic preview rather than a reach-aware layout, entity-number stability is local to one generation, and import/export semantic round trips remain Phase 8 work. Keeping this boundary explicit prevents the temporary row placer from becoming part of the eventual blueprint codec contract.
 
 ## Next slice
 
 Phase 3's executed compiler path and Phase 4's ownership/multi-network surface are complete. Zero-tick consuming transfer, function-scoped `Readonly`/`Ref` borrow views, explicit `Move<Network>` call/return ownership, shared-generation aliases with ordinary container-slot replacement, and immutable `pair(a, b)` both-colors input views extend the ordinary-JavaScript execution model rather than replacing it. Successful capability uses survive as audit descriptors beside `networkTransfers` and `networkPairs` through the serialized direct plan, validated EG/NCIR execution result, CLI JSON, and browser plan. They do not create hardware; their physical consequences are reflected in color and topology constraints. The acceptance matrix lives in [Phase 4: ownership and multi-network design](ownership-and-multi-network.md).
 
-Later native-object, exact-Decider, and placement-time parameter domains are specified in [Native objects, Deciders, and blueprint parameters](native-objects-deciders-and-parameters.md). They extend configuration values without making the concrete circuit simulator symbolic.
+Later native-object and placement-time parameter domains are specified in
+[Native objects, Deciders, and blueprint parameters](native-objects-deciders-and-parameters.md). They extend configuration values without making the concrete circuit simulator symbolic.
 
 The architectural constraints are:
 

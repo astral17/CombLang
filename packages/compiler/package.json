@@ -14,6 +14,7 @@
     "./entity": "./src/entity.ts",
     "./entity-v4": "./src/entity-v4.ts",
     "./entity-v5": "./src/entity-v5.ts",
+    "./entity-v6": "./src/entity-v6.ts",
     "./entity-configuration": "./src/entity-configuration.ts",
     "./entity-fixtures": "./src/entity-fixtures.ts",
     "./entity-profile": "./src/entity-profile.ts",
@@ -26,7 +27,8 @@
     "./producer-network-references": "./src/producer-network-references.ts",
     "./resolved-source-circuit": "./src/resolved-source-circuit.ts",
     "./resolved-entity-v4": "./src/resolved-entity-v4.ts",
-    "./resolved-entity-v5": "./src/resolved-entity-v5.ts"
+    "./resolved-entity-v5": "./src/resolved-entity-v5.ts",
+    "./resolved-entity-v6": "./src/resolved-entity-v6.ts"
   },
   "dependencies": {
     "@comblang/factorio": "0.0.0",

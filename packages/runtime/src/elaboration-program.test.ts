@@ -15,11 +15,7 @@ import {
 import { sourceFileId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
-import {
-  elaborateDirectPlan,
-  elaborateEntityDirectPlan,
-  tryElaborateDirectPlan,
-} from './direct-plan.js';
+import { elaborateDirectPlan, elaborateEntityDirectPlan } from './direct-plan.js';
 import { tryElaborateEntityV5DirectPlan } from './entity-v5.js';
 import { validateEntityDirectPlan } from './entity-plan-validation.js';
 import { RuntimeDiagnosticError } from './elaboration.js';
@@ -2423,13 +2419,13 @@ const output: Network = when(BuildCondition(input)).then(...outputRows);`,
       name: 'Each output without an Each condition',
       condition: 'input[A] > 0',
       row: 'input',
-      message: 'Each output requires a final condition set that uses Each',
+      message: 'Decider Each output requires a final condition set that uses Each',
     },
     {
       name: 'Everything output with an Each condition',
       condition: 'input > 0',
       row: 'Everything(input)',
-      message: 'Everything output is invalid when the final condition set uses Each',
+      message: 'Decider Everything output is invalid when the final condition set uses Each',
     },
   ])('validates generated Decider modes after execution: $name', ({ condition, row, message }) => {
     const parsed = parseFile({
@@ -2443,18 +2439,130 @@ for (const enabled of [true]) {
 const output: Network = when(${condition}).then(...rows);`,
     });
     expect(validateDslSemantics(parsed)).toEqual([]);
-    const plan = executeElaborationProgram(transformElaborationModule(parsed));
-    const result = tryElaborateDirectPlan(plan);
+    const source = parsed.text;
+    const rowStart = source.lastIndexOf('...rows');
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected final Decider mode validation to reject the source.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(Error);
+      expect((error as { code?: string }).code).toBe('RT2027');
+      expect((error as Error).message).toContain(message);
+      expect((error as { span?: unknown }).span).toEqual({
+        fileId: sourceFileId('generated-invalid-decider-mode.factorio.ts'),
+        start: rowStart,
+        end: rowStart + '...rows'.length,
+      });
+      expect((error as { related?: readonly unknown[] }).related).toEqual([
+        expect.objectContaining({
+          message: 'Physical combinator was created here.',
+          span: expect.any(Object),
+        }),
+      ]);
+    }
+  });
 
-    expect(result.execution).toBeUndefined();
-    expect(result.diagnostics).toEqual([
-      expect.objectContaining({
-        code: 'RT2027',
-        severity: 'error',
-        message: expect.stringContaining(message),
-        span: expect.any(Object),
-      }),
-    ]);
+  test.each([
+    {
+      name: 'direct IF',
+      source: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output: Network = IF(input[A] > 0, Each(input));`,
+      marker: 'Each(input)',
+    },
+    {
+      name: 'direct when',
+      source: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const gate = when(input[A] > 0);
+gate.then(Each(input));`,
+      marker: 'Each(input)',
+    },
+    {
+      name: 'computed when alias',
+      source: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const gate = when(input[A] > 0);
+gate['then'](Each(input));`,
+      marker: 'Each(input)',
+    },
+    {
+      name: 'spread when alias',
+      source: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const rows = [Each(input)];
+const gate = when(input[A] > 0);
+gate.then(...rows);`,
+      marker: '...rows',
+    },
+  ])('points final mode diagnostics at the offending $name row', ({ source, marker }) => {
+    const parsed = parseFile({ path: 'decider-mode-call-forms.factorio.ts', text: source });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected final Decider mode validation to reject the source.');
+    } catch (error) {
+      const start = source.indexOf(marker);
+      expect((error as { code?: string }).code).toBe('RT2027');
+      expect((error as Error).message).toContain('Decider Each output');
+      expect((error as { span?: unknown }).span).toEqual({
+        fileId: sourceFileId('decider-mode-call-forms.factorio.ts'),
+        start,
+        end: start + marker.length,
+      });
+    }
+  });
+
+  test('expands IF branch spreads with native arity and preserves single evaluation', () => {
+    const parsed = parseFile({
+      path: 'if-branch-spreads.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const one = [input];
+const two = [input, input[A]];
+let evaluations = 0;
+const first: Network = IF(input > 0, ...(evaluations += 1, one));
+const second: Network = IF(input > 0, ...(evaluations += 1, two));
+if (evaluations !== 2) throw new Error('IF spread expression was evaluated more than once');`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const deciders = plan.producers.filter((producer) => producer.kind === 'decider');
+    expect(deciders).toHaveLength(2);
+    expect(deciders[0]?.kind === 'decider' ? deciders[0].outputs : []).toHaveLength(1);
+    expect(deciders[1]?.kind === 'decider' ? deciders[1].outputs : []).toHaveLength(1);
+    expect(deciders[1]?.kind === 'decider' ? deciders[1].elseOutputs : []).toHaveLength(1);
+
+    for (const branches of ['[]', '[input, input[A], input]']) {
+      const invalid = parseFile({
+        path: 'invalid-if-branch-spread.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+IF(input > 0, ...${branches});`,
+      });
+      expect(validateDslSemantics(invalid)).toEqual([]);
+      expect(() => executeElaborationProgram(transformElaborationModule(invalid))).toThrow(
+        'IF requires one or two branch output arguments',
+      );
+    }
+  });
+
+  test('keeps ordinary then methods unwrapped and evaluated once', () => {
+    const parsed = parseFile({
+      path: 'ordinary-then-method.factorio.ts',
+      text: `let evaluations = 0;
+function value() { evaluations += 1; return 4; }
+const ordinary = {
+  then(input) {
+    if (input !== 4) throw new Error('ordinary method received a descriptor');
+    return input + 1;
+  },
+};
+const result = ordinary.then(value());
+if (result !== 5 || evaluations !== 1) throw new Error('ordinary method evaluation changed');`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).not.toThrow();
   });
 
   test('executes fluent deciders, wildcards, output binding, and method fan-out', () => {
@@ -3206,6 +3314,51 @@ ${expression};`,
         expect(failure.code).toBe('RT2023');
         expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(expression);
       }
+    }
+  });
+
+  test('keeps decider row origins internal to the v2 direct plan', () => {
+    const parsed = parseFile({
+      path: 'decider-row-origins.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const comb = when(input > 0).then(input, input).else(input);`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const producer = plan.producers[0]!;
+
+    expect(producer).toMatchObject({
+      kind: 'decider',
+      outputs: [{ kind: 'each' }, { kind: 'each' }],
+      elseOutputs: [{ kind: 'each' }],
+    });
+    expect(Object.prototype.hasOwnProperty.call(producer, 'outputOrigins')).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(producer, 'elseOutputOrigins')).toBe(false);
+  });
+
+  test('points wildcard output rebinding at the offending decider row', () => {
+    const row = 'Everything(input)';
+    const creation = `IF(input > 0, input, ${row})`;
+    const attachment = `${creation}.to(output, A)`;
+    const parsed = parseFile({
+      path: 'decider-row-origin-diagnostic.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output = new Network();
+${attachment};`,
+    });
+
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected wildcard output rebinding to fail.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ElaborationExecutionError);
+      const failure = error as ElaborationExecutionError;
+      expect(failure.code).toBe('RT2023');
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(row);
+      expect(failure.related).toContainEqual(
+        expect.objectContaining({ message: 'Physical combinator was created here.' }),
+      );
     }
   });
 

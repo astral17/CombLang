@@ -1,4 +1,6 @@
 import type {
+  DeciderOutputOrigin,
+  DeciderOutputSyntaxIntent,
   DirectPlanProducer,
   PlanDeciderCondition,
 } from '@comblang/compiler/direct-plan-schema';
@@ -123,10 +125,17 @@ type CompleteDeciderDescriptor = Extract<
   { readonly kind: 'decider' }
 >;
 
+export type {
+  DeciderOutputOrigin,
+  DeciderOutputSyntaxIntent,
+} from '@comblang/compiler/direct-plan-schema';
+
 export type CombinatorDescriptor =
   | Exclude<CompleteCombinatorDescriptor, { readonly kind: 'decider' }>
   | (Omit<CompleteDeciderDescriptor, 'output'> & {
       readonly output?: CompleteDeciderDescriptor['output'];
+      readonly outputOrigins?: readonly DeciderOutputOrigin[];
+      readonly elseOutputOrigins?: readonly DeciderOutputOrigin[];
     });
 
 /** Source-visible handle for one physical combinator. Its Network facet lives in the registry. */

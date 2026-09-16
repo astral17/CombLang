@@ -3,6 +3,7 @@ import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schem
 import type { DirectElaborationPlanV3 } from '@comblang/compiler/entity';
 import type { DirectElaborationPlanV4 } from '@comblang/compiler/entity-v4';
 import type { DirectElaborationPlanV5 } from '@comblang/compiler/entity-v5';
+import type { DirectElaborationPlanV6 } from '@comblang/compiler/entity-v6';
 import {
   cloneEntityReplayContextTransport,
   entityReplayContextIdentity,
@@ -31,6 +32,7 @@ import {
 } from './direct-plan.js';
 import { tryElaborateEntityV4DirectPlan, type ExecutedEntityDirectPlanV4 } from './entity-v4.js';
 import { tryElaborateEntityV5DirectPlan, type ExecutedEntityDirectPlanV5 } from './entity-v5.js';
+import { tryElaborateEntityV6DirectPlan, type ExecutedEntityDirectPlanV6 } from './entity-v6.js';
 import { executeElaborationProgram, executeElaborationProgramV3 } from './elaboration-program.js';
 import type { EntityPrototypeResolver } from './entity-registry.js';
 import { executionFailureDiagnostic } from './execution-diagnostic.js';
@@ -41,6 +43,7 @@ import {
 } from '@comblang/compiler/resolved-source-circuit';
 import type { ResolvedEntityV4Circuit } from '@comblang/compiler/resolved-entity-v4';
 import type { ResolvedEntityV5Circuit } from '@comblang/compiler/resolved-entity-v5';
+import type { ResolvedEntityV6Circuit } from '@comblang/compiler/resolved-entity-v6';
 
 export interface SourceCompilationEnvironment {
   readonly prototypes?: PrototypeProvider;
@@ -68,10 +71,14 @@ export interface SourceCompilationArtifact extends ParseWorkerResult {
     | DirectElaborationPlan
     | DirectElaborationPlanV3
     | DirectElaborationPlanV4
-    | DirectElaborationPlanV5;
-  /** Detached physical v3/v4/v5 IR; present only after host-authorized lowering succeeds. */
+    | DirectElaborationPlanV5
+    | DirectElaborationPlanV6;
+  /** Detached physical v3/v4/v5/v6 IR; present only after host-authorized lowering succeeds. */
   readonly resolvedCircuit?:
-    ResolvedSourceCircuit | ResolvedEntityV4Circuit | ResolvedEntityV5Circuit;
+    | ResolvedSourceCircuit
+    | ResolvedEntityV4Circuit
+    | ResolvedEntityV5Circuit
+    | ResolvedEntityV6Circuit;
 }
 
 /** Host-local compilation state. Runtime handles never enter the transport artifact. */
@@ -80,7 +87,8 @@ export interface LocalSourceCompilation extends SourceCompilationArtifact {
     | ExecutedDirectPlan
     | ExecutedEntityDirectPlan
     | ExecutedEntityDirectPlanV4
-    | ExecutedEntityDirectPlanV5;
+    | ExecutedEntityDirectPlanV5
+    | ExecutedEntityDirectPlanV6;
 }
 
 export type SourceCompilationStage = 'parse' | 'semantic' | 'transform' | 'execute' | 'lower';
@@ -142,15 +150,21 @@ function compileParsedSource(
     | DirectElaborationPlanV3
     | DirectElaborationPlanV4
     | DirectElaborationPlanV5
+    | DirectElaborationPlanV6
     | undefined;
   let execution:
     | ExecutedDirectPlan
     | ExecutedEntityDirectPlan
     | ExecutedEntityDirectPlanV4
     | ExecutedEntityDirectPlanV5
+    | ExecutedEntityDirectPlanV6
     | undefined;
   let resolvedCircuit:
-    ResolvedSourceCircuit | ResolvedEntityV4Circuit | ResolvedEntityV5Circuit | undefined;
+    | ResolvedSourceCircuit
+    | ResolvedEntityV4Circuit
+    | ResolvedEntityV5Circuit
+    | ResolvedEntityV6Circuit
+    | undefined;
   let elaborationJavaScript: string | undefined;
   observe?.('semantic');
   const semanticDiagnostics = validateDslSemantics(parsed);
@@ -182,46 +196,61 @@ function compileParsedSource(
         plan = executedPlan;
         observe?.('lower');
         const lowered =
-          executedPlan.version === 5
+          executedPlan.version === 6
             ? environment.trustedEntityReplayContext === undefined
               ? (() => {
                   throw new EntityReplayContextError(
                     'ER1001',
                     '$.entityReplayContext',
-                    'Entity v5 plans require a host-bound trusted profile-set context.',
+                    'Entity v6 plans require a host-bound trusted profile-set context.',
                   );
                 })()
-              : tryElaborateEntityV5DirectPlan(executedPlan, environment.trustedEntityReplayContext)
-            : executedPlan.version === 4
+              : tryElaborateEntityV6DirectPlan(executedPlan, environment.trustedEntityReplayContext)
+            : executedPlan.version === 5
               ? environment.trustedEntityReplayContext === undefined
                 ? (() => {
                     throw new EntityReplayContextError(
                       'ER1001',
                       '$.entityReplayContext',
-                      'Entity v4 plans require a host-bound trusted profile-set context.',
+                      'Entity v5 plans require a host-bound trusted profile-set context.',
                     );
                   })()
-                : tryElaborateEntityV4DirectPlan(
+                : tryElaborateEntityV5DirectPlan(
                     executedPlan,
                     environment.trustedEntityReplayContext,
                   )
-              : executedPlan.version === 3
+              : executedPlan.version === 4
                 ? environment.trustedEntityReplayContext === undefined
                   ? (() => {
                       throw new EntityReplayContextError(
                         'ER1001',
                         '$.entityReplayContext',
-                        'Entity v3 plans require a host-bound trusted profile-set context.',
+                        'Entity v4 plans require a host-bound trusted profile-set context.',
                       );
                     })()
-                  : tryElaborateEntityDirectPlan(
+                  : tryElaborateEntityV4DirectPlan(
                       executedPlan,
                       environment.trustedEntityReplayContext,
                     )
-                : tryElaborateDirectPlan(executedPlan);
+                : executedPlan.version === 3
+                  ? environment.trustedEntityReplayContext === undefined
+                    ? (() => {
+                        throw new EntityReplayContextError(
+                          'ER1001',
+                          '$.entityReplayContext',
+                          'Entity v3 plans require a host-bound trusted profile-set context.',
+                        );
+                      })()
+                    : tryElaborateEntityDirectPlan(
+                        executedPlan,
+                        environment.trustedEntityReplayContext,
+                      )
+                  : tryElaborateDirectPlan(executedPlan);
         execution = lowered.execution;
         if (
-          (executedPlan.version === 4 || executedPlan.version === 5) &&
+          (executedPlan.version === 4 ||
+            executedPlan.version === 5 ||
+            executedPlan.version === 6) &&
           'resolvedCircuit' in lowered &&
           lowered.resolvedCircuit !== undefined
         ) {

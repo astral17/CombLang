@@ -375,7 +375,44 @@ const colors: Network = IF(input > 0, 0x00ff00 * EACH);
 
 The decider emits the constant for every active `Each` candidate. The count must be a finite safe integer and is canonicalized to signed int32.
 
-The exact `Decider({...})` constructor remains Phase 7 work.
+The exact native-shaped source form is `Decider({ condition, outputs,
+elseOutputs })`:
+
+```ts
+const gate: DeciderCombinator = Decider({
+  condition: input[A] > 0,
+  outputs: [input[A], 1 * B],
+  elseOutputs: [input[B]],
+});
+```
+
+The configuration is a semantic plain data record, not raw Blueprint JSON. It
+must contain `condition`; `outputs` and `elseOutputs` are independently
+optional and may be omitted, `undefined`, or empty. Unknown string or symbol
+keys, missing fields, accessors, and non-plain records are rejected. The record
+is evaluated once in ordinary JavaScript order. Each branch accepts one output
+value or recursively nested arrays/plain records; flattening follows insertion
+order. Rows are never sorted, merged, or deduplicated, so repeated SignalIDs
+retain native multiplicity. At least one row must exist across both branches;
+an empty normal branch is valid when `elseOutputs` is non-empty, and an empty
+else branch is omitted from the canonical descriptor.
+
+Exact rows reuse the existing output vocabulary: concrete Signal selections,
+bare/`Each` sources, `Anything`/`Everything`, and constant-count rows. The
+runtime validates the final descriptor, so dynamically computed rows receive
+the same native compatibility checks as literal rows. A cyclic container,
+array hole, custom or symbol container field, accessor, or unsupported leaf
+fails atomically before a producer or Entity is allocated.
+
+With trusted canonical `entity:decider-combinator` authority, exact `Decider`
+and provider-backed ergonomic `IF`/`when` share one physical linked Decider
+Entity and select cumulative Entity v6 when any linked Decider is present.
+The producer retains topology and output-row provenance; the Entity owns native
+configuration and placement. Without trusted authority, ergonomic `IF`/`when`
+retain profile-free v2 behavior, while exact `Decider` fails because its exact
+Entity contract cannot be established. The v6 path reuses the current
+simulation and readable Blueprint preview and is not Factorio import/export
+conformance evidence. See [Entity v6](entity-v6.md).
 
 ## Constant combinator
 
@@ -511,7 +548,8 @@ to(first, second)[RESULT] += left[A] + right[B];
 
 The free destination form binds an output Signal as `to(first, second)[SIGNAL]`; fluent syntax uses `.to(first, second, SIGNAL)`. The output binding changes the existing physical configuration and adds no combinator. A destination may be an ordinary Network or a Combinator's primary Network facet; pair views and multi-output destinations must be selected explicitly. `.to(first[SIGNAL], second[SIGNAL])` remains invalid. Empty, duplicate, and over-capacity destination lists report `RT2003`, `RT2004`, and `RT2005`. A third sequential lane request reports `RT2028`. The first output binding is retained for the physical combinator: an incompatible later binding reports `RT2023` at the later operation with both binding and creation provenance. `Network += Network` and `Network += number` remain errors; the callable Entity output form is the separate `Network += entity` case documented above and requires a declared profile projection.
 
-`when(condition)` also creates its Decider immediately. `.then(...)` and `.else(...)` mutate central state shared by every alias:
+`when(condition)` also creates its Decider immediately. `.then(...)` and
+`.else(...)` mutate central state shared by every alias:
 
 ```ts
 const gate = when(input > 0);
@@ -520,7 +558,14 @@ gate.then(input);
 alias.else(fallback);
 ```
 
-The final object is one physical Decider. Every mutation revalidates its input-connector capacity and color constraints online, and a destination Signal bound before `.then/.else` is reapplied when the output descriptor becomes complete. One output in each mutually exclusive `then` and `else` branch may share that binding; adding multiple outputs to either branch reports `RT2023` at that mutation. A `when` left without either branch is `RT2022` at finalization.
+The final object is one physical Decider. Repeated `.then(...)` or `.else(...)`
+calls append rows to that branch and return the same handle; they do not create
+another device. Every mutation revalidates its input-connector capacity and
+color constraints online, and a destination Signal bound before `.then/.else`
+is reapplied when the output descriptor becomes complete. One output in each
+mutually exclusive `then` and `else` branch may share that binding; adding
+multiple outputs to either branch reports `RT2023` at that mutation. A `when`
+left without either branch is `RT2022` at finalization.
 
 Arrays and objects are ordinary JavaScript containers; the runtime does not recursively convert their contents. This works naturally because each combinator is already a Network value:
 

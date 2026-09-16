@@ -460,6 +460,7 @@ function Roboport(value: string) { return value; }
 function Constant(value: string) { return value; }
 function NativeCondition(signal: unknown, comparator: string, constant: number) { return signal; }
 function CC() { return 1; }
+function Decider(value: unknown) { return value; }
 function join() { return 1; }
 class Network { constructor(value: number) {} }
 Signal("ordinary");
@@ -472,7 +473,7 @@ const prototypes = {};`,
     });
 
     const reserved = validateDslSemantics(parsed).filter(({ code }) => code === 'CL1045');
-    expect(reserved).toHaveLength(13);
+    expect(reserved).toHaveLength(14);
     expect(
       reserved.map(({ span }) =>
         span === undefined ? undefined : parsed.text.slice(span.start, span.end),
@@ -485,6 +486,7 @@ const prototypes = {};`,
       'Constant',
       'NativeCondition',
       'CC',
+      'Decider',
       'join',
       'Network',
       'Any',
@@ -707,6 +709,50 @@ Arithmetic();`,
       expect.objectContaining({
         code: 'CL1014',
         message: 'Arithmetic(configuration) requires exactly one configuration argument.',
+      }),
+    ]);
+  });
+
+  test('classifies exact Decider records without rejecting dynamic configuration records', () => {
+    const parsed = parseFile({
+      path: 'decider-overload.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const exact: DeciderCombinator = Decider({ condition: input[A] > 0, outputs: [input[A], 1 * A] });
+function make(): DeciderCombinator {
+  return Decider({ condition: input[A] > 0, outputs: input[A] });
+}
+const dynamic = makeConfig();
+const runtime = Decider(dynamic);
+input += runtime;
+Decider();`,
+    });
+
+    const diagnostics = validateDslSemantics(parsed);
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'CL1014',
+        message: 'Decider(configuration) requires exactly one configuration argument.',
+      }),
+    ]);
+  });
+
+  test('infers direct Decider producers and rejects incompatible nominal annotations', () => {
+    const parsed = parseFile({
+      path: 'decider-inference.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const inferred = Decider({ condition: input[A] > 0, outputs: input[A] });
+const output = new Network();
+output += inferred;
+const wrong: ArithmeticCombinator = Decider({ condition: input[A] > 0, outputs: input[A] });`,
+    });
+
+    const diagnostics = validateDslSemantics(parsed);
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'CL1044',
+        message: 'ArithmeticCombinator requires a combinator producer initializer.',
       }),
     ]);
   });

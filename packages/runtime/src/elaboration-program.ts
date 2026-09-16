@@ -11,6 +11,7 @@ import type {
   DirectElaborationPlanV3,
   DirectElaborationPlanV4,
   DirectElaborationPlanV5,
+  DirectElaborationPlanV6,
   ElaborationJavaScript,
   EntityBehaviorKey,
   EntityConfiguration,
@@ -28,6 +29,12 @@ import type {
 } from '@comblang/compiler';
 import type { EntityV4ConstantConfiguration } from '@comblang/compiler/entity-v4';
 import type { EntityV5ArithmeticConfiguration } from '@comblang/compiler/entity-v5';
+import type {
+  DirectPlanProducerV6,
+  EntityPlanRecordV6,
+  EntityV6DeciderConfiguration,
+} from '@comblang/compiler/entity-v6';
+import type { EntityPlanRecordV5 } from '@comblang/compiler/entity-v5';
 import { entityFamilyDslNames, type DslParameterContract } from '@comblang/language';
 import type {
   DirectElaborationPlan,
@@ -67,6 +74,8 @@ import {
   type CombinatorValue,
   type ConditionValue,
   type DestinationValue,
+  type DeciderOutputOrigin,
+  type DeciderOutputSyntaxIntent,
   type DslValue,
   type FunctionOwnershipFrame,
   type NetworkBorrow,
@@ -130,6 +139,26 @@ interface RawSpan {
 interface CallArgument {
   readonly value: unknown;
   readonly source: RawSpan;
+  readonly fieldSources?: Readonly<{
+    readonly outputs?: RawSpan;
+    readonly elseOutputs?: RawSpan;
+  }>;
+}
+
+type PlanDeciderOutput = Extract<DirectPlanProducer, { kind: 'decider' }>['output'];
+
+interface DeciderOutputCandidate {
+  readonly output: PlanDeciderOutput;
+  readonly source: SourceSpan;
+  readonly instancePath: readonly string[];
+  readonly syntaxIntent: DeciderOutputSyntaxIntent;
+}
+
+function conditionUsesEach(condition: PlanDeciderCondition): boolean {
+  if (condition.kind === 'and' || condition.kind === 'or') {
+    return condition.conditions.some(conditionUsesEach);
+  }
+  return condition.kind === 'compare-each';
 }
 
 const entityFamilyConstructionTypes = Object.freeze({
@@ -150,6 +179,7 @@ interface Invocation {
 interface PreparedInvocation {
   readonly callable: unknown;
   readonly receiver: unknown;
+  readonly deciderBranch?: 'then' | 'else';
 }
 
 interface BindingDescriptor {
@@ -230,7 +260,14 @@ interface LinkedArithmeticAssociation {
   readonly configuration: EntityV5ArithmeticConfiguration;
 }
 
-type LinkedProducerAssociation = LinkedConstantAssociation | LinkedArithmeticAssociation;
+interface LinkedDeciderAssociation {
+  readonly kind: 'decider';
+  readonly entity: EntityValue;
+  readonly configuration: EntityV6DeciderConfiguration;
+}
+
+type LinkedProducerAssociation =
+  LinkedConstantAssociation | LinkedArithmeticAssociation | LinkedDeciderAssociation;
 
 export interface ElaborationExecutionOptions {
   readonly dslCallBudget?: number;
@@ -308,6 +345,13 @@ class ElaborationRecorder {
   readonly #combinators = new CombinatorRegistry();
   readonly #combinatorByOutput = new Map<NetworkOwnershipState, CombinatorValue>();
   readonly #runtimeValues = new RuntimeValueRegistry();
+  readonly #deciderMemberAliases = new WeakMap<
+    Function,
+    {
+      readonly receiver: unknown;
+      readonly branch: 'then' | 'else';
+    }
+  >();
   readonly #ownership = createElaborationOwnershipPolicy((network) => this.#networkState(network));
   readonly #colors = new ElaborationColorConstraints();
   readonly #executionApiFrames: ExecutionApiFrame[] = [];
@@ -402,6 +446,9 @@ class ElaborationRecorder {
       // their original lexical environment (not a thunk: eval and yield depend on it).
       if (this.#isCircuitDslValue(receiver)) {
         const property = Reflect.ownKeys({ [key]: undefined })[0]!;
+        if (property === 'then' || property === 'else') {
+          return { callable: undefined, receiver, deciderBranch: property };
+        }
         const operations: Record<string, ((...values: unknown[]) => unknown) | undefined> = {
           to: (...values) => this.api.attachTo(receiver, ...values, rawSpan),
           take: (...values) => this.api.take(receiver, ...values, rawSpan),
@@ -448,11 +495,16 @@ class ElaborationRecorder {
       }
       return { callable: this.api.element(receiver, key, rawSpan), receiver };
     },
+    member: (receiver: unknown, key: PropertyKey, rawSpan: RawSpan): unknown =>
+      this.#member(receiver, key, rawSpan),
     invokePrepared: (
       prepared: PreparedInvocation,
       args: readonly CallArgument[],
       rawSpan: RawSpan,
-    ): unknown => this.#invoke(prepared.callable, prepared.receiver, args, rawSpan),
+    ): unknown =>
+      prepared.deciderBranch === undefined
+        ? this.#invoke(prepared.callable, prepared.receiver, args, rawSpan)
+        : this.#appendDeciderArguments(prepared.receiver, prepared.deciderBranch, args, rawSpan),
     invokeMember: (
       receiver: unknown,
       key: PropertyKey,
@@ -787,6 +839,57 @@ class ElaborationRecorder {
           },
           rawSpan,
         );
+      }),
+    deciderOverload: (arguments_: readonly CallArgument[], rawSpan: RawSpan): CombinatorValue =>
+      this.#withTopologyTransaction(rawSpan, () => {
+        this.#recordDslCall();
+        if (!Array.isArray(arguments_) || arguments_.length !== 1) {
+          throw new ElaborationExecutionError(
+            'Decider(configuration) requires exactly one configuration argument.',
+            this.#span(rawSpan),
+            'RT2027',
+          );
+        }
+        const profile = this.#resolveCanonicalDeciderProfile(rawSpan);
+        if (profile === undefined) {
+          throw new ElaborationExecutionError(
+            'Exact Decider configuration requires a trusted base entity:decider-combinator Entity profile.',
+            this.#span(rawSpan),
+            'RT2027',
+          );
+        }
+        const configuration = this.#normalizeDeciderConfigurationSource(
+          arguments_[0]!.value,
+          arguments_[0]!.source,
+          arguments_[0]!.fieldSources,
+        );
+        const instancePath = this.#path();
+        const normal = this.#deciderRowsWithOrigins(
+          configuration.outputs.map((row) => ({ ...row, instancePath })),
+          'normal',
+        );
+        const alternate = this.#deciderRowsWithOrigins(
+          (configuration.elseOutputs ?? []).map((row) => ({ ...row, instancePath })),
+          'else',
+        );
+        const producer = this.#createCombinator(
+          {
+            kind: 'decider',
+            condition: configuration.condition,
+            output: normal.outputs[0] ?? alternate.outputs[0]!,
+            outputs: normal.outputs,
+            outputOrigins: normal.origins,
+            ...(alternate.outputs.length === 0
+              ? {}
+              : { elseOutputs: alternate.outputs, elseOutputOrigins: alternate.origins }),
+            source: this.#span(rawSpan),
+            instancePath,
+          },
+          rawSpan,
+        );
+        // #createCombinator records the exact Decider association after the
+        // descriptor is complete; exact and ergonomic forms share one link.
+        return producer;
       }),
     network: (
       name: string | undefined,
@@ -1312,116 +1415,136 @@ class ElaborationRecorder {
       return value;
     },
     decider: (...args: unknown[]): CombinatorValue => {
-      this.#recordDslCall();
       const rawSpan = args.at(-1);
       const condition = args[0];
       const outputValues = args.slice(1, -1);
       if (!isRawSpan(rawSpan)) throw new Error('IF/when is missing provenance.');
-      if (!this.#isCondition(condition)) throw new Error('IF/when requires a circuit condition.');
-      if (outputValues.length === 0) {
-        throw new Error('IF/when requires at least one output specification.');
-      }
-      const outputs = outputValues.map((output) => this.#deciderOutput(output, rawSpan));
-      return this.#createCombinator(
-        {
-          kind: 'decider',
-          condition: condition.condition,
-          output: outputs[0]!,
-          ...(outputs.length === 1 ? {} : { outputs }),
-          source: this.#span(rawSpan),
-          instancePath: this.#path(),
-        },
-        rawSpan,
-      );
+      return this.#withTopologyTransaction(rawSpan, () => {
+        this.#recordDslCall();
+        if (!this.#isCondition(condition)) throw new Error('IF/when requires a circuit condition.');
+        if (outputValues.length === 0) {
+          throw new Error('IF/when requires at least one output specification.');
+        }
+        const instancePath = this.#path();
+        const rows = outputValues.map((output) =>
+          this.#deciderOutputCandidate(output, rawSpan, instancePath),
+        );
+        const normal = this.#deciderRowsWithOrigins(rows, 'normal');
+        return this.#createCombinator(
+          {
+            kind: 'decider',
+            condition: condition.condition,
+            output: normal.outputs[0]!,
+            outputs: normal.outputs,
+            outputOrigins: normal.origins,
+            source: this.#span(rawSpan),
+            instancePath: instancePath,
+          },
+          rawSpan,
+        );
+      });
     },
     deciderStart: (condition: unknown, rawSpan: RawSpan): CombinatorValue => {
-      this.#recordDslCall();
       if (!isRawSpan(rawSpan)) throw new Error('when(...) is missing provenance.');
-      if (!this.#isCondition(condition)) throw new Error('when(...) requires a circuit condition.');
-      return this.#createCombinator(
-        {
-          kind: 'decider',
-          condition: condition.condition,
-          source: this.#span(rawSpan),
-          instancePath: this.#path(),
-        },
-        rawSpan,
-      );
+      return this.#withTopologyTransaction(rawSpan, () => {
+        this.#recordDslCall();
+        if (!this.#isCondition(condition))
+          throw new Error('when(...) requires a circuit condition.');
+        return this.#createCombinator(
+          {
+            kind: 'decider',
+            condition: condition.condition,
+            source: this.#span(rawSpan),
+            instancePath: this.#path(),
+          },
+          rawSpan,
+        );
+      });
     },
     appendDecider: (
       value: unknown,
       branch: 'then' | 'else',
       outputs: readonly unknown[],
       rawSpan: RawSpan,
-    ): CombinatorValue => {
-      this.#recordDslCall();
-      if (!isRawSpan(rawSpan) || (branch !== 'then' && branch !== 'else')) {
-        throw new Error('Invalid when(...).then/else mutation descriptor.');
-      }
-      if (!this.#isCombinator(value)) {
-        throw new Error(`.${branch}(...) requires a DeciderCombinator.`);
-      }
-      const state = this.#combinators.stateFor(value);
-      if (state.descriptor.kind !== 'decider') {
-        throw new ElaborationExecutionError(
-          `.${branch}(...) requires a DeciderCombinator.`,
-          this.#span(rawSpan),
-          'RT2022',
-          [{ message: 'Physical combinator was created here.', span: state.descriptor.source }],
-        );
-      }
-      const appended = outputs.flatMap((output) => this.#deciderOutputs(output, rawSpan));
-      if (appended.length === 0) {
-        throw new Error(`.${branch}(output, ...) requires at least one output specification.`);
-      }
-      const thenOutputs =
-        state.descriptor.outputs ??
-        (state.descriptor.output === undefined || state.descriptor.elseOutputs !== undefined
-          ? []
-          : [state.descriptor.output]);
-      const elseOutputs = state.descriptor.elseOutputs ?? [];
-      const nextThen = branch === 'then' ? [...thenOutputs, ...appended] : thenOutputs;
-      const nextElse = branch === 'else' ? [...elseOutputs, ...appended] : elseOutputs;
-      const descriptor: CombinatorDescriptor = {
-        ...state.descriptor,
-        output: nextThen[0] ?? nextElse[0]!,
-        outputs: nextThen,
-        ...(nextElse.length === 0 ? {} : { elseOutputs: nextElse }),
-      };
-      this.#combinators.update(value, descriptor, this.#span(rawSpan));
-      this.#colors.registerCombinatorInputs(
-        value.identity,
-        this.#combinators.stateFor(value).descriptor,
-        this.#span(rawSpan),
-      );
-      return value;
-    },
+    ): CombinatorValue =>
+      this.#appendDecider(
+        value,
+        branch,
+        outputs.flatMap((output) => this.#deciderOutputs(output, rawSpan)),
+        rawSpan,
+      ),
+    appendDeciderArguments: (
+      value: unknown,
+      branch: 'then' | 'else',
+      outputs: readonly CallArgument[],
+      rawSpan: RawSpan,
+    ): CombinatorValue => this.#appendDeciderArguments(value, branch, outputs, rawSpan),
     deciderBranches: (
       condition: unknown,
       thenValue: unknown,
       elseValue: unknown,
-      rawSpan: RawSpan,
+      rawSpan?: RawSpan,
     ): CombinatorValue => {
-      this.#recordDslCall();
-      if (!isRawSpan(rawSpan)) throw new Error('IF/when is missing provenance.');
-      if (!this.#isCondition(condition)) throw new Error('IF/when requires a circuit condition.');
-      const thenOutputs = this.#deciderOutputs(thenValue, rawSpan);
-      const elseOutputs = this.#deciderOutputs(elseValue, rawSpan);
-      if (thenOutputs.length === 0 && elseOutputs.length === 0) {
-        throw new Error('IF/when requires at least one output specification.');
-      }
-      return this.#createCombinator(
-        {
-          kind: 'decider',
-          condition: condition.condition,
-          output: thenOutputs[0] ?? elseOutputs[0]!,
-          outputs: thenOutputs,
-          ...(elseOutputs.length === 0 ? {} : { elseOutputs }),
-          source: this.#span(rawSpan),
-          instancePath: this.#path(),
-        },
-        rawSpan,
-      );
+      const branchArguments =
+        rawSpan === undefined &&
+        isRawSpan(elseValue) &&
+        Array.isArray(thenValue) &&
+        thenValue.every(
+          (argument): argument is CallArgument =>
+            typeof argument === 'object' && argument !== null && isRawSpan(argument.source),
+        )
+          ? thenValue
+          : undefined;
+      const actualRawSpan = branchArguments === undefined ? rawSpan : elseValue;
+      if (!isRawSpan(actualRawSpan)) throw new Error('IF/when is missing provenance.');
+      return this.#withTopologyTransaction(actualRawSpan, () => {
+        this.#recordDslCall();
+        if (!this.#isCondition(condition)) throw new Error('IF/when requires a circuit condition.');
+        if (
+          branchArguments !== undefined &&
+          (branchArguments.length < 1 || branchArguments.length > 2)
+        ) {
+          throw new Error('IF requires one or two branch output arguments.');
+        }
+        const thenRows =
+          branchArguments === undefined
+            ? this.#deciderOutputs(thenValue, actualRawSpan)
+            : this.#deciderOutputs(
+                branchArguments[0]!.value,
+                actualRawSpan,
+                branchArguments[0]!.source,
+              );
+        const elseRows =
+          branchArguments === undefined
+            ? this.#deciderOutputs(elseValue, actualRawSpan)
+            : branchArguments.length === 1
+              ? []
+              : this.#deciderOutputs(
+                  branchArguments[1]!.value,
+                  actualRawSpan,
+                  branchArguments[1]!.source,
+                );
+        if (thenRows.length === 0 && elseRows.length === 0) {
+          throw new Error('IF/when requires at least one output specification.');
+        }
+        const normal = this.#deciderRowsWithOrigins(thenRows, 'normal');
+        const alternate = this.#deciderRowsWithOrigins(elseRows, 'else');
+        return this.#createCombinator(
+          {
+            kind: 'decider',
+            condition: condition.condition,
+            output: normal.outputs[0] ?? alternate.outputs[0]!,
+            outputs: normal.outputs,
+            outputOrigins: normal.origins,
+            ...(alternate.outputs.length === 0
+              ? {}
+              : { elseOutputs: alternate.outputs, elseOutputOrigins: alternate.origins }),
+            source: this.#span(actualRawSpan),
+            instancePath: this.#path(),
+          },
+          actualRawSpan,
+        );
+      });
     },
     logical: (
       operator: 'and' | 'or',
@@ -1508,6 +1631,9 @@ class ElaborationRecorder {
       return this.#select(value, signal, rawSpan);
     },
     element: (value: unknown, key: unknown, rawSpan: RawSpan): unknown => {
+      if (this.#isCombinator(value) && (key === 'then' || key === 'else')) {
+        return this.#member(value, key, rawSpan);
+      }
       if (
         this.#isNetwork(value) ||
         this.#isCombinator(value) ||
@@ -1807,13 +1933,21 @@ class ElaborationRecorder {
     | DirectElaborationPlan
     | DirectElaborationPlanV3
     | DirectElaborationPlanV4
-    | DirectElaborationPlanV5 {
+    | DirectElaborationPlanV5
+    | DirectElaborationPlanV6 {
     if (this.#status === 'failed') throw this.#firstFailure;
     if (this.#status === 'sealed') {
       throw new Error('The elaboration runtime has already been sealed.');
     }
     try {
+      const hasLinkedDecider = this.#linkedProducers.some(
+        ({ association }) => association.kind === 'decider',
+      );
+      const hasLinkedArithmetic = this.#linkedProducers.some(
+        ({ association }) => association.kind === 'arithmetic',
+      );
       this.#finalizeUnusedCombinators();
+      this.#validateFinalDeciderModes();
       const declarations = new Map(this.#networks.map((network) => [network.name, network]));
       const common = {
         format: 'comblang-direct-plan' as const,
@@ -1853,10 +1987,26 @@ class ElaborationRecorder {
         producers: Object.freeze(
           this.#combinators.states().map((state) => {
             const producer = this.#combinators.toPlan(state);
+            const v6Producer =
+              hasLinkedDecider && producer.kind === 'decider' && state.descriptor.kind === 'decider'
+                ? {
+                    ...producer,
+                    outputs:
+                      state.descriptor.outputs ??
+                      (state.descriptor.output === undefined ? [] : [state.descriptor.output]),
+                    outputOrigins: state.descriptor.outputOrigins ?? [],
+                    ...(state.descriptor.elseOutputs === undefined
+                      ? {}
+                      : {
+                          elseOutputs: state.descriptor.elseOutputs,
+                          elseOutputOrigins: state.descriptor.elseOutputOrigins ?? [],
+                        }),
+                  }
+                : producer;
             const linked = this.#linkedProducerByIdentity.get(state.identity);
             return linked === undefined
-              ? producer
-              : Object.freeze({ ...producer, entityId: linked.entity.id });
+              ? v6Producer
+              : Object.freeze({ ...v6Producer, entityId: linked.entity.id });
           }),
         ),
         diagnostics: Object.freeze([...this.#diagnostics]),
@@ -1901,6 +2051,23 @@ class ElaborationRecorder {
                 configuration: linked.association.configuration,
               });
       });
+      const v6Entities = entities.map((entity) => {
+        const linked = this.#linkedProducers.find(
+          ({ association }) => association.entity.id === entity.id,
+        );
+        if (linked === undefined) return entity;
+        return linked.association.kind === 'constant'
+          ? Object.freeze({
+              ...entity,
+              configuration: {
+                mode: 'constant' as const,
+                value: linked.association.configuration,
+              } satisfies EntityV4ConstantConfiguration,
+            })
+          : linked.association.kind === 'arithmetic'
+            ? Object.freeze({ ...entity, configuration: linked.association.configuration })
+            : Object.freeze({ ...entity, configuration: linked.association.configuration });
+      });
       const entityCommon = () => ({
         ...common,
         debugInstances: Object.freeze([
@@ -1924,21 +2091,31 @@ class ElaborationRecorder {
         | DirectElaborationPlan
         | DirectElaborationPlanV3
         | DirectElaborationPlanV4
-        | DirectElaborationPlanV5 = this.#linkedProducers.some(
-        ({ association }) => association.kind === 'arithmetic',
-      )
-        ? { ...entityCommon(), version: 5 as const, entities: Object.freeze(v5Entities) }
-        : this.#linkedProducers.some(({ association }) => association.kind === 'constant')
-          ? { ...entityCommon(), version: 4 as const, entities: Object.freeze(v4Entities) }
-          : entities.length === 0
-            ? {
-                ...common,
-                version: 2 as const,
-                debugInstances: Object.freeze([
-                  ...this.#debugInstances,
-                ]) as readonly DirectPlanDebugInstance[],
-              }
-            : { ...entityCommon(), version: 3 as const, entities: Object.freeze([...entities]) };
+        | DirectElaborationPlanV5
+        | DirectElaborationPlanV6 = hasLinkedDecider
+        ? ({
+            ...entityCommon(),
+            version: 6 as const,
+            producers: common.producers as readonly DirectPlanProducerV6[],
+            entities: Object.freeze(v6Entities) as readonly EntityPlanRecordV6[],
+          } satisfies DirectElaborationPlanV6)
+        : hasLinkedArithmetic
+          ? {
+              ...entityCommon(),
+              version: 5 as const,
+              entities: Object.freeze(v5Entities) as readonly EntityPlanRecordV5[],
+            }
+          : this.#linkedProducers.some(({ association }) => association.kind === 'constant')
+            ? { ...entityCommon(), version: 4 as const, entities: Object.freeze(v4Entities) }
+            : entities.length === 0
+              ? {
+                  ...common,
+                  version: 2 as const,
+                  debugInstances: Object.freeze([
+                    ...this.#debugInstances,
+                  ]) as readonly DirectPlanDebugInstance[],
+                }
+              : { ...entityCommon(), version: 3 as const, entities: Object.freeze([...entities]) };
       this.#status = 'sealed';
       return plan;
     } catch (error) {
@@ -2035,6 +2212,17 @@ class ElaborationRecorder {
     args: readonly CallArgument[],
     rawSpan: RawSpan,
   ): unknown {
+    if (typeof callable === 'function') {
+      const deciderAlias = this.#deciderMemberAliases.get(callable);
+      if (deciderAlias !== undefined) {
+        return this.#appendDeciderArguments(
+          deciderAlias.receiver,
+          deciderAlias.branch,
+          args,
+          rawSpan,
+        );
+      }
+    }
     if (this.#isEntity(callable)) return this.#invokeEntity(callable, args, rawSpan);
     if (typeof callable !== 'function') throw new TypeError('Called value is not a function.');
     const invocation: Invocation = {
@@ -2054,6 +2242,15 @@ class ElaborationRecorder {
     } finally {
       this.#invocations.pop();
     }
+  }
+
+  #member(receiver: unknown, key: PropertyKey, rawSpan: RawSpan): unknown {
+    if (this.#isCombinator(receiver) && (key === 'then' || key === 'else')) {
+      const callable = (() => undefined) as Function;
+      this.#deciderMemberAliases.set(callable, { receiver, branch: key });
+      return callable;
+    }
+    return this.api.element(receiver, key, rawSpan);
   }
 
   #invokeEntity(entity: EntityValue, args: readonly CallArgument[], rawSpan: RawSpan): EntityValue {
@@ -2230,6 +2427,65 @@ class ElaborationRecorder {
     }
   }
 
+  #validateFinalDeciderModes(): void {
+    for (const state of this.#combinators.states()) {
+      if (state.descriptor.kind !== 'decider') continue;
+      const descriptor = state.descriptor;
+      const usesEach = conditionUsesEach(descriptor.condition);
+      const branches = [
+        {
+          outputs:
+            descriptor.outputs ??
+            (descriptor.output === undefined || descriptor.elseOutputs !== undefined
+              ? []
+              : [descriptor.output]),
+          origins: descriptor.outputOrigins,
+        },
+        { outputs: descriptor.elseOutputs ?? [], origins: descriptor.elseOutputOrigins },
+      ] as const;
+      for (const { outputs, origins } of branches) {
+        for (const [index, output] of outputs.entries()) {
+          const eachOutput = output.kind === 'each';
+          const everythingOutput = output.kind === 'wildcard' && output.wildcard === 'everything';
+          const origin = origins?.[index];
+          const diagnosticSource = origin?.source ?? descriptor.source;
+          const related = [
+            { message: 'Physical combinator was created here.', span: descriptor.source },
+          ].filter(
+            (entry, entryIndex, entries) =>
+              entries.findIndex(
+                (candidate) =>
+                  candidate.span.fileId === entry.span.fileId &&
+                  candidate.span.start === entry.span.start &&
+                  candidate.span.end === entry.span.end,
+              ) === entryIndex &&
+              !(
+                entry.span.fileId === diagnosticSource.fileId &&
+                entry.span.start === diagnosticSource.start &&
+                entry.span.end === diagnosticSource.end
+              ),
+          );
+          if (eachOutput && !usesEach) {
+            throw new ElaborationExecutionError(
+              'A Decider Each output requires a final condition set that uses Each.',
+              diagnosticSource,
+              'RT2027',
+              related,
+            );
+          }
+          if (everythingOutput && usesEach) {
+            throw new ElaborationExecutionError(
+              'A Decider Everything output is invalid when the final condition set uses Each.',
+              diagnosticSource,
+              'RT2027',
+              related,
+            );
+          }
+        }
+      }
+    }
+  }
+
   #network(name: string, rawSpan: RawSpan, fixedColor?: 'red' | 'green'): NetworkValue {
     this.#recordDslCall();
     const occurrence = (this.#networkNameCounts.get(name) ?? 0) + 1;
@@ -2354,6 +2610,11 @@ class ElaborationRecorder {
       descriptor.kind === 'arithmetic'
         ? this.#resolveCanonicalArithmeticProfile(rawSpan)
         : undefined;
+    const deciderProfile =
+      descriptor.kind === 'decider' &&
+      ((descriptor.outputs?.length ?? 0) > 0 || (descriptor.elseOutputs?.length ?? 0) > 0)
+        ? this.#resolveCanonicalDeciderProfile(rawSpan)
+        : undefined;
     const ordinal = ++this.#combinatorOrdinal;
     const primary = this.#network(`$combinator:${ordinal}:primary`, rawSpan);
     const value = this.#runtimeValue<CombinatorValue>({ kind: 'combinator', identity: {} });
@@ -2383,7 +2644,55 @@ class ElaborationRecorder {
       this.#linkedProducerByIdentity.set(value.identity, association);
       this.#linkedProducers.push({ producer: value, association });
     }
+    if (
+      descriptor.kind === 'decider' &&
+      ((descriptor.outputs?.length ?? 0) > 0 || (descriptor.elseOutputs?.length ?? 0) > 0)
+    ) {
+      this.#linkDeciderCombinator(value, descriptor, rawSpan, deciderProfile);
+    }
     return value;
+  }
+
+  #linkDeciderCombinator(
+    producer: CombinatorValue,
+    descriptor: Extract<CombinatorDescriptor, { kind: 'decider' }>,
+    rawSpan: RawSpan,
+    resolvedProfile?: EntityProfile,
+  ): void {
+    const profile = resolvedProfile ?? this.#resolveCanonicalDeciderProfile(rawSpan);
+    if (profile === undefined) return;
+    const outputs =
+      descriptor.outputs ?? (descriptor.output === undefined ? [] : [descriptor.output]);
+    if (outputs.length === 0 && (descriptor.elseOutputs?.length ?? 0) === 0) return;
+    const configuration: EntityV6DeciderConfiguration = {
+      mode: 'decider',
+      condition: descriptor.condition,
+      outputs,
+      ...(descriptor.elseOutputs === undefined ? {} : { elseOutputs: descriptor.elseOutputs }),
+    };
+    const existing = this.#linkedProducerByIdentity.get(producer.identity);
+    if (existing?.kind === 'decider') {
+      const association = { ...existing, configuration } satisfies LinkedDeciderAssociation;
+      const entry = this.#linkedProducers.findIndex(
+        ({ producer: candidate }) => candidate.identity === producer.identity,
+      );
+      if (entry >= 0) this.#linkedProducers[entry] = { producer, association };
+      this.#linkedProducerByIdentity.set(producer.identity, association);
+      return;
+    }
+    if (existing !== undefined) return;
+    const entity = this.#allocateEntity(profile.ref, undefined, descriptor.placement, rawSpan);
+    if (descriptor.placement !== undefined) {
+      const { placement: _placement, ...withoutPlacement } = descriptor;
+      this.#combinators.update(producer, withoutPlacement);
+    }
+    const association = {
+      kind: 'decider' as const,
+      entity,
+      configuration,
+    } satisfies LinkedDeciderAssociation;
+    this.#linkedProducerByIdentity.set(producer.identity, association);
+    this.#linkedProducers.push({ producer, association });
   }
 
   #ensureSecondaryOutput(value: CombinatorValue, rawSpan: RawSpan): NetworkValue {
@@ -3369,6 +3678,169 @@ class ElaborationRecorder {
     return { left, operation: operation as ArithmeticOperation, right, output };
   }
 
+  #normalizeDeciderConfigurationSource(
+    value: unknown,
+    source: RawSpan,
+    fieldSources?: CallArgument['fieldSources'],
+  ): {
+    readonly condition: PlanDeciderCondition;
+    readonly outputs: readonly DeciderOutputCandidate[];
+    readonly elseOutputs?: readonly DeciderOutputCandidate[];
+  } {
+    if (!isPlainDataRecord(value)) {
+      throw new ElaborationExecutionError(
+        'Decider configuration must be a plain data record.',
+        this.#span(source),
+        'RT2027',
+      );
+    }
+    const allowed = new Set(['condition', 'outputs', 'elseOutputs']);
+    if (Reflect.ownKeys(value).some((key) => typeof key !== 'string' || !allowed.has(key))) {
+      throw new ElaborationExecutionError(
+        'Decider configuration must contain exactly condition, outputs, and optional elseOutputs fields.',
+        this.#span(source),
+        'RT2027',
+      );
+    }
+    if (!Object.prototype.hasOwnProperty.call(value, 'condition')) {
+      throw new ElaborationExecutionError(
+        'Decider configuration is missing required field "condition".',
+        this.#span(source),
+        'RT2027',
+      );
+    }
+    const conditionValue = value.condition;
+    if (!this.#isCondition(conditionValue)) {
+      throw new ElaborationExecutionError(
+        'Decider configuration condition must be a circuit Condition.',
+        this.#span(source),
+        'RT2027',
+      );
+    }
+    const normal =
+      Object.prototype.hasOwnProperty.call(value, 'outputs') && value.outputs !== undefined
+        ? this.#deciderConfigurationRows(value.outputs, fieldSources?.outputs ?? source, 'outputs')
+        : [];
+    const alternate =
+      Object.prototype.hasOwnProperty.call(value, 'elseOutputs') && value.elseOutputs !== undefined
+        ? this.#deciderConfigurationRows(
+            value.elseOutputs,
+            fieldSources?.elseOutputs ?? source,
+            'elseOutputs',
+          )
+        : [];
+    if (normal.length === 0 && alternate.length === 0) {
+      throw new ElaborationExecutionError(
+        'Decider configuration requires at least one output row.',
+        this.#span(source),
+        'RT2027',
+      );
+    }
+    return {
+      condition: conditionValue.condition,
+      outputs: normal,
+      ...(alternate.length === 0 ? {} : { elseOutputs: alternate }),
+    };
+  }
+
+  #deciderConfigurationRows(
+    value: unknown,
+    source: RawSpan,
+    field: 'outputs' | 'elseOutputs',
+  ): readonly DeciderOutputCandidate[] {
+    this.#assertDeciderOutputContainer(value, new Set(), source);
+    try {
+      return this.#deciderOutputs(value, source, source, this.#path()).map((row) => ({
+        ...row,
+        syntaxIntent: 'exact' as const,
+      }));
+    } catch (error) {
+      if (error instanceof ElaborationExecutionError) throw error;
+      throw new ElaborationExecutionError(
+        error instanceof Error ? error.message : `Invalid Decider configuration ${field}.`,
+        this.#span(source),
+        'RT2027',
+        undefined,
+        { cause: error },
+      );
+    }
+  }
+
+  #assertDeciderOutputContainer(value: unknown, seen: Set<object>, source: RawSpan): void {
+    if (
+      this.#isSignalValue(value) ||
+      this.#isWildcardCount(value) ||
+      this.#isSelected(value) ||
+      this.#isPair(value) ||
+      this.#rawNetworkFacet(value) !== undefined
+    )
+      return;
+    if (value === null || typeof value !== 'object') return;
+    if (seen.has(value)) {
+      throw new ElaborationExecutionError(
+        'Decider configuration output containers cannot be cyclic.',
+        this.#span(source),
+        'RT2027',
+      );
+    }
+    seen.add(value);
+    try {
+      if (Array.isArray(value)) {
+        if (Object.getPrototypeOf(value) !== Array.prototype)
+          throw new ElaborationExecutionError(
+            'Decider configuration output arrays must be plain arrays.',
+            this.#span(source),
+            'RT2027',
+          );
+        for (const key of Reflect.ownKeys(value)) {
+          if (typeof key !== 'string' || (key !== 'length' && !/^(0|[1-9][0-9]*)$/.test(key)))
+            throw new ElaborationExecutionError(
+              'Decider configuration output arrays cannot contain custom or symbol fields.',
+              this.#span(source),
+              'RT2027',
+            );
+          const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+          if (!('value' in descriptor))
+            throw new ElaborationExecutionError(
+              'Decider configuration output containers cannot contain accessors.',
+              this.#span(source),
+              'RT2027',
+            );
+        }
+        for (let index = 0; index < value.length; index += 1) {
+          if (!Object.prototype.hasOwnProperty.call(value, String(index)))
+            throw new ElaborationExecutionError(
+              'Decider configuration output arrays cannot contain holes.',
+              this.#span(source),
+              'RT2027',
+            );
+          this.#assertDeciderOutputContainer(value[index], seen, source);
+        }
+        return;
+      }
+      const prototype = Object.getPrototypeOf(value);
+      if (prototype !== Object.prototype && prototype !== null) return;
+      for (const key of Reflect.ownKeys(value)) {
+        if (typeof key !== 'string')
+          throw new ElaborationExecutionError(
+            'Decider configuration output records cannot contain symbol fields.',
+            this.#span(source),
+            'RT2027',
+          );
+        const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
+        if (!('value' in descriptor))
+          throw new ElaborationExecutionError(
+            'Decider configuration output containers cannot contain accessors.',
+            this.#span(source),
+            'RT2027',
+          );
+        this.#assertDeciderOutputContainer(descriptor.value, seen, source);
+      }
+    } finally {
+      seen.delete(value);
+    }
+  }
+
   #resolveCanonicalArithmeticProfile(rawSpan: RawSpan): EntityProfile | undefined {
     const context = this.#entityContext;
     const resolver = this.#entityPrototypeResolver;
@@ -3418,6 +3890,62 @@ class ElaborationRecorder {
     ) {
       throw new ElaborationExecutionError(
         `Trusted Arithmetic profile ${JSON.stringify(profile.ref.prototypeKey)} does not match base provider prototype data.`,
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    return profile;
+  }
+
+  #resolveCanonicalDeciderProfile(rawSpan: RawSpan): EntityProfile | undefined {
+    const context = this.#entityContext;
+    const resolver = this.#entityPrototypeResolver;
+    if (context === undefined || resolver === undefined) return undefined;
+    const candidates = context.profiles.filter(
+      ({ ref }) => ref.prototypeKey === 'entity:decider-combinator',
+    );
+    if (candidates.length === 0) return undefined;
+    if (candidates.length > 1) {
+      throw new ElaborationExecutionError(
+        'The trusted provider exposes ambiguous base decider-combinator profiles.',
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    const profile = candidates[0]!;
+    if (profile.prototypeType !== 'decider-combinator') {
+      throw new ElaborationExecutionError(
+        'The trusted base decider-combinator profile does not assert prototypeType "decider-combinator".',
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    let prototype: EntityPrototype | undefined;
+    try {
+      prototype = resolver.getEntity(profile.ref.prototypeKey);
+    } catch (error) {
+      throw new ElaborationExecutionError(
+        error instanceof Error ? error.message : 'Decider prototype lookup failed.',
+        this.#span(rawSpan),
+        'RT2027',
+        undefined,
+        { cause: error },
+      );
+    }
+    if (prototype === undefined) {
+      throw new ElaborationExecutionError(
+        `Trusted Decider profile ${JSON.stringify(profile.ref.prototypeKey)} is not available in the selected provider.`,
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    if (
+      prototype.key !== profile.ref.prototypeKey ||
+      prototype.name !== 'decider-combinator' ||
+      prototype.type !== 'decider-combinator'
+    ) {
+      throw new ElaborationExecutionError(
+        `Trusted Decider profile ${JSON.stringify(profile.ref.prototypeKey)} does not match base provider prototype data.`,
         this.#span(rawSpan),
         'RT2027',
       );
@@ -4362,6 +4890,176 @@ class ElaborationRecorder {
     return this.#runtimeValues.hasKind(value, kind);
   }
 
+  #appendDecider(
+    value: unknown,
+    branch: 'then' | 'else',
+    appended: readonly DeciderOutputCandidate[],
+    rawSpan: RawSpan,
+  ): CombinatorValue {
+    return this.#withTopologyTransaction(rawSpan, () =>
+      this.#appendDeciderMutation(value, branch, appended, rawSpan),
+    );
+  }
+
+  #appendDeciderMutation(
+    value: unknown,
+    branch: 'then' | 'else',
+    appended: readonly DeciderOutputCandidate[],
+    rawSpan: RawSpan,
+  ): CombinatorValue {
+    if (!isRawSpan(rawSpan) || (branch !== 'then' && branch !== 'else')) {
+      throw new Error('Invalid when(...).then/else mutation descriptor.');
+    }
+    if (!this.#isCombinator(value)) {
+      throw new Error(`.${branch}(...) requires a DeciderCombinator.`);
+    }
+    const state = this.#combinators.stateFor(value);
+    if (state.descriptor.kind !== 'decider') {
+      throw new ElaborationExecutionError(
+        `.${branch}(...) requires a DeciderCombinator.`,
+        this.#span(rawSpan),
+        'RT2022',
+        [{ message: 'Physical combinator was created here.', span: state.descriptor.source }],
+      );
+    }
+    if (appended.length === 0) {
+      throw new Error(`.${branch}(output, ...) requires at least one output specification.`);
+    }
+    const thenRows = this.#deciderRowsForDescriptor(state.descriptor, 'normal');
+    const elseRows = this.#deciderRowsForDescriptor(state.descriptor, 'else');
+    const nextThen = branch === 'then' ? [...thenRows, ...appended] : thenRows;
+    const nextElse = branch === 'else' ? [...elseRows, ...appended] : elseRows;
+    const normal = this.#deciderRowsWithOrigins(nextThen, 'normal');
+    const alternate = this.#deciderRowsWithOrigins(nextElse, 'else');
+    const descriptor: CombinatorDescriptor = {
+      ...state.descriptor,
+      output: normal.outputs[0] ?? alternate.outputs[0]!,
+      outputs: normal.outputs,
+      outputOrigins: normal.origins,
+      ...(alternate.outputs.length === 0
+        ? {}
+        : { elseOutputs: alternate.outputs, elseOutputOrigins: alternate.origins }),
+    };
+    this.#combinators.update(value, descriptor, this.#span(rawSpan));
+    this.#colors.registerCombinatorInputs(
+      value.identity,
+      this.#combinators.stateFor(value).descriptor,
+      this.#span(rawSpan),
+    );
+    this.#linkDeciderCombinator(
+      value,
+      this.#combinators.stateFor(value).descriptor as Extract<
+        CombinatorDescriptor,
+        { kind: 'decider' }
+      >,
+      rawSpan,
+    );
+    return value;
+  }
+
+  #appendDeciderArguments(
+    value: unknown,
+    branch: 'then' | 'else',
+    outputs: readonly CallArgument[],
+    rawSpan: RawSpan,
+  ): CombinatorValue {
+    if (
+      !Array.isArray(outputs) ||
+      outputs.some(
+        (output) =>
+          typeof output !== 'object' ||
+          output === null ||
+          !isRawSpan((output as CallArgument).source),
+      )
+    ) {
+      throw new Error('Invalid when(...).then/else argument descriptors.');
+    }
+    return this.#appendDecider(
+      value,
+      branch,
+      outputs.flatMap((output) => this.#deciderOutputs(output.value, rawSpan, output.source)),
+      rawSpan,
+    );
+  }
+
+  #deciderRowsForDescriptor(
+    descriptor: Extract<CombinatorDescriptor, { kind: 'decider' }>,
+    branch: 'normal' | 'else',
+  ): readonly DeciderOutputCandidate[] {
+    const outputs =
+      branch === 'normal'
+        ? (descriptor.outputs ??
+          (descriptor.output === undefined || descriptor.elseOutputs !== undefined
+            ? []
+            : [descriptor.output]))
+        : (descriptor.elseOutputs ?? []);
+    if (outputs.length === 0) return [];
+    const origins = branch === 'normal' ? descriptor.outputOrigins : descriptor.elseOutputOrigins;
+    if (origins === undefined || origins.length !== outputs.length) {
+      throw new Error('Decider output rows are missing aligned origins.');
+    }
+    return outputs.map((output, ordinal) => {
+      const origin = origins[ordinal]!;
+      return {
+        output,
+        source: origin.source,
+        instancePath: origin.instancePath,
+        syntaxIntent: origin.syntaxIntent,
+      };
+    });
+  }
+
+  #deciderRowsWithOrigins(
+    rows: readonly DeciderOutputCandidate[],
+    branch: 'normal' | 'else',
+  ): {
+    readonly outputs: readonly PlanDeciderOutput[];
+    readonly origins: readonly DeciderOutputOrigin[];
+  } {
+    return {
+      outputs: Object.freeze(rows.map(({ output }) => output)),
+      origins: Object.freeze(
+        rows.map((row, ordinal) =>
+          Object.freeze({
+            branch,
+            ordinal,
+            source: Object.freeze({ ...row.source }),
+            instancePath: Object.freeze([...row.instancePath]),
+            syntaxIntent: row.syntaxIntent,
+          }),
+        ),
+      ),
+    };
+  }
+
+  #deciderOutputCandidate(
+    output: unknown,
+    source: RawSpan,
+    instancePath: readonly string[] = this.#path(),
+  ): DeciderOutputCandidate {
+    return {
+      output: this.#deciderOutput(output, source),
+      source: this.#span(source),
+      instancePath,
+      syntaxIntent: this.#deciderOutputSyntaxIntent(output),
+    };
+  }
+
+  #deciderOutputSyntaxIntent(output: unknown): DeciderOutputSyntaxIntent {
+    if (this.#isSignalValue(output) || this.#isWildcardCount(output)) return 'explicit-constant';
+    if (this.#isSelected(output)) {
+      return isSignalId(output.selection)
+        ? 'implicit-concrete-copy'
+        : output.selection === 'each'
+          ? 'implicit-each-copy'
+          : 'explicit-wildcard-copy';
+    }
+    if (this.#isPair(output) || this.#rawNetworkFacet(output) !== undefined) {
+      return 'implicit-each-copy';
+    }
+    throw new Error('Unsupported decider output specification.');
+  }
+
   #deciderOutput(
     output: unknown,
     rawSpan: RawSpan,
@@ -4402,35 +5100,39 @@ class ElaborationRecorder {
   #deciderOutputs(
     value: unknown,
     rawSpan: RawSpan,
-    seen: Set<object> = new Set(),
-  ): readonly Extract<DirectPlanProducer, { kind: 'decider' }>['output'][] {
-    if (value === undefined) return [];
-    if (
-      this.#isSignalValue(value) ||
-      this.#isWildcardCount(value) ||
-      this.#isSelected(value) ||
-      this.#isPair(value) ||
-      this.#rawNetworkFacet(value) !== undefined
-    ) {
-      return [this.#deciderOutput(value, rawSpan)];
-    }
-    if (typeof value !== 'object' || value === null) {
-      return [this.#deciderOutput(value, rawSpan)];
-    }
-    if (seen.has(value)) throw new Error('IF/when output containers cannot be cyclic.');
-    seen.add(value);
-    try {
-      if (Array.isArray(value)) {
-        return value.flatMap((item) => this.#deciderOutputs(item, rawSpan, seen));
+    source: RawSpan = rawSpan,
+    instancePath: readonly string[] = this.#path(),
+  ): readonly DeciderOutputCandidate[] {
+    const visit = (candidate: unknown, seen: Set<object>): readonly DeciderOutputCandidate[] => {
+      if (candidate === undefined) return [];
+      if (
+        this.#isSignalValue(candidate) ||
+        this.#isWildcardCount(candidate) ||
+        this.#isSelected(candidate) ||
+        this.#isPair(candidate) ||
+        this.#rawNetworkFacet(candidate) !== undefined
+      ) {
+        return [this.#deciderOutputCandidate(candidate, source, instancePath)];
       }
-      const prototype = Object.getPrototypeOf(value);
-      if (prototype === Object.prototype || prototype === null) {
-        return Object.values(value).flatMap((item) => this.#deciderOutputs(item, rawSpan, seen));
+      if (typeof candidate !== 'object' || candidate === null) {
+        return [this.#deciderOutputCandidate(candidate, source, instancePath)];
       }
-      return [this.#deciderOutput(value, rawSpan)];
-    } finally {
-      seen.delete(value);
-    }
+      if (seen.has(candidate)) throw new Error('IF/when output containers cannot be cyclic.');
+      seen.add(candidate);
+      try {
+        if (Array.isArray(candidate)) {
+          return candidate.flatMap((item) => visit(item, seen));
+        }
+        const prototype = Object.getPrototypeOf(candidate);
+        if (prototype === Object.prototype || prototype === null) {
+          return Object.values(candidate).flatMap((item) => visit(item, seen));
+        }
+        return [this.#deciderOutputCandidate(candidate, source, instancePath)];
+      } finally {
+        seen.delete(candidate);
+      }
+    };
+    return visit(value, new Set());
   }
 
   #isCircuitDslValue(value: unknown): value is DslValue {
@@ -4533,7 +5235,8 @@ function executeElaborationProgramInternal(
   | DirectElaborationPlan
   | DirectElaborationPlanV3
   | DirectElaborationPlanV4
-  | DirectElaborationPlanV5 {
+  | DirectElaborationPlanV5
+  | DirectElaborationPlanV6 {
   if (program.format !== 'comblang-elaboration-js' || program.version !== 2) {
     throw new Error('Unsupported elaboration JavaScript format.');
   }
@@ -4590,6 +5293,7 @@ export function executeElaborationProgramV3(
   | DirectElaborationPlan
   | DirectElaborationPlanV3
   | DirectElaborationPlanV4
-  | DirectElaborationPlanV5 {
+  | DirectElaborationPlanV5
+  | DirectElaborationPlanV6 {
   return executeElaborationProgramInternal(program, options);
 }

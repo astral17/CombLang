@@ -19,6 +19,7 @@ import type {
 import type { NativeCircuitIrV3 } from '@comblang/compiler/entity';
 import type { NativeCircuitIrV4 } from '@comblang/compiler/entity-v4';
 import type { NativeCircuitIrV5 } from '@comblang/compiler/entity-v5';
+import type { NativeCircuitIrV6 } from '@comblang/compiler/entity-v6';
 import { constantConfigurationFromOutputs, SparseBus, type SignalId } from '@comblang/factorio';
 import {
   ArithmeticCombinatorDevice,
@@ -257,7 +258,7 @@ function unique<T>(values: Iterable<T>): T[] {
 }
 
 type SimulatableNativeCircuitIr =
-  NativeCircuitIr | NativeCircuitIrV3 | NativeCircuitIrV4 | NativeCircuitIrV5;
+  NativeCircuitIr | NativeCircuitIrV3 | NativeCircuitIrV4 | NativeCircuitIrV5 | NativeCircuitIrV6;
 
 function simulationDevicesForIr(ir: SimulatableNativeCircuitIr): {
   readonly concrete: readonly SynchronousDevice[];

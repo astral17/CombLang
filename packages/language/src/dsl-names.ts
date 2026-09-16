@@ -30,6 +30,7 @@ export const freeDslFunctionNames = Object.freeze([
   'Network',
   'CC',
   'Arithmetic',
+  'Decider',
   'IF',
   'to',
   'when',

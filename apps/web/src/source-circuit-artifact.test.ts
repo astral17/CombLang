@@ -4,7 +4,12 @@ import builtinPrototypeDatabase from '../../../packages/prototypes/generated/spa
 import type { DirectElaborationPlanV3 } from '@comblang/compiler/entity';
 import type { NativeCircuitIrV4 } from '@comblang/compiler/entity-v4';
 import type { ResolvedSourceCircuit } from '@comblang/compiler/resolved-source-circuit';
-import { syntheticSharedTwoColorEntityProfile } from '@comblang/compiler/entity-fixtures';
+import type { ResolvedEntityV6Circuit } from '@comblang/compiler/resolved-entity-v6';
+import {
+  syntheticSharedTwoColorEntityProfile,
+  syntheticZeroPortEntityProfile,
+} from '@comblang/compiler/entity-fixtures';
+import type { EntityProfile } from '@comblang/compiler/entity';
 import { createTrustedEntityReplayContext } from '@comblang/compiler/entity-replay-context';
 import {
   generateEntityBlueprintJson,
@@ -36,6 +41,41 @@ function assertResolvedV3(value: unknown): asserts value is ResolvedSourceCircui
   ) {
     throw new Error('Expected a resolved v3 source circuit.');
   }
+}
+
+function exactDeciderEnvironment() {
+  const profile: EntityProfile = {
+    ...structuredClone(syntheticZeroPortEntityProfile),
+    ref: {
+      ...syntheticZeroPortEntityProfile.ref,
+      prototypeKey: 'entity:decider-combinator',
+      profileId: 'profile:web-artifact-decider-v6' as EntityProfile['ref']['profileId'],
+    },
+    prototypeType: 'decider-combinator',
+  };
+  const trustedEntityReplayContext = createTrustedEntityReplayContext({
+    database: profile.ref.database,
+    source: 'synthetic',
+    evidenceIdentity: 'web-artifact-decider-v6-evidence',
+    policyIdentity: 'web-artifact-decider-v6-policy',
+    profiles: [profile],
+  });
+  const prototype: EntityPrototype = {
+    key: 'entity:decider-combinator',
+    name: 'decider-combinator',
+    type: 'decider-combinator',
+    tileWidth: 1,
+    tileHeight: 2,
+  };
+  return {
+    trustedEntityReplayContext,
+    entityPrototypeResolver: {
+      database: profile.ref.database,
+      getEntity(nameOrKey: string) {
+        return nameOrKey === prototype.key || nameOrKey === prototype.name ? prototype : undefined;
+      },
+    } as EntityPrototypeResolver,
+  };
 }
 
 describe('source circuit artifact', () => {
@@ -228,6 +268,101 @@ output += exact;`,
       },
     });
     expect(controller.timeline).toHaveLength(1);
+  });
+
+  test('hydrates a linked v6 Decider artifact and keeps row origins out of blueprint JSON', () => {
+    const environment = exactDeciderEnvironment();
+    const compiled = compileSource(
+      {
+        path: 'exact-decider-preview.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const exact: DeciderCombinator = Decider({ condition: input[A] > 0, outputs: [input[A]], elseOutputs: [1 * A] }).at(3.5, -1, 8);
+const output = new Network();
+output += exact;`,
+      },
+      environment,
+    );
+    if (
+      compiled.plan === undefined ||
+      compiled.plan.version !== 6 ||
+      compiled.resolvedCircuit?.format !== 'comblang-resolved-entity-v6'
+    ) {
+      throw new Error('Expected a resolved v6 Decider artifact.');
+    }
+
+    const artifact = createSourceCircuitArtifact(compiled.plan, compiled.resolvedCircuit);
+    expect(artifact.execution.circuit.ir.version).toBe(6);
+    expect(artifact.execution.circuit.ir.producers[0]).toMatchObject({
+      kind: 'decider',
+      entityId: artifact.execution.circuit.ir.entities[0]?.id,
+      outputOrigins: [{ branch: 'normal', ordinal: 0 }],
+      elseOutputOrigins: [{ branch: 'else', ordinal: 0 }],
+    });
+    expect(artifact.blueprint.blueprint.entities).toEqual([
+      expect.objectContaining({
+        entity_number: 1,
+        name: 'decider-combinator',
+        position: { x: 3.5, y: -1 },
+        direction: 8,
+        control_behavior: {
+          decider_conditions: expect.objectContaining({
+            outputs: [expect.objectContaining({})],
+            else_outputs: [expect.objectContaining({})],
+          }),
+        },
+      }),
+    ]);
+    expect(JSON.stringify(artifact.blueprint)).not.toContain('outputOrigins');
+  });
+
+  test('rejects stale, context-mismatched, and malformed v6 preview inputs', () => {
+    const environment = exactDeciderEnvironment();
+    const compile = (count: number) =>
+      compileSource(
+        {
+          path: 'v6-correlation.factorio.ts',
+          text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const gate: DeciderCombinator = Decider({ condition: input[A] > 0, outputs: [${count} * A] });
+const output = new Network();
+output += gate;`,
+        },
+        environment,
+      );
+    const first = compile(1);
+    const second = compile(2);
+    if (
+      first.plan?.version !== 6 ||
+      first.resolvedCircuit?.format !== 'comblang-resolved-entity-v6' ||
+      second.plan?.version !== 6 ||
+      second.resolvedCircuit?.format !== 'comblang-resolved-entity-v6'
+    ) {
+      throw new Error('Expected two resolved v6 Decider artifacts.');
+    }
+    const firstPlan = first.plan;
+    const firstResolved = first.resolvedCircuit;
+    const secondResolved = second.resolvedCircuit;
+
+    expect(firstResolved.planFingerprint).not.toBe(secondResolved.planFingerprint);
+    expect(() => createSourceCircuitArtifact(firstPlan, secondResolved)).toThrow(
+      /fingerprint does not match/,
+    );
+    const contextMismatch = {
+      ...firstResolved,
+      ir: {
+        ...firstResolved.ir,
+        context: { ...firstResolved.ir.context, evidenceIdentity: 'wrong-evidence' },
+      },
+    };
+    expect(() => createSourceCircuitArtifact(firstPlan, contextMismatch)).toThrow(
+      /context does not match/,
+    );
+    const malformed = {
+      ...firstResolved,
+      ir: { ...firstResolved.ir, version: 5 },
+    } as unknown as ResolvedEntityV6Circuit;
+    expect(() => createSourceCircuitArtifact(firstPlan, malformed)).toThrow();
   });
 
   test('rejects stale and modified v3 plans even when context and record counts match', () => {

@@ -148,6 +148,22 @@ export interface DirectPlanDecider {
   readonly placement?: PlanEntityPlacement;
 }
 
+/** Internal row identity retained only by computation-bearing Entity v6 transport. */
+export type DeciderOutputSyntaxIntent =
+  | 'implicit-concrete-copy'
+  | 'implicit-each-copy'
+  | 'explicit-wildcard-copy'
+  | 'explicit-constant'
+  | 'exact';
+
+export interface DeciderOutputOrigin {
+  readonly branch: 'normal' | 'else';
+  readonly ordinal: number;
+  readonly source: SourceSpan;
+  readonly instancePath: readonly string[];
+  readonly syntaxIntent: DeciderOutputSyntaxIntent;
+}
+
 export interface DirectPlanConstant {
   readonly kind: 'constant';
   /** Explicit source Producer binding retained for debug queries. */

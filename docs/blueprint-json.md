@@ -83,6 +83,17 @@ plans are supported by the same adapter. This remains readable synthetic
 preview output and does not establish native Factorio import/export
 conformance.
 
+The cumulative Entity v6 preview uses
+`generateEntityComputationBlueprintJsonV6`. A linked Decider combines the
+producer's resolved condition and ordered normal/else output rows with the
+linked Entity's trusted `decider-combinator` prototype and Entity-owned
+placement, emitting exactly one native-preview Decider object. Linked Constant,
+Arithmetic, and Decider producers may be mixed; each linked pair emits once,
+and no hidden second device is introduced. Row origins are transport/debug
+metadata and do not become Entity configuration fields. The simulator and
+preview reuse the existing Decider semantics; this adapter is structural
+preview evidence, not native Factorio conformance.
+
 The generator emits plain JSON only. It does not prepend the exchange-string version byte, deflate, or base64-encode the result.
 
 Nested Decider conditions are lowered to OR-connected groups of AND comparisons.

@@ -48,6 +48,32 @@ async function circuitTestFiles(
   return [sourcePath, testPath];
 }
 
+async function deciderPrototypeProvider() {
+  const database = structuredClone(syntheticPrototypeDatabase()) as {
+    entities: Array<Record<string, unknown>>;
+  };
+  database.entities.push({
+    key: 'entity:decider-combinator',
+    name: 'decider-combinator',
+    type: 'decider-combinator',
+    blueprintEligible: true,
+    tileWidth: 1,
+    tileHeight: 2,
+    circuit: {
+      read: false,
+      enableDisable: false,
+      readContents: false,
+      setFilters: false,
+      setRequests: false,
+      setRecipe: false,
+      readRecipe: false,
+      readFinishedCraft: false,
+      outputSignals: false,
+    },
+  });
+  return loadPrototypeDatabase(database);
+}
+
 afterEach(async () => {
   vi.restoreAllMocks();
   await Promise.all(
@@ -113,6 +139,41 @@ const input = CC(); const a = Double(input); const b = Double(input); const c = 
     expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
       entityReplayContext,
       entityReplayIdentity: expect.stringContaining('comblang-synthetic-evidence-v1'),
+    });
+  });
+
+  test('prints a successful linked Decider v6 result through check and test output', async () => {
+    const { prototypes } = await deciderPrototypeProvider();
+    const [source, tests] = await circuitTestFiles(
+      `const A = Signal('virtual', 'signal-A');
+const input: Network = CC(5 * A);
+const gate: DeciderCombinator = Decider({ condition: input[A] > 0, outputs: [input[A]], elseOutputs: [1 * A] });
+const output = new Network();
+output += gate;`,
+      `test('linked v6 Decider is executable', ({ network, tick, expectSignal }) => {
+  tick();
+  expectSignal(network('output'), Signal('virtual', 'signal-A')).toBe(1);
+});`,
+    );
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', source], { prototypes })).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      diagnostics: [],
+      producerCount: 2,
+      prototypeEnvironment: { identity: prototypes.identity },
+    });
+    log.mockClear();
+
+    const testExit = await run(['test', '--json', source, tests], { prototypes });
+    const testReport = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect({ testExit, report: testReport }).toMatchObject({
+      testExit: 0,
+      report: {
+        diagnostics: [],
+        tests: { passed: 1, failed: 0, results: [{ status: 'passed' }] },
+        prototypeEnvironment: { identity: prototypes.identity },
+      },
     });
   });
 

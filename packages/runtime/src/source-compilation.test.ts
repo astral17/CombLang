@@ -121,6 +121,34 @@ function syntheticTypedLampHost() {
 }
 
 describe('shared source compilation service', () => {
+  test('reports final v2 Decider mode failures at the offending row', () => {
+    const path = 'v2-decider-mode-row.factorio.ts';
+    const text = `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output: Network = IF(input[A] > 0, Each(input));`;
+    const result = compileSourceProgram({ path, text });
+    const start = text.indexOf('Each(input)');
+
+    expect(result.plan).toBeUndefined();
+    expect(result.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'RT2027',
+        message: expect.stringContaining('Decider Each output'),
+        span: {
+          fileId: sourceFileId(path),
+          start,
+          end: start + 'Each(input)'.length,
+        },
+        related: [
+          expect.objectContaining({
+            message: 'Physical combinator was created here.',
+            span: expect.any(Object),
+          }),
+        ],
+      }),
+    ]);
+  });
+
   test('resolves Lamp from short, canonical, and exact provider-owned prototype forms', async () => {
     const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
     const provisioned = new EntityProvisioningService().provision(

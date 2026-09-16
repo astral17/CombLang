@@ -20,6 +20,7 @@ import type {
 } from './entity.js';
 import type { EntityPhysicalRecordV4, NativeCircuitIrV4 } from './entity-v4.js';
 import type { EntityPhysicalRecordV5, NativeCircuitIrV5 } from './entity-v5.js';
+import type { EntityPhysicalRecordV6, NativeCircuitIrV6 } from './entity-v6.js';
 
 import type { CircuitColor, CircuitProducerNode, NativeCircuitIr } from './ir.js';
 
@@ -308,15 +309,37 @@ export function generateEntityComputationBlueprintJsonV5(
   );
 }
 
+/** Cumulative v6 preview path; linked Constant, Arithmetic, and Decider entities share their producer number. */
+export function generateEntityComputationBlueprintJsonV6(
+  ir: NativeCircuitIrV6,
+  options: BlueprintJsonOptions = {},
+): FactorioBlueprintJson {
+  const entitiesById = new Map(ir.entities.map((entity) => [entity.id, entity]));
+  const linked = new Map<ProducerId, EntityPhysicalRecordV6>();
+  for (const producer of ir.producers) {
+    if (producer.entityId === undefined) continue;
+    const entity = entitiesById.get(producer.entityId);
+    if (entity === undefined)
+      throw new BlueprintJsonError(`Missing physical Entity for linked producer ${producer.id}.`);
+    linked.set(producer.id, entity);
+  }
+  return generatePreview(
+    { format: 'comblang-ncir', version: 2, networks: ir.networks, producers: ir.producers },
+    options,
+    ir.entities,
+    linked,
+  );
+}
+
 function generatePreview(
   ir: NativeCircuitIr,
   options: BlueprintJsonOptions,
   physicalEntities: readonly (
-    EntityPhysicalRecord | EntityPhysicalRecordV4 | EntityPhysicalRecordV5
+    EntityPhysicalRecord | EntityPhysicalRecordV4 | EntityPhysicalRecordV5 | EntityPhysicalRecordV6
   )[],
   linkedEntities: ReadonlyMap<
     ProducerId,
-    EntityPhysicalRecord | EntityPhysicalRecordV4 | EntityPhysicalRecordV5
+    EntityPhysicalRecord | EntityPhysicalRecordV4 | EntityPhysicalRecordV5 | EntityPhysicalRecordV6
   > = new Map(),
 ): FactorioBlueprintJson {
   const maxRows = options.maxDeciderConditionRows ?? 1024;
@@ -371,8 +394,12 @@ function generatePreview(
     ordinals.add(entity.ordinal);
     const linked = [...linkedEntities.values()].find(({ id }) => id === entity.id);
     if (linked !== undefined) {
-      if (entity.configuration?.mode !== 'constant' && entity.configuration?.mode !== 'arithmetic')
-        fail('Linked Entity requires Constant or Arithmetic configuration.');
+      if (
+        entity.configuration?.mode !== 'constant' &&
+        entity.configuration?.mode !== 'arithmetic' &&
+        entity.configuration?.mode !== 'decider'
+      )
+        fail('Linked Entity requires Constant, Arithmetic, or Decider configuration.');
     } else if (entity.configuration !== undefined) {
       const configuration = dataRecord(entity.configuration, '$.configuration', fail);
       if (configuration.mode === 'raw') {
@@ -451,7 +478,7 @@ function generatePreview(
           direction: producer.placement?.direction ?? 4,
         };
       }
-      if (linked.configuration?.mode === 'arithmetic') {
+      if (linked.configuration?.mode === 'arithmetic' || linked.configuration?.mode === 'decider') {
         return {
           entity_number: numbers.get(producer.id)!,
           name: linked.prototypeName,
@@ -464,7 +491,7 @@ function generatePreview(
       }
       if (linked.configuration?.mode !== 'constant')
         throw new BlueprintJsonError(
-          'Linked Entity requires Constant or Arithmetic configuration.',
+          'Linked Entity requires Constant, Arithmetic, or Decider configuration.',
           linked.provenance.source,
         );
       return {

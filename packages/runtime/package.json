@@ -10,7 +10,10 @@
     "./resolved-source-circuit": "./src/resolved-source-circuit.ts",
     "./resolved-entity-v4": "./src/resolved-entity-v4.ts",
     "./resolved-entity-v5": "./src/resolved-entity-v5.ts",
+    "./resolved-entity-v6": "./src/resolved-entity-v6.ts",
     "./entity-v5": "./src/entity-v5.ts",
+    "./entity-v6": "./src/entity-v6.ts",
+    "./entity-v6-validation": "./src/entity-v6-validation.ts",
     "./entity-registry": "./src/entity-registry.ts",
     "./source-compilation": "./src/source-compilation.ts"
   },

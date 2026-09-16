@@ -38,23 +38,48 @@ export function transformCallOrElementNode(
   context: CallTransformContext,
 ): ts.Node | undefined {
   const { factory, visit } = context;
-  const callArguments = (args: readonly ts.Expression[]): ts.ArrayLiteralExpression =>
+  const exactDeciderFieldSources = (
+    argument: ts.Expression,
+  ): ts.ObjectLiteralExpression | undefined => {
+    if (!ts.isObjectLiteralExpression(argument)) return undefined;
+    const fields = argument.properties.flatMap((property) => {
+      if (!ts.isPropertyAssignment(property)) return [];
+      const name = property.name;
+      const key = ts.isIdentifier(name) || ts.isStringLiteral(name) ? name.text : undefined;
+      return key === 'outputs' || key === 'elseOutputs'
+        ? [factory.createPropertyAssignment(key, context.spanLiteral(property.initializer))]
+        : [];
+    });
+    return fields.length === 0 ? undefined : factory.createObjectLiteralExpression(fields);
+  };
+  const callArgument = (
+    argument: ts.Expression,
+    fieldSources?: ts.ObjectLiteralExpression,
+  ): ts.ObjectLiteralExpression | ts.SpreadElement =>
+    ts.isSpreadElement(argument)
+      ? factory.createSpreadElement(
+          context.dslCall('spreadCallArguments', [
+            ts.visitNode(argument.expression, visit) as ts.Expression,
+            context.spanLiteral(argument),
+          ]),
+        )
+      : factory.createObjectLiteralExpression([
+          factory.createPropertyAssignment('value', ts.visitNode(argument, visit) as ts.Expression),
+          factory.createPropertyAssignment('source', context.spanLiteral(argument)),
+          ...(fieldSources === undefined
+            ? []
+            : [factory.createPropertyAssignment('fieldSources', fieldSources)]),
+        ]);
+  const callArguments = (
+    args: readonly ts.Expression[],
+    exactDecider = false,
+  ): ts.ArrayLiteralExpression =>
     factory.createArrayLiteralExpression(
-      args.map((argument) =>
-        ts.isSpreadElement(argument)
-          ? factory.createSpreadElement(
-              context.dslCall('spreadCallArguments', [
-                ts.visitNode(argument.expression, visit) as ts.Expression,
-                context.spanLiteral(argument),
-              ]),
-            )
-          : factory.createObjectLiteralExpression([
-              factory.createPropertyAssignment(
-                'value',
-                ts.visitNode(argument, visit) as ts.Expression,
-              ),
-              factory.createPropertyAssignment('source', context.spanLiteral(argument)),
-            ]),
+      args.map((argument, index) =>
+        callArgument(
+          argument,
+          exactDecider && index === 0 ? exactDeciderFieldSources(argument) : undefined,
+        ),
       ),
     );
 
@@ -138,6 +163,12 @@ export function transformCallOrElementNode(
         context.spanLiteral(node),
       ]);
     }
+    if (node.expression.text === 'Decider') {
+      return context.dslCall('deciderOverload', [
+        callArguments(node.arguments, true),
+        context.spanLiteral(node),
+      ]);
+    }
     const entityFamily = Object.prototype.hasOwnProperty.call(
       entityFamilyDslNames,
       node.expression.text,
@@ -160,10 +191,7 @@ export function transformCallOrElementNode(
     if (node.expression.text === 'IF' && node.arguments.length >= 2) {
       return context.dslCall('deciderBranches', [
         ts.visitNode(node.arguments[0]!, visit) as ts.Expression,
-        ts.visitNode(node.arguments[1]!, visit) as ts.Expression,
-        node.arguments[2] === undefined
-          ? factory.createVoidZero()
-          : (ts.visitNode(node.arguments[2], visit) as ts.Expression),
+        callArguments(node.arguments.slice(1)),
         context.spanLiteral(node),
       ]);
     }
@@ -186,6 +214,17 @@ export function transformCallOrElementNode(
   if (ts.isCallExpression(node)) {
     const instantiated = context.transformTestInstantiation(node);
     if (instantiated !== undefined) return instantiated;
+  }
+
+  if (
+    ts.isPropertyAccessExpression(node) &&
+    (node.name.text === 'then' || node.name.text === 'else')
+  ) {
+    return context.dslCall('member', [
+      ts.visitNode(node.expression, visit) as ts.Expression,
+      factory.createStringLiteral(node.name.text),
+      context.spanLiteral(node),
+    ]);
   }
 
   if (

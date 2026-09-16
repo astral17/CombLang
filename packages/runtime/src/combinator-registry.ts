@@ -217,11 +217,16 @@ export class CombinatorRegistry {
   }
 
   toPlan(state: CombinatorRuntimeState): DirectPlanProducer {
+    const descriptor =
+      state.descriptor.kind === 'decider'
+        ? (({ outputOrigins: _outputOrigins, elseOutputOrigins: _elseOutputOrigins, ...rest }) =>
+            rest)(state.descriptor)
+        : state.descriptor;
     const destinations = [state.outputPort.primary, state.outputPort.secondary]
       .filter((lane): lane is OutputLaneState => lane !== undefined)
       .map(({ attachment }) => attachment);
     return {
-      ...state.descriptor,
+      ...descriptor,
       ...(state.debugCaptureIds.length === 0
         ? {}
         : { debugCaptureIds: Object.freeze([...state.debugCaptureIds]) }),

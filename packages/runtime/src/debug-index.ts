@@ -2,6 +2,7 @@ import type {
   DirectElaborationPlan,
   DirectPlanProducer,
 } from '@comblang/compiler/direct-plan-schema';
+import type { DirectElaborationPlanV6, DirectPlanProducerV6 } from '@comblang/compiler/entity-v6';
 import type { EntityPhysicalRecord } from '@comblang/compiler/entity';
 import type { NetworkId, ProducerId, SourceSpan } from '@comblang/shared';
 
@@ -51,7 +52,7 @@ export interface DebugProducerEntry {
   readonly kindOrdinal: number;
   readonly source: SourceSpan;
   readonly instancePath: readonly string[];
-  readonly descriptor: DirectPlanProducer;
+  readonly descriptor: DirectPlanProducer | DirectPlanProducerV6;
 }
 
 export interface DebugEntityEntry {
@@ -275,8 +276,8 @@ export class DebugIndex {
   }
 
   static fromDirectPlan(
-    plan: DirectElaborationPlan,
-    circuit: ElaboratedCircuit,
+    plan: DirectElaborationPlan | DirectElaborationPlanV6,
+    circuit: { readonly graph: { readonly producers: readonly { readonly id: ProducerId }[] } },
     networkId: (planName: string) => NetworkId,
     producerId: (planIndex: number) => ProducerId,
     entities: readonly EntityPhysicalRecord[] = [],

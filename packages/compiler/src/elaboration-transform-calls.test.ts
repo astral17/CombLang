@@ -61,7 +61,7 @@ describe('elaboration call/member transform', () => {
     expect(code).toContain('__dsl.entityFamilyFromPrototype("Roboport", [{ value: value, source:');
     expect(code).toContain('__dsl.constantOverload([...__dsl.spreadCallArguments(rest');
     expect(code).toContain('__dsl.constant(value');
-    expect(code).toContain('__dsl.deciderBranches(test, yes, no');
+    expect(code).toContain('__dsl.deciderBranches(test, [{ value: yes, source:');
     expect(code).toContain('__dsl.invoke(fn, [{ value: first, source:');
     expect(code).toContain('...__dsl.spreadCallArguments(rest');
   });
@@ -76,6 +76,19 @@ describe('elaboration call/member transform', () => {
     expect(code).toContain('source: { start:');
   });
 
+  test('routes exact Decider through the runtime overload boundary with argument spans', () => {
+    const code = transformCalls(
+      `Decider({ condition: input[A] > 0, outputs: [input[A], 1 * A] }); Decider(...configuration); object.Decider(configuration);`,
+    );
+
+    expect(code).toContain('__dsl.deciderOverload([{ value: {');
+    expect(code).toContain('condition: __dsl.element(input, A');
+    expect(code).toContain('outputs: [');
+    expect(code).toContain('source: { start:');
+    expect(code).toContain('__dsl.deciderOverload([...__dsl.spreadCallArguments(configuration');
+    expect(code).toContain('__dsl.invokePrepared(__dsl.prepareMember(object, "Decider"');
+  });
+
   test('instruments computed and returned-call callees at the executed boundary', () => {
     const code = transformCalls(
       `const called = Entity('entity:synthetic')(input); getFactory()(value);`,
@@ -85,16 +98,18 @@ describe('elaboration call/member transform', () => {
     expect(code).toContain('__dsl.invoke(__dsl.invoke(getFactory');
   });
 
-  test('recognizes both fluent decider branch forms before generic member calls', () => {
+  test('routes fluent decider branches through runtime-aware prepared members', () => {
     const code = transformCalls(
       `when(test).then(a, b).else(c); when(other).else(fallback); object.method(value);`,
     );
 
     expect(code.match(/__dsl\.deciderStart/g)).toHaveLength(2);
-    expect(code).toContain('__dsl.prepareMember(__dsl.deciderStart(test');
+    expect(code).toContain(
+      '__dsl.invokePrepared(__dsl.prepareMember(__dsl.invokePrepared(__dsl.prepareMember(__dsl.deciderStart(test',
+    );
     expect(code).toContain('"then"');
     expect(code).toContain('"else"');
-    expect(code).toContain('__dsl.prepareMember(__dsl.deciderStart(other');
+    expect(code).toContain('__dsl.invokePrepared(__dsl.prepareMember(__dsl.deciderStart(other');
     expect(code).toContain('__dsl.invokePrepared(__dsl.prepareMember(object, "method"');
   });
 

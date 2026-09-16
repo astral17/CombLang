@@ -55,9 +55,15 @@ Object schemas should leave room for separate circuit and logistic conditions wh
 
 ## Native Decider completeness
 
-The source language, lower simulator, and blueprint IR represent ordered normal and else output lists. Compact syntax supports `IF(condition, then, else)`, `when(condition).then(...).else(...)`, and false-only `when(condition).else(...)`; exact native configuration remains future work.
+The source language, lower simulator, and blueprint IR represent ordered normal
+and else output lists. Compact syntax supports `IF(condition, then, else)`,
+`when(condition).then(...).else(...)`, and false-only
+`when(condition).else(...)`. The exact `Decider({ condition, outputs,
+elseOutputs })` source form is implemented for the current semantic output
+vocabulary; it requires trusted canonical Decider authority and selects the
+cumulative v6 transport. Native fixture verification remains future work.
 
-Phase 7 must complete the native surface without hidden hardware:
+The current exact slice preserves the native surface without hidden hardware:
 
 - ordered normal and else output lists;
 - copy-input-count and constant-count modes;
@@ -65,6 +71,16 @@ Phase 7 must complete the native surface without hidden hardware:
 - independent input network selections where the Factorio schema permits them;
 - exactly one physical Decider and one tick for one source Decider configuration;
 - preservation of repeated output SignalIDs.
+
+Exact records require only `condition`; `outputs` and `elseOutputs` are
+independently optional and may be omitted, `undefined`, or empty. They accept a
+single output value or recursively nested plain arrays and records per branch.
+Flattening is ordered and preserves duplicates. An empty normal branch is
+valid only when the else branch has rows; an empty else branch is canonicalized
+away. A row carries branch, dense ordinal, source
+boundary, dynamic instance path, and syntax intent through v6 plan/EG/NCIR/
+resolved/debug transport. Nested JavaScript mutations before the final
+container is supplied do not receive invented provenance.
 
 Repeated outputs are intentional. For example, copying `A` and emitting constant `1` to `A` yields the sum on the destination Network; the compiler must not deduplicate or combine those rows.
 
@@ -94,7 +110,8 @@ descriptor must retain source span, dynamic
 instance path, ordinal, and syntax intent (`implicit-concrete-copy`, explicit
 ergonomic form, or exact/native). Duplicate rows retain distinct descriptors.
 Exact constructors may suppress stylistic advice, but never native correctness
-validation.
+validation. The exact normalizer rejects malformed records and containers
+atomically before topology or Entity allocation.
 
 An implicit concrete copy in Each-mode is legal, so any readability diagnostic
 must be a configurable note/hint rather than an unconditional warning. Its

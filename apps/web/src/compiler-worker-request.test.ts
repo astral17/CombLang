@@ -7,6 +7,7 @@ import {
   type EntityPrototype,
 } from '@comblang/prototypes';
 import { syntheticZeroPortEntityProfile } from '@comblang/compiler/entity-fixtures';
+import type { EntityProfile } from '@comblang/compiler/entity';
 import { generateEntityBlueprintJson } from '@comblang/compiler/blueprint-json';
 import {
   createTrustedEntityReplayContext,
@@ -89,6 +90,13 @@ const rawSource = JSON.stringify({
       flags: ['placeable-player', 'player-creation'],
     },
   },
+  'decider-combinator': {
+    'decider-combinator': {
+      type: 'decider-combinator',
+      name: 'decider-combinator',
+      flags: ['placeable-player', 'player-creation'],
+    },
+  },
   'logistic-container': {
     'fixture-logistics': {
       type: 'logistic-container',
@@ -97,6 +105,42 @@ const rawSource = JSON.stringify({
     },
   },
 });
+
+function exactDeciderHostContext() {
+  const profile: EntityProfile = {
+    ...structuredClone(syntheticZeroPortEntityProfile),
+    ref: {
+      ...syntheticZeroPortEntityProfile.ref,
+      prototypeKey: 'entity:decider-combinator',
+      profileId: 'profile:worker-decider-v6' as EntityProfile['ref']['profileId'],
+    },
+    prototypeType: 'decider-combinator',
+  };
+  const trustedEntityReplayContext = createTrustedEntityReplayContext({
+    database: profile.ref.database,
+    source: 'synthetic',
+    evidenceIdentity: 'worker-decider-v6-evidence',
+    policyIdentity: 'worker-decider-v6-policy',
+    profiles: [profile],
+  });
+  const prototype: EntityPrototype = {
+    key: 'entity:decider-combinator',
+    name: 'decider-combinator',
+    type: 'decider-combinator',
+    tileWidth: 1,
+    tileHeight: 2,
+  };
+  return {
+    trustedEntityReplayContext,
+    entityReplayContext: entityReplayContextTransport(trustedEntityReplayContext),
+    entityPrototypeResolver: {
+      database: profile.ref.database,
+      getEntity(nameOrKey: string) {
+        return nameOrKey === prototype.key || nameOrKey === prototype.name ? prototype : undefined;
+      },
+    },
+  };
+}
 
 describe('browser compiler Worker prototype profile', () => {
   test('reports ordered cloneable progress for ordinary source compilation', async () => {
@@ -323,6 +367,52 @@ output += exact;`,
       version: 1,
       ir: { version: 5 },
     });
+    expect(JSON.stringify(response.result)).not.toMatch(
+      /profiles|resolver|prototypeProvider|trustedEntityReplayContext/,
+    );
+    expect(response.result).not.toHaveProperty('execution');
+    expect(structuredClone(response)).toEqual(response);
+  });
+
+  test('transports a linked exact Decider with row origins as profile-free v6 data', async () => {
+    const host = exactDeciderHostContext();
+    const runtime = new CompilerWorkerRuntime({
+      resolveEntityReplayContext: () => host,
+    });
+    const response = await runtime.handle({
+      kind: 'parse',
+      revision: 24,
+      file: {
+        path: 'worker-exact-decider.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const exact: DeciderCombinator = Decider({ condition: input[A] > 0, outputs: [input[A]], elseOutputs: [1 * A] });
+const output = new Network();
+output += exact;`,
+      },
+      entityReplayContext: host.entityReplayContext,
+    });
+
+    expect(response.result.compilerDiagnostics).toEqual([]);
+    expect(response.result.plan).toMatchObject({
+      version: 6,
+      producers: [{ kind: 'decider', entityId: expect.any(String) }],
+      entities: [
+        {
+          configuration: { mode: 'decider' },
+        },
+      ],
+    });
+    expect(response.result.resolvedCircuit?.ir.entities[0]).toMatchObject({
+      prototypeName: 'decider-combinator',
+    });
+    expect(response.result.resolvedCircuit).toMatchObject({
+      format: 'comblang-resolved-entity-v6',
+      version: 1,
+      ir: { version: 6 },
+    });
+    const producer = response.result.resolvedCircuit?.ir.producers[0];
+    expect(producer).toMatchObject({ kind: 'decider', outputOrigins: [{ branch: 'normal' }] });
     expect(JSON.stringify(response.result)).not.toMatch(
       /profiles|resolver|prototypeProvider|trustedEntityReplayContext/,
     );
