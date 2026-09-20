@@ -78,7 +78,7 @@ export class DebugStructureExpectation {
   }
 
   toHaveProducerCounts(expected: ProducerCounts): this {
-    const actual = { arithmetic: 0, decider: 0, constant: 0 };
+    const actual = { arithmetic: 0, decider: 0, constant: 0, selector: 0 };
     for (const producer of this.#producers) actual[producer.producerKind] += 1;
     for (const [kind, count] of Object.entries(expected) as [keyof ProducerCounts, number][]) {
       if (!Number.isSafeInteger(count) || count < 0) {

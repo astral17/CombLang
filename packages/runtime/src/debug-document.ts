@@ -4,6 +4,7 @@ import type { ElaborationGraphV3 } from '@comblang/compiler/entity';
 import type { ElaborationGraphV4 } from '@comblang/compiler/entity-v4';
 import type { ElaborationGraphV5, EntityPhysicalRecordV5 } from '@comblang/compiler/entity-v5';
 import type { ElaborationGraphV6, EntityPhysicalRecordV6 } from '@comblang/compiler/entity-v6';
+import type { ElaborationGraphV7, EntityPhysicalRecordV7 } from '@comblang/compiler/entity-v7';
 import type { NetworkId } from '@comblang/shared';
 import type { DeciderOutputOrigin } from '@comblang/compiler/direct-plan-schema';
 
@@ -25,7 +26,8 @@ export interface DebugDocumentProducer extends Omit<DebugProducerEntry, 'descrip
 }
 
 export interface DebugDocumentEntity extends Omit<DebugEntityEntry, 'record'> {
-  readonly record: EntityPhysicalRecord | EntityPhysicalRecordV5 | EntityPhysicalRecordV6;
+  readonly record:
+    EntityPhysicalRecord | EntityPhysicalRecordV5 | EntityPhysicalRecordV6 | EntityPhysicalRecordV7;
 }
 
 interface DebugDocumentScopeV1 {
@@ -59,7 +61,8 @@ export function createDebugDocument(
     | ElaborationGraphV3
     | ElaborationGraphV4
     | ElaborationGraphV5
-    | ElaborationGraphV6,
+    | ElaborationGraphV6
+    | ElaborationGraphV7,
 ): DebugDocument {
   const byId = new Map(graph.producers.map((producer) => [producer.id, producer]));
   const scopes = index.scopes.map((scope) => ({

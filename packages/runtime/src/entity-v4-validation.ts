@@ -195,9 +195,11 @@ function parseRawProducers(value: unknown): readonly { readonly entityId?: Entit
         ? ['left', 'operation', 'right', 'output']
         : kind === 'decider'
           ? ['condition', 'output', 'outputs', 'elseOutputs']
-          : kind === 'constant'
-            ? ['outputs']
-            : [];
+          : kind === 'selector'
+            ? ['input', 'operation', 'selectMax', 'index', 'output']
+            : kind === 'constant'
+              ? ['outputs']
+              : [];
     if (specific.length === 0)
       invalid('RT4000', `${path}.kind`, 'unknown Producer tag.', sourceOf(record));
     exactKeys(record, [...common, ...specific], path);

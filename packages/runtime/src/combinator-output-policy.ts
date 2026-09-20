@@ -53,6 +53,13 @@ export function bindCombinatorOutputSignal(
   if (value.kind === 'arithmetic') {
     return { ...value, output: { kind: 'signal', signal } };
   }
+  if (value.kind === 'selector') {
+    outputBindingFailure(
+      'A Selector output cannot be rebound to a destination Signal.',
+      value,
+      source,
+    );
+  }
   const thenOutputs =
     value.outputs ??
     (value.elseOutputs === undefined && value.output !== undefined ? [value.output] : []);

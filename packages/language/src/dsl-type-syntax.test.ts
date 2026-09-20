@@ -16,6 +16,7 @@ describe('DSL type annotation syntax', () => {
     ['Ref<Network>', { kind: 'network', capability: 'ref' }],
     ['Move<Network<G>>', { kind: 'network', capability: 'move', color: 'green' }],
     ['ArithmeticCombinator', { kind: 'producer', producerType: 'ArithmeticCombinator' }],
+    ['SelectorCombinator', { kind: 'producer', producerType: 'SelectorCombinator' }],
     [
       'ReadonlyArray<DeciderCombinator>',
       {

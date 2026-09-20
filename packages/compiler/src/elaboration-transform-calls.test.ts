@@ -59,7 +59,7 @@ describe('elaboration call/member transform', () => {
     expect(code).toContain('__dsl.signal("signal-A"');
     expect(code).toContain('__dsl.entityFamilyFromPrototype("Lamp", [{ value: first, source:');
     expect(code).toContain('__dsl.entityFamilyFromPrototype("Roboport", [{ value: value, source:');
-    expect(code).toContain('__dsl.entityFamilyFromPrototype("Selector", [{ value: value, source:');
+    expect(code).toContain('__dsl.selectorOverload([{ value: value, source:');
     expect(code).toContain('__dsl.constantOverload([...__dsl.spreadCallArguments(rest');
     expect(code).toContain('__dsl.constant(value');
     expect(code).toContain('__dsl.deciderBranches(test, [{ value: yes, source:');
@@ -75,6 +75,16 @@ describe('elaboration call/member transform', () => {
     expect(code).toContain('__dsl.arithmeticOverload([{ value: {');
     expect(code).toContain("operation: 'multiply'");
     expect(code).toContain('source: { start:');
+  });
+
+  test('routes exact Selector through the runtime overload boundary', () => {
+    const code = transformCalls(`Selector({ input: input, operation: 'select', index: 2 });`);
+
+    expect(code).toContain('__dsl.selectorOverload([{ value: {');
+    expect(code).toContain("operation: 'select'");
+    expect(code).toContain('fieldSources: {');
+    expect(code).toContain('input: { start:');
+    expect(code).toContain('index: { start:');
   });
 
   test('routes exact Decider through the runtime overload boundary with argument spans', () => {

@@ -13,6 +13,7 @@ import type {
   DirectElaborationPlanV4,
   DirectElaborationPlanV5,
   DirectElaborationPlanV6,
+  DirectElaborationPlanV7,
   ElaborationJavaScript,
   EntityBehaviorKey,
   EntityConfiguration,
@@ -36,6 +37,10 @@ import type {
   EntityV6DeciderConfiguration,
 } from '@comblang/compiler/entity-v6';
 import type { EntityPlanRecordV5 } from '@comblang/compiler/entity-v5';
+import type {
+  EntityPlanRecordV7,
+  EntityV7SelectorConfiguration,
+} from '@comblang/compiler/entity-v7';
 import { entityFamilyDslNames, type DslParameterContract } from '@comblang/language';
 import type {
   DirectElaborationPlan,
@@ -43,6 +48,7 @@ import type {
   DirectPlanDebugInstance,
   DirectPlanDebugValue,
   DirectPlanProducer,
+  DirectPlanSelector,
   PlanEntityPlacement,
   PlanArithmeticOperand,
   PlanDeciderCondition,
@@ -142,12 +148,27 @@ interface CallArgument {
   readonly value: unknown;
   readonly source: RawSpan;
   readonly fieldSources?: Readonly<{
+    readonly input?: RawSpan;
+    readonly operation?: RawSpan;
+    readonly selectMax?: RawSpan;
+    readonly index?: RawSpan;
+    readonly output?: RawSpan;
     readonly outputs?: RawSpan;
     readonly elseOutputs?: RawSpan;
   }>;
 }
 
 type PlanDeciderOutput = Extract<DirectPlanProducer, { kind: 'decider' }>['output'];
+
+type NormalizedSelectorConfiguration =
+  | Pick<
+      Extract<DirectPlanSelector, { readonly operation: 'select' }>,
+      'operation' | 'input' | 'selectMax' | 'index'
+    >
+  | Pick<
+      Extract<DirectPlanSelector, { readonly operation: 'count' }>,
+      'operation' | 'input' | 'output'
+    >;
 
 interface DeciderOutputCandidate {
   readonly output: PlanDeciderOutput;
@@ -269,8 +290,17 @@ interface LinkedDeciderAssociation {
   readonly configuration: EntityV6DeciderConfiguration;
 }
 
+interface LinkedSelectorAssociation {
+  readonly kind: 'selector';
+  readonly entity: EntityValue;
+  readonly configuration: EntityV7SelectorConfiguration;
+}
+
 type LinkedProducerAssociation =
-  LinkedConstantAssociation | LinkedArithmeticAssociation | LinkedDeciderAssociation;
+  | LinkedConstantAssociation
+  | LinkedArithmeticAssociation
+  | LinkedDeciderAssociation
+  | LinkedSelectorAssociation;
 
 export interface ElaborationExecutionOptions {
   readonly dslCallBudget?: number;
@@ -894,6 +924,59 @@ class ElaborationRecorder {
         // #createCombinator records the exact Decider association after the
         // descriptor is complete; exact and ergonomic forms share one link.
         return producer;
+      }),
+    selectorOverload: (
+      arguments_: readonly CallArgument[],
+      rawSpan: RawSpan,
+    ): CombinatorValue | EntityValue =>
+      this.#withTopologyTransaction(rawSpan, () => {
+        this.#recordDslCall();
+        if (!Array.isArray(arguments_)) {
+          throw new ElaborationExecutionError(
+            'Selector(...) arguments must be an evaluated argument list.',
+            this.#span(rawSpan),
+            'RT2027',
+          );
+        }
+        const first = arguments_[0];
+        const structural =
+          first !== undefined &&
+          (typeof first.value === 'string' || this.#isPrototypeRecordCandidate(first.value));
+        if (
+          structural ||
+          arguments_.length === 0 ||
+          arguments_.length > 2 ||
+          arguments_.length === 2
+        ) {
+          return this.#constructEntityFromPrototype(
+            arguments_,
+            rawSpan,
+            'selector-combinator',
+            'Selector',
+            false,
+          );
+        }
+        if (arguments_.length !== 1) {
+          throw new ElaborationExecutionError(
+            'Selector(configuration) requires exactly one configuration argument, or use Selector(prototype, configuration?) for an Entity.',
+            this.#span(rawSpan),
+            'RT2027',
+          );
+        }
+        const configuration = this.#normalizeSelectorConfigurationSource(
+          first!.value,
+          first!.source,
+          first!.fieldSources,
+        );
+        return this.#createCombinator(
+          {
+            kind: 'selector',
+            ...configuration,
+            source: this.#span(rawSpan),
+            instancePath: this.#path(),
+          },
+          rawSpan,
+        );
       }),
     network: (
       name: string | undefined,
@@ -1981,7 +2064,8 @@ class ElaborationRecorder {
     | DirectElaborationPlanV3
     | DirectElaborationPlanV4
     | DirectElaborationPlanV5
-    | DirectElaborationPlanV6 {
+    | DirectElaborationPlanV6
+    | DirectElaborationPlanV7 {
     if (this.#status === 'failed') throw this.#firstFailure;
     if (this.#status === 'sealed') {
       throw new Error('The elaboration runtime has already been sealed.');
@@ -1992,6 +2076,9 @@ class ElaborationRecorder {
       );
       const hasLinkedArithmetic = this.#linkedProducers.some(
         ({ association }) => association.kind === 'arithmetic',
+      );
+      const hasLinkedSelector = this.#linkedProducers.some(
+        ({ association }) => association.kind === 'selector',
       );
       this.#finalizeUnusedCombinators();
       this.#validateFinalDeciderModes();
@@ -2113,7 +2200,21 @@ class ElaborationRecorder {
             })
           : linked.association.kind === 'arithmetic'
             ? Object.freeze({ ...entity, configuration: linked.association.configuration })
-            : Object.freeze({ ...entity, configuration: linked.association.configuration });
+            : linked.association.kind === 'decider'
+              ? Object.freeze({ ...entity, configuration: linked.association.configuration })
+              : entity;
+      });
+      const v7Entities = entities.map((entity) => {
+        const linked = this.#linkedProducers.find(
+          ({ association }) => association.entity.id === entity.id,
+        );
+        if (linked?.association.kind !== 'selector') {
+          return v6Entities.find((candidate) => candidate.id === entity.id) ?? entity;
+        }
+        return Object.freeze({
+          ...entity,
+          configuration: linked.association.configuration,
+        });
       });
       const entityCommon = () => ({
         ...common,
@@ -2139,30 +2240,48 @@ class ElaborationRecorder {
         | DirectElaborationPlanV3
         | DirectElaborationPlanV4
         | DirectElaborationPlanV5
-        | DirectElaborationPlanV6 = hasLinkedDecider
+        | DirectElaborationPlanV6
+        | DirectElaborationPlanV7 = hasLinkedSelector
         ? ({
             ...entityCommon(),
-            version: 6 as const,
-            producers: common.producers as readonly DirectPlanProducerV6[],
-            entities: Object.freeze(v6Entities) as readonly EntityPlanRecordV6[],
-          } satisfies DirectElaborationPlanV6)
-        : hasLinkedArithmetic
-          ? {
+            version: 7 as const,
+            producers: common.producers as unknown as DirectElaborationPlanV7['producers'],
+            entities: Object.freeze(v7Entities) as readonly EntityPlanRecordV7[],
+          } satisfies DirectElaborationPlanV7)
+        : hasLinkedDecider
+          ? ({
               ...entityCommon(),
-              version: 5 as const,
-              entities: Object.freeze(v5Entities) as readonly EntityPlanRecordV5[],
-            }
-          : this.#linkedProducers.some(({ association }) => association.kind === 'constant')
-            ? { ...entityCommon(), version: 4 as const, entities: Object.freeze(v4Entities) }
-            : entities.length === 0
+              version: 6 as const,
+              producers: common.producers as unknown as readonly DirectPlanProducerV6[],
+              entities: Object.freeze(v6Entities) as readonly EntityPlanRecordV6[],
+            } satisfies DirectElaborationPlanV6)
+          : hasLinkedArithmetic
+            ? {
+                ...entityCommon(),
+                version: 5 as const,
+                producers: common.producers as unknown as DirectElaborationPlanV5['producers'],
+                entities: Object.freeze(v5Entities) as readonly EntityPlanRecordV5[],
+              }
+            : this.#linkedProducers.some(({ association }) => association.kind === 'constant')
               ? {
-                  ...common,
-                  version: 2 as const,
-                  debugInstances: Object.freeze([
-                    ...this.#debugInstances,
-                  ]) as readonly DirectPlanDebugInstance[],
+                  ...entityCommon(),
+                  version: 4 as const,
+                  producers: common.producers as unknown as DirectElaborationPlanV4['producers'],
+                  entities: Object.freeze(v4Entities),
                 }
-              : { ...entityCommon(), version: 3 as const, entities: Object.freeze([...entities]) };
+              : entities.length === 0
+                ? {
+                    ...common,
+                    version: 2 as const,
+                    debugInstances: Object.freeze([
+                      ...this.#debugInstances,
+                    ]) as readonly DirectPlanDebugInstance[],
+                  }
+                : {
+                    ...entityCommon(),
+                    version: 3 as const,
+                    entities: Object.freeze([...entities]),
+                  };
       this.#status = 'sealed';
       return plan;
     } catch (error) {
@@ -2662,6 +2781,19 @@ class ElaborationRecorder {
       ((descriptor.outputs?.length ?? 0) > 0 || (descriptor.elseOutputs?.length ?? 0) > 0)
         ? this.#resolveCanonicalDeciderProfile(rawSpan)
         : undefined;
+    const selectorProfile =
+      descriptor.kind === 'selector' ? this.#resolveCanonicalSelectorProfile(rawSpan) : undefined;
+    if (
+      descriptor.kind === 'selector' &&
+      (this.#entityContext !== undefined || this.#entityPrototypeResolver !== undefined) &&
+      selectorProfile === undefined
+    ) {
+      throw new ElaborationExecutionError(
+        'Exact Selector configuration requires a trusted base entity:selector-combinator Entity profile.',
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
     const ordinal = ++this.#combinatorOrdinal;
     const primary = this.#network(`$combinator:${ordinal}:primary`, rawSpan);
     const value = this.#runtimeValue<CombinatorValue>({ kind: 'combinator', identity: {} });
@@ -2696,6 +2828,40 @@ class ElaborationRecorder {
       ((descriptor.outputs?.length ?? 0) > 0 || (descriptor.elseOutputs?.length ?? 0) > 0)
     ) {
       this.#linkDeciderCombinator(value, descriptor, rawSpan, deciderProfile);
+    }
+    if (selectorProfile !== undefined && descriptor.kind === 'selector') {
+      const entity = this.#allocateEntity(
+        selectorProfile.ref,
+        undefined,
+        descriptor.placement,
+        rawSpan,
+      );
+      if (descriptor.placement !== undefined) {
+        const { placement: _placement, ...withoutPlacement } = descriptor;
+        this.#combinators.update(value, withoutPlacement);
+      }
+      const configuration: EntityV7SelectorConfiguration =
+        descriptor.operation === 'select'
+          ? {
+              mode: 'selector',
+              operation: 'select',
+              input: descriptor.input,
+              selectMax: descriptor.selectMax,
+              index: descriptor.index,
+            }
+          : {
+              mode: 'selector',
+              operation: 'count',
+              input: descriptor.input,
+              output: descriptor.output,
+            };
+      const association = {
+        kind: 'selector' as const,
+        entity,
+        configuration,
+      } satisfies LinkedSelectorAssociation;
+      this.#linkedProducerByIdentity.set(value.identity, association);
+      this.#linkedProducers.push({ producer: value, association });
     }
     return value;
   }
@@ -3647,6 +3813,14 @@ class ElaborationRecorder {
     return this.#prototypes.getEntity((value as { key: string }).key) === value;
   }
 
+  #isPrototypeRecordCandidate(value: unknown): boolean {
+    return (
+      value !== null &&
+      typeof value === 'object' &&
+      typeof (value as { key?: unknown }).key === 'string'
+    );
+  }
+
   #normalizeArithmeticConfigurationSource(
     value: unknown,
     source: RawSpan,
@@ -3725,6 +3899,113 @@ class ElaborationRecorder {
       );
     }
     return { left, operation: operation as ArithmeticOperation, right, output };
+  }
+
+  #normalizeSelectorConfigurationSource(
+    value: unknown,
+    source: RawSpan,
+    fieldSources?: CallArgument['fieldSources'],
+  ): NormalizedSelectorConfiguration {
+    const spanFor = (field: keyof NonNullable<CallArgument['fieldSources']>): SourceSpan =>
+      this.#span(fieldSources?.[field] ?? source);
+    if (!isPlainDataRecord(value)) {
+      throw new ElaborationExecutionError(
+        'Selector configuration must be a plain data record.',
+        this.#span(source),
+        'RT2027',
+      );
+    }
+    const keys = Reflect.ownKeys(value);
+    const operation = value.operation;
+    const allowed =
+      operation === 'count'
+        ? new Set(['input', 'operation', 'output'])
+        : operation === 'select'
+          ? new Set(['input', 'operation', 'selectMax', 'index'])
+          : new Set(['input', 'operation', 'selectMax', 'index', 'output']);
+    if (keys.some((key) => typeof key !== 'string' || !allowed.has(key))) {
+      throw new ElaborationExecutionError(
+        'Selector configuration fields are operation-specific: select requires input and may use selectMax/index; count requires input/output.',
+        this.#span(source),
+        'RT2027',
+      );
+    }
+    if (operation !== 'select' && operation !== 'count') {
+      throw new ElaborationExecutionError(
+        'Selector configuration operation must be "select" or "count".',
+        spanFor('operation'),
+        'RT2027',
+      );
+    }
+    if (!Object.prototype.hasOwnProperty.call(value, 'input')) {
+      throw new ElaborationExecutionError(
+        'Selector configuration is missing required field "input".',
+        this.#span(source),
+        'RT2027',
+      );
+    }
+    const inputValue = value.input;
+    if (!this.#isNetwork(inputValue) && !this.#isPair(inputValue)) {
+      throw new ElaborationExecutionError(
+        'Selector configuration input must be a Network or pair(a, b).',
+        spanFor('input'),
+        'RT2027',
+      );
+    }
+    this.#assertReadableValue(inputValue, {
+      start: fieldSources?.input?.start ?? source.start,
+      end: fieldSources?.input?.end ?? source.end,
+    });
+    const input = this.#planNetworkRef(inputValue);
+    if (operation === 'select') {
+      const selectMax = value.selectMax === undefined ? true : value.selectMax;
+      if (typeof selectMax !== 'boolean') {
+        throw new ElaborationExecutionError(
+          'Selector configuration selectMax must be a boolean.',
+          spanFor('selectMax'),
+          'RT2027',
+        );
+      }
+      const indexValue = value.index === undefined ? 0 : value.index;
+      let index: number | SignalId;
+      if (this.#isSignal(indexValue)) {
+        index = this.#signalSnapshot(indexValue);
+      } else if (typeof indexValue === 'number') {
+        try {
+          index = circuitConstant(indexValue);
+        } catch (error) {
+          throw new ElaborationExecutionError(
+            'Selector configuration index must be a safe integer or a Signal.',
+            spanFor('index'),
+            'RT2027',
+            undefined,
+            { cause: error },
+          );
+        }
+      } else {
+        throw new ElaborationExecutionError(
+          'Selector configuration index must be a safe integer or a Signal.',
+          spanFor('index'),
+          'RT2027',
+        );
+      }
+      return { operation, input, selectMax, index };
+    }
+    if (!Object.prototype.hasOwnProperty.call(value, 'output')) {
+      throw new ElaborationExecutionError(
+        'Selector count configuration is missing required field "output".',
+        this.#span(source),
+        'RT2027',
+      );
+    }
+    if (!this.#isSignal(value.output)) {
+      throw new ElaborationExecutionError(
+        'Selector count configuration output must be a Signal.',
+        spanFor('output'),
+        'RT2027',
+      );
+    }
+    return { operation, input, output: this.#signalSnapshot(value.output) };
   }
 
   #normalizeDeciderConfigurationSource(
@@ -3995,6 +4276,62 @@ class ElaborationRecorder {
     ) {
       throw new ElaborationExecutionError(
         `Trusted Decider profile ${JSON.stringify(profile.ref.prototypeKey)} does not match base provider prototype data.`,
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    return profile;
+  }
+
+  #resolveCanonicalSelectorProfile(rawSpan: RawSpan): EntityProfile | undefined {
+    const context = this.#entityContext;
+    const resolver = this.#entityPrototypeResolver;
+    if (context === undefined || resolver === undefined) return undefined;
+    const candidates = context.profiles.filter(
+      ({ ref }) => ref.prototypeKey === 'entity:selector-combinator',
+    );
+    if (candidates.length === 0) return undefined;
+    if (candidates.length > 1) {
+      throw new ElaborationExecutionError(
+        'The trusted provider exposes ambiguous base selector-combinator profiles.',
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    const profile = candidates[0]!;
+    if (profile.prototypeType !== 'selector-combinator') {
+      throw new ElaborationExecutionError(
+        'The trusted base selector-combinator profile does not assert prototypeType "selector-combinator".',
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    let prototype: EntityPrototype | undefined;
+    try {
+      prototype = resolver.getEntity(profile.ref.prototypeKey);
+    } catch (error) {
+      throw new ElaborationExecutionError(
+        error instanceof Error ? error.message : 'Selector prototype lookup failed.',
+        this.#span(rawSpan),
+        'RT2027',
+        undefined,
+        { cause: error },
+      );
+    }
+    if (prototype === undefined) {
+      throw new ElaborationExecutionError(
+        `Trusted Selector profile ${JSON.stringify(profile.ref.prototypeKey)} is not available in the selected provider.`,
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    if (
+      prototype.key !== profile.ref.prototypeKey ||
+      prototype.name !== 'selector-combinator' ||
+      prototype.type !== 'selector-combinator'
+    ) {
+      throw new ElaborationExecutionError(
+        `Trusted Selector profile ${JSON.stringify(profile.ref.prototypeKey)} does not match base provider prototype data.`,
         this.#span(rawSpan),
         'RT2027',
       );
@@ -5373,7 +5710,8 @@ function executeElaborationProgramInternal(
   | DirectElaborationPlanV3
   | DirectElaborationPlanV4
   | DirectElaborationPlanV5
-  | DirectElaborationPlanV6 {
+  | DirectElaborationPlanV6
+  | DirectElaborationPlanV7 {
   if (program.format !== 'comblang-elaboration-js' || program.version !== 2) {
     throw new Error('Unsupported elaboration JavaScript format.');
   }
@@ -5431,6 +5769,7 @@ export function executeElaborationProgramV3(
   | DirectElaborationPlanV3
   | DirectElaborationPlanV4
   | DirectElaborationPlanV5
-  | DirectElaborationPlanV6 {
+  | DirectElaborationPlanV6
+  | DirectElaborationPlanV7 {
   return executeElaborationProgramInternal(program, options);
 }

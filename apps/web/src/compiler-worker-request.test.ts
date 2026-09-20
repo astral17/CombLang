@@ -149,6 +149,42 @@ function exactDeciderHostContext() {
   };
 }
 
+function exactSelectorHostContext() {
+  const profile: EntityProfile = {
+    ...structuredClone(syntheticZeroPortEntityProfile),
+    ref: {
+      ...syntheticZeroPortEntityProfile.ref,
+      prototypeKey: 'entity:selector-combinator',
+      profileId: 'profile:worker-selector-v7' as EntityProfile['ref']['profileId'],
+    },
+    prototypeType: 'selector-combinator',
+  };
+  const trustedEntityReplayContext = createTrustedEntityReplayContext({
+    database: profile.ref.database,
+    source: 'synthetic',
+    evidenceIdentity: 'worker-selector-v7-evidence',
+    policyIdentity: 'worker-selector-v7-policy',
+    profiles: [profile],
+  });
+  const prototype: EntityPrototype = {
+    key: 'entity:selector-combinator',
+    name: 'selector-combinator',
+    type: 'selector-combinator',
+    tileWidth: 1,
+    tileHeight: 2,
+  };
+  return {
+    trustedEntityReplayContext,
+    entityReplayContext: entityReplayContextTransport(trustedEntityReplayContext),
+    entityPrototypeResolver: {
+      database: profile.ref.database,
+      getEntity(nameOrKey: string) {
+        return nameOrKey === prototype.key || nameOrKey === prototype.name ? prototype : undefined;
+      },
+    },
+  };
+}
+
 describe('browser compiler Worker prototype profile', () => {
   test('compiles NetworkSignal source through the Worker request boundary', async () => {
     const response = await handleCompilerWorkerRequest({
@@ -448,6 +484,43 @@ output += exact;`,
     expect(producer).toMatchObject({ kind: 'decider', outputOrigins: [{ branch: 'normal' }] });
     expect(JSON.stringify(response.result)).not.toMatch(
       /profiles|resolver|prototypeProvider|trustedEntityReplayContext/,
+    );
+    expect(response.result).not.toHaveProperty('execution');
+    expect(structuredClone(response)).toEqual(response);
+  });
+
+  test('transports a linked exact Selector as profile-free v7 data', async () => {
+    const host = exactSelectorHostContext();
+    const runtime = new CompilerWorkerRuntime({
+      resolveEntityReplayContext: () => host,
+    });
+    const response = await runtime.handle({
+      kind: 'parse',
+      revision: 25,
+      file: {
+        path: 'worker-exact-selector.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const exact: SelectorCombinator = Selector({ input, operation: 'count', output: A });
+const output = new Network();
+output += exact;`,
+      },
+      entityReplayContext: host.entityReplayContext,
+    });
+
+    expect(response.result.compilerDiagnostics).toEqual([]);
+    expect(response.result.plan).toMatchObject({
+      version: 7,
+      producers: [{ kind: 'selector', entityId: expect.any(String) }],
+      entities: [{ configuration: { mode: 'selector', operation: 'count' } }],
+    });
+    expect(response.result.resolvedCircuit).toMatchObject({
+      format: 'comblang-resolved-entity-v7',
+      version: 1,
+      ir: { version: 7, entities: [{ prototypeName: 'selector-combinator' }] },
+    });
+    expect(JSON.stringify(response.result)).not.toMatch(
+      /profiles|resolver|prototypeProvider|trustedEntityReplayContext|prototypeType/,
     );
     expect(response.result).not.toHaveProperty('execution');
     expect(structuredClone(response)).toEqual(response);

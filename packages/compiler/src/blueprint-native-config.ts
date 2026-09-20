@@ -31,7 +31,8 @@ export class BlueprintJsonError extends Error {
 }
 
 export interface NativeCombinatorEntityConfig {
-  readonly name: 'arithmetic-combinator' | 'constant-combinator' | 'decider-combinator';
+  readonly name:
+    'arithmetic-combinator' | 'constant-combinator' | 'decider-combinator' | 'selector-combinator';
   readonly control_behavior: Record<string, unknown>;
 }
 
@@ -224,6 +225,29 @@ function deciderEntity(
   };
 }
 
+function selectorEntity(
+  producer: Extract<CircuitProducerNode, { kind: 'selector' }>,
+): NativeCombinatorEntityConfig {
+  return producer.config.operation === 'select'
+    ? {
+        name: 'selector-combinator',
+        control_behavior: {
+          operation: 'select',
+          select_max: producer.config.selectMax,
+          ...(typeof producer.config.index === 'number'
+            ? { index_constant: producer.config.index }
+            : { index_signal: signalJson(producer.config.index) }),
+        },
+      }
+    : {
+        name: 'selector-combinator',
+        control_behavior: {
+          operation: 'count',
+          count_signal: signalJson(producer.config.output),
+        },
+      };
+}
+
 /** Resolves logical NCIR references into native combinator fields before JSON assembly. */
 export function lowerNativeBlueprintConfig(
   ir: NativeCircuitIr,
@@ -250,7 +274,9 @@ export function lowerNativeBlueprintConfig(
         ? arithmeticEntity(producer, selection)
         : producer.kind === 'constant'
           ? constantEntity(constantConfigurationFromOutputs(producer.config.outputs))
-          : deciderEntity(producer, selection, maxDeciderConditionRows);
+          : producer.kind === 'decider'
+            ? deciderEntity(producer, selection, maxDeciderConditionRows)
+            : selectorEntity(producer);
     for (const network of producer.destinations) {
       if (!networkColors.has(network)) {
         throw new BlueprintJsonError(

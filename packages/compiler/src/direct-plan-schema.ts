@@ -176,7 +176,31 @@ export interface DirectPlanConstant {
   readonly placement?: PlanEntityPlacement;
 }
 
-export type DirectPlanProducer = DirectPlanArithmetic | DirectPlanDecider | DirectPlanConstant;
+interface DirectPlanSelectorBase {
+  readonly kind: 'selector';
+  readonly input: PlanNetworkRef;
+  readonly destinations: readonly PlanAttachment[];
+  readonly source: SourceSpan;
+  readonly instancePath: readonly string[];
+  readonly placement?: PlanEntityPlacement;
+  /** Explicit source Producer binding retained for debug queries. */
+  readonly bindingName?: string;
+  readonly debugCaptureIds?: readonly string[];
+}
+
+export type DirectPlanSelector =
+  | (DirectPlanSelectorBase & {
+      readonly operation: 'select';
+      readonly selectMax: boolean;
+      readonly index: number | SignalId;
+    })
+  | (DirectPlanSelectorBase & {
+      readonly operation: 'count';
+      readonly output: SignalId;
+    });
+
+export type DirectPlanProducer =
+  DirectPlanArithmetic | DirectPlanDecider | DirectPlanConstant | DirectPlanSelector;
 
 export type DirectPlanDebugValue =
   | { readonly kind: 'network'; readonly network: string }

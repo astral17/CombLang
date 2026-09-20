@@ -25,6 +25,7 @@ import type {
   ValueSimulationReader,
   ValueSynchronousDevice,
 } from './value-kernel.js';
+import { evaluateSelector, type SelectorCombinatorConfig } from './selector.js';
 
 export interface InputConnectorNetworks {
   readonly red?: NetworkId;
@@ -43,6 +44,10 @@ export interface ArithmeticDeviceConfig extends DeviceNetworks {
 
 export interface DeciderDeviceConfig extends DeviceNetworks {
   readonly combinator: DeciderCombinatorConfig;
+}
+
+export interface SelectorDeviceConfig extends DeviceNetworks {
+  readonly combinator: SelectorCombinatorConfig;
 }
 
 export interface ConstantDeviceConfig {
@@ -204,6 +209,43 @@ export class DeciderCombinatorDevice implements SynchronousDevice {
   evaluate(snapshot: SimulationReader): readonly NetworkOutput[] {
     const input = readInputs(snapshot, this.#config.inputNetworks);
     return broadcast(evaluateDecider(this.#config.combinator, input), this.#config.outputNetworks);
+  }
+}
+
+export class SelectorCombinatorDevice implements SynchronousDevice {
+  readonly id: DeviceId;
+  readonly #config: SelectorDeviceConfig;
+
+  constructor(config: SelectorDeviceConfig) {
+    validateNetworks(config);
+    this.id = config.id;
+    this.#config = config;
+  }
+
+  evaluate(snapshot: SimulationReader): readonly NetworkOutput[] {
+    const input = readInputs(snapshot, this.#config.inputNetworks);
+    return broadcast(evaluateSelector(this.#config.combinator, input), this.#config.outputNetworks);
+  }
+}
+
+export class SelectorValueCombinatorDevice implements ValueSynchronousDevice {
+  readonly id: DeviceId;
+  readonly #config: SelectorDeviceConfig;
+
+  constructor(config: SelectorDeviceConfig) {
+    validateNetworks(config);
+    this.id = config.id;
+    this.#config = config;
+  }
+
+  evaluate(snapshot: ValueSimulationReader): readonly ValueNetworkOutput[] {
+    const input = readValueInputs(snapshot, this.#config.inputNetworks);
+    const dependency = aggregateBusValues([input.red, input.green]);
+    const output =
+      dependency.kind === 'unknown'
+        ? throughDevice(dependency, this.id)
+        : knownBus(evaluateSelector(this.#config.combinator, concreteInput(input)));
+    return valueBroadcast(output, this.#config.outputNetworks);
   }
 }
 

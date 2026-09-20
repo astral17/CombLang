@@ -9,6 +9,7 @@ import {
   ConstantValueCombinatorDevice,
   DeciderCombinatorDevice,
   DeciderValueCombinatorDevice,
+  SelectorCombinatorDevice,
 } from './combinator-device.js';
 import { knownBus, unknownBus } from './bus-value.js';
 import { SimulationKernel } from './kernel.js';
@@ -88,6 +89,32 @@ describe('combinator simulation devices', () => {
     expect(kernel.snapshot.read(output).get(a)).toBe(0);
     expect(kernel.step().read(output).get(a)).toBe(5);
     expect(kernel.step().read(fanout).get(a)).toBe(5);
+  });
+
+  it('evaluates a Selector from T and exposes its selected row at T+1', () => {
+    const kernel = new SimulationKernel();
+    kernel.setInitialNetwork(
+      input,
+      new SparseBus([
+        [a, 4],
+        [b, 2],
+      ]),
+    );
+    kernel.addDevice(
+      new SelectorCombinatorDevice({
+        id: 'device:selector' as DeviceId,
+        inputNetworks: { red: input },
+        outputNetworks: [output],
+        combinator: { operation: 'select', index: 1 },
+      }),
+    );
+
+    expect(kernel.snapshot.read(output).get(a)).toBe(0);
+    expect(kernel.snapshot.read(output).get(b)).toBe(0);
+    const next = kernel.step();
+    expect(next.tick).toBe(1);
+    expect(next.read(output).get(a)).toBe(0);
+    expect(next.read(output).get(b)).toBe(2);
   });
 
   it('broadcasts the same Constant configuration through the value kernel', () => {

@@ -209,7 +209,9 @@ The workflow is `Factorio export -> decoded normalized JSON -> golden fixture ->
 - Phase 4 settles Network/Producer ownership, `take`, `pair`, and the separation between `const`/`let` rebinding and topology capability.
 - Phase 5 testbenches remain concrete; Phase 8 later adds parameter instantiation before those tests enter the existing simulator.
 - Phase 6 introduces typed objects, shared connector inputs, and native object conditions.
-- Phase 7 completes exact native combinator/object configuration and the feedback/duplicate-output stress cases.
+- Phase 7 advances exact implementation/model slices such as linked Selector
+  `select`/`count`, while native combinator/object configuration and
+  feedback/duplicate-output conformance remain fixture-gated work.
 - Phase 8 introduces parameter-ready configuration IR, `BlueprintFormula`, dependent parameters, FCIR, and the fixture-backed Factorio codec.
 - Phase 11 presents operator-domain facts in language services and finishes composition-safe mobile editing tools.
 

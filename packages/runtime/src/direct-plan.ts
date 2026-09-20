@@ -43,6 +43,7 @@ import {
   type RuntimeConstantConfig,
   type RuntimeDeciderConfig,
   type RuntimeNetworkRef,
+  type RuntimeSelectorConfig,
 } from './elaboration.js';
 
 export interface ExecutedDirectPlan {
@@ -517,22 +518,38 @@ function executeDirectPlan(
               { outputs: descriptor.outputs } satisfies RuntimeConstantConfig,
               provenance,
             )
-          : runtime.decider(
-              {
-                condition: lowerCondition(descriptor.condition, networks, descriptor.source),
-                outputs: (descriptor.outputs ?? [descriptor.output]).map((output) =>
-                  lowerDeciderOutput(output, networks, descriptor.source),
-                ),
-                ...(descriptor.elseOutputs === undefined
-                  ? {}
-                  : {
-                      elseOutputs: descriptor.elseOutputs.map((output) =>
-                        lowerDeciderOutput(output, networks, descriptor.source),
-                      ),
-                    }),
-              } satisfies RuntimeDeciderConfig,
-              provenance,
-            );
+          : descriptor.kind === 'decider'
+            ? runtime.decider(
+                {
+                  condition: lowerCondition(descriptor.condition, networks, descriptor.source),
+                  outputs: (descriptor.outputs ?? [descriptor.output]).map((output) =>
+                    lowerDeciderOutput(output, networks, descriptor.source),
+                  ),
+                  ...(descriptor.elseOutputs === undefined
+                    ? {}
+                    : {
+                        elseOutputs: descriptor.elseOutputs.map((output) =>
+                          lowerDeciderOutput(output, networks, descriptor.source),
+                        ),
+                      }),
+                } satisfies RuntimeDeciderConfig,
+                provenance,
+              )
+            : runtime.selector(
+                descriptor.operation === 'select'
+                  ? {
+                      operation: 'select',
+                      input: lowerNetworkRef(descriptor.input, networks, descriptor.source),
+                      selectMax: descriptor.selectMax,
+                      index: descriptor.index,
+                    }
+                  : ({
+                      operation: 'count',
+                      input: lowerNetworkRef(descriptor.input, networks, descriptor.source),
+                      output: descriptor.output,
+                    } satisfies RuntimeSelectorConfig),
+                provenance,
+              );
     for (const captureId of descriptor.debugCaptureIds ?? []) {
       if (capturedProducers.has(captureId)) {
         throw runtimeFailure(

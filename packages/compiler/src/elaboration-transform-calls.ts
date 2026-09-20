@@ -38,19 +38,20 @@ export function transformCallOrElementNode(
   context: CallTransformContext,
 ): ts.Node | undefined {
   const { factory, visit } = context;
-  const exactDeciderFieldSources = (
+  const exactFieldSources = (
     argument: ts.Expression,
+    fields: readonly string[],
   ): ts.ObjectLiteralExpression | undefined => {
     if (!ts.isObjectLiteralExpression(argument)) return undefined;
-    const fields = argument.properties.flatMap((property) => {
+    const entries = argument.properties.flatMap((property) => {
       if (!ts.isPropertyAssignment(property)) return [];
       const name = property.name;
       const key = ts.isIdentifier(name) || ts.isStringLiteral(name) ? name.text : undefined;
-      return key === 'outputs' || key === 'elseOutputs'
+      return key !== undefined && fields.includes(key)
         ? [factory.createPropertyAssignment(key, context.spanLiteral(property.initializer))]
         : [];
     });
-    return fields.length === 0 ? undefined : factory.createObjectLiteralExpression(fields);
+    return entries.length === 0 ? undefined : factory.createObjectLiteralExpression(entries);
   };
   const callArgument = (
     argument: ts.Expression,
@@ -72,13 +73,15 @@ export function transformCallOrElementNode(
         ]);
   const callArguments = (
     args: readonly ts.Expression[],
-    exactDecider = false,
+    exactFields?: readonly string[],
   ): ts.ArrayLiteralExpression =>
     factory.createArrayLiteralExpression(
       args.map((argument, index) =>
         callArgument(
           argument,
-          exactDecider && index === 0 ? exactDeciderFieldSources(argument) : undefined,
+          exactFields !== undefined && index === 0
+            ? exactFieldSources(argument, exactFields)
+            : undefined,
         ),
       ),
     );
@@ -157,6 +160,23 @@ export function transformCallOrElementNode(
         context.spanLiteral(node),
       ]);
     }
+    if (
+      node.expression.text === 'Selector' &&
+      (node.arguments.length === 2 ||
+        (node.arguments.length === 1 && ts.isStringLiteral(node.arguments[0]!)))
+    ) {
+      return context.dslCall('entityFamilyFromPrototype', [
+        factory.createStringLiteral(node.expression.text),
+        callArguments(node.arguments),
+        context.spanLiteral(node),
+      ]);
+    }
+    if (node.expression.text === 'Selector') {
+      return context.dslCall('selectorOverload', [
+        callArguments(node.arguments, ['input', 'operation', 'selectMax', 'index', 'output']),
+        context.spanLiteral(node),
+      ]);
+    }
     if (node.expression.text === 'Arithmetic') {
       return context.dslCall('arithmeticOverload', [
         callArguments(node.arguments),
@@ -165,7 +185,7 @@ export function transformCallOrElementNode(
     }
     if (node.expression.text === 'Decider') {
       return context.dslCall('deciderOverload', [
-        callArguments(node.arguments, true),
+        callArguments(node.arguments, ['outputs', 'elseOutputs']),
         context.spanLiteral(node),
       ]);
     }

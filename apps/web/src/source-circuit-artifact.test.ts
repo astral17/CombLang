@@ -1,10 +1,11 @@
-import { signal } from '@comblang/factorio';
+import { signal, SparseBus } from '@comblang/factorio';
 import { loadPrototypeDatabase } from '@comblang/prototypes';
 import builtinPrototypeDatabase from '../../../packages/prototypes/generated/space-age-2.1.17.json';
 import type { DirectElaborationPlanV3 } from '@comblang/compiler/entity';
 import type { NativeCircuitIrV4 } from '@comblang/compiler/entity-v4';
 import type { ResolvedSourceCircuit } from '@comblang/compiler/resolved-source-circuit';
 import type { ResolvedEntityV6Circuit } from '@comblang/compiler/resolved-entity-v6';
+import type { ResolvedEntityV7Circuit } from '@comblang/compiler/resolved-entity-v7';
 import {
   syntheticSharedTwoColorEntityProfile,
   syntheticZeroPortEntityProfile,
@@ -64,6 +65,41 @@ function exactDeciderEnvironment() {
     key: 'entity:decider-combinator',
     name: 'decider-combinator',
     type: 'decider-combinator',
+    tileWidth: 1,
+    tileHeight: 2,
+  };
+  return {
+    trustedEntityReplayContext,
+    entityPrototypeResolver: {
+      database: profile.ref.database,
+      getEntity(nameOrKey: string) {
+        return nameOrKey === prototype.key || nameOrKey === prototype.name ? prototype : undefined;
+      },
+    } as EntityPrototypeResolver,
+  };
+}
+
+function exactSelectorEnvironment() {
+  const profile: EntityProfile = {
+    ...structuredClone(syntheticZeroPortEntityProfile),
+    ref: {
+      ...syntheticZeroPortEntityProfile.ref,
+      prototypeKey: 'entity:selector-combinator',
+      profileId: 'profile:web-artifact-selector-v7' as EntityProfile['ref']['profileId'],
+    },
+    prototypeType: 'selector-combinator',
+  };
+  const trustedEntityReplayContext = createTrustedEntityReplayContext({
+    database: profile.ref.database,
+    source: 'synthetic',
+    evidenceIdentity: 'web-artifact-selector-v7-evidence',
+    policyIdentity: 'web-artifact-selector-v7-policy',
+    profiles: [profile],
+  });
+  const prototype: EntityPrototype = {
+    key: 'entity:selector-combinator',
+    name: 'selector-combinator',
+    type: 'selector-combinator',
     tileWidth: 1,
     tileHeight: 2,
   };
@@ -204,6 +240,43 @@ describe('source circuit artifact', () => {
     });
     expect(entity).not.toHaveProperty('connections');
     expect(entity).not.toHaveProperty('wires');
+  });
+
+  test('replays a resolved v7 Selector artifact through blueprint and simulation consumers', () => {
+    const compiled = compileSource(
+      {
+        path: 'selector-v7-artifact.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output = new Network();
+const selector: SelectorCombinator = Selector({ input, operation: 'count', output: A }).at(4, 2);
+output += selector;`,
+      },
+      exactSelectorEnvironment(),
+    );
+    const plan = compiled.plan;
+    if (plan === undefined || plan.version !== 7) throw new Error('Expected a v7 source plan.');
+    const resolvedCircuit = compiled.resolvedCircuit;
+    if (resolvedCircuit?.format !== 'comblang-resolved-entity-v7')
+      throw new Error('Expected a resolved v7 source circuit.');
+    const artifact = createSourceCircuitArtifact(plan, resolvedCircuit as ResolvedEntityV7Circuit);
+    const input = artifact.execution.network('input');
+    const output = artifact.execution.network('output');
+    const simulation = artifact.execution.circuit.createSimulation([
+      { network: input, values: new SparseBus([[{ type: 'virtual', name: 'signal-A' }, 2]]) },
+    ]);
+
+    expect(artifact.resolvedCircuit.format).toBe('comblang-resolved-entity-v7');
+    expect(artifact.execution.circuit.ir.version).toBe(7);
+    expect(simulation.step().read(output.id).get({ type: 'virtual', name: 'signal-A' })).toBe(1);
+    expect(artifact.blueprint.blueprint.entities[0]).toMatchObject({
+      name: 'selector-combinator',
+      position: { x: 4, y: 2 },
+      control_behavior: {
+        operation: 'count',
+        count_signal: { type: 'virtual', name: 'signal-A' },
+      },
+    });
   });
 
   test('hydrates a v4 Constant artifact without provider authority or a duplicate blueprint object', async () => {

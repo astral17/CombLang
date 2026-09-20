@@ -2,6 +2,7 @@ import { compileDirectPlan, type DirectElaborationPlan } from '@comblang/compile
 import { transformElaborationModule } from '@comblang/compiler/elaboration-transform';
 import { signal, SparseBus } from '@comblang/factorio';
 import { parseFile } from '@comblang/language';
+import type { SourceFileId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
 import { elaborateDirectPlan, tryElaborateDirectPlan } from './direct-plan.js';
@@ -9,6 +10,74 @@ import { RuntimeDiagnosticError } from './elaboration.js';
 import { executeElaborationProgram } from './elaboration-program.js';
 
 describe('direct plan execution', () => {
+  test('materializes a pair Selector through replay, color solving, debug, and simulation', () => {
+    const A = signal('virtual', 'signal-A');
+    const B = signal('virtual', 'signal-B');
+    const plan: DirectElaborationPlan = {
+      format: 'comblang-direct-plan',
+      version: 2,
+      networks: [
+        {
+          name: 'red',
+          fixedColor: 'red',
+          source: { fileId: 'selector.ts' as SourceFileId, start: 0, end: 1 },
+          instancePath: [],
+        },
+        {
+          name: 'green',
+          fixedColor: 'green',
+          source: { fileId: 'selector.ts' as SourceFileId, start: 2, end: 3 },
+          instancePath: [],
+        },
+        {
+          name: 'out',
+          source: { fileId: 'selector.ts' as SourceFileId, start: 4, end: 5 },
+          instancePath: [],
+        },
+      ],
+      producers: [
+        {
+          kind: 'selector',
+          operation: 'select',
+          input: { refKind: 'pair', networks: ['red', 'green'] },
+          selectMax: true,
+          index: 0,
+          destinations: [
+            {
+              network: 'out',
+              source: { fileId: 'selector.ts' as SourceFileId, start: 6, end: 7 },
+              instancePath: [],
+            },
+          ],
+          source: { fileId: 'selector.ts' as SourceFileId, start: 6, end: 7 },
+          instancePath: [],
+        },
+      ],
+    };
+
+    const executed = elaborateDirectPlan(plan);
+
+    expect(executed.circuit.ir.producers).toHaveLength(1);
+    expect(executed.circuit.ir.producers[0]).toMatchObject({
+      kind: 'selector',
+      config: { operation: 'select', selectMax: true, index: 0 },
+    });
+    expect(executed.circuit.ir.networks.map(({ name, color }) => ({ name, color }))).toEqual([
+      { name: 'red', color: 'red' },
+      { name: 'green', color: 'green' },
+      { name: 'out', color: 'red' },
+    ]);
+    executed.structure().toHaveProducerCounts({ selector: 1 });
+
+    const simulation = executed.circuit.createSimulation([
+      { network: executed.network('red'), values: new SparseBus([[A, 2]]) },
+      { network: executed.network('green'), values: new SparseBus([[B, 1]]) },
+    ]);
+    const snapshot = simulation.step();
+
+    expect(snapshot.read(executed.network('out').id).toJSON()).toEqual([{ signal: A, value: 2 }]);
+  });
+
   test('rejects malformed and ambiguous root Network alias descriptors', () => {
     const parsed = parseFile({
       path: 'alias-schema.factorio.ts',

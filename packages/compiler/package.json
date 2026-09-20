@@ -15,6 +15,8 @@
     "./entity-v4": "./src/entity-v4.ts",
     "./entity-v5": "./src/entity-v5.ts",
     "./entity-v6": "./src/entity-v6.ts",
+    "./entity-v7": "./src/entity-v7.ts",
+    "./resolved-entity-v7": "./src/resolved-entity-v7.ts",
     "./entity-configuration": "./src/entity-configuration.ts",
     "./entity-fixtures": "./src/entity-fixtures.ts",
     "./entity-profile": "./src/entity-profile.ts",

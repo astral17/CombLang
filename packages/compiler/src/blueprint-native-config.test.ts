@@ -193,4 +193,67 @@ describe('native blueprint configuration lowering', () => {
       },
     });
   });
+
+  test('lowers Selector select and count configurations without arithmetic rows', () => {
+    const index = signal('virtual', 'signal-index');
+    const output = signal('virtual', 'signal-output');
+    const ir: NativeCircuitIr = {
+      format: 'comblang-ncir',
+      version: 2,
+      networks: [
+        { id: network(1), color: 'red', provenance },
+        { id: network(2), color: 'green', provenance },
+        { id: network(3), color: 'red', provenance },
+      ],
+      producers: [
+        {
+          id: producer(4),
+          kind: 'selector',
+          provenance,
+          destinations: [network(3)],
+          config: {
+            operation: 'select',
+            input: { refKind: 'pair', networks: [network(1), network(2)] },
+            selectMax: false,
+            index,
+          },
+        },
+        {
+          id: producer(5),
+          kind: 'selector',
+          provenance,
+          destinations: [network(3)],
+          config: {
+            operation: 'count',
+            input: { refKind: 'single', network: network(1) },
+            output,
+          },
+        },
+      ],
+    };
+
+    const lowered = lowerNativeBlueprintConfig(ir, 1024);
+
+    expect(lowered.combinators.map(({ inputNetworks }) => inputNetworks)).toEqual([
+      [network(1), network(2)],
+      [network(1)],
+    ]);
+    expect(lowered.combinators.map(({ entity }) => entity)).toEqual([
+      {
+        name: 'selector-combinator',
+        control_behavior: {
+          operation: 'select',
+          select_max: false,
+          index_signal: { type: 'virtual', name: 'signal-index' },
+        },
+      },
+      {
+        name: 'selector-combinator',
+        control_behavior: {
+          operation: 'count',
+          count_signal: { type: 'virtual', name: 'signal-output' },
+        },
+      },
+    ]);
+  });
 });

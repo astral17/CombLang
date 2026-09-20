@@ -160,6 +160,123 @@ describe('direct plan envelope validation', () => {
     expect(validateDirectPlanEnvelope(plan).diagnostics).toEqual([]);
   });
 
+  test('accepts and canonicalizes the discriminated Selector producer', () => {
+    const plan = {
+      format: 'comblang-direct-plan',
+      version: 2,
+      networks: [
+        { name: 'red', source: span, instancePath: [] },
+        { name: 'green', source: span, instancePath: [] },
+        { name: 'out', source: span, instancePath: [] },
+      ],
+      producers: [
+        {
+          kind: 'selector',
+          input: { refKind: 'pair', networks: ['red', 'green'] },
+          operation: 'select',
+          selectMax: true,
+          index: 4_294_967_298,
+          destinations: [{ network: 'out', source: span, instancePath: [] }],
+          source: span,
+          instancePath: [],
+        },
+      ],
+    };
+
+    const result = validateDirectPlanEnvelope(plan);
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.value?.plan.producers[0]).toMatchObject({
+      kind: 'selector',
+      operation: 'select',
+      input: { refKind: 'pair', networks: ['red', 'green'] },
+      index: 2,
+    });
+    expect(Object.isFrozen(result.value?.plan.producers[0])).toBe(true);
+  });
+
+  test.each([
+    ['unknown operation', { operation: 'random' }, '$.producers[0].operation'],
+    [
+      'invalid selectMax',
+      { operation: 'select', selectMax: 'yes', index: 0 },
+      '$.producers[0].selectMax',
+    ],
+    [
+      'invalid count output',
+      { operation: 'count', output: { type: 'virtual', name: '' } },
+      '$.producers[0].output',
+    ],
+  ])('rejects Selector %s before replay', (_name, fields, path) => {
+    const producer: Record<string, unknown> = {
+      kind: 'selector',
+      input: { refKind: 'single', network: 'input' },
+      selectMax: true,
+      index: 0,
+      destinations: [{ network: 'out', source: span, instancePath: [] }],
+      source: span,
+      instancePath: [],
+      ...fields,
+    };
+    if (fields.operation === 'count') {
+      delete producer.selectMax;
+      delete producer.index;
+    }
+    const plan = {
+      format: 'comblang-direct-plan',
+      version: 2,
+      networks: [
+        { name: 'input', source: span, instancePath: [] },
+        { name: 'out', source: span, instancePath: [] },
+      ],
+      producers: [producer],
+    };
+
+    expect(validateDirectPlanEnvelope(plan).diagnostics[0]).toMatchObject({
+      message: expect.stringContaining(path),
+    });
+  });
+
+  test.each([
+    ['unknown configuration field', { extra: true }, '$.producers[0].extra'],
+    [
+      'duplicate destination',
+      {
+        destinations: [
+          { network: 'out', source: span, instancePath: [] },
+          { network: 'out', source: span, instancePath: [] },
+        ],
+      },
+      '$.producers[0].destinations',
+    ],
+  ])('rejects Selector %s before replay', (_name, overrides, path) => {
+    const plan = {
+      format: 'comblang-direct-plan',
+      version: 2,
+      networks: [
+        { name: 'input', source: span, instancePath: [] },
+        { name: 'out', source: span, instancePath: [] },
+      ],
+      producers: [
+        {
+          kind: 'selector',
+          input: { refKind: 'single', network: 'input' },
+          operation: 'select',
+          selectMax: true,
+          index: 0,
+          destinations: [{ network: 'out', source: span, instancePath: [] }],
+          source: span,
+          instancePath: [],
+          ...overrides,
+        },
+      ],
+    };
+
+    expect(validateDirectPlanEnvelope(plan).diagnostics[0]).toMatchObject({
+      message: expect.stringContaining(path),
+    });
+  });
+
   test.each([
     {
       name: 'unknown arithmetic operation',

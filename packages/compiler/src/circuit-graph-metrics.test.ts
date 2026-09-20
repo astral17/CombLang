@@ -109,6 +109,30 @@ describe('resolved NCIR graph metrics', () => {
     ).toBe(2);
   });
 
+  test('includes both Selector input Networks in graph dependencies', () => {
+    const selector: CircuitProducerNode = {
+      id: producerId('selector'),
+      kind: 'selector',
+      config: {
+        operation: 'count',
+        input: { refKind: 'pair', networks: [network('left'), network('right')] },
+        output: A,
+      },
+      destinations: [network('output')],
+      provenance,
+    };
+
+    expect(
+      analyzeCircuitGraph(
+        circuit([
+          arithmetic('left-driver', 'input', 'left'),
+          arithmetic('right-driver', 'input', 'right'),
+          selector,
+        ]),
+      ),
+    ).toMatchObject({ depth: 2, feedback: false, unknownLatency: false });
+  });
+
   test('condenses feedback and reports it separately from structural depth', () => {
     const metrics = analyzeCircuitGraph(
       circuit([

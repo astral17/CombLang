@@ -214,7 +214,39 @@ the documented `select` default when it is omitted; group-less documented
 operations accept common fields only. This is a structural checked-configuration
 surface: it creates one inert Entity and does not create a Producer, Network,
 connector, call projection, simulator device, or native-conformance claim. A
-computation-bearing `Selector({ ... })` constructor remains pending.
+computation-bearing `Selector({ ... })` constructor is a separate exact
+overload. It requires trusted canonical `entity:selector-combinator` authority
+and returns a `SelectorCombinator` Producer:
+
+```ts
+const selected: SelectorCombinator = Selector({
+  input: pair(red, green),
+  operation: 'select',
+  selectMax: false,
+  index: 0,
+});
+const counted: SelectorCombinator = Selector({
+  input,
+  operation: 'count',
+  output: Signal('virtual', 'signal-A'),
+});
+```
+
+Exact `select` accepts a readable Network or pair input, defaults `selectMax` to
+`true` and `index` to signed int32 `0`, and also accepts a current-session
+nominal Signal as the dynamic index. Exact `count` requires a current-session
+nominal output Signal. Records are operation-specific and data-only; unknown,
+mixed, accessor, symbol, cyclic, and sparse fields fail before topology or
+physical state is committed. `.at(...)`, `.to(...)`, `Network +=`, aliases,
+functions, loops, and concrete `SelectorCombinator` annotations retain one
+physical Producer identity per constructor call.
+
+Exact `random`, `quality`, `rocket-capacity`, `stack-size`, and `time` remain
+unsupported operation values. Use the structural checked/raw Entity overload
+for those native-shaped configurations; it remains inert and does not acquire
+Producer or simulator semantics. The exact select/count simulator and readable
+Blueprint output are deterministic CombLang model/preview surfaces, not native
+Factorio conformance. See [Entity v7](entity-v7.md).
 
 `machine.port(connector, lane)` selects an explicit connector lane. The exact
 four-argument `machine.bind(connector, lane, network, direction)` form binds
@@ -863,7 +895,6 @@ See the [diagnostics catalog](diagnostics.md) for common codes and corrective ac
 ## Not implemented yet
 
 - blueprint import/export and FCIR
-- computation-bearing `Selector({ ... })` constructor
 - multi-file module linking and asynchronous top-level elaboration
 - testbench syntax, mocks, expectations, and waveform assertions
 - general language service and schematic editor

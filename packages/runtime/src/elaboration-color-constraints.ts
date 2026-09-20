@@ -50,6 +50,8 @@ function combinatorInputNames(combinator: CombinatorDescriptor): readonly string
       addOutput(output);
     }
     for (const output of combinator.elseOutputs ?? []) addOutput(output);
+  } else if (combinator.kind === 'selector') {
+    addRef(combinator.input);
   }
   return Object.freeze(names);
 }

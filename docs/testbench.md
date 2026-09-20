@@ -91,6 +91,16 @@ simulation. Those state models and facades remain later Phase 6 work.
 See [Phase 5 acceptance](phase-5-acceptance.md) for commands, complete examples,
 coverage and the completed MVP boundary.
 
+The exact `Selector({ input, operation, ... })` source path is an Entity v7
+extension of this same testbench boundary. A linked `select` or `count` device
+can be driven and inspected through `execution.createTestSession()` after
+hydration, including pair input and the one-boundary `T+1` response. Its
+deterministic ordering, count, dynamic-index, and empty/out-of-range behavior
+are CombLang model evidence only; the testbench does not claim native Factorio
+Selector semantics or import/export conformance. Structural
+`Selector(prototype, configuration?)` remains an inert Entity and contributes no
+simulator participant.
+
 For an executed source plan, prefer `execution.createTestSession()`. Its targets
 may be either public handles returned by `execution.network(name)` or internal
 Network entries returned by `execution.debug`. A test drive models an external

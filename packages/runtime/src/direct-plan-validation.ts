@@ -6,13 +6,14 @@ import type {
   DirectPlanNetwork,
   DirectPlanNetworkAlias,
   DirectPlanProducer,
+  DirectPlanSelector,
   PlanArithmeticOperand,
   PlanAttachment,
   PlanDeciderCondition,
   PlanNetworkRef,
 } from '@comblang/compiler/direct-plan-schema';
 import type { ArithmeticOperation, LogicalArithmeticOutput } from '@comblang/compiler';
-import type { SignalId, SignalType } from '@comblang/factorio';
+import { circuitConstant, type SignalId, type SignalType } from '@comblang/factorio';
 import type { Diagnostic, SourceSpan } from '@comblang/shared';
 
 export interface ValidatedDirectPlanEnvelope {
@@ -325,6 +326,50 @@ function validateConstantProducer(
   return undefined;
 }
 
+function validateSelectorProducer(
+  producer: Record<string, unknown>,
+  path: string,
+  declarations: ReadonlyMap<string, DirectPlanNetwork>,
+  span: SourceSpan,
+): DirectPlanEnvelopeValidationResult | undefined {
+  if (producer.operation !== 'select' && producer.operation !== 'count')
+    return payloadFailure(`${path}.operation`, 'unknown Selector operation.', span);
+  const allowed = new Set([
+    'kind',
+    'input',
+    'operation',
+    'bindingName',
+    'debugCaptureIds',
+    'destinations',
+    'source',
+    'instancePath',
+    'placement',
+    ...(producer.operation === 'select' ? ['selectMax', 'index'] : ['output']),
+  ]);
+  for (const key of Object.keys(producer)) {
+    if (!allowed.has(key))
+      return payloadFailure(`${path}.${key}`, 'unknown Selector configuration field.', span);
+  }
+  const input = producer.input;
+  if (!isRecord(input))
+    return payloadFailure(`${path}.input`, 'expected a Network reference.', span);
+  const invalidInput = validateNetworkRef(input, `${path}.input`, declarations, span);
+  if (invalidInput !== undefined) return invalidInput;
+  if (producer.operation === 'count') {
+    return isSignalId(producer.output)
+      ? undefined
+      : payloadFailure(`${path}.output`, 'expected a valid SignalID.', span);
+  }
+  if (typeof producer.selectMax !== 'boolean')
+    return payloadFailure(`${path}.selectMax`, 'expected a boolean.', span);
+  if (!(
+    (typeof producer.index === 'number' && Number.isSafeInteger(producer.index)) ||
+    isSignalId(producer.index)
+  ))
+    return payloadFailure(`${path}.index`, 'expected a safe integer or a valid SignalID.', span);
+  return undefined;
+}
+
 function validateProducerMetadata(
   producer: Record<string, unknown>,
   path: string,
@@ -596,6 +641,10 @@ function canonicalDeciderOutput(value: unknown): PlanDeciderOutput {
   }) as PlanDeciderOutput;
 }
 
+function canonicalSelectorIndex(value: unknown): number | SignalId {
+  return typeof value === 'number' ? circuitConstant(value) : canonicalSignal(value);
+}
+
 function canonicalAttachment(value: unknown): PlanAttachment {
   const attachment = value as Record<string, unknown>;
   return Object.freeze({
@@ -654,6 +703,21 @@ function canonicalProducer(value: unknown): DirectPlanProducer {
         }),
       ),
     });
+  if (producer.kind === 'selector') {
+    const input = canonicalNetworkRef(producer.input as Record<string, unknown>);
+    return Object.freeze({
+      kind: 'selector',
+      ...common,
+      input,
+      operation: producer.operation as 'select' | 'count',
+      ...(producer.operation === 'select'
+        ? {
+            selectMax: producer.selectMax as boolean,
+            index: canonicalSelectorIndex(producer.index),
+          }
+        : { output: canonicalSignal(producer.output) }),
+    }) as DirectPlanSelector;
+  }
   const compatibilityOutput = canonicalDeciderOutput(producer.output);
   const outputs = Object.freeze(
     (producer.outputs === undefined ? [producer.output] : (producer.outputs as unknown[])).map(
@@ -935,7 +999,8 @@ export function validateDirectPlanEnvelope(plan: unknown): DirectPlanEnvelopeVal
     if (
       producer.kind !== 'arithmetic' &&
       producer.kind !== 'decider' &&
-      producer.kind !== 'constant'
+      producer.kind !== 'constant' &&
+      producer.kind !== 'selector'
     )
       return payloadFailure(
         `${path}.kind`,
@@ -967,6 +1032,17 @@ export function validateDirectPlanEnvelope(plan: unknown): DirectPlanEnvelopeVal
           descriptorSpan(destination, 'source'),
         );
     }
+    const destinationNames = new Set<string>();
+    for (const destination of producer.destinations) {
+      if (!isRecord(destination) || typeof destination.network !== 'string') continue;
+      if (destinationNames.has(destination.network))
+        return failure(
+          'RT1004',
+          `${path}.destinations: duplicate attachment destination.`,
+          descriptorSpan(destination, 'source'),
+        );
+      destinationNames.add(destination.network);
+    }
     const producerSpan = producer.source as SourceSpan;
     const metadata = validateProducerMetadata(producer, path, producerSpan, captureIds);
     if (metadata !== undefined) return metadata;
@@ -975,7 +1051,9 @@ export function validateDirectPlanEnvelope(plan: unknown): DirectPlanEnvelopeVal
         ? validateArithmeticProducer(producer, path, declarations, producerSpan)
         : producer.kind === 'decider'
           ? validateDeciderProducer(producer, path, declarations, producerSpan)
-          : validateConstantProducer(producer, path, producerSpan);
+          : producer.kind === 'constant'
+            ? validateConstantProducer(producer, path, producerSpan)
+            : validateSelectorProducer(producer, path, declarations, producerSpan);
     if (invalid !== undefined) return invalid;
   }
 

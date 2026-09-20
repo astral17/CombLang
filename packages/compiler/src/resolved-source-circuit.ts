@@ -38,6 +38,7 @@ import type {
   Provenance,
   ResolvedCircuitNetworkNode,
   CircuitColor,
+  SelectorProducerConfig,
 } from './ir.js';
 
 export const resolvedSourceCircuitFormat = 'comblang-resolved-source-circuit' as const;
@@ -345,6 +346,14 @@ function arithmeticOutput(value: unknown, path: string): LogicalArithmeticOutput
     return { kind: 'signal', signal: signal(record.signal, `${path}.signal`) };
   }
   invalid(`${path}.kind`, 'unknown arithmetic output tag.');
+}
+
+function selectorIndex(
+  value: unknown,
+  path: string,
+): Extract<SelectorProducerConfig, { operation: 'select' }>['index'] {
+  if (typeof value === 'number') return int32(value, path);
+  return signal(value, path);
 }
 
 function conditionLeft(
@@ -802,6 +811,38 @@ function producer(
     });
     return { ...common, kind: 'constant', config: { outputs: Object.freeze(outputs) } };
   }
+  if (record.kind === 'selector') {
+    const config = dataRecord(record.config, `${path}.config`);
+    const input = networkRef(config.input, `${path}.config.input`, networkIds);
+    if (config.operation === 'select') {
+      exactKeys(config, ['operation', 'input', 'selectMax', 'index'], `${path}.config`);
+      if (typeof config.selectMax !== 'boolean')
+        invalid(`${path}.config.selectMax`, 'expected a boolean.');
+      return {
+        ...common,
+        kind: 'selector',
+        config: {
+          operation: 'select',
+          input,
+          selectMax: config.selectMax,
+          index: selectorIndex(config.index, `${path}.config.index`),
+        },
+      };
+    }
+    if (config.operation === 'count') {
+      exactKeys(config, ['operation', 'input', 'output'], `${path}.config`);
+      return {
+        ...common,
+        kind: 'selector',
+        config: {
+          operation: 'count',
+          input,
+          output: signal(config.output, `${path}.config.output`),
+        },
+      };
+    }
+    invalid(`${path}.config.operation`, 'unknown Selector operation.');
+  }
   if (record.kind === 'decider') {
     const config = dataRecord(record.config, `${path}.config`);
     exactKeys(config, ['condition', 'outputs', 'elseOutputs'], `${path}.config`);
@@ -929,6 +970,8 @@ function validatePhysicalInvariants(ir: NativeCircuitIrV3): void {
       producer.config.elseOutputs?.forEach((output, index) =>
         validateDeciderOutputColors(output, `${path}.config.elseOutputs[${index}]`, colors),
       );
+    } else if (producer.kind === 'selector') {
+      validateNetworkRefColors(producer.config.input, `${path}.config.input`, colors);
     }
   });
   ir.entities.forEach((entity, entityIndex) => {

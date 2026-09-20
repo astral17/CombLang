@@ -2721,6 +2721,145 @@ to(first, second)[A] += input + 1;`,
     });
   });
 
+  test('creates exact Selector producers from ordinary configuration records', () => {
+    const parsed = parseFile({
+      path: 'selector-overload.factorio.ts',
+      text: `const red = new Network();
+const green = new Network();
+const producer: SelectorCombinator = Selector({
+  input: pair(red, green),
+  operation: 'select',
+  index: 1,
+});
+const output = new Network();
+output += producer;`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.diagnostics).toEqual([]);
+    expect(plan.producers).toMatchObject([
+      {
+        kind: 'selector',
+        operation: 'select',
+        selectMax: true,
+        index: 1,
+        input: { refKind: 'pair', networks: expect.any(Array) },
+        destinations: [{}],
+      },
+    ]);
+  });
+
+  test('keeps exact Selector count defaults, placement, and dynamic configuration boundaries', () => {
+    const parsed = parseFile({
+      path: 'selector-count-overload.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+function build(configuration: unknown): SelectorCombinator {
+  return Selector(configuration).at(3, 4);
+}
+const configuration = { input, operation: 'count', output: A };
+const producer = build(configuration);
+const output = new Network();
+producer.to(output);`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.diagnostics).toEqual([]);
+    expect(plan.producers).toMatchObject([
+      {
+        kind: 'selector',
+        operation: 'count',
+        output: { type: 'virtual', name: 'signal-A' },
+        destinations: [{}],
+        placement: { x: 3, y: 4 },
+      },
+    ]);
+  });
+
+  test('covers exact Selector defaults, explicit controls, pair input, fan-out, placement, and to', () => {
+    const parsed = parseFile({
+      path: 'selector-acceptance-matrix.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const index = Signal('virtual', 'signal-index');
+const red = new Network();
+const green = new Network();
+const defaults: SelectorCombinator = Selector({ input: red, operation: 'select' });
+const explicit: SelectorCombinator = Selector({
+  input: pair(red, green),
+  operation: 'select',
+  selectMax: false,
+  index,
+});
+const counted: SelectorCombinator = Selector({ input: red, operation: 'count', output: A });
+const first = new Network();
+const second = new Network();
+defaults.to(first);
+explicit.at(1, 2).to(first, second);
+counted.to(first);`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.diagnostics).toEqual([]);
+    expect(plan.producers).toHaveLength(3);
+    expect(plan.producers[0]).toMatchObject({
+      kind: 'selector',
+      operation: 'select',
+      selectMax: true,
+      index: 0,
+      input: { refKind: 'single' },
+      destinations: [{}],
+    });
+    expect(plan.producers[1]).toMatchObject({
+      kind: 'selector',
+      operation: 'select',
+      selectMax: false,
+      index: { type: 'virtual', name: 'signal-index' },
+      input: { refKind: 'pair', networks: expect.any(Array) },
+      destinations: [{}, {}],
+      placement: { x: 1, y: 2 },
+    });
+    expect(plan.producers[2]).toMatchObject({
+      kind: 'selector',
+      operation: 'count',
+      output: { type: 'virtual', name: 'signal-A' },
+      destinations: [{}],
+    });
+  });
+
+  test('keeps exact Selector concrete return kind through functions, loops, aliases, and unused warnings', () => {
+    const parsed = parseFile({
+      path: 'selector-function-loop-acceptance.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+function build(configuration: unknown): SelectorCombinator {
+  return Selector(configuration).at(5, 6);
+}
+const input = new Network();
+const output = new Network();
+const configuration = { input, operation: 'select', index: 0 };
+const producers: SelectorCombinator[] = [];
+for (const marker of [0, 1]) {
+  producers.push(build(configuration));
+}
+for (const producer of producers) producer.to(output);
+Selector({ input, operation: 'count', output: A });`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.producers).toHaveLength(3);
+    expect(plan.producers.slice(0, 2)).toMatchObject([
+      { kind: 'selector', operation: 'select', destinations: [{}], placement: { x: 5, y: 6 } },
+      { kind: 'selector', operation: 'select', destinations: [{}], placement: { x: 5, y: 6 } },
+    ]);
+    expect(plan.producers[2]).toMatchObject({
+      kind: 'selector',
+      operation: 'count',
+      destinations: [{ network: '$combinator:3:primary' }],
+    });
+    expect(plan.diagnostics).toEqual([
+      expect.objectContaining({ code: 'CL2001', severity: 'warning' }),
+    ]);
+  });
+
   test('stores an explicitly typed DeciderCombinator without losing its handle', () => {
     const parsed = parseFile({
       path: 'stored-decider.factorio.ts',

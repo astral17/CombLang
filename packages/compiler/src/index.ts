@@ -8,6 +8,8 @@ export * from './entity.js';
 export * from './entity-v4.js';
 export * from './entity-v5.js';
 export * from './entity-v6.js';
+export * from './entity-v7.js';
+export * from './resolved-entity-v7.js';
 export * from './entity-configuration.js';
 export * from './entity-fixtures.js';
 export * from './entity-profile.js';

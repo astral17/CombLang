@@ -3,7 +3,12 @@ import ts from 'typescript';
 export type NetworkCapability = 'owned' | 'readonly' | 'ref' | 'move';
 export type NetworkColorRequirement = 'red' | 'green';
 export type ProducerHandleType =
-  'Combinator' | 'Producer' | 'DeciderCombinator' | 'ArithmeticCombinator' | 'ConstantCombinator';
+  | 'Combinator'
+  | 'Producer'
+  | 'DeciderCombinator'
+  | 'ArithmeticCombinator'
+  | 'ConstantCombinator'
+  | 'SelectorCombinator';
 
 export type DslTypeSyntax =
   | {
@@ -47,6 +52,7 @@ const producerTypes = new Set<ProducerHandleType>([
   'DeciderCombinator',
   'ArithmeticCombinator',
   'ConstantCombinator',
+  'SelectorCombinator',
 ]);
 
 const colorFromArgument = (argument: string | undefined): NetworkColorRequirement | undefined =>

@@ -226,6 +226,7 @@ function producerKeys(kind: string): readonly string[] {
       'outputOrigins',
       'elseOutputOrigins',
     ];
+  if (kind === 'selector') return [...common, 'input', 'operation', 'selectMax', 'index', 'output'];
   return [];
 }
 

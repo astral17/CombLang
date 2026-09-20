@@ -14,12 +14,14 @@ import type {
   LogicalScalarOperand,
   NativeCircuitIr,
   Provenance,
+  SelectorProducerConfig,
   EntityPlacement,
 } from '@comblang/compiler/ir';
 import type { NativeCircuitIrV3 } from '@comblang/compiler/entity';
 import type { NativeCircuitIrV4 } from '@comblang/compiler/entity-v4';
 import type { NativeCircuitIrV5 } from '@comblang/compiler/entity-v5';
 import type { NativeCircuitIrV6 } from '@comblang/compiler/entity-v6';
+import type { NativeCircuitIrV7 } from '@comblang/compiler/entity-v7';
 import { constantConfigurationFromOutputs, SparseBus, type SignalId } from '@comblang/factorio';
 import {
   ArithmeticCombinatorDevice,
@@ -28,6 +30,8 @@ import {
   ConstantValueCombinatorDevice,
   DeciderCombinatorDevice,
   DeciderValueCombinatorDevice,
+  SelectorCombinatorDevice,
+  SelectorValueCombinatorDevice,
   SimulationKernel,
   TestSession,
   ValueSimulationKernel,
@@ -37,6 +41,7 @@ import {
   type DeciderCondition,
   type DeciderOutput,
   type ScalarOperand,
+  type SelectorCombinatorConfig,
   type SynchronousDevice,
   type ValueSynchronousDevice,
 } from '@comblang/simulator';
@@ -216,6 +221,19 @@ export interface RuntimeDeciderConfig {
   readonly elseOutputs?: readonly RuntimeDeciderOutput[];
 }
 
+export type RuntimeSelectorConfig =
+  | {
+      readonly operation: 'select';
+      readonly input: RuntimeNetworkRef;
+      readonly selectMax?: boolean;
+      readonly index?: number | SignalId;
+    }
+  | {
+      readonly operation: 'count';
+      readonly input: RuntimeNetworkRef;
+      readonly output: SignalId;
+    };
+
 export interface RuntimeConstantConfig {
   readonly outputs: readonly { readonly signal: SignalId; readonly value: number }[];
 }
@@ -258,7 +276,12 @@ function unique<T>(values: Iterable<T>): T[] {
 }
 
 type SimulatableNativeCircuitIr =
-  NativeCircuitIr | NativeCircuitIrV3 | NativeCircuitIrV4 | NativeCircuitIrV5 | NativeCircuitIrV6;
+  | NativeCircuitIr
+  | NativeCircuitIrV3
+  | NativeCircuitIrV4
+  | NativeCircuitIrV5
+  | NativeCircuitIrV6
+  | NativeCircuitIrV7;
 
 function simulationDevicesForIr(ir: SimulatableNativeCircuitIr): {
   readonly concrete: readonly SynchronousDevice[];
@@ -304,7 +327,7 @@ function simulationDevicesForIr(ir: SimulatableNativeCircuitIr): {
       };
       concrete.push(new ConstantCombinatorDevice(config));
       value.push(new ConstantValueCombinatorDevice(config));
-    } else {
+    } else if (producer.kind === 'decider') {
       const scalar = (value: LogicalScalarOperand): ScalarOperand =>
         value.kind === 'constant' ? value : { ...value, networks: selection(value) };
       const condition = (value: LogicalDeciderCondition): DeciderCondition =>
@@ -351,6 +374,23 @@ function simulationDevicesForIr(ir: SimulatableNativeCircuitIr): {
       };
       concrete.push(new DeciderCombinatorDevice(config));
       value.push(new DeciderValueCombinatorDevice(config));
+    } else {
+      const combinator: SelectorCombinatorConfig =
+        producer.config.operation === 'select'
+          ? {
+              operation: 'select',
+              selectMax: producer.config.selectMax,
+              index: producer.config.index,
+            }
+          : { operation: 'count', output: producer.config.output };
+      const config = {
+        id: producer.id as unknown as DeviceId,
+        inputNetworks: inputNetworks(producer),
+        outputNetworks: producer.destinations,
+        combinator,
+      };
+      concrete.push(new SelectorCombinatorDevice(config));
+      value.push(new SelectorValueCombinatorDevice(config));
     }
   }
   return { concrete, value };
@@ -501,6 +541,33 @@ export class DslRuntime {
       id,
       kind: 'decider',
       config: lowered,
+      destinations: Object.freeze([]),
+      provenance: makeProvenance(options),
+      ...(options.placement === undefined ? {} : { placement: options.placement }),
+    });
+    this.#producers.set(id, node);
+    return this.#makeProducerHandle(id);
+  }
+
+  selector(config: RuntimeSelectorConfig, options: RuntimeProducerOptions = {}): ProducerHandle {
+    const lowered: SelectorProducerConfig =
+      config.operation === 'select'
+        ? {
+            operation: 'select',
+            input: this.#lowerNetworkRef(config.input),
+            selectMax: config.selectMax ?? true,
+            index: config.index ?? 0,
+          }
+        : {
+            operation: 'count',
+            input: this.#lowerNetworkRef(config.input),
+            output: config.output,
+          };
+    const id = this.#producerIds.allocate() as unknown as ProducerId;
+    const node: CircuitProducerNode = Object.freeze({
+      id,
+      kind: 'selector',
+      config: Object.freeze(lowered),
       destinations: Object.freeze([]),
       provenance: makeProvenance(options),
       ...(options.placement === undefined ? {} : { placement: options.placement }),

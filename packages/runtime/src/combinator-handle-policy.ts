@@ -5,7 +5,7 @@ import type { CombinatorValue } from './elaboration-values.js';
 
 export interface CombinatorHandlePolicyContext {
   isCombinator(value: unknown): value is CombinatorValue;
-  kindOf(value: CombinatorValue): 'arithmetic' | 'decider' | 'constant';
+  kindOf(value: CombinatorValue): 'arithmetic' | 'decider' | 'constant' | 'selector';
   bindName(value: CombinatorValue, name: string): void;
 }
 
@@ -15,6 +15,7 @@ const expectedCombinatorKinds = {
   DeciderCombinator: 'decider',
   ArithmeticCombinator: 'arithmetic',
   ConstantCombinator: 'constant',
+  SelectorCombinator: 'selector',
 } as const;
 
 /** Validates a source Combinator annotation and optionally adds its debug binding name. */

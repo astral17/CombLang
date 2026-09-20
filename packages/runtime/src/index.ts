@@ -14,6 +14,8 @@ export * from './entity-v5-validation.js';
 export * from './entity-v6-validation.js';
 export * from './entity-v5.js';
 export * from './entity-v6.js';
+export * from './entity-v7.js';
+export * from './resolved-entity-v7.js';
 export * from './constant-signal-values.js';
 export * from './constant-configuration-source.js';
 export * from './elaboration-program.js';

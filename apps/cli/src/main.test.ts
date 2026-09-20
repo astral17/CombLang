@@ -662,6 +662,55 @@ output += exact;`,
     });
   });
 
+  test('runs an exact Selector through the CLI testbench as cumulative v7', async () => {
+    const database = structuredClone(syntheticPrototypeDatabase()) as {
+      entities: Array<Record<string, unknown>>;
+    };
+    database.entities.push({
+      key: 'entity:selector-combinator',
+      name: 'selector-combinator',
+      type: 'selector-combinator',
+      blueprintEligible: true,
+      circuit: {
+        read: false,
+        enableDisable: false,
+        readContents: false,
+        setFilters: false,
+        setRequests: false,
+        setRecipe: false,
+        readRecipe: false,
+        readFinishedCraft: false,
+        outputSignals: false,
+      },
+    });
+    const source = await sourceFile(
+      `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const exact: SelectorCombinator = Selector({ input, operation: 'count', output: A });
+const output = new Network();
+output += exact;`,
+    );
+    const tests =
+      await sourceFile(`test('selector count', ({ network, drive, tick, expectSignal }) => {
+  drive(network('input'), [[Signal('virtual', 'signal-A'), 2]]);
+  tick(2);
+  expectSignal(network('output'), Signal('virtual', 'signal-A')).toBe(1);
+});`);
+    const profile = await profileFile(JSON.stringify(database));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const exitCode = await run(['test', '--json', '--prototypes', profile, source, tests]);
+    const report = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(report.tests.results[0]).toMatchObject({ status: 'passed' });
+    expect({ exitCode, report }).toMatchObject({
+      exitCode: 0,
+      report: {
+        diagnostics: [],
+        tests: { passed: 1, failed: 0 },
+      },
+    });
+  });
+
   test('does not provision an explicitly non-blueprintable CLI Entity', async () => {
     const database = structuredClone(syntheticPrototypeDatabase()) as {
       capabilities: { entityCircuitCapabilities: boolean };

@@ -286,9 +286,11 @@ function parseProducerAssociations(value: unknown): readonly ProducerAssociation
         ? ['left', 'operation', 'right', 'output']
         : kind === 'decider'
           ? ['condition', 'output', 'outputs', 'elseOutputs']
-          : kind === 'constant'
-            ? ['outputs']
-            : [];
+          : kind === 'selector'
+            ? ['input', 'operation', 'selectMax', 'index', 'output']
+            : kind === 'constant'
+              ? ['outputs']
+              : [];
     if (specific.length === 0)
       invalid('RT5000', `${path}.kind`, 'unknown Producer tag.', sourceOf(record));
     exactKeys(

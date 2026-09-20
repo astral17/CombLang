@@ -199,6 +199,7 @@ function producerKeys(kind: string): readonly string[] {
   const common = ['id', 'kind', 'config', 'destinations', 'provenance', 'placement'];
   if (kind === 'decider') return [...common, 'entityId', 'outputOrigins', 'elseOutputOrigins'];
   if (kind === 'constant' || kind === 'arithmetic') return [...common, 'entityId'];
+  if (kind === 'selector') return [...common, 'entityId'];
   return [];
 }
 

@@ -509,6 +509,25 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     }
     return 'runtime';
   };
+  const selectorOverloadCertainty = (node: ts.CallExpression): ProducerCertainty => {
+    if (!isDslBuiltin('Selector')) return 'runtime';
+    if (node.arguments.length === 1) {
+      const argument = node.arguments[0]!;
+      if (ts.isObjectLiteralExpression(argument)) return 'producer';
+      if (ts.isStringLiteral(argument)) return 'runtime';
+      if (
+        ts.isNumericLiteral(argument) ||
+        argument.kind === ts.SyntaxKind.TrueKeyword ||
+        argument.kind === ts.SyntaxKind.FalseKeyword ||
+        argument.kind === ts.SyntaxKind.NullKeyword ||
+        ts.isArrayLiteralExpression(argument)
+      ) {
+        return 'non-producer';
+      }
+    }
+    if (node.arguments.length === 2) return 'runtime';
+    return 'runtime';
+  };
   const producerCertainty = (node: ts.Expression): ProducerCertainty => {
     if (ts.isParenthesizedExpression(node)) return producerCertainty(node.expression);
     if (ts.isIdentifier(node) && lookupProducerSlot(node.text)?.direct !== undefined) {
@@ -533,6 +552,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
         if (node.expression.text === 'Constant') return constantOverloadCertainty(node);
         if (node.expression.text === 'Arithmetic') return arithmeticOverloadCertainty(node);
         if (node.expression.text === 'Decider') return deciderOverloadCertainty(node);
+        if (node.expression.text === 'Selector') return selectorOverloadCertainty(node);
         return (node.expression.text === 'CC' && isDslBuiltin('CC')) ||
           (node.expression.text === 'IF' && isDslBuiltin('IF')) ||
           (node.expression.text === 'when' && isDslBuiltin('when')) ||
@@ -571,7 +591,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     producerCertainty(node) === 'producer';
   const producerKindOfExpression = (
     node: ts.Expression,
-  ): 'arithmetic' | 'decider' | 'constant' | undefined => {
+  ): 'arithmetic' | 'decider' | 'constant' | 'selector' | undefined => {
     if (ts.isParenthesizedExpression(node)) return producerKindOfExpression(node.expression);
     if (ts.isBinaryExpression(node) && operatorText(node.operatorToken.kind) !== undefined) {
       return 'arithmetic';
@@ -587,6 +607,9 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       if (node.expression.text === 'Decider') {
         return deciderOverloadCertainty(node) === 'producer' ? 'decider' : undefined;
       }
+      if (node.expression.text === 'Selector') {
+        return selectorOverloadCertainty(node) === 'producer' ? 'selector' : undefined;
+      }
       if (node.expression.text === 'CC' && isDslBuiltin('CC')) return 'constant';
       if (node.expression.text === 'IF' && isDslBuiltin('IF')) return 'decider';
       if (node.expression.text === 'when' && isDslBuiltin('when')) return 'decider';
@@ -594,6 +617,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       if (returned === 'ArithmeticCombinator') return 'arithmetic';
       if (returned === 'DeciderCombinator') return 'decider';
       if (returned === 'ConstantCombinator') return 'constant';
+      if (returned === 'SelectorCombinator') return 'selector';
       return undefined;
     }
     if (ts.isPropertyAccessExpression(node.expression)) {
@@ -619,24 +643,32 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
   };
   const producerTypeAcceptsKind = (
     type: string,
-    kind: 'arithmetic' | 'decider' | 'constant' | undefined,
+    kind: 'arithmetic' | 'decider' | 'constant' | 'selector' | undefined,
   ): boolean =>
     kind === undefined ||
     type === 'Combinator' ||
     type === 'Producer' ||
     (type === 'ArithmeticCombinator' && kind === 'arithmetic') ||
     (type === 'DeciderCombinator' && kind === 'decider') ||
-    (type === 'ConstantCombinator' && kind === 'constant');
+    (type === 'ConstantCombinator' && kind === 'constant') ||
+    (type === 'SelectorCombinator' && kind === 'selector');
   const producerTypeForKind = (
-    kind: 'arithmetic' | 'decider' | 'constant' | undefined,
-  ): 'ArithmeticCombinator' | 'DeciderCombinator' | 'ConstantCombinator' | undefined =>
+    kind: 'arithmetic' | 'decider' | 'constant' | 'selector' | undefined,
+  ):
+    | 'ArithmeticCombinator'
+    | 'DeciderCombinator'
+    | 'ConstantCombinator'
+    | 'SelectorCombinator'
+    | undefined =>
     kind === 'arithmetic'
       ? 'ArithmeticCombinator'
       : kind === 'decider'
         ? 'DeciderCombinator'
         : kind === 'constant'
           ? 'ConstantCombinator'
-          : undefined;
+          : kind === 'selector'
+            ? 'SelectorCombinator'
+            : undefined;
   const isDefinitelyNonSignal = (node: ts.Expression): boolean => {
     if (ts.isParenthesizedExpression(node)) return isDefinitelyNonSignal(node.expression);
     return (

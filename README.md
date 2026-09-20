@@ -36,7 +36,8 @@ The current repository implements the completed Phase 0–6 foundation, from the
   - [x] Add exact `Arithmetic({ left, operation, right, output })` and cumulative v5 linked Constant/Arithmetic transport. The trusted arithmetic base profile, one-device placement ownership, profile-free hydration, and native preview remain separate from native Factorio conformance.
   - [x] Validate the currently implemented `Each`/`Everything` output compatibility against the final post-execution Decider descriptor, including dynamically generated rows and conditions.
   - [x] Add exact `Decider({ condition, outputs, elseOutputs })` and cumulative v6 linked Constant/Arithmetic/Decider transport. Exact rows preserve order, duplicates, branch identity, and bounded source provenance; trusted preview/simulation remains separate from native Factorio conformance.
-  - [x] Add the structural `Selector(prototype, configuration?)` Entity facade and preserve Selector operation groups in the checked Blueprint schema catalog; exact computation-bearing `Selector({ ... })` remains pending.
+  - [x] Add the structural `Selector(prototype, configuration?)` Entity facade and preserve Selector operation groups in the checked Blueprint schema catalog; the structural path remains separate from computation.
+  - [x] Add exact `Selector({ input, operation, ... })` with deterministic `select`/`count`, cumulative linked Entity v7, profile-free hydration, simulator/testbench, CLI/Worker/browser artifacts, and native-shaped Blueprint preview. This is implementation/model evidence, not native Factorio conformance; other exact Selector operations remain unsupported.
   - [ ] Verify Each-to-concrete copy-count behavior, constant-row interaction, duplicate multiplicity, conditional subsets, and `pair(red, green)` selections against exported Factorio fixtures; never lower these rows as a sum/reduce.
   - [x] Preserve per-output source span, dynamic instance path, ordinal, and implicit/explicit/exact syntax intent through the final generated Decider descriptor for the current IF/when/exact slice; extend authoritative post-execution validation as the exact surface grows.
   - [ ] Decide whether the provisional `input.into(A)` spelling is valid only in final Each-mode after conformance evidence; keep it Decider-output-specific and leave raw `input[A]` legal.
@@ -72,6 +73,7 @@ Later phases cover reviewed prototype capabilities, typed Factorio objects, exac
 - [Entity v4 computation foundation](docs/entity-v4.md) — internal linked Constant/Entity identity, exact configuration projection, profile-free replay, and one-object blueprint adapter.
 - [Entity v5 cumulative computation](docs/entity-v5.md) — exact Arithmetic, linked Constant/Arithmetic associations, version selection, resolved hydration, and preview boundary.
 - [Entity v6 cumulative computation](docs/entity-v6.md) — exact Decider, linked Constant/Arithmetic/Decider associations, row provenance, version selection, hydration, and preview boundary.
+- [Entity v7 cumulative computation](docs/entity-v7.md) — exact Selector select/count, linked cumulative transport, profile-free hydration, deterministic model, preview boundary, and native-evidence limits.
 - [Diagnostics](docs/diagnostics.md) — compiler/runtime code families and the most common actionable errors.
 - [Blueprint JSON preview](docs/blueprint-json.md) — generated structure, wiring model, and current limitations.
 - [Architecture notes](docs/architecture.md) — package boundaries, lowering decisions, runtime invariants, and implementation status.

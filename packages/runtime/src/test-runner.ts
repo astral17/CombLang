@@ -21,6 +21,7 @@ import {
 import type { ExecutedEntityDirectPlanV4 } from './entity-v4.js';
 import type { ExecutedEntityDirectPlanV5 } from './entity-v5.js';
 import type { ExecutedEntityDirectPlanV6 } from './entity-v6.js';
+import type { ExecutedEntityDirectPlanV7 } from './entity-v7.js';
 import type { NetworkHandle } from './elaboration.js';
 
 export type DirectPlanTestFailureKind = 'assertion' | 'debug-query' | 'structure' | 'runtime';
@@ -55,7 +56,8 @@ export interface DirectPlanTestApi {
     | ExecutedEntityDirectPlan
     | ExecutedEntityDirectPlanV4
     | ExecutedEntityDirectPlanV5
-    | ExecutedEntityDirectPlanV6;
+    | ExecutedEntityDirectPlanV6
+    | ExecutedEntityDirectPlanV7;
   readonly session: TestSession<DirectPlanTestTarget>;
   network(name: string): NetworkHandle;
   drive(network: NetworkHandle, values: TestBusInput): void;
@@ -145,7 +147,8 @@ function runTestsWithExecution(
     | ExecutedEntityDirectPlan
     | ExecutedEntityDirectPlanV4
     | ExecutedEntityDirectPlanV5
-    | ExecutedEntityDirectPlanV6,
+    | ExecutedEntityDirectPlanV6
+    | ExecutedEntityDirectPlanV7,
   source: string,
   options: DirectPlanTestRunnerOptions = {},
 ): DirectPlanTestRun {
@@ -188,7 +191,8 @@ function runTestsWithExecution(
       | ExecutedEntityDirectPlan
       | ExecutedEntityDirectPlanV4
       | ExecutedEntityDirectPlanV5
-      | ExecutedEntityDirectPlanV6;
+      | ExecutedEntityDirectPlanV6
+      | ExecutedEntityDirectPlanV7;
     try {
       execution = getExecution();
     } catch (error) {
@@ -269,7 +273,8 @@ export function runExecutedDirectPlanTests(
     | ExecutedEntityDirectPlan
     | ExecutedEntityDirectPlanV4
     | ExecutedEntityDirectPlanV5
-    | ExecutedEntityDirectPlanV6,
+    | ExecutedEntityDirectPlanV6
+    | ExecutedEntityDirectPlanV7,
   source: string,
   options: DirectPlanTestRunnerOptions = {},
 ): DirectPlanTestRun {

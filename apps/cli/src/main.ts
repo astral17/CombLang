@@ -43,6 +43,7 @@ import {
   type ExecutedEntityDirectPlanV4,
   type ExecutedEntityDirectPlanV5,
   type ExecutedEntityDirectPlanV6,
+  type ExecutedEntityDirectPlanV7,
 } from '@comblang/runtime';
 import {
   conservativeEntityProvisioningPolicy,
@@ -277,6 +278,7 @@ async function testCircuit(
     | ExecutedEntityDirectPlanV4
     | ExecutedEntityDirectPlanV5
     | ExecutedEntityDirectPlanV6
+    | ExecutedEntityDirectPlanV7
     | undefined;
 
   if (file !== undefined && !diagnostics.some(({ severity }) => severity === 'error')) {

@@ -65,6 +65,21 @@ export interface ConstantProducerConfig {
   }[];
 }
 
+export type SelectorIndex = ConcreteConfigNumber | ConcreteConfigSignal;
+
+export type SelectorProducerConfig =
+  | {
+      readonly operation: 'select';
+      readonly input: LogicalNetworkRef;
+      readonly selectMax: boolean;
+      readonly index: SelectorIndex;
+    }
+  | {
+      readonly operation: 'count';
+      readonly input: LogicalNetworkRef;
+      readonly output: ConcreteConfigSignal;
+    };
+
 export type Comparator = '>' | '<' | '=' | '>=' | '<=' | '!=';
 export type Quantifier = 'each' | 'anything' | 'everything';
 
@@ -132,6 +147,14 @@ export type CircuitProducerNode =
       readonly id: ProducerId;
       readonly kind: 'decider';
       readonly config: DeciderProducerConfig;
+      readonly destinations: readonly NetworkId[];
+      readonly provenance: Provenance;
+      readonly placement?: EntityPlacement;
+    }
+  | {
+      readonly id: ProducerId;
+      readonly kind: 'selector';
+      readonly config: SelectorProducerConfig;
       readonly destinations: readonly NetworkId[];
       readonly provenance: Provenance;
       readonly placement?: EntityPlacement;

@@ -48,26 +48,29 @@ hidden Producer, Network, Decider, or tick.
 Typed facades, raw native import, and verified native import behavior remain
 pending; see [Entity v3](entity-v3.md).
 
-The Phase 7 computation slice uses separate Entity v4, cumulative v5, and
-cumulative v6 envelopes. v4 remains Constant-only; v5 is selected when any
-Arithmetic producer is linked and may mix linked Constant and Arithmetic. v6
-is selected when any Decider producer is linked and may mix linked Constant,
-Arithmetic, and Decider. Exact
+The Phase 7 computation slice uses separate Entity v4, cumulative v5, v6, and
+v7 envelopes. v4 remains Constant-only; v5 is selected when any Arithmetic
+producer is linked and may mix linked Constant and Arithmetic. v6 is selected
+when any Decider producer is linked and may mix linked Constant, Arithmetic,
+and Decider. v7 is selected when any Selector producer is linked and may mix
+all earlier linked kinds. Exact
 `Arithmetic({ left, operation, right, output })` requires trusted base
-`entity:arithmetic-combinator` authority with matching prototype type. The v5
-validator requires the current SHA-256 profile-set identity, checks exact
-family/configuration/association equality, and rejects linked producer
-placement because placement belongs to the Entity. Validated v4/v5/v6 plans reuse
-the v2 topology engine transiently, then restore their association in graph and
-NCIR without creating a second physical object. Their profile-free resolved
-snapshots and hydration paths carry identity-only context, not profiles,
-providers, or resolver authority. The public exact Constant/Arithmetic/Decider
-forms and provider-backed `CC`/ergonomic Arithmetic/IF/when share their linked
+`entity:arithmetic-combinator` authority with matching prototype type. Exact
+`Selector({ input, operation, ... })` requires the matching trusted
+`entity:selector-combinator` authority and supports only the deterministic
+`select`/`count` slice described in [Entity v7](entity-v7.md). The v4-v7
+validators require the current profile-set identity, check exact
+family/configuration/association equality, and reject linked producer placement
+because placement belongs to the Entity. Validated v4-v7 plans reuse the v2
+topology engine transiently, then restore their association in graph and NCIR
+without creating a second physical object. Their profile-free resolved snapshots
+and hydration paths carry identity-only context, not profiles, providers, or
+resolver authority. The public exact Constant/Arithmetic/Decider/Selector forms
+and provider-backed `CC`/ergonomic Arithmetic/IF/when share their linked
 physical representation when the matching trusted base profile is available;
-without that authority, profile-free behavior retains its legacy envelope
-(exact Decider rejects the missing authority). Synthetic/
-internal tests and readable blueprint preview do not establish native Factorio
-conformance.
+without that authority, profile-free behavior retains its legacy envelope (exact
+Entity constructors reject missing authority). Synthetic/internal tests and
+readable blueprint preview do not establish native Factorio conformance.
 The default website and ordinary CLI now provision a conservative, provider-
 bound zero-port fallback profile only for Entity records whose normalized
 `blueprintEligible: true` fact is explicit. Presence in `data.raw`, a familiar
@@ -228,6 +231,13 @@ placement and the producer's resolved Decider condition/output configuration
 to emit one object per linked device. Row origins remain producer/debug
 metadata. The adapter and v6 simulator are structural preview surfaces, not
 Factorio conformance claims.
+
+`generateEntityComputationBlueprintJsonV7` is the cumulative adapter for linked
+Constant, Arithmetic, Decider, and Selector. A linked Selector emits one
+`selector-combinator` object with `select_max` plus exactly one index field for
+`select`, or `count_signal` for `count`. Its resolved topology and Entity-owned
+placement are preserved. The v7 adapter and deterministic Selector simulator are
+structural preview/model surfaces, not Factorio conformance claims.
 
 This is deliberately pre-FCIR. Placement is a deterministic preview rather than a reach-aware layout, entity-number stability is local to one generation, and import/export semantic round trips remain Phase 8 work. Keeping this boundary explicit prevents the temporary row placer from becoming part of the eventual blueprint codec contract.
 

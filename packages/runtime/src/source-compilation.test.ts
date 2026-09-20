@@ -9,6 +9,7 @@ import { SparseBus } from '@comblang/factorio';
 import {
   generateEntityBlueprintJson,
   generateEntityComputationBlueprintJson,
+  generateEntityComputationBlueprintJsonV7,
 } from '@comblang/compiler/blueprint-json';
 import type { EntityProfile, NativeCircuitIrV3 } from '@comblang/compiler/entity';
 import type { NativeCircuitIrV4 } from '@comblang/compiler/entity-v4';
@@ -38,6 +39,7 @@ import {
 } from './entity-provisioning.js';
 import { createDebugDocument } from './debug-document.js';
 import { hydrateResolvedSourceCircuit } from './resolved-source-circuit.js';
+import { hydrateResolvedEntityV7Circuit } from './resolved-entity-v7.js';
 
 const importedEntitySource = JSON.stringify({
   item: { 'iron-plate': { type: 'item', name: 'iron-plate', stack_size: 100 } },
@@ -115,6 +117,83 @@ function syntheticTypedLampHost() {
     database: profile.ref.database,
     getEntity(nameOrKey) {
       return nameOrKey === prototype.key || nameOrKey === prototype.name ? prototype : undefined;
+    },
+  };
+  return { trustedEntityReplayContext, entityPrototypeResolver };
+}
+
+function syntheticSelectorHost() {
+  const prototypeKey = 'entity:selector-combinator' as EntityPrototype['key'];
+  const profile: EntityProfile = {
+    ...syntheticZeroPortEntityProfile,
+    prototypeType: 'selector-combinator',
+    ref: { ...syntheticZeroPortEntityProfile.ref, prototypeKey },
+  };
+  const prototype = {
+    key: prototypeKey,
+    name: 'selector-combinator',
+    type: 'selector-combinator',
+  } as EntityPrototype;
+  const trustedEntityReplayContext = createTrustedEntityReplayContext({
+    database: profile.ref.database,
+    source: 'synthetic',
+    evidenceIdentity: 'comblang-synthetic-evidence-v1',
+    policyIdentity: 'comblang-entity-policy-v1',
+    profiles: [profile],
+  });
+  const entityPrototypeResolver: EntityPrototypeResolver = {
+    database: profile.ref.database,
+    getEntity(nameOrKey) {
+      return nameOrKey === prototype.key || nameOrKey === prototype.name ? prototype : undefined;
+    },
+  };
+  return { trustedEntityReplayContext, entityPrototypeResolver };
+}
+
+function syntheticSelectorArithmeticHost() {
+  const selectorKey = 'entity:selector-combinator' as EntityPrototype['key'];
+  const arithmeticKey = 'entity:arithmetic-combinator' as EntityPrototype['key'];
+  const selectorProfile: EntityProfile = {
+    ...syntheticZeroPortEntityProfile,
+    prototypeType: 'selector-combinator',
+    ref: {
+      ...syntheticZeroPortEntityProfile.ref,
+      prototypeKey: selectorKey,
+      profileId: 'profile:synthetic-selector-v7' as EntityProfile['ref']['profileId'],
+    },
+  };
+  const arithmeticProfile: EntityProfile = {
+    ...syntheticZeroPortEntityProfile,
+    prototypeType: 'arithmetic-combinator',
+    ref: {
+      ...syntheticZeroPortEntityProfile.ref,
+      prototypeKey: arithmeticKey,
+      profileId: 'profile:synthetic-arithmetic-v5' as EntityProfile['ref']['profileId'],
+    },
+  };
+  const prototypes = [
+    {
+      key: selectorKey,
+      name: 'selector-combinator',
+      type: 'selector-combinator',
+    },
+    {
+      key: arithmeticKey,
+      name: 'arithmetic-combinator',
+      type: 'arithmetic-combinator',
+    },
+  ] as EntityPrototype[];
+  const trustedEntityReplayContext = createTrustedEntityReplayContext({
+    database: selectorProfile.ref.database,
+    source: 'synthetic',
+    evidenceIdentity: 'comblang-synthetic-selector-arithmetic-evidence',
+    policyIdentity: 'comblang-synthetic-selector-arithmetic-policy',
+    profiles: [selectorProfile, arithmeticProfile],
+  });
+  const entityPrototypeResolver: EntityPrototypeResolver = {
+    database: selectorProfile.ref.database,
+    getEntity(nameOrKey) {
+      return prototypes.find(({ key, name }) => nameOrKey === key || nameOrKey === name);
     },
   };
   return { trustedEntityReplayContext, entityPrototypeResolver };
@@ -271,6 +350,272 @@ const record = Selector(prototypes.entity['selector-combinator']);`,
     ]);
   });
 
+  test('links an exact Selector to one cumulative v7 Entity and preserves physical config', () => {
+    const host = syntheticSelectorHost();
+    const compilation = compileSourceProgram(
+      {
+        path: 'selector-v7.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output = new Network();
+const producer: SelectorCombinator = Selector({ input, operation: 'count', output: A });
+output += producer;`,
+      },
+      host,
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 7) throw new Error('Expected a v7 Selector plan.');
+    expect(plan.producers).toMatchObject([
+      { kind: 'selector', operation: 'count', entityId: expect.any(String) },
+    ]);
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.entities[0]?.configuration).toMatchObject({
+      mode: 'selector',
+      operation: 'count',
+      input: { refKind: 'single', network: 'input' },
+      output: { type: 'virtual', name: 'signal-A' },
+    });
+    const execution = compilation.execution;
+    if (execution === undefined) throw new Error('Expected a v7 Entity execution.');
+    const ir = execution.circuit.ir;
+    if (ir.version !== 7) throw new Error('Expected a v7 Native Circuit IR.');
+    expect(ir.entities[0]?.configuration).toMatchObject({
+      mode: 'selector',
+      operation: 'count',
+      output: { type: 'virtual', name: 'signal-A' },
+    });
+    const resolved = compilation.resolvedCircuit;
+    if (resolved?.format !== 'comblang-resolved-entity-v7')
+      throw new Error('Expected a resolved v7 circuit.');
+    expect(JSON.stringify(resolved)).not.toContain('prototypeType');
+    const runtime = hydrateResolvedEntityV7Circuit(resolved);
+    const inputId = runtime.ir.networks.find((network) => network.name === 'input')!.id;
+    const outputId = runtime.ir.networks.find((network) => network.name === 'output')!.id;
+    const simulation = runtime.createSimulation([
+      {
+        network: runtime.network(inputId),
+        values: new SparseBus([[{ type: 'virtual', name: 'signal-A' }, 3]]),
+      },
+    ]);
+    expect(simulation.step().read(outputId).get({ type: 'virtual', name: 'signal-A' })).toBe(1);
+    const blueprint = generateEntityComputationBlueprintJsonV7(runtime.ir);
+    expect(blueprint.blueprint.entities[0]).toMatchObject({
+      name: 'selector-combinator',
+      control_behavior: { operation: 'count', count_signal: { type: 'virtual', name: 'signal-A' } },
+    });
+  });
+
+  test('rejects tampered v7 authority while hydrating a structured clone without a host', () => {
+    const compilation = compileSourceProgram(
+      {
+        path: 'selector-v7-tamper.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output = new Network();
+const producer: SelectorCombinator = Selector({ input, operation: 'count', output: A });
+output += producer;`,
+      },
+      syntheticSelectorHost(),
+    );
+    const resolved = compilation.resolvedCircuit;
+    if (resolved?.format !== 'comblang-resolved-entity-v7')
+      throw new Error('Expected a resolved v7 circuit.');
+
+    type MutableResolved = {
+      format: string;
+      version: number;
+      planFingerprint: string;
+      ir: {
+        format: string;
+        version: number;
+        context: unknown;
+        networks: Array<Record<string, unknown>>;
+        producers: Array<Record<string, unknown>>;
+        entities: Array<Record<string, unknown>>;
+      };
+    };
+    const clone = (): MutableResolved => structuredClone(resolved) as unknown as MutableResolved;
+    const hydrate = (value: unknown) => hydrateResolvedEntityV7Circuit(value);
+
+    expect(structuredClone(resolved)).toEqual(resolved);
+    expect(hydrate(structuredClone(resolved)).artifact).toEqual(resolved);
+
+    const association = clone();
+    association.ir.producers[0]!.entityId = 'entity:missing';
+    expect(() => hydrate(association)).toThrow('linked Entity does not exist');
+
+    const family = clone();
+    const familyProfile = family.ir.entities[0]!.profile as Record<string, unknown>;
+    familyProfile.prototypeKey = 'entity:constant-combinator';
+    family.ir.entities[0]!.prototypeName = 'constant-combinator';
+    expect(() => hydrate(family)).toThrow('linked Selector profile must identify');
+
+    const configuration = clone();
+    const selectorConfiguration = configuration.ir.entities[0]!.configuration as Record<
+      string,
+      unknown
+    >;
+    selectorConfiguration.output = { type: 'virtual', name: 'signal-B' };
+    expect(() => hydrate(configuration)).toThrow('Selector producer configuration must equal');
+
+    const topology = clone();
+    const selectorProducer = topology.ir.producers[0]!;
+    selectorProducer.destinations = ['network:missing'];
+    expect(() => hydrate(topology)).toThrow('unknown Network ID');
+
+    const downgraded = clone();
+    downgraded.version = 0;
+    expect(() => hydrate(downgraded)).toThrow('unsupported resolved Entity v7 circuit version');
+
+    const authority = clone();
+    authority.ir.entities[0]!.prototypeType = 'selector-combinator';
+    expect(() => hydrate(authority)).toThrow('unknown resolved v7 field');
+  });
+
+  test('keeps unlinked v6-compatible producers beside a linked Selector in cumulative v7', () => {
+    const host = syntheticSelectorHost();
+    const compilation = compileSourceProgram(
+      {
+        path: 'selector-v7-mixed.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output = new Network();
+const constant: ConstantCombinator = CC(2 * A);
+const selector: SelectorCombinator = Selector({ input, operation: 'count', output: A });
+output += constant;
+output += selector;`,
+      },
+      host,
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 7) throw new Error('Expected a mixed v7 plan.');
+    expect(plan.producers.map((producer) => producer.kind)).toEqual(['constant', 'selector']);
+    const execution = compilation.execution;
+    if (execution === undefined) throw new Error('Expected a mixed v7 execution.');
+    const ir = execution.circuit.ir;
+    if (ir.version !== 7) throw new Error('Expected a mixed v7 Native Circuit IR.');
+    expect(ir.producers.map((producer) => producer.kind)).toEqual(['constant', 'selector']);
+    expect(ir.entities).toHaveLength(1);
+    expect(ir.entities[0]?.configuration).toMatchObject({ mode: 'selector' });
+  });
+
+  test('preserves linked v6 Arithmetic configuration beside linked Selector in v7', () => {
+    const compilation = compileSourceProgram(
+      {
+        path: 'selector-v7-arithmetic.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output = new Network();
+const arithmetic: ArithmeticCombinator = Arithmetic({ left: input[A], operation: 'add', right: 1, output: A });
+const selector: SelectorCombinator = Selector({ input, operation: 'count', output: A });
+output += arithmetic;
+output += selector;`,
+      },
+      syntheticSelectorArithmeticHost(),
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 7) throw new Error('Expected cumulative v7 plan.');
+    expect(plan.entities.map((entity) => entity.configuration?.mode)).toEqual([
+      'arithmetic',
+      'selector',
+    ]);
+    const resolved = compilation.resolvedCircuit;
+    if (resolved?.format !== 'comblang-resolved-entity-v7')
+      throw new Error('Expected a resolved cumulative v7 circuit.');
+    expect(resolved.ir.entities.map((entity) => entity.configuration?.mode)).toEqual([
+      'arithmetic',
+      'selector',
+    ]);
+  });
+
+  test('stress-compiles bounded generated Selector sources with mixed earlier combinators', () => {
+    const selectorCount = 12;
+    const selectors = Array.from({ length: selectorCount }, (_, index) => {
+      const input = index % 2 === 0 ? 'input' : 'pair(input, green)';
+      if (index % 3 === 0)
+        return `const selector${index}: SelectorCombinator = Selector({ input: ${input}, operation: 'select', selectMax: ${index % 2 === 0}, index: ${index % 4 === 0 ? 'A' : index % 5} });\noutput += selector${index};`;
+      return `const selector${index}: SelectorCombinator = Selector({ input: ${input}, operation: 'count', output: ${index % 2 === 0 ? 'A' : 'B'} });\noutput += selector${index};`;
+    }).join('\n');
+    const compilation = compileSourceProgram(
+      {
+        path: 'selector-v7-generated-stress.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const input = new Network();
+const green = new Network();
+const output = new Network();
+const legacy: ConstantCombinator = CC(2 * A);
+const arithmetic: ArithmeticCombinator = Arithmetic({ left: input[A], operation: 'add', right: 1, output: A });
+output += legacy;
+output += arithmetic;
+${selectors}`,
+      },
+      syntheticSelectorArithmeticHost(),
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 7) throw new Error('Expected generated v7 plan.');
+    expect(plan.producers).toHaveLength(selectorCount + 2);
+    expect(plan.producers.slice(0, 2).map(({ kind }) => kind)).toEqual(['constant', 'arithmetic']);
+    const selectorProducers = plan.producers.slice(2);
+    expect(selectorProducers.every(({ kind }) => kind === 'selector')).toBe(true);
+    expect(plan.entities).toHaveLength(selectorCount + 1);
+    expect(plan.entities.map((entity) => entity.configuration?.mode)).toEqual([
+      'arithmetic',
+      ...Array.from({ length: selectorCount }, () => 'selector'),
+    ]);
+    expect(
+      selectorProducers.map((producer) => ('entityId' in producer ? producer.entityId : '')),
+    ).toEqual(plan.entities.slice(1).map(({ id }) => id));
+
+    const resolved = compilation.resolvedCircuit;
+    if (resolved?.format !== 'comblang-resolved-entity-v7')
+      throw new Error('Expected generated resolved v7 circuit.');
+    expect(structuredClone(resolved)).toEqual(resolved);
+    const blueprint = generateEntityComputationBlueprintJsonV7(resolved.ir);
+    expect(blueprint.blueprint.entities).toHaveLength(selectorCount + 2);
+    expect(
+      blueprint.blueprint.entities.filter(({ name }) => name === 'constant-combinator'),
+    ).toHaveLength(1);
+    expect(
+      blueprint.blueprint.entities.filter(({ name }) => name === 'selector-combinator'),
+    ).toHaveLength(selectorCount);
+
+    const runtime = hydrateResolvedEntityV7Circuit(resolved);
+    const input = runtime.ir.networks.find(({ name }) => name === 'input');
+    const green = runtime.ir.networks.find(({ name }) => name === 'green');
+    const output = runtime.ir.networks.find(({ name }) => name === 'output');
+    if (input === undefined || green === undefined || output === undefined)
+      throw new Error('Expected generated input/output Networks.');
+    const initial = () => [
+      {
+        network: runtime.network(input.id),
+        values: new SparseBus([
+          [{ type: 'virtual', name: 'signal-A' }, 3],
+          [{ type: 'virtual', name: 'signal-B' }, 1],
+        ]),
+      },
+      {
+        network: runtime.network(green.id),
+        values: new SparseBus([
+          [{ type: 'virtual', name: 'signal-A' }, 2],
+          [{ type: 'virtual', name: 'signal-B' }, 4],
+        ]),
+      },
+    ];
+    const first = runtime.createSimulation(initial()).step().read(output.id).toJSON();
+    const second = runtime.createSimulation(initial()).step().read(output.id).toJSON();
+    expect(first).toEqual(second);
+    expect(first.length).toBeGreaterThan(0);
+  });
+
   test('evaluates Selector arguments once in order and preserves aliases and spread', async () => {
     const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
     const provisioned = new EntityProvisioningService().provision(
@@ -338,9 +683,9 @@ if (order !== 'pc' || !Object.is(alias[0], direct)) throw new Error('Selector ev
       message: 'foreign or not owned by the selected host provider',
     },
     {
-      name: 'reserved one-argument configuration',
+      name: 'invalid exact configuration',
       source: `Selector({ operation: 'select' });`,
-      message: 'prototype record has no canonical key',
+      message: 'Selector configuration is missing required field "input".',
     },
   ])(
     'rejects Selector $name without widening its constructor shape',
@@ -361,6 +706,34 @@ if (order !== 'pc' || !Object.is(alias[0], direct)) throw new Error('Selector ev
       expect(compilation.plan).toBeUndefined();
       expect(compilation.pipelineDiagnostics).toEqual([
         expect.objectContaining({ code: 'RT2027', message: expect.stringContaining(message) }),
+      ]);
+    },
+  );
+
+  test.each(['random', 'quality', 'rocket-capacity', 'stack-size', 'time'])(
+    'rejects unsupported exact Selector operation %s before retaining runtime state',
+    (operation) => {
+      const text = `const input = new Network();
+Selector({ input, operation: '${operation}' });`;
+      const compilation = compileSourceProgram(
+        { path: `selector-unsupported-${operation}.factorio.ts`, text },
+        syntheticSelectorHost(),
+      );
+
+      const operationStart = text.indexOf(`'${operation}'`);
+      expect(compilation.plan).toBeUndefined();
+      expect(compilation.execution).toBeUndefined();
+      expect(compilation.resolvedCircuit).toBeUndefined();
+      expect(compilation.pipelineDiagnostics).toEqual([
+        expect.objectContaining({
+          code: 'RT2027',
+          message: 'Selector configuration operation must be "select" or "count".',
+          span: {
+            fileId: `file:selector-unsupported-${operation}.factorio.ts`,
+            start: operationStart,
+            end: operationStart + operation.length + 2,
+          },
+        }),
       ]);
     },
   );

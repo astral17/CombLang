@@ -3,6 +3,7 @@ import type {
   DirectPlanProducer,
 } from '@comblang/compiler/direct-plan-schema';
 import type { DirectElaborationPlanV6, DirectPlanProducerV6 } from '@comblang/compiler/entity-v6';
+import type { DirectElaborationPlanV7 } from '@comblang/compiler/entity-v7';
 import type { EntityPhysicalRecord } from '@comblang/compiler/entity';
 import type { NetworkId, ProducerId, SourceSpan } from '@comblang/shared';
 
@@ -276,7 +277,7 @@ export class DebugIndex {
   }
 
   static fromDirectPlan(
-    plan: DirectElaborationPlan | DirectElaborationPlanV6,
+    plan: DirectElaborationPlan | DirectElaborationPlanV6 | DirectElaborationPlanV7,
     circuit: { readonly graph: { readonly producers: readonly { readonly id: ProducerId }[] } },
     networkId: (planName: string) => NetworkId,
     producerId: (planIndex: number) => ProducerId,

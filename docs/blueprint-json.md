@@ -94,6 +94,16 @@ metadata and do not become Entity configuration fields. The simulator and
 preview reuse the existing Decider semantics; this adapter is structural
 preview evidence, not native Factorio conformance.
 
+The cumulative Entity v7 preview uses
+`generateEntityComputationBlueprintJsonV7`. A linked Selector combines the
+producer's resolved input topology and `select`/`count` configuration with the
+Entity prototype and Entity-owned placement, emitting exactly one
+`selector-combinator` object. `select` emits `select_max` and exactly one of
+`index_constant` or `index_signal`; `count` emits `count_signal`. Linked
+Constant, Arithmetic, Decider, and Selector producers may be mixed. This is a
+readable structural preview and deterministic model adapter, not Factorio
+Selector conformance or an import/export round trip.
+
 The generator emits plain JSON only. It does not prepend the exchange-string version byte, deflate, or base64-encode the result.
 
 Nested Decider conditions are lowered to OR-connected groups of AND comparisons.

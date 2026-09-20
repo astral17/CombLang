@@ -26,10 +26,12 @@ interface DirectElaborationPlan {
 
 The internal computation-bearing Entity slices use separate plan/graph/NCIR
 types. Version 4 is the Constant-only envelope; version 5 is cumulative for
-linked Constant and Arithmetic. A linked producer may reference one physical
-`EntityId`, but the association does not add a second placement or hardware
-record. v2/v3 validators and resolved readers intentionally reject v4/v5,
-while the v4 and v5 readers remain strict and separate.
+linked Constant and Arithmetic; version 6 adds linked Decider; version 7 adds
+linked Selector and may mix all earlier linked kinds. A linked producer may
+reference one physical `EntityId`, but the association does not add a second
+placement or hardware record. v2/v3 validators and resolved readers
+intentionally reject these envelopes, while each Entity version remains strict
+and separate.
 
 The runtime remains the authoritative validator: `tryElaborateDirectPlan()` returns structured diagnostics, while `elaborateDirectPlan()` throws the same diagnostic for exception-oriented callers. A TypeScript type assertion or deserialized JSON is not proof that a plan is valid.
 
@@ -59,10 +61,18 @@ conservative `constantConfigurationToSparseBus` model. Each deterministic
 `planFingerprint` is stale-response correlation only, not a cryptographic
 integrity or authority claim.
 
+The v6 and v7 resolved envelopes follow the same profile-free boundary. v7 uses
+`comblang-resolved-entity-v7`, strictly validates linked Selector family,
+association, topology, and exact `select`/`count` physical configuration, and
+hydrates without provider or profile authority. Its `planFingerprint` is stale-
+response correlation only. The Selector simulator and Blueprint adapter are
+deterministic implementation/model surfaces; they do not establish Factorio
+native conformance.
+
 ## Descriptor groups
 
 - `networks` declares logical Network identities and optional fixed colors.
-- `producers` declares arithmetic, decider, and constant combinators, their inputs, outputs, destinations, source spans, instance paths, and optional placement.
+- `producers` declares arithmetic, decider, constant, and versioned selector combinators, their inputs, outputs, destinations, source spans, instance paths, and optional placement.
 - `networkAliases`, `networkTransfers`, and `networkPairs` retain executed zero-hardware Network relationships.
 - `capabilityUses` retains ownership-boundary audit metadata.
 - `debugInstances` and Producer capture IDs retain source-visible debug structure.

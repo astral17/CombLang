@@ -33,6 +33,8 @@ export function producerInputNetworkReferences(
     for (const output of producer.config.elseOutputs ?? []) {
       if (output.input !== undefined) result.push(output.input);
     }
+  } else if (producer.kind === 'selector') {
+    result.push(producer.config.input);
   }
   return Object.freeze(result);
 }

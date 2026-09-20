@@ -768,6 +768,30 @@ Decider();`,
     ]);
   });
 
+  test('classifies exact Selector records and preserves the nominal producer kind', () => {
+    const parsed = parseFile({
+      path: 'selector-overload.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const exact: SelectorCombinator = Selector({ input, operation: 'count', output: A });
+function make(): SelectorCombinator {
+  return Selector({ input, operation: 'select', index: 1 });
+}
+const dynamic = makeConfig();
+const runtime = Selector(dynamic);
+input += runtime;
+const wrong: ArithmeticCombinator = Selector({ input, operation: 'count', output: A });`,
+    });
+
+    const diagnostics = validateDslSemantics(parsed);
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'CL1044',
+        message: 'ArithmeticCombinator requires a combinator producer initializer.',
+      }),
+    ]);
+  });
+
   test('infers direct Decider producers and rejects incompatible nominal annotations', () => {
     const parsed = parseFile({
       path: 'decider-inference.ts',
