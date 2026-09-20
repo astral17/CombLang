@@ -74,14 +74,32 @@ export type WildcardName = 'each' | 'anything' | 'everything';
 
 export interface SelectedValue {
   readonly kind: 'selected';
-  readonly network: NetworkValue;
-  readonly networks?: readonly [NetworkValue, NetworkValue];
-  readonly selection: SignalId | WildcardName;
+  /** Public projection present only on a concrete single-Network selection. */
+  readonly signal?: SignalHandle;
+  /** Public readonly projection present only on a concrete single-Network selection. */
+  readonly network?: NetworkValue;
 }
 
-export interface PairSelectedValue extends SelectedValue {
-  readonly networks: readonly [NetworkValue, NetworkValue];
+export interface PairSelectedValue extends SelectedValue {}
+
+/** Recorder-owned state for a concrete single-Network selection. */
+export interface ConcreteSelectedRuntimeState {
+  readonly kind: 'concrete';
+  readonly network: NetworkValue;
+  readonly selection: SignalHandle;
+  readonly readonlyNetwork: NetworkValue;
 }
+
+/** Recorder-owned state for pair and wildcard selections. */
+export interface NonConcreteSelectedRuntimeState {
+  readonly kind: 'pair' | 'wildcard';
+  readonly network: NetworkValue;
+  readonly networks?: readonly [NetworkValue, NetworkValue];
+  readonly selection: SignalHandle | WildcardName;
+}
+
+/** Recorder-owned state for a selected value; none of these fields are source-visible. */
+export type SelectedRuntimeState = ConcreteSelectedRuntimeState | NonConcreteSelectedRuntimeState;
 
 export interface PairValue {
   readonly kind: 'pair';
@@ -170,6 +188,7 @@ export class RuntimeValueRegistry {
   readonly #kinds = new WeakMap<object, RuntimeObjectKind>();
   readonly #networks = new WeakMap<NetworkValue, NetworkRuntimeState>();
   readonly #signals = new WeakSet<object>();
+  readonly #selected = new WeakMap<SelectedValue, SelectedRuntimeState>();
 
   brand<T extends RuntimeObjectValue>(value: T): T {
     if (value.kind === 'network') {
@@ -197,6 +216,16 @@ export class RuntimeValueRegistry {
 
   hasSignal(value: unknown): value is SignalHandle {
     return typeof value === 'object' && value !== null && this.#signals.has(value);
+  }
+
+  brandSelected<T extends SelectedValue>(value: T, state: SelectedRuntimeState): T {
+    this.#kinds.set(value, value.kind);
+    this.#selected.set(value, state);
+    return Object.freeze(value);
+  }
+
+  selectedState(value: SelectedValue): SelectedRuntimeState | undefined {
+    return this.#selected.get(value);
   }
 
   hasKind<K extends RuntimeObjectKind>(

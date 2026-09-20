@@ -3,14 +3,16 @@ import ts from 'typescript';
 import type { Diagnostic, SourceSpan } from '@comblang/shared';
 
 import { spanForNode, type ParsedSourceFile } from './parser.js';
-import { reservedDslValueNames } from './dsl-names.js';
+import { reservedDslValueNames, wildcardDslNames } from './dsl-names.js';
 import { createFunctionResolver } from './function-resolution.js';
 import { evaluateNumericConstantExpression } from './numeric-constant.js';
 import {
   parseDslTypeAnnotation,
+  parseDslParameterContract,
   networkTypeFromAnnotation,
   producerHandleTypeFromAnnotation,
   type NetworkCapability,
+  type DslParameterContract,
   type NetworkTypeSyntax,
 } from './dsl-type-syntax.js';
 
@@ -234,6 +236,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
   interface SemanticScope {
     readonly bindings: Set<string>;
     readonly networks: Set<string>;
+    readonly networkSignals: Set<string>;
     readonly networkArrays: Set<string>;
     readonly capabilities: Map<string, NetworkCapability>;
     readonly producerSlots: Map<string, ProducerSlotType | undefined>;
@@ -241,6 +244,7 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
   const createSemanticScope = (bindings: Set<string> = new Set()): SemanticScope => ({
     bindings,
     networks: new Set(),
+    networkSignals: new Set(),
     networkArrays: new Set(),
     capabilities: new Map(),
     producerSlots: new Map(),
@@ -353,6 +357,8 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
   };
   const lookupNetwork = (name: string): boolean =>
     resolveSemanticScope(name)?.networks.has(name) === true;
+  const lookupNetworkSignal = (name: string): boolean =>
+    resolveSemanticScope(name)?.networkSignals.has(name) === true;
   const lookupNetworkArray = (name: string): boolean =>
     resolveSemanticScope(name)?.networkArrays.has(name) === true;
   const lookupCapability = (name: string): NetworkCapability | undefined =>
@@ -424,6 +430,14 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       node.arguments.length === 1 &&
       isPairViewExpression(node.arguments[0]!)
     );
+  };
+  const isNetworkSignalExpression = (node: ts.Expression): boolean => {
+    if (ts.isParenthesizedExpression(node)) return isNetworkSignalExpression(node.expression);
+    if (ts.isIdentifier(node)) return lookupNetworkSignal(node.text);
+    if (ts.isElementAccessExpression(node)) {
+      return isNetworkExpression(node.expression) || isPairViewExpression(node.expression);
+    }
+    return false;
   };
   const capabilityOfNetworkExpression = (node: ts.Expression): NetworkCapability | undefined => {
     if (ts.isParenthesizedExpression(node)) return capabilityOfNetworkExpression(node.expression);
@@ -682,6 +696,86 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
         isDslBuiltin('Signal'))
     );
   };
+  const isDefinitelyInvalidNetworkSignalArgument = (node: ts.Expression): boolean => {
+    if (ts.isParenthesizedExpression(node)) {
+      return isDefinitelyInvalidNetworkSignalArgument(node.expression);
+    }
+    if (ts.isIdentifier(node) && lookupNetworkSignal(node.text)) return false;
+    if (ts.isElementAccessExpression(node)) {
+      if (isPairViewExpression(node)) return true;
+      if (
+        ts.isIdentifier(node.argumentExpression) &&
+        wildcardDslNames[node.argumentExpression.text as keyof typeof wildcardDslNames] !==
+          undefined
+      ) {
+        return true;
+      }
+      // The selected value remains a runtime decision, including aliases and collection reads.
+      return false;
+    }
+    if (isNetworkExpression(node) || isProducerExpression(node)) return true;
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+      if (node.expression.text === 'Signal' && isDslBuiltin('Signal')) return true;
+      if (
+        wildcardDslNames[node.expression.text as keyof typeof wildcardDslNames] !== undefined &&
+        node.arguments.length === 1
+      ) {
+        return true;
+      }
+      if (node.expression.text === 'pair' && isDslBuiltin('pair')) return true;
+    }
+    return (
+      ts.isNumericLiteral(node) ||
+      ts.isStringLiteral(node) ||
+      node.kind === ts.SyntaxKind.TrueKeyword ||
+      node.kind === ts.SyntaxKind.FalseKeyword ||
+      node.kind === ts.SyntaxKind.NullKeyword ||
+      ts.isArrayLiteralExpression(node) ||
+      ts.isObjectLiteralExpression(node)
+    );
+  };
+  const definitelyNotPrimitive = (node: ts.Expression): boolean => {
+    if (ts.isParenthesizedExpression(node)) return definitelyNotPrimitive(node.expression);
+    if (
+      ts.isNumericLiteral(node) ||
+      ts.isStringLiteral(node) ||
+      node.kind === ts.SyntaxKind.TrueKeyword ||
+      node.kind === ts.SyntaxKind.FalseKeyword ||
+      node.kind === ts.SyntaxKind.NullKeyword
+    ) {
+      return false;
+    }
+    return (
+      ts.isArrayLiteralExpression(node) ||
+      ts.isObjectLiteralExpression(node) ||
+      isNetworkExpression(node) ||
+      isProducerExpression(node)
+    );
+  };
+  const contractHasNetworkSignal = (contract: DslParameterContract): boolean =>
+    contract.kind === 'network-signal' ||
+    (contract.kind === 'union' && contract.members.some(contractHasNetworkSignal));
+  const isDefinitelyInvalidNetworkSignalContract = (
+    node: ts.Expression,
+    contract: DslParameterContract,
+  ): boolean => {
+    switch (contract.kind) {
+      case 'network-signal':
+        return isDefinitelyInvalidNetworkSignalArgument(node);
+      case 'primitive':
+        return definitelyNotPrimitive(node);
+      case 'union':
+        return contract.members.every((member) =>
+          isDefinitelyInvalidNetworkSignalContract(node, member),
+        );
+      case 'dynamic':
+        return false;
+      case 'network':
+        return isDefinitelyInvalidNetworkArgument(node);
+      case 'producer':
+        return producerCertainty(node) === 'non-producer';
+    }
+  };
   const report = (code: string, message: string, node: ts.Node): void => {
     diagnostics.push({ code, severity: 'error', message, span: spanForNode(file, node) });
   };
@@ -757,6 +851,18 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
           const capability =
             networkTypeFromAnnotation(parameter.type, file.ast)?.capability ?? 'owned';
           scope.capabilities.set(parameter.name.text, capability);
+        }
+        if (
+          ts.isIdentifier(parameter.name) &&
+          contractHasNetworkSignal(
+            parseDslParameterContract(
+              parameter.type,
+              file.ast,
+              parameter.questionToken !== undefined,
+            ),
+          )
+        ) {
+          scope.networkSignals.add(parameter.name.text);
         }
         if (ts.isIdentifier(parameter.name) && isNetworkArrayType(parameter.type)) {
           scope.networkArrays.add(parameter.name.text);
@@ -874,6 +980,9 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
               : capabilityOfNetworkExpression(node.initializer)) ??
             'owned',
         );
+      }
+      if (node.initializer !== undefined && isNetworkSignalExpression(node.initializer)) {
+        scope.networkSignals.add(node.name.text);
       }
       if (
         isNetworkArrayType(node.type) ||
@@ -1087,6 +1196,31 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
             report(
               'CL1047',
               `${expected} requires a Network or a Combinator with a readable primary facet.`,
+              argument,
+            );
+          }
+        }
+      }
+      const parameterContracts = hasSpreadArgument
+        ? undefined
+        : declaration?.parameters.map((parameter) =>
+            parseDslParameterContract(
+              parameter.type,
+              file.ast,
+              parameter.questionToken !== undefined || parameter.initializer !== undefined,
+            ),
+          );
+      if (parameterContracts !== undefined) {
+        for (const [index, contract] of parameterContracts.entries()) {
+          const argument = node.arguments[index];
+          if (
+            argument !== undefined &&
+            contractHasNetworkSignal(contract) &&
+            isDefinitelyInvalidNetworkSignalContract(argument, contract)
+          ) {
+            report(
+              'CL1047',
+              `${contract.text} parameter requires a concrete single-Network Signal selection or an admitted union value.`,
               argument,
             );
           }

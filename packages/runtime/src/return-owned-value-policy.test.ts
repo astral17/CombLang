@@ -7,6 +7,7 @@ import type {
   PairSelectedValue,
   PairValue,
   CombinatorValue,
+  SelectedValue,
 } from './elaboration-values.js';
 import {
   returnOwnedValue,
@@ -50,6 +51,10 @@ function policy(
       value !== null &&
       (value as { kind?: unknown }).kind === 'selected' &&
       Array.isArray((value as { networks?: unknown }).networks),
+    isSelected: (value): value is SelectedValue =>
+      typeof value === 'object' &&
+      value !== null &&
+      (value as { kind?: unknown }).kind === 'selected',
     assertReturnable: vi.fn(),
     assertReadable: vi.fn(),
     ownershipOf: (value) => owners.get(value)!,

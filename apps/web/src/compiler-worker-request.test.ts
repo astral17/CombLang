@@ -143,6 +143,32 @@ function exactDeciderHostContext() {
 }
 
 describe('browser compiler Worker prototype profile', () => {
+  test('compiles NetworkSignal source through the Worker request boundary', async () => {
+    const response = await handleCompilerWorkerRequest({
+      kind: 'parse',
+      revision: 11,
+      file: {
+        path: 'worker-network-signal.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+function Scale(value: NetworkSignal): Network {
+  const output = new Network();
+  output += value.network + 1;
+  return output;
+}
+const input = new Network();
+const output = Scale(input[A]);`,
+      },
+    });
+
+    expect(response.result.compilerDiagnostics).toEqual([]);
+    expect(response.result.plan?.capabilityUses).toMatchObject([
+      { capability: 'readonly', parameter: 'value', network: 'input' },
+    ]);
+    expect(response.result.plan?.producers).toMatchObject([
+      { kind: 'arithmetic', left: { kind: 'each', network: 'input' } },
+    ]);
+  });
+
   test('reports ordered cloneable progress for ordinary source compilation', async () => {
     const stages: CompilerWorkerProgressStage[] = [];
     const response = await handleCompilerWorkerRequest(

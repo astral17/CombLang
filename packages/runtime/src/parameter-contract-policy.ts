@@ -17,6 +17,8 @@ export interface ParameterContractDescriptor {
 }
 
 export interface ParameterContractPolicyContext extends NetworkParameterPolicyContext {
+  isConcreteNetworkSignal(value: unknown): boolean;
+  bindNetworkSignal(value: unknown, parameter: string, source: SourceSpan): unknown;
   isCombinator(value: unknown): value is CombinatorValue;
   bindCombinator(
     value: unknown,
@@ -50,6 +52,8 @@ function matches(
           ? context.readableNetworkFacet?.(value, source)
           : undefined) ?? context.networkFacet(value)) !== undefined
       );
+    case 'network-signal':
+      return context.isConcreteNetworkSignal(value);
     case 'producer':
       return context.isCombinator(value);
     case 'primitive':
@@ -138,6 +142,9 @@ export function bindParameterContract(
       selected.color,
       descriptor.source,
     );
+  }
+  if (selected.kind === 'network-signal') {
+    return context.bindNetworkSignal(value, descriptor.parameter, descriptor.source);
   }
   if (selected.kind === 'producer') {
     return context.bindCombinator(

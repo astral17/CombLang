@@ -11,6 +11,7 @@ export type DslTypeSyntax =
       readonly capability: NetworkCapability;
       readonly color?: NetworkColorRequirement;
     }
+  | { readonly kind: 'network-signal' }
   | { readonly kind: 'producer'; readonly producerType: ProducerHandleType }
   | { readonly kind: 'array'; readonly readonly: boolean; readonly element: DslTypeSyntax };
 
@@ -24,6 +25,7 @@ export type DslParameterContract =
     } & {
       readonly text: string;
     })
+  | ({ readonly kind: 'network-signal' } & { readonly text: string })
   | ({ readonly kind: 'producer'; readonly producerType: ProducerHandleType } & {
       readonly text: string;
     })
@@ -56,6 +58,7 @@ export function parseDslTypeText(rawText: string): DslTypeSyntax | undefined {
   if (producerTypes.has(text as ProducerHandleType)) {
     return { kind: 'producer', producerType: text as ProducerHandleType };
   }
+  if (text === 'NetworkSignal') return { kind: 'network-signal' };
   const directNetwork = /^Network(?:<(.+)>)?$/.exec(text);
   if (directNetwork !== null) {
     const color = colorFromArgument(directNetwork[1]);
@@ -116,6 +119,14 @@ export function networkTypeFromAnnotation(
   return syntax?.kind === 'network' ? syntax : undefined;
 }
 
+export function networkSignalTypeFromAnnotation(
+  node: ts.TypeNode | undefined,
+  sourceFile?: ts.SourceFile,
+): Extract<DslTypeSyntax, { readonly kind: 'network-signal' }> | undefined {
+  const syntax = parseDslTypeAnnotation(node, sourceFile);
+  return syntax?.kind === 'network-signal' ? syntax : undefined;
+}
+
 function parameterContractForNode(
   node: ts.TypeNode,
   sourceFile?: ts.SourceFile,
@@ -132,7 +143,9 @@ function parameterContractForNode(
       : { kind: 'union', members: members as DslParameterContract[], text };
   }
   const syntax = parseDslTypeAnnotation(node, sourceFile);
-  if (syntax?.kind === 'network') return { ...syntax, text };
+  if (syntax?.kind === 'network' || syntax?.kind === 'network-signal') {
+    return { ...syntax, text };
+  }
   if (syntax?.kind === 'producer') return { ...syntax, text };
   switch (node.kind) {
     case ts.SyntaxKind.NumberKeyword:

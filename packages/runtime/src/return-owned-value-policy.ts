@@ -8,6 +8,7 @@ import type {
   PairSelectedValue,
   PairValue,
   CombinatorValue,
+  SelectedValue,
 } from './elaboration-values.js';
 import { inspectReturnValueGraph } from './return-value-graph.js';
 
@@ -20,6 +21,7 @@ export interface ReturnOwnedValuePolicyContext {
   isNetwork(value: unknown): value is NetworkValue;
   isPair(value: unknown): value is PairValue;
   isPairSelection(value: unknown): value is PairSelectedValue;
+  isSelected(value: unknown): value is SelectedValue;
   assertReturnable(network: NetworkValue): void;
   assertReadable(network: NetworkValue): void;
   ownershipOf(network: NetworkValue): NetworkOwnershipState;
@@ -50,7 +52,8 @@ export function returnOwnedValue(
       context.isCombinator(item) ||
       context.isNetwork(item) ||
       context.isPair(item) ||
-      context.isPairSelection(item),
+      context.isPairSelection(item) ||
+      context.isSelected(item),
   );
   const networks: NetworkValue[] = [];
   const entities: EntityValue[] = [];
@@ -95,6 +98,13 @@ export function returnOwnedValue(
         context.isPair(handle)
           ? [{ message: 'The pair view was created here.', span: handle.source }]
           : undefined,
+      );
+    }
+    if (context.isSelected(handle)) {
+      throw new ElaborationExecutionError(
+        'A NetworkSignal selection cannot escape its function.',
+        source,
+        'RT2017',
       );
     }
     if (context.isCombinator(handle)) {

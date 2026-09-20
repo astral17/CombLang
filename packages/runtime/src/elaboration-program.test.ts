@@ -1964,6 +1964,50 @@ if (skippedElement !== undefined || skippedCall !== undefined || keyCalls !== 1 
     expect(executeElaborationProgram(transformElaborationModule(parsed)).producers).toEqual([]);
   });
 
+  test('preserves ordinary signal and network property JavaScript semantics', () => {
+    const parsed = parseFile({
+      path: 'ordinary-signal-network-properties.ts',
+      text: `const events: string[] = [];
+const ordinary = {
+  get signal() { if (this !== ordinary) throw new Error("signal receiver changed"); events.push("get-signal"); return 2; },
+  set signal(value: number) { if (this !== ordinary) throw new Error("signal setter receiver changed"); events.push("set-signal:" + value); },
+  get network() { if (this !== ordinary) throw new Error("network receiver changed"); events.push("get-network"); return 3; },
+  set network(value: number) { if (this !== ordinary) throw new Error("network setter receiver changed"); events.push("set-network:" + value); },
+};
+function key() { events.push("key"); return "signal"; }
+const read = ordinary.signal + ordinary.network;
+const keyed = ordinary[key()];
+ordinary.signal = 4;
+ordinary.network += 5;
+const post = ordinary.signal++;
+const pre = ++ordinary.network;
+const deleted = delete ordinary.signal;
+const missing: { signal: number; network: number } | undefined = undefined;
+const skippedSignal = missing?.signal;
+const skippedNetwork = missing?.network;
+function receiver() { events.push("receiver"); return ordinary; }
+const receiverRead = receiver().network;
+class Base { get signal() { return 8; } get network() { return 9; } }
+class Derived extends Base { read() { return super.signal + super.network; } }
+class PrivateValues {
+  #signal = 10;
+  #network = 11;
+  read() { return this.#signal + this.#network; }
+}
+const derived = new Derived();
+const privateValues = new PrivateValues();
+if (read !== 5 || post !== 2 || pre !== 4 || !deleted || keyed !== 2 ||
+    skippedSignal !== undefined || skippedNetwork !== undefined || receiverRead !== 3 ||
+    derived.read() !== 17 || privateValues.read() !== 21 ||
+    events.join(",") !== "get-signal,get-network,key,get-signal,set-signal:4,get-network,set-network:8,get-signal,set-signal:3,get-network,set-network:4,receiver,get-network") {
+  throw new Error("ordinary signal/network property semantics changed");
+}
+`,
+    });
+
+    expect(executeElaborationProgram(transformElaborationModule(parsed)).producers).toEqual([]);
+  });
+
   test('keeps transformed DSL arguments behind native optional-call short-circuiting', () => {
     const parsed = parseFile({
       path: 'optional-dsl-arguments.factorio.ts',
@@ -3654,7 +3698,7 @@ const key = String(A);
 const descriptor = Object.getOwnPropertyDescriptor(A, Symbol.toPrimitive);
 const values = {[A]: 5};
 const restored = JSON.parse(JSON.stringify(values));
-if (key !== "signal:v1/virtual/signal%2FA%25/legendary" ||
+if (key !== "virtual/signal%2FA%25/legendary" ||
     restored[key] !== 5 || descriptor?.enumerable !== false ||
     typeof descriptor?.value !== "function" || !Object.isFrozen(A) ||
     Object.keys(A).join(",") !== "type,name,quality") {
@@ -3787,6 +3831,106 @@ const output = input["iron-plate"] + 1;`,
       },
     });
     expect(JSON.stringify(entity)).not.toContain('"type":"item"');
+  });
+
+  test('keeps concrete selection state opaque while exposing safe signal and Network members', () => {
+    const parsed = parseFile({
+      path: 'opaque-concrete-selection.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const input = new Network();
+const selected = input[A];
+const destination = new Network();
+destination += selected["network"] + 0;
+const output = CC(1 * selected.signal);
+const directSignal = selected.signal;
+const computedSignal = selected["signal"];
+const optionalSignal = selected?.signal;
+const directNetwork = selected.network;
+const computedNetwork = selected["network"];
+const optionalNetwork = selected?.network;
+const { signal: destructuredSignal, network: destructuredNetwork } = selected;
+if (selected.leaked !== undefined || Object.keys(selected).join(",") !== "kind,signal,network" ||
+    !Object.getOwnPropertyNames(selected).includes("network") ||
+    Object.getOwnPropertyDescriptor(selected, "network") === undefined ||
+    !Object.hasOwn({ ...selected }, "network") ||
+    !Object.is(directSignal, computedSignal) || !Object.is(directSignal, optionalSignal) ||
+    !Object.is(directNetwork, computedNetwork) || !Object.is(directNetwork, optionalNetwork) ||
+    !Object.is(destructuredSignal, directSignal) || !Object.is(destructuredNetwork, directNetwork) ||
+    directNetwork.capability !== "readonly") {
+  throw new Error("concrete selection public projection changed");
+}
+`,
+    });
+
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const expectedSignal = signal('virtual', 'signal-A');
+    expect(plan.networks.slice(0, 2).map(({ name }) => name)).toEqual(['input', 'destination']);
+    expect(plan.networks).toHaveLength(4);
+    expect(plan.producers).toMatchObject([
+      {
+        kind: 'arithmetic',
+        left: { kind: 'each', network: 'input' },
+      },
+      {
+        kind: 'constant',
+        outputs: [{ signal: expectedSignal, value: 1 }],
+      },
+    ]);
+  });
+
+  test('allows flat concrete selection destructuring while preserving safe projections', () => {
+    const parsed = parseFile({
+      path: 'opaque-selection-destructure.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const input = new Network();
+const selected = input[A];
+const { signal, network } = selected;
+const destination = new Network();
+destination += network + 0;
+const output = CC(1 * signal);`,
+    });
+
+    expect(executeElaborationProgram(transformElaborationModule(parsed)).producers).toHaveLength(2);
+  });
+
+  test('keeps array, pair, and wildcard selection destructuring restricted', () => {
+    const parsed = parseFile({
+      path: 'opaque-selection-destructure-restrictions.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const red = new Network<R>();
+const green = new Network<G>();
+const pairSelected = pair(red, green)[A];
+const { signal } = pairSelected;`,
+    });
+
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+      'A pair or wildcard Network selection cannot be destructured',
+    );
+
+    const arrayParsed = parseFile({
+      path: 'opaque-selection-array-destructure.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const input = new Network();
+const selected = input[A];
+const [value] = selected;`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(arrayParsed))).toThrowError(
+      'A Network selection cannot be destructured',
+    );
+  });
+
+  test('keeps the Network member of a concrete selection readonly', () => {
+    const parsed = parseFile({
+      path: 'opaque-selection-write.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const input = new Network();
+const selected = input[A];
+selected.network.take(input);`,
+    });
+
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+      /Cannot consume Readonly<Network>/,
+    );
   });
 
   test('reads and simulates both pair wire colors in arithmetic and wildcard deciders', () => {
@@ -4982,4 +5126,228 @@ const output: Network = Pick(input);`,
       { kind: 'arithmetic', left: { kind: 'each', network: 'input' } },
     ]);
   });
+
+  test('binds NetworkSignal through aliases and ordinary collections with one readonly borrow', () => {
+    const parsed = parseFile({
+      path: 'network-signal-parameter.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+function Read(value: NetworkSignal): Network {
+  const output = new Network();
+  output += CC(1 * value.signal);
+  return output;
+}
+const input = new Network();
+const selected = input[A];
+const aliases = [selected];
+const records = [{ selected: aliases[0] }];
+const output = Read(records[0].selected);`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.capabilityUses).toMatchObject([
+      { capability: 'readonly', parameter: 'value', network: 'input' },
+    ]);
+    expect(plan.capabilityUses).toHaveLength(1);
+    expect(plan.producers).toMatchObject([
+      { kind: 'constant', outputs: [{ signal: { type: 'virtual', name: 'signal-A' }, value: 1 }] },
+    ]);
+    expect(() => elaborateDirectPlan(plan)).not.toThrow();
+  });
+
+  test('selects the primitive branch of a NetworkSignal union without borrowing', () => {
+    const parsed = parseFile({
+      path: 'network-signal-union.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+function Read(value: NetworkSignal | number): Network {
+  const output = new Network();
+  if (typeof value !== 'number') output += CC(1 * value.signal);
+  return output;
+}
+const input = new Network();
+const selected = input[A];
+const numberOutput = Read(3);
+const signalOutput = Read(selected);`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.capabilityUses).toMatchObject([
+      { capability: 'readonly', parameter: 'value', network: 'input' },
+    ]);
+    expect(plan.capabilityUses).toHaveLength(1);
+    expect(() => elaborateDirectPlan(plan)).not.toThrow();
+  });
+
+  test('allows only ordinary reads through a live NetworkSignal borrow', () => {
+    const parsed = parseFile({
+      path: 'network-signal-live-read.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+function Read(value: NetworkSignal): Network {
+  const output = new Network();
+  output += value.network + 1;
+  output += CC(1 * value.signal);
+  return output;
+}
+const input = new Network();
+const output = Read(input[A]);`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.capabilityUses).toMatchObject([
+      { capability: 'readonly', parameter: 'value', network: 'input' },
+    ]);
+    expect(plan.producers).toHaveLength(2);
+    expect(() => elaborateDirectPlan(plan)).not.toThrow();
+  });
+
+  test.each([
+    {
+      label: 'take',
+      source: `function Use(value: NetworkSignal): Network {
+  value.network.take(new Network());
+  return new Network();
+}
+const input = new Network(); const output = Use(input[Signal('virtual', 'signal-A')]);`,
+    },
+    {
+      label: 'Ref parameter',
+      source: `function RefUse(value: Ref<Network>) {}
+function Use(value: NetworkSignal): Network {
+  RefUse(value.network);
+  return new Network();
+}
+const input = new Network(); const output = Use(input[Signal('virtual', 'signal-A')]);`,
+    },
+    {
+      label: 'Move parameter',
+      source: `function MoveUse(value: Move<Network>): Network { return value; }
+function Use(value: NetworkSignal): Network {
+  MoveUse(value.network);
+  return new Network();
+}
+const input = new Network(); const output = Use(input[Signal('virtual', 'signal-A')]);`,
+    },
+    {
+      label: 'join',
+      source: `function Use(value: NetworkSignal): Network {
+  join(value.network);
+  return new Network();
+}
+const input = new Network(); const output = Use(input[Signal('virtual', 'signal-A')]);`,
+    },
+    {
+      label: 'attachment destination',
+      source: `function Use(value: NetworkSignal): Network {
+  value.network += CC();
+  return new Network();
+}
+const input = new Network(); const output = Use(input[Signal('virtual', 'signal-A')]);`,
+    },
+  ])('rejects a NetworkSignal .network $label operation', ({ source }) => {
+    const parsed = parseFile({ path: 'network-signal-backdoor.factorio.ts', text: source });
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+      expect.objectContaining({ code: 'RT2015' }),
+    );
+  });
+
+  test.each(['return value;', 'return [value];', 'return { value };'])(
+    'rejects returning a NetworkSignal selection through %s',
+    (returnStatement) => {
+      const parsed = parseFile({
+        path: 'network-signal-return-escape.factorio.ts',
+        text: `function Leak(value: NetworkSignal) { ${returnStatement} }
+const input = new Network();
+const escaped = Leak(input[Signal('virtual', 'signal-A')]);`,
+      });
+      expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+        expect.objectContaining({ code: 'RT2017' }),
+      );
+    },
+  );
+
+  test('rejects returning the readonly Network member of a NetworkSignal parameter', () => {
+    const parsed = parseFile({
+      path: 'network-signal-network-return.factorio.ts',
+      text: `function Leak(value: NetworkSignal): Readonly<Network> { return value.network; }
+const input = new Network();
+const escaped = Leak(input[Signal('virtual', 'signal-A')]);`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+      expect.objectContaining({ code: 'RT2017' }),
+    );
+  });
+
+  test('reports an expired NetworkSignal selection at a delayed closure use', () => {
+    const source = `function Capture(value: NetworkSignal) { return () => value + 0; }
+const input = new Network();
+const delayed = Capture(input[Signal('virtual', 'signal-A')]);
+const output = delayed();`;
+    const parsed = parseFile({ path: 'network-signal-closure.factorio.ts', text: source });
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+      expect.objectContaining({ code: 'RT2017' }),
+    );
+  });
+
+  test('reports a moved NetworkSignal selection at its later use', () => {
+    const source = `function Advance(value: Move<Network>): Network { return value; }
+const input = new Network();
+const selected = input[Signal('virtual', 'signal-A')];
+const moved = Advance(input);
+const output = selected + 0;`;
+    const parsed = parseFile({ path: 'network-signal-moved.factorio.ts', text: source });
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+      expect.objectContaining({ code: 'RT2012' }),
+    );
+  });
+
+  test.each([
+    { label: 'Network', setup: 'const bad = input;', expression: 'bad', source: 'bad' },
+    {
+      label: 'Signal',
+      setup: "const bad = Signal('virtual', 'signal-B');",
+      expression: 'bad',
+      source: 'bad',
+    },
+    {
+      label: 'wildcard',
+      setup: 'const bad = Each(input);',
+      expression: 'bad',
+      source: 'bad',
+    },
+    {
+      label: 'pair selection',
+      setup:
+        'const first = new Network<R>(); const second = new Network<G>(); const bad = pair(first, second)[A];',
+      expression: 'bad',
+      source: 'bad',
+    },
+    { label: 'producer', setup: 'const bad = CC();', expression: 'bad', source: 'bad' },
+    {
+      label: 'ordinary lookalike',
+      setup: "const bad = { kind: 'selected' };",
+      expression: 'bad',
+      source: 'bad',
+    },
+  ])(
+    'rejects a $label at the executed NetworkSignal argument span',
+    ({ setup, expression, source }) => {
+      const text = `function Read(value: NetworkSignal): Network { return new Network(); }
+const input = new Network();
+const A = Signal('virtual', 'signal-A');
+${setup}
+const output = Read(${expression});`;
+      const parsed = parseFile({ path: 'invalid-network-signal.factorio.ts', text });
+      try {
+        executeElaborationProgram(transformElaborationModule(parsed));
+        expect.fail('Expected NetworkSignal argument rejection.');
+      } catch (error) {
+        expect(error).toBeInstanceOf(ElaborationExecutionError);
+        const failure = error as ElaborationExecutionError;
+        expect(failure.code).toBe('RT2015');
+        expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(source);
+      }
+    },
+  );
 });

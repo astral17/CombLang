@@ -123,6 +123,26 @@ const input = CC(); const a = Double(input); const b = Double(input); const c = 
     });
   });
 
+  test('checks a NetworkSignal-authored circuit through the CLI pipeline', async () => {
+    const text = `const A = Signal('virtual', 'signal-A');
+function Scale(value: NetworkSignal): Network {
+  const output = new Network();
+  output += value.network + 1;
+  return output;
+}
+const input = new Network();
+const output = Scale(input[A]);`;
+    const path = await sourceFile(text);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path])).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      diagnostics: [],
+      producerCount: 1,
+      capabilityUses: [{ capability: 'readonly', parameter: 'value', network: 'input' }],
+    });
+  });
+
   test('threads the cloneable v3 context through programmatic CLI compilation', async () => {
     const path = await sourceFile('const output = new Network();');
     const trusted = createTrustedEntityReplayContext({

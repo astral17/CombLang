@@ -26,7 +26,7 @@ describe('exact Constant source configuration', () => {
               [B, 3],
             ],
           },
-          { filters: new Map([['signal:v1/virtual/signal-A/', -2]]) },
+          { filters: new Map([['virtual/signal-A', -2]]) },
         ],
       },
       context,

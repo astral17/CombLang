@@ -17,12 +17,10 @@ export interface SignalId {
   readonly quality?: string;
 }
 
-declare const signalPropertyKeyBrand: unique symbol;
-export type SignalPropertyKey = string & {
-  readonly [signalPropertyKeyBrand]: true;
+declare const signalRefBrand: unique symbol;
+export type SignalRef = string & {
+  readonly [signalRefBrand]: true;
 };
-
-const SIGNAL_PROPERTY_KEY_PREFIX = 'signal:v1/';
 
 function assertWellFormedComponent(value: string, label: string): void {
   for (let index = 0; index < value.length; index += 1) {
@@ -43,8 +41,7 @@ function encodeSignalComponent(value: string, label: string): string {
   return encodeURIComponent(value);
 }
 
-/** Encodes an external, reversible JavaScript property key without changing internal bus keys. */
-export function encodeSignalPropertyKey(id: SignalId): SignalPropertyKey {
+function assertSignalId(id: SignalId): void {
   if (!signalTypes.includes(id.type)) {
     throw new TypeError(`Unknown signal type: ${String(id.type)}.`);
   }
@@ -54,49 +51,61 @@ export function encodeSignalPropertyKey(id: SignalId): SignalPropertyKey {
   if (id.quality !== undefined && (typeof id.quality !== 'string' || id.quality.length === 0)) {
     throw new TypeError('A signal quality cannot be empty when provided.');
   }
-  const name = encodeSignalComponent(id.name, 'name');
-  const quality = encodeSignalComponent(
-    id.quality === undefined || id.quality === 'normal' ? '' : id.quality,
-    'quality',
-  );
-  return `${SIGNAL_PROPERTY_KEY_PREFIX}${id.type}/${name}/${quality}` as SignalPropertyKey;
 }
 
-function decodeSignalComponent(value: string, label: string): string {
+/** Formats the public, reversible SignalRef without changing internal bus keys. */
+export function formatSignalRef(id: SignalId): SignalRef {
+  assertSignalId(id);
+  const name = encodeSignalComponent(id.name, 'name');
+  const quality =
+    id.quality === undefined || id.quality === 'normal'
+      ? undefined
+      : encodeSignalComponent(id.quality, 'quality');
+  if (quality === undefined) {
+    return (id.type === 'item' ? name : `${id.type}/${name}`) as SignalRef;
+  }
+  return `${id.type}/${name}/${quality}` as SignalRef;
+}
+
+function decodeSignalComponent(value: string, label: string): { decoded: string; encoded: string } {
   let decoded: string;
   try {
     decoded = decodeURIComponent(value);
   } catch {
-    throw new TypeError(`Signal property key has invalid percent encoding in ${label}.`);
+    throw new TypeError(`SignalRef has invalid percent encoding in ${label}.`);
   }
   assertWellFormedComponent(decoded, label);
-  return decoded;
+  const encoded = encodeSignalComponent(decoded, label);
+  if (encoded !== value) throw new TypeError(`SignalRef is not canonical in ${label}.`);
+  return { decoded, encoded };
 }
 
-/** Parses only the canonical external key; malformed prefixed strings never become item shorthand. */
-export function parseSignalPropertyKey(key: string): SignalId {
-  if (typeof key !== 'string' || !key.startsWith(SIGNAL_PROPERTY_KEY_PREFIX)) {
-    throw new TypeError(`Signal property key must start with ${SIGNAL_PROPERTY_KEY_PREFIX}.`);
+/** Parses a canonical SignalRef, accepting explicit item and normal-quality spellings. */
+export function parseSignalRef(ref: string): SignalId {
+  if (typeof ref !== 'string') throw new TypeError('SignalRef must be a string.');
+  const segments = ref.split('/');
+  if (segments.length < 1 || segments.length > 3) {
+    throw new TypeError('SignalRef must contain one, two, or three segments.');
   }
-  const segments = key.split('/');
-  if (segments.length !== 4) {
-    throw new TypeError('Signal property key must contain exactly four segments.');
+  if (segments.length === 1) {
+    const { decoded } = decodeSignalComponent(segments[0]!, 'name');
+    if (decoded.length === 0) throw new TypeError('A SignalRef name cannot be empty.');
+    return Signal(decoded);
   }
-  const [, rawType, rawName, rawQuality] = segments as [string, string, string, string];
+
+  const [rawType, rawName, rawQuality] = segments as [string, string, string?];
   if (!signalTypes.includes(rawType as SignalType)) {
-    throw new TypeError(`Unknown signal type in property key: ${rawType}.`);
+    throw new TypeError(`Unknown signal type in SignalRef: ${rawType}.`);
   }
-  const name = decodeSignalComponent(rawName, 'name');
-  const quality = decodeSignalComponent(rawQuality, 'quality');
-  if (name.length === 0) throw new TypeError('A signal property-key name cannot be empty.');
-  const decoded =
-    quality.length === 0
-      ? Signal(rawType as SignalType, name)
-      : Signal(rawType as SignalType, name, quality);
-  if (encodeSignalPropertyKey(decoded) !== key) {
-    throw new TypeError('Signal property key is not in canonical form.');
-  }
-  return decoded;
+  const name = decodeSignalComponent(rawName!, 'name').decoded;
+  if (name.length === 0) throw new TypeError('A SignalRef name cannot be empty.');
+  if (rawQuality === undefined) return Signal(rawType as SignalType, name);
+
+  const quality = decodeSignalComponent(rawQuality, 'quality').decoded;
+  if (quality.length === 0) throw new TypeError('A SignalRef quality cannot be empty.');
+  return quality === 'normal'
+    ? Signal(rawType as SignalType, name)
+    : Signal(rawType as SignalType, name, quality);
 }
 
 /** Creates the structural SignalID used by Factorio circuit networks. */

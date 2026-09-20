@@ -21,7 +21,12 @@ export interface FunctionBoundaryTransformContext {
 type TransformableFunction = ts.FunctionDeclaration | ts.FunctionExpression | ts.ArrowFunction;
 
 function contractNeedsBoundary(contract: DslParameterContract): boolean {
-  if (contract.kind === 'network' || contract.kind === 'producer') return true;
+  if (
+    contract.kind === 'network' ||
+    contract.kind === 'network-signal' ||
+    contract.kind === 'producer'
+  )
+    return true;
   if (contract.kind === 'union') return contract.members.some(contractNeedsBoundary);
   return (
     contract.kind === 'dynamic' &&
@@ -189,6 +194,7 @@ function parameterBinding(
   const usesContractBoundary =
     contractNeedsBoundary(contract) &&
     (contract.kind === 'union' ||
+      contract.kind === 'network-signal' ||
       (contract.kind === 'dynamic' && (contract.text === 'any' || contract.text === 'unknown')) ||
       (contract.kind === 'network' && networkType === undefined));
   if (usesContractBoundary) {

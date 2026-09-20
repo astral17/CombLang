@@ -35,21 +35,22 @@ Source Signal handles can also become ordinary JavaScript computed-property keys
 ```ts
 const A = Signal('virtual', 'signal/A');
 const counts = { [A]: 5 };
-// The actual key is: signal:v1/virtual/signal%2FA/
+// The actual key is: virtual/signal%2FA
 ```
 
-The external key is exactly
-`signal:v1/<type>/<encodeURIComponent(name)>/<encoded non-normal quality or empty>`.
-`String(A)` returns that key, while numeric/default coercion is rejected. The
-codec treats omitted quality and explicit `normal` as the same Factorio Signal
-identity, accepts every Signal namespace, and rejects malformed/noncanonical percent encoding. This external
-format does not replace the internal `signalKey` used by circuit buses.
+The external key is a canonical `SignalRef`: a bare encoded name is an item
+shorthand, `type/name` names a namespace, and `type/name/quality` carries a
+non-normal quality. `String(A)` returns that key, while numeric/default
+coercion is rejected. Omitted quality and explicit `normal` are the same
+Factorio Signal identity, every Signal namespace is accepted, and
+malformed/noncanonical percent encoding is rejected. This external format does
+not replace the internal `signalKey` used by circuit buses.
 
 Only source-created nominal handles have this coercion. The public structural
 `Signal(...)` helper in `@comblang/factorio` still returns an ordinary frozen
-object, and `Signal('signal:v1/virtual/signal-A/')` still means an item with that
-literal name. The canonical property-key form is accepted by `CC` dictionaries;
-an ordinary bare string key remains item shorthand.
+object, and `Signal('virtual/signal-A')` still means an item with that literal
+name. The canonical `SignalRef` form is accepted by `CC` dictionaries; an
+ordinary bare string key remains item shorthand.
 
 ## Provider- and host-bound Entities
 
@@ -271,6 +272,32 @@ input[A];
 
 The semantic checker rejects a definitely invalid key such as `input[5]`, but does not guess the type of a dynamic key. A string selection such as `input["chest"]` is equivalent to `input[Signal("chest")]`: both normalize to the item Signal `{ type: "item", name: "chest" }`, and generated blueprint fields omit that default item `type`. This shorthand does not infer arbitrary namespaces from a prototype name, so virtual selections use an explicit identity such as `input[Signal("virtual", "signal-A")]`. Indexing `networks[i]` remains ordinary collection access when `networks` is a `Network[]`; the executed element is subsequently classified by the DSL operation that consumes it.
 
+`NetworkSignal` is the public type for one concrete Signal selected from one
+Network. It is accepted only at an executed function boundary:
+
+```ts
+function Scale(value: NetworkSignal): Network {
+  const output = new Network();
+  output += value.network + 1;
+  output += CC(1 * value.signal);
+  return output;
+}
+
+const input = new Network();
+const output = Scale(input[Signal('virtual', 'signal-A')]);
+```
+
+`.signal` is the current session's nominal Signal handle. `.network` is a
+readonly view of the same logical Network and does not allocate hardware or a
+second wire. Binding a `NetworkSignal` parameter creates one readonly borrow;
+the selected value remains valid only during that function call. `NetworkSignal`
+does not include bare Networks, Signals, wildcard selections, pair selections,
+producers, or ordinary objects. A union such as `NetworkSignal | number` checks
+the branch at execution time, including values reached through arrays and
+objects. The selection and its readonly view cannot be returned or stored for
+later use; stale or moved uses retain the normal RT2012/RT2017 ownership
+diagnostics.
+
 Compact decider conditions also support native quantifiers:
 
 ```ts
@@ -437,7 +464,7 @@ to(first, second) += CC(5 * A, -2 * B);
 
 `CC` accepts typed counts (`count * Signal`), `[Signal|string, count]` tuples,
 nested arrays of accepted rows, `Map<Signal|string, count>`, and plain objects.
-Object keys produced by `[Signal]` use the canonical `signal:v1/` codec; bare
+Object keys produced by `[Signal]` use the canonical `SignalRef` grammar; bare
 strings mean item Signals. Counts must be finite safe integers and are
 canonicalized to signed int32.
 

@@ -16,6 +16,7 @@ import type {
   PairValue,
   RuntimeObjectValue,
   SelectedValue,
+  WildcardName,
   WildcardTokenValue,
 } from './elaboration-values.js';
 
@@ -26,6 +27,7 @@ export interface ElaborationOperatorDispatchContext<Source> {
   /** Structural Signal ID already admitted into a selected/IR value. */
   isSignalId(value: unknown): value is SignalId;
   isSelected(value: unknown): value is SelectedValue;
+  selectedSelection(value: SelectedValue): SignalId | WildcardName;
   isNetwork(value: unknown): value is NetworkValue;
   networkFacet(value: unknown): NetworkValue | undefined;
   readableNetworkFacet(value: unknown, source: Source): NetworkValue | undefined;
@@ -193,16 +195,18 @@ function dispatchComparison<Source>(
   context.assertReadable(left, source);
   context.assertReadable(right, source);
   if (context.isSelected(left) && context.isSelected(right)) {
-    if (!context.isSignalId(left.selection) || !context.isSignalId(right.selection)) {
+    const leftSelection = context.selectedSelection(left);
+    const rightSelection = context.selectedSelection(right);
+    if (!context.isSignalId(leftSelection) || !context.isSignalId(rightSelection)) {
       throw new Error('Signal-to-signal comparison requires concrete Signal selections.');
     }
     return context.brand({
       kind: 'condition',
       condition: {
         kind: 'compare-signals',
-        left: { ...context.planNetworkRef(left), signal: left.selection },
+        left: { ...context.planNetworkRef(left), signal: leftSelection },
         comparator,
-        right: { ...context.planNetworkRef(right), signal: right.selection },
+        right: { ...context.planNetworkRef(right), signal: rightSelection },
       },
     });
   }
@@ -211,17 +215,18 @@ function dispatchComparison<Source>(
     typeof left === 'number' ? left : typeof right === 'number' ? right : undefined;
   if (selected !== undefined && selectedConstant !== undefined) {
     const normalized = context.isSelected(left) ? comparator : reverseComparators[comparator];
+    const selection = context.selectedSelection(selected);
     return context.brand({
       kind: 'condition',
-      condition: context.isSignalId(selected.selection)
+      condition: context.isSignalId(selection)
         ? {
             kind: 'compare-signal',
             ...context.planNetworkRef(selected),
-            signal: selected.selection,
+            signal: selection,
             comparator: normalized,
             constant: circuitConstant(selectedConstant),
           }
-        : selected.selection === 'each'
+        : selection === 'each'
           ? {
               kind: 'compare-each',
               ...context.planNetworkRef(selected),
@@ -231,7 +236,7 @@ function dispatchComparison<Source>(
           : {
               kind: 'compare-wildcard',
               ...context.planNetworkRef(selected),
-              wildcard: selected.selection,
+              wildcard: selection,
               comparator: normalized,
               constant: circuitConstant(selectedConstant),
             },
@@ -309,12 +314,15 @@ function dispatchBinary<Source>(
   }
   const operation = arithmeticOperations[operator];
   if (operation === undefined) throw new Error(`Unsupported arithmetic operator: ${operator}.`);
-  const concreteOutput =
-    context.isSelected(left) && context.isSignalId(left.selection)
-      ? left.selection
-      : context.isSelected(right) && context.isSignalId(right.selection)
-        ? right.selection
-        : undefined;
+  let concreteOutput: SignalId | undefined;
+  if (context.isSelected(left)) {
+    const selection = context.selectedSelection(left);
+    if (context.isSignalId(selection)) concreteOutput = selection;
+  }
+  if (concreteOutput === undefined && context.isSelected(right)) {
+    const selection = context.selectedSelection(right);
+    if (context.isSignalId(selection)) concreteOutput = selection;
+  }
   return context.createCombinator(
     {
       kind: 'arithmetic',

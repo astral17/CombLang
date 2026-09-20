@@ -1,4 +1,4 @@
-import { circuitConstant, parseSignalPropertyKey, Signal, type SignalId } from '@comblang/factorio';
+import { circuitConstant, parseSignalRef, type SignalId } from '@comblang/factorio';
 
 import type { SignalValue } from './elaboration-values.js';
 
@@ -42,9 +42,8 @@ function count(value: unknown, path: string): number {
 function signalKey(value: unknown, path: string, context: SignalValueSourceContext): SignalId {
   if (context.isSignal(value)) return value;
   if (typeof value !== 'string') fail(path, 'expected a Signal or string signal key.');
-  if (!value.startsWith('signal:')) return Signal(value);
   try {
-    return parseSignalPropertyKey(value);
+    return parseSignalRef(value);
   } catch (error) {
     fail(path, error instanceof Error ? error.message : String(error));
   }

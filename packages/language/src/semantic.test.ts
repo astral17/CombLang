@@ -207,6 +207,35 @@ const contextual = Read(input * 2);`,
     );
   });
 
+  test('checks only definite direct NetworkSignal mismatches and defers aliases to runtime', () => {
+    const parsed = parseFile({
+      path: 'network-signal-arguments.ts',
+      text: `function Read(value: NetworkSignal) {}
+const input = new Network();
+const A = Signal('virtual', 'signal-A');
+const selected = input[A];
+const aliases = [selected];
+Read(aliases[0]);
+Read(input);
+Read(Signal('virtual', 'signal-B'));
+Read(Each(input));
+const first = new Network<R>();
+const second = new Network<G>();
+Read(pair(first, second)[A]);
+Read({ kind: 'selected' });`,
+    });
+    const diagnostics = validateDslSemantics(parsed).filter(({ code }) => code === 'CL1047');
+
+    expect(diagnostics).toHaveLength(5);
+    expect(diagnostics.map(({ span }) => parsed.text.slice(span!.start, span!.end))).toEqual([
+      'input',
+      "Signal('virtual', 'signal-B')",
+      'Each(input)',
+      'pair(first, second)[A]',
+      "{ kind: 'selected' }",
+    ]);
+  });
+
   test('accepts stored Combinator handles and rejects definite non-combinator initializers', () => {
     const valid = parseFile({
       path: 'stored-producer.ts',

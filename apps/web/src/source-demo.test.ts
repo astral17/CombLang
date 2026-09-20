@@ -25,6 +25,33 @@ const output: Network = Scale(input);`,
 }
 
 describe('source-driven homepage proof', () => {
+  test('compiles a NetworkSignal-authored circuit through preview, simulation, and blueprint output', () => {
+    const A = signal('virtual', 'signal-A');
+    const compiled = compileSource({
+      path: 'network-signal-preview.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+function Scale(value: NetworkSignal): Network {
+  const output = new Network();
+  output += value.network + 1;
+  return output;
+}
+const input = new Network();
+const output = Scale(input[A]);`,
+    });
+    expect(compiled.compilerDiagnostics).toEqual([]);
+    const plan = compiled.plan!;
+    expect(plan.capabilityUses).toMatchObject([
+      { capability: 'readonly', parameter: 'value', network: 'input' },
+    ]);
+    expect(blueprintJsonForPlan(plan).blueprint.entities).toHaveLength(1);
+
+    const controller = new SourceSimulationController(plan);
+    const input = controller.timeline[0]!.networks.find(({ name }) => name === 'input')!;
+    controller.setSignalAt(0, input.id, A, 5);
+    controller.stepFrom(0, 1);
+    expect(controller.signalValueAt(1, 'output', A)).toBe(6);
+  });
+
   test('previews merged MemoCell outputs without reading a consumed source handle', () => {
     const compiled = compileSource({
       path: 'memo-take.factorio.ts',

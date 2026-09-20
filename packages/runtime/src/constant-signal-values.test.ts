@@ -1,4 +1,4 @@
-import { encodeSignalPropertyKey, Signal, type SignalId } from '@comblang/factorio';
+import { formatSignalRef, Signal, type SignalId } from '@comblang/factorio';
 import { describe, expect, test } from 'vitest';
 
 import {
@@ -31,7 +31,7 @@ describe('constant signal-value sources', () => {
   test('preserves source order, duplicate signals, zeros, paths, and ordinals', () => {
     const { a, sameA, b, context, typed } = fixture();
     const object = {
-      [encodeSignalPropertyKey(b)]: 8,
+      [formatSignalRef(b)]: 8,
       'copper-plate': 0,
     };
 
@@ -72,7 +72,7 @@ describe('constant signal-value sources', () => {
       'args[3].map[0]',
       'args[3].map[1]',
       'args[3].map[2]',
-      `args[4].object[${JSON.stringify(encodeSignalPropertyKey(b))}]`,
+      `args[4].object[${JSON.stringify(formatSignalRef(b))}]`,
       'args[4].object["copper-plate"]',
     ]);
     expect(Object.isFrozen(entries)).toBe(true);
@@ -90,6 +90,28 @@ describe('constant signal-value sources', () => {
         context,
       ),
     ).toMatchObject([{ value: -1 }, { value: 0 }]);
+  });
+
+  test('parses shorthand and explicit SignalRef spellings at tuple, Map, and object boundaries', () => {
+    const { context } = fixture();
+    const entries = normalizeSignalValueSources(
+      [
+        ['iron-plate', 1],
+        new Map([
+          ['virtual/signal-A', 2],
+          ['item/iron-plate/normal', 3],
+        ]),
+        { 'virtual/signal-B/legendary': 4 },
+      ],
+      context,
+    );
+
+    expect(entries.map(({ signal, value }) => [signal, value])).toEqual([
+      [Signal('item', 'iron-plate'), 1],
+      [Signal('virtual', 'signal-A'), 2],
+      [Signal('item', 'iron-plate'), 3],
+      [Signal('virtual', 'signal-B', 'legendary'), 4],
+    ]);
   });
 
   test('uses ordinary object overwrite semantics and Map identity semantics', () => {
@@ -112,11 +134,7 @@ describe('constant signal-value sources', () => {
 
   test.each([
     ['invalid tuple count', (a: SignalId) => [a, 1.5], 'args[0].value'],
-    [
-      'malformed canonical key',
-      () => ({ 'signal:broken': 1 }),
-      'args[0].object["signal:broken"].key',
-    ],
+    ['malformed SignalRef', () => ({ 'virtual/%2f': 1 }), 'args[0].object["virtual/%2f"].key'],
     ['arbitrary iterable', () => new Set([[Signal('item', 'iron-plate'), 1]]), 'args[0]'],
     ['non-plain object', () => new Date(0), 'args[0]'],
   ])('rejects %s with its structural path', (_name, makeValue, path) => {

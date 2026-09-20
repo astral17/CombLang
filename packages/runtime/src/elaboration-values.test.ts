@@ -29,7 +29,7 @@ describe('runtime value registry', () => {
 
   test('keeps a Signal function-valued symbol descriptor on the branded identity', () => {
     const registry = new RuntimeValueRegistry();
-    const primitive = (hint: string) => (hint === 'string' ? 'signal:v1/virtual/signal-A/' : '');
+    const primitive = (hint: string) => (hint === 'string' ? 'virtual/signal-A' : '');
     const signal = Object.create(Object.prototype, {
       type: { value: 'virtual', enumerable: true },
       name: { value: 'signal-A', enumerable: true },

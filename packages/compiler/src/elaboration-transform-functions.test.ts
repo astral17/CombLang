@@ -112,6 +112,20 @@ const native = (value: number) => value + 1;
     expect(code.match(/__dsl\.returnValue/g)).toHaveLength(2);
   });
 
+  test('routes NetworkSignal parameters through the executed contract boundary', () => {
+    const code = transformFunctions(`
+function Read(value: NetworkSignal): Network { return value.network; }
+const read = (value: NetworkSignal | number) => value;
+`);
+
+    expect(code.match(/__dsl\.parameterContract/g)).toHaveLength(2);
+    expect(code).toContain('{ kind: "network-signal", text: "NetworkSignal" }');
+    expect(code).toContain(
+      '{ kind: "network-signal", text: "NetworkSignal" }, { kind: "primitive", text: "number", value: "number" }',
+    );
+    expect(code).not.toContain('__dsl.implicitNetworkParameter(value, "value"');
+  });
+
   test('closes function frames after both a normal return and an exception', () => {
     const code = transformFunctions(`function Identity(value) { return value; }
 function Fail() { throw new Error('failure'); }

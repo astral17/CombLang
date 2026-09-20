@@ -1,8 +1,8 @@
 import { describe, expect, test } from 'vitest';
 
 import {
-  encodeSignalPropertyKey,
-  parseSignalPropertyKey,
+  formatSignalRef,
+  parseSignalRef,
   Signal,
   sameSignal,
   signal,
@@ -48,51 +48,71 @@ describe('SignalID', () => {
     );
   });
 
-  test.each(signalTypes)('round-trips the %s signal namespace as a property key', (type) => {
+  test.each(signalTypes)('round-trips the %s signal namespace as a SignalRef', (type) => {
     const value = Signal(type, 'name/with%delimiters 🛰', 'quality/légendaire%');
 
-    expect(parseSignalPropertyKey(encodeSignalPropertyKey(value))).toEqual(value);
+    expect(parseSignalRef(formatSignalRef(value))).toEqual(value);
   });
 
-  test('canonicalizes omitted and explicit normal quality to the same identity key', () => {
+  test('formats shorthand, namespaces, and quality canonically', () => {
     const omitted = Signal('item', 'iron-plate');
     const normal = Signal('item', 'iron-plate', 'normal');
+    const virtual = Signal('virtual', 'signal-A');
+    const itemQuality = Signal('item', 'iron-plate', 'legendary');
 
-    expect(encodeSignalPropertyKey(omitted)).toBe('signal:v1/item/iron-plate/');
-    expect(encodeSignalPropertyKey(normal)).toBe('signal:v1/item/iron-plate/');
+    expect(formatSignalRef(omitted)).toBe('iron-plate');
+    expect(formatSignalRef(normal)).toBe('iron-plate');
+    expect(formatSignalRef(virtual)).toBe('virtual/signal-A');
+    expect(formatSignalRef(itemQuality)).toBe('item/iron-plate/legendary');
     expect(signalKey(normal)).toBe(signalKey(omitted));
     expect(sameSignal(normal, omitted)).toBe(true);
-    expect(parseSignalPropertyKey(encodeSignalPropertyKey(omitted))).toEqual(omitted);
-    expect(parseSignalPropertyKey(encodeSignalPropertyKey(normal))).toEqual(omitted);
+    expect(parseSignalRef('item/iron-plate')).toEqual(omitted);
+    expect(parseSignalRef('virtual/signal-A')).toEqual(virtual);
+    expect(parseSignalRef('item/iron-plate/normal')).toEqual(omitted);
   });
 
   test.each([
-    'item/iron-plate/',
-    'signal:v1/item//',
-    'signal:v1/item/iron-plate',
-    'signal:v1/item/iron-plate//extra',
-    'signal:v1/unknown/iron-plate/',
-    'signal:v1/item/%/',
-    'signal:v1/item/%2f/',
-    'signal:v1/item/%69ron-plate/',
-    'signal:v1/item/iron-plate/normal',
-  ])('rejects malformed or noncanonical property key %s', (key) => {
-    expect(() => parseSignalPropertyKey(key)).toThrow(TypeError);
+    '',
+    '/',
+    'virtual/',
+    'virtual//signal-A',
+    'virtual/signal-A/',
+    'virtual/signal-A/extra/more',
+    'unknown/signal-A',
+    'virtual/%',
+    'virtual/%2f',
+    'virtual/%69ignal-A',
+    'virtual/signal-A/%6eormal',
+  ])('rejects malformed or noncanonical SignalRef %s', (ref) => {
+    expect(() => parseSignalRef(ref)).toThrow(TypeError);
   });
 
-  test('rejects lone surrogates with a codec-specific TypeError', () => {
-    expect(() => encodeSignalPropertyKey(Signal('item', '\ud800'))).toThrowError(
+  test('rejects lone surrogates with a SignalRef TypeError', () => {
+    expect(() => formatSignalRef(Signal('item', '\ud800'))).toThrowError(
       /unpaired UTF-16 surrogate/,
     );
-    expect(() =>
-      encodeSignalPropertyKey({ type: 'item', name: 'plate', quality: '\udfff' }),
-    ).toThrowError(/unpaired UTF-16 surrogate/);
+    expect(() => formatSignalRef({ type: 'item', name: 'plate', quality: '\udfff' })).toThrowError(
+      /unpaired UTF-16 surrogate/,
+    );
+    expect(() => parseSignalRef('item/\ud800')).toThrowError(/unpaired UTF-16 surrogate/);
   });
 
-  test('keeps a prefixed one-argument Signal name literal', () => {
-    expect(Signal('signal:v1/virtual/signal-A/')).toEqual({
+  test('keeps a slash-containing one-argument Signal name literal', () => {
+    const value = Signal('virtual/signal-A');
+    expect(value).toEqual({
       type: 'item',
-      name: 'signal:v1/virtual/signal-A/',
+      name: 'virtual/signal-A',
     });
+    expect(formatSignalRef(value)).toBe('virtual%2Fsignal-A');
+  });
+
+  test('encodes reserved delimiters and never emits the removed prefix', () => {
+    const refs = signalTypes.flatMap((type) => [
+      formatSignalRef(Signal(type, 'name/with%delimiters 🛰')),
+      formatSignalRef(Signal(type, 'name', 'quality/légendaire%')),
+    ]);
+
+    expect(refs.every((ref) => !ref.startsWith('signal:'))).toBe(true);
+    expect(refs).toContain('virtual/name%2Fwith%25delimiters%20%F0%9F%9B%B0');
   });
 });

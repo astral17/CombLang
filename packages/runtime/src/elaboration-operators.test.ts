@@ -52,6 +52,7 @@ function dispatchFixture() {
     isSignalId: (value): value is SignalId =>
       typeof value === 'object' && value !== null && 'type' in value && 'name' in value,
     isSelected: (value) => registry.hasKind(value, 'selected'),
+    selectedSelection: (value) => registry.selectedState(value)!.selection,
     isNetwork: (value): value is NetworkValue => registry.hasKind(value, 'network'),
     networkFacet: (value) => (registry.hasKind(value, 'network') ? value : undefined),
     readableNetworkFacet: (value) => (registry.hasKind(value, 'network') ? value : undefined),
@@ -69,11 +70,12 @@ function dispatchFixture() {
         };
       }
       if (value.kind === 'selected') {
-        return value.networks === undefined
-          ? { refKind: 'single', network: value.network.name }
+        const state = registry.selectedState(value)!;
+        return state.kind === 'concrete' || state.networks === undefined
+          ? { refKind: 'single', network: state.network.name }
           : {
               refKind: 'pair',
-              networks: value.networks.map(({ name }) => name) as [string, string],
+              networks: state.networks.map(({ name }) => name) as [string, string],
             };
       }
       return { refKind: 'single', network: value.name };

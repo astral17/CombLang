@@ -132,7 +132,7 @@ describe('Blueprint Entity Signal detachment', () => {
           enumerable: false,
           value: () => {
             invoked = true;
-            return 'signal:v1/virtual/signal-A/';
+            return 'virtual/signal-A';
           },
           writable: false,
         },

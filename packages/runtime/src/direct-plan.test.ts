@@ -626,6 +626,29 @@ const output: Network = Gate(input);`,
     ]);
   });
 
+  test.each([
+    ['item shorthand', 'iron-plate', signal('item', 'iron-plate')],
+    [
+      'explicit namespace and quality',
+      'virtual/signal-A/legendary',
+      signal('virtual', 'signal-A', 'legendary'),
+    ],
+  ])('parses %s at the Network string-selection boundary', (_label, reference, expected) => {
+    const parsed = parseFile({
+      path: 'string-selection.factorio.ts',
+      text: `const input = new Network();
+const output: Network = IF(input[${JSON.stringify(reference)}] > 40, input[${JSON.stringify(reference)}]);`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.producers[0]).toMatchObject({
+      kind: 'decider',
+      condition: { kind: 'compare-signal', signal: expected },
+      output: { kind: 'signal', signal: expected },
+      outputs: [{ kind: 'signal', signal: expected }],
+    });
+  });
+
   test('uses opposite input wire colors for a two-Network signal comparison', () => {
     const parsed = parseFile({
       path: 'network-comparison.factorio.ts',

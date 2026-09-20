@@ -10,6 +10,7 @@ import {
 describe('DSL type annotation syntax', () => {
   test.each([
     ['Network', { kind: 'network', capability: 'owned' }],
+    ['NetworkSignal', { kind: 'network-signal' }],
     ['Network<G>', { kind: 'network', capability: 'owned', color: 'green' }],
     ['Readonly < Network < R > >', { kind: 'network', capability: 'readonly', color: 'red' }],
     ['Ref<Network>', { kind: 'network', capability: 'ref' }],
@@ -72,6 +73,26 @@ describe('DSL type annotation syntax', () => {
         { kind: 'network', capability: 'readonly', color: 'red', text: 'Readonly<Network<R>>' },
         { kind: 'primitive', value: 'number', text: 'number' },
         { kind: 'primitive', value: 'undefined', text: 'undefined' },
+      ],
+    });
+  });
+
+  test('keeps NetworkSignal as a nominal executed contract inside a union', () => {
+    const source = ts.createSourceFile(
+      'network-signal-parameter.ts',
+      'function f(value: NetworkSignal | number) {}',
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.TS,
+    );
+    const parameter = (source.statements[0] as ts.FunctionDeclaration).parameters[0]!;
+
+    expect(parseDslParameterContract(parameter.type, source)).toEqual({
+      kind: 'union',
+      text: 'NetworkSignal | number',
+      members: [
+        { kind: 'network-signal', text: 'NetworkSignal' },
+        { kind: 'primitive', value: 'number', text: 'number' },
       ],
     });
   });

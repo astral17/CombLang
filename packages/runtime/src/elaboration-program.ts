@@ -2,7 +2,8 @@ import {
   circuitConstant,
   constantConfigurationFromOutputs,
   constantConfigurationToSparseBus,
-  encodeSignalPropertyKey,
+  formatSignalRef,
+  parseSignalRef,
   sameSignal,
   Signal,
   type SignalId,
@@ -87,6 +88,7 @@ import {
   type PairValue,
   type RuntimeObjectKind,
   type RuntimeObjectValue,
+  type SelectedRuntimeState,
   type SelectedValue,
   type SignalHandle,
   type SignalValue,
@@ -395,6 +397,7 @@ class ElaborationRecorder {
     isSignal: (value): value is SignalId => this.#isSignal(value),
     isSignalId,
     isSelected: (value): value is SelectedValue => this.#isSelected(value),
+    selectedSelection: (value) => this.#selectedSelection(value),
     isNetwork: (value): value is NetworkValue => this.#isNetwork(value),
     networkFacet: (value) => this.#networkFacet(value),
     readableNetworkFacet: (value, source) => this.#readableNetworkFacet(value, source),
@@ -1033,6 +1036,9 @@ class ElaborationRecorder {
           networkFacet: (candidate) => this.#networkFacet(candidate),
           readableNetworkFacet: (candidate, source) =>
             this.#readableNetworkFacet(candidate, source),
+          isConcreteNetworkSignal: (candidate) => this.#isConcreteNetworkSignal(candidate),
+          bindNetworkSignal: (candidate, parameter, source) =>
+            this.#networkSignalParameter(candidate, parameter, this.#rawSpan(source)),
           isNetwork: (candidate): candidate is NetworkValue => this.#isNetwork(candidate),
           isCombinator: (candidate): candidate is CombinatorValue => this.#isCombinator(candidate),
           selectCombinatorMove: (candidate, source) =>
@@ -1298,6 +1304,13 @@ class ElaborationRecorder {
       rawSpan: RawSpan,
     ): unknown => {
       if (!Array.isArray(descriptors)) throw new Error('Invalid array binding descriptors.');
+      if (this.#isSelected(value)) {
+        throw new ElaborationExecutionError(
+          'A Network selection cannot be destructured; use .signal or .network explicitly.',
+          this.#span(rawSpan),
+          'RT2022',
+        );
+      }
       if (this.#isNetwork(value)) {
         throw new ElaborationExecutionError(
           'A Network value cannot be destructured; return an explicit array of Networks.',
@@ -1350,6 +1363,35 @@ class ElaborationRecorder {
       rawSpan: RawSpan,
     ): unknown => {
       if (!Array.isArray(descriptors)) throw new Error('Invalid object binding descriptors.');
+      if (this.#isSelected(value)) {
+        const state = this.#selectedState(value);
+        if (state.kind !== 'concrete') {
+          throw new ElaborationExecutionError(
+            'A pair or wildcard Network selection cannot be destructured; use an explicit selection member.',
+            this.#span(rawSpan),
+            'RT2022',
+          );
+        }
+        const entries = descriptors.map((descriptor) => {
+          if (
+            descriptor === null ||
+            descriptor.property === undefined ||
+            descriptor.producerType !== undefined ||
+            (descriptor.property !== 'signal' && descriptor.property !== 'network')
+          ) {
+            throw new ElaborationExecutionError(
+              'A concrete Network selection only supports flat signal and network destructuring.',
+              this.#span(rawSpan),
+              'RT2022',
+            );
+          }
+          return [
+            descriptor.property,
+            descriptor.property === 'signal' ? state.selection : state.readonlyNetwork,
+          ] as const;
+        });
+        return Object.fromEntries(entries);
+      }
       if (this.#isNetwork(value)) {
         throw new ElaborationExecutionError(
           'A Network value cannot be destructured; return an explicit object of Networks.',
@@ -1589,10 +1631,10 @@ class ElaborationRecorder {
           );
         }
         const selected = values.length === 1 && this.#isSelected(values[0]) ? values[0] : undefined;
+        const selectedValue =
+          selected === undefined ? undefined : this.#selectedSelection(selected);
         const selectedSignal =
-          selected === undefined || !isSignalId(selected.selection)
-            ? undefined
-            : selected.selection;
+          selectedValue === undefined || !isSignalId(selectedValue) ? undefined : selectedValue;
         if (values.some((value) => this.#isSelected(value)) && selectedSignal === undefined) {
           throw new ElaborationExecutionError(
             '.to(...) permits Network[SIGNAL] only for one destination; use .to(first, second, SIGNAL) for fan-out.',
@@ -1631,6 +1673,10 @@ class ElaborationRecorder {
       return this.#select(value, signal, rawSpan);
     },
     element: (value: unknown, key: unknown, rawSpan: RawSpan): unknown => {
+      if (this.#isSelected(value)) {
+        this.#recordDslCall();
+        return this.#selectedMember(value, key);
+      }
       if (this.#isCombinator(value) && (key === 'then' || key === 'else')) {
         return this.#member(value, key, rawSpan);
       }
@@ -2905,14 +2951,15 @@ class ElaborationRecorder {
           'RT2020',
         );
       }
-      if (outputSignal !== undefined || !isSignalId(selected.selection)) {
+      const selectedValue = this.#selectedSelection(selected);
+      if (outputSignal !== undefined || !isSignalId(selectedValue)) {
         throw new ElaborationExecutionError(
           'A selected .to(...) destination must bind exactly one concrete Signal.',
           source,
           'RT2003',
         );
       }
-      outputSignal = selected.selection;
+      outputSignal = selectedValue;
       const destination = this.#resolveWritableNetwork(selected, rawSpan, 'destination');
       if (destination === undefined) {
         throw new ElaborationExecutionError(
@@ -2978,15 +3025,15 @@ class ElaborationRecorder {
     const outputSignal = this.#isDestination(destination)
       ? destination.signal
       : this.#isSelected(destination)
-        ? isSignalId(destination.selection)
-          ? destination.selection
-          : (() => {
-              throw new ElaborationExecutionError(
-                'A destination can bind only a concrete Signal.',
-                source,
-                'RT2003',
-              );
-            })()
+        ? (() => {
+            const selection = this.#selectedSelection(destination);
+            if (isSignalId(selection)) return selection;
+            throw new ElaborationExecutionError(
+              'A destination can bind only a concrete Signal.',
+              source,
+              'RT2003',
+            );
+          })()
         : undefined;
     this.#attachMany(destinations, producer, rawSpan, outputSignal);
   }
@@ -3330,6 +3377,7 @@ class ElaborationRecorder {
       isNetwork: (item): item is NetworkValue => this.#isNetwork(item),
       isPair: (item): item is PairValue => this.#isPair(item),
       isPairSelection: (item): item is PairSelectedValue => this.#isPairSelection(item),
+      isSelected: (item): item is SelectedValue => this.#isSelected(item),
       assertReturnable: (network) => this.#ownership.assertReturnable(network, source, frame),
       assertReadable: (network) => this.#ownership.assertReadable(network, source),
       ownershipOf: (network) => this.#networkState(network).ownership,
@@ -3557,7 +3605,7 @@ class ElaborationRecorder {
   }
 
   #signalHandle(value: SignalId): SignalHandle {
-    const propertyKey = encodeSignalPropertyKey(value);
+    const propertyKey = formatSignalRef(value);
     const handle = Object.create(Object.getPrototypeOf(value), {
       ...Object.getOwnPropertyDescriptors(value),
       [Symbol.toPrimitive]: {
@@ -4745,12 +4793,35 @@ class ElaborationRecorder {
     return this.#hasRuntimeKind(value, 'selected');
   }
 
+  #isConcreteNetworkSignal(value: unknown): value is SelectedValue {
+    return this.#isSelected(value) && this.#selectedState(value).kind === 'concrete';
+  }
+
+  #networkSignalParameter(value: unknown, parameter: string, rawSpan: RawSpan): SelectedValue {
+    if (!this.#isConcreteNetworkSignal(value)) {
+      throw new ElaborationExecutionError(
+        `NetworkSignal parameter ${parameter} requires a concrete single-Network Signal selection.`,
+        this.#span(rawSpan),
+        'RT2015',
+      );
+    }
+    const state = this.#selectedState(value);
+    const borrowed = this.#networkParameter(
+      state.network,
+      'readonly',
+      parameter,
+      undefined,
+      rawSpan,
+    );
+    return this.#selectedValue(borrowed, state.selection);
+  }
+
   #isPair(value: unknown): value is PairValue {
     return this.#hasRuntimeKind(value, 'pair');
   }
 
   #isPairSelection(value: unknown): value is PairSelectedValue {
-    return this.#isSelected(value) && value.networks !== undefined;
+    return this.#isSelected(value) && this.#selectedState(value).kind === 'pair';
   }
 
   #isWildcardToken(value: unknown): value is WildcardTokenValue {
@@ -4768,7 +4839,7 @@ class ElaborationRecorder {
   #select(value: unknown, signal: unknown, rawSpan: RawSpan): SelectedValue | DestinationValue {
     const concreteSignal =
       typeof signal === 'string'
-        ? Signal('item', signal)
+        ? this.#signalHandle(parseSignalRef(signal))
         : this.#isSignal(signal)
           ? signal
           : undefined;
@@ -4797,16 +4868,73 @@ class ElaborationRecorder {
 
   #selectedValue(
     value: NetworkValue | PairValue,
-    selection: SignalId | WildcardName,
+    selection: SignalHandle | WildcardName,
   ): SelectedValue {
-    return this.#isPair(value)
-      ? this.#runtimeValue({
-          kind: 'selected',
-          network: value.networks[0],
-          networks: value.networks,
-          selection,
-        })
-      : this.#runtimeValue({ kind: 'selected', network: value, selection });
+    if (this.#isPair(value)) {
+      const selected = { kind: 'selected' as const };
+      return this.#runtimeValues.brandSelected(selected, {
+        kind: 'pair',
+        network: value.networks[0],
+        networks: value.networks,
+        selection,
+      });
+    }
+    if (isSignalId(selection)) {
+      const readonlyNetwork = this.#readonlyNetwork(value);
+      const selected = {
+        kind: 'selected' as const,
+        signal: selection,
+        network: readonlyNetwork,
+      };
+      return this.#runtimeValues.brandSelected(selected, {
+        kind: 'concrete',
+        network: value,
+        selection,
+        readonlyNetwork,
+      });
+    }
+    const selected = { kind: 'selected' as const };
+    return this.#runtimeValues.brandSelected(selected, {
+      kind: 'wildcard',
+      network: value,
+      selection,
+    });
+  }
+
+  #selectedState(value: SelectedValue): SelectedRuntimeState {
+    const state = this.#runtimeValues.selectedState(value);
+    if (state === undefined) throw new Error('Selected value is missing opaque runtime state.');
+    return state;
+  }
+
+  #selectedSelection(value: SelectedValue): SignalHandle | WildcardName {
+    return this.#selectedState(value).selection;
+  }
+
+  #selectedNetwork(value: SelectedValue): NetworkValue {
+    return this.#selectedState(value).network;
+  }
+
+  #readonlyNetwork(value: NetworkValue): NetworkValue {
+    const state = this.#networkState(value);
+    return this.#runtimeValues.brandNetwork(
+      {
+        kind: 'network',
+        name: value.name,
+        declaration: value.declaration,
+        capability: 'readonly',
+        generation: value.generation,
+      },
+      state,
+    );
+  }
+
+  #selectedMember(value: SelectedValue, key: unknown): unknown {
+    const state = this.#selectedState(value);
+    if (state.kind !== 'concrete') return undefined;
+    if (key === 'signal') return value.signal;
+    if (key === 'network') return value.network;
+    return undefined;
   }
 
   #planNetworkRef(value: NetworkValue | PairValue | SelectedValue):
@@ -4825,16 +4953,21 @@ class ElaborationRecorder {
       };
     }
     if (this.#isNetwork(value)) return { refKind: 'single', network: value.name };
-    return value.networks === undefined
-      ? { refKind: 'single', network: value.network.name }
+    const state = this.#selectedState(value);
+    return state.kind === 'concrete' || state.networks === undefined
+      ? { refKind: 'single', network: state.network.name }
       : {
           refKind: 'pair',
-          networks: [value.networks[0].name, value.networks[1].name],
+          networks: [state.networks[0].name, state.networks[1].name],
         };
   }
 
   #readableNetworks(value: PairValue | SelectedValue): readonly NetworkValue[] {
-    return this.#isPair(value) ? value.networks : (value.networks ?? [value.network]);
+    if (this.#isPair(value)) return value.networks;
+    const state = this.#selectedState(value);
+    return state.kind === 'concrete' || state.networks === undefined
+      ? [state.network]
+      : state.networks;
   }
 
   #arithmeticOperand(value: DslValue, rawSpan: RawSpan): PlanArithmeticOperand {
@@ -4855,10 +4988,11 @@ class ElaborationRecorder {
     }
     if (this.#isSelected(value)) {
       this.#assertReadableValue(value, rawSpan);
-      if (isSignalId(value.selection)) {
-        return { kind: 'signal', ...this.#planNetworkRef(value), signal: value.selection };
+      const selection = this.#selectedSelection(value);
+      if (isSignalId(selection)) {
+        return { kind: 'signal', ...this.#planNetworkRef(value), signal: selection };
       }
-      if (value.selection === 'each') return { kind: 'each', ...this.#planNetworkRef(value) };
+      if (selection === 'each') return { kind: 'each', ...this.#planNetworkRef(value) };
       throw new Error('Anything/Everything cannot be arithmetic operands.');
     }
     if (this.#isCombinator(value)) {
@@ -5048,9 +5182,10 @@ class ElaborationRecorder {
   #deciderOutputSyntaxIntent(output: unknown): DeciderOutputSyntaxIntent {
     if (this.#isSignalValue(output) || this.#isWildcardCount(output)) return 'explicit-constant';
     if (this.#isSelected(output)) {
-      return isSignalId(output.selection)
+      const selection = this.#selectedSelection(output);
+      return isSignalId(selection)
         ? 'implicit-concrete-copy'
-        : output.selection === 'each'
+        : selection === 'each'
           ? 'implicit-each-copy'
           : 'explicit-wildcard-copy';
     }
@@ -5075,14 +5210,15 @@ class ElaborationRecorder {
     }
     if (this.#isSelected(output)) {
       this.#assertReadableValue(output, rawSpan);
-      return isSignalId(output.selection)
-        ? { kind: 'signal', ...this.#planNetworkRef(output), signal: output.selection }
-        : output.selection === 'each'
+      const selection = this.#selectedSelection(output);
+      return isSignalId(selection)
+        ? { kind: 'signal', ...this.#planNetworkRef(output), signal: selection }
+        : selection === 'each'
           ? { kind: 'each', ...this.#planNetworkRef(output) }
           : {
               kind: 'wildcard',
               ...this.#planNetworkRef(output),
-              wildcard: output.selection,
+              wildcard: selection,
             };
     }
     if (this.#isPair(output)) {
@@ -5190,7 +5326,7 @@ class ElaborationRecorder {
     _role = 'Network',
   ): NetworkValue | undefined {
     if (this.#isPair(value) || this.#isPairSelection(value)) return undefined;
-    if (this.#isSelected(value)) return value.network;
+    if (this.#isSelected(value)) return this.#selectedNetwork(value);
     return this.#rawNetworkFacet(value);
   }
 
