@@ -1,4 +1,5 @@
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
+import { canonicalDirectPlan } from '@comblang/runtime';
 import {
   createSourceCircuitArtifact,
   type SourceCircuitArtifact,
@@ -10,5 +11,5 @@ export function blueprintJsonForArtifact(artifact: SourceCircuitArtifact) {
 
 /** Converts a compiler-owned direct plan into readable, uncompressed Factorio blueprint JSON. */
 export function blueprintJsonForPlan(plan: DirectElaborationPlan) {
-  return blueprintJsonForArtifact(createSourceCircuitArtifact(plan));
+  return blueprintJsonForArtifact(createSourceCircuitArtifact(canonicalDirectPlan(plan)));
 }

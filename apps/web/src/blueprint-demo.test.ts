@@ -108,7 +108,7 @@ const output: Network = constants * 2;`,
     expect(generated.blueprint.wires).toHaveLength(1);
   });
 
-  test('previews a hydrated exact Decider v6 as one native object', () => {
+  test('previews a hydrated exact Decider as one canonical native object', () => {
     const compiled = compileSource(
       {
         path: 'blueprint-exact-decider.factorio.ts',
@@ -122,10 +122,10 @@ output += gate;`,
     );
     if (
       compiled.plan === undefined ||
-      compiled.plan.version !== 6 ||
-      compiled.resolvedCircuit?.format !== 'comblang-resolved-entity-v6'
+      compiled.plan.entities.length !== 1 ||
+      compiled.resolvedCircuit?.format !== 'comblang-resolved-circuit'
     ) {
-      throw new Error('Expected a resolved v6 Decider source compilation.');
+      throw new Error('Expected a resolved canonical Decider source compilation.');
     }
     const generated = blueprintJsonForArtifact(
       createSourceCircuitArtifact(compiled.plan, compiled.resolvedCircuit),

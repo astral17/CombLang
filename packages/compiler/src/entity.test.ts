@@ -2,8 +2,6 @@ import type { DirectElaborationPlan } from './direct-plan-schema.js';
 import { describe, expect, test } from 'vitest';
 import {
   entityRawJsonLimits,
-  entitySemanticVersion,
-  type DirectElaborationPlanV3,
   type EntityConnectorKey,
   type EntityPhysicalConnectorBinding,
   type EntityPhysicalRecord,
@@ -12,9 +10,8 @@ import {
   type EntityPlanConnectorBinding,
   type EntityPlanRecord,
   type EntityReplayContextRef,
-  type ElaborationGraphV3,
-  type NativeCircuitIrV3,
 } from './entity.js';
+import type { ElaborationGraph, NativeCircuitIr } from './ir.js';
 import {
   syntheticSharedTwoColorEntityProfile,
   syntheticZeroPortEntityProfile,
@@ -80,25 +77,24 @@ const physicalEntity: EntityPhysicalRecord = {
   connectorBindings: [physicalBinding],
 };
 
-const v2Plan: DirectElaborationPlan = {
+const v2Plan = {
   format: 'comblang-direct-plan',
   version: 2,
   networks: [],
   producers: [],
+  entities: [],
 };
 
-const v3Plan: DirectElaborationPlanV3 = {
+const canonicalPlan: DirectElaborationPlan = {
   format: 'comblang-direct-plan',
-  version: entitySemanticVersion,
   context,
   networks: [],
   producers: [],
   entities: [planEntity],
 };
 
-const v3Graph: ElaborationGraphV3 = {
+const canonicalGraph: ElaborationGraph = {
   format: 'comblang-eg',
-  version: entitySemanticVersion,
   context,
   networks: [],
   producers: [],
@@ -106,22 +102,21 @@ const v3Graph: ElaborationGraphV3 = {
   entities: [physicalEntity],
 };
 
-const v3Ir: NativeCircuitIrV3 = {
+const canonicalIr: NativeCircuitIr = {
   format: 'comblang-ncir',
-  version: entitySemanticVersion,
   context,
   networks: [],
   producers: [],
   entities: [physicalEntity],
 };
 
-describe('compiler-owned Entity v3 vocabulary', () => {
-  test('keeps v2 circuit transport separate from v3 Entity semantics', () => {
+describe('compiler-owned Entity vocabulary', () => {
+  test('keeps the canonical transport separate from historical envelopes', () => {
     expect(v2Plan.version).toBe(2);
-    expect(v3Plan.version).toBe(3);
-    expect(v3Graph.version).toBe(3);
-    expect(v3Ir.version).toBe(3);
-    expect(v3Plan.entities).toHaveLength(1);
+    expect(canonicalPlan).not.toHaveProperty('version');
+    expect(canonicalGraph).not.toHaveProperty('version');
+    expect(canonicalIr).not.toHaveProperty('version');
+    expect(canonicalPlan.entities).toHaveLength(1);
   });
 
   test('keeps declaration-name and physical-ID Entity binding domains distinct', () => {

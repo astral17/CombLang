@@ -15,7 +15,6 @@ describe('direct plan execution', () => {
     const B = signal('virtual', 'signal-B');
     const plan: DirectElaborationPlan = {
       format: 'comblang-direct-plan',
-      version: 2,
       networks: [
         {
           name: 'red',
@@ -53,6 +52,7 @@ describe('direct plan execution', () => {
           instancePath: [],
         },
       ],
+      entities: [],
     };
 
     const executed = elaborateDirectPlan(plan);
@@ -553,7 +553,7 @@ out += CC(5 * A, -2 * B);`,
     const simulation = executed.circuit.createSimulation();
 
     expect(executed.circuit.graph.producers).toMatchObject([{ kind: 'constant' }]);
-    expect('entities' in executed.circuit.ir).toBe(false);
+    expect(executed.circuit.ir.entities).toEqual([]);
     expect(simulation.step().read(executed.network('out').id).get(A)).toBe(5);
     expect(simulation.step().read(executed.network('out').id).get(B)).toBe(-2);
 

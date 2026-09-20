@@ -1,7 +1,7 @@
 /**
  * Makes an independent, recursively immutable copy of a data-shaped value.
  *
- * v5 transport values are plain structured data. The WeakSet keeps the freeze
+ * Canonical transport values are plain structured data. The WeakSet keeps the freeze
  * walk safe for cyclic input while structuredClone ensures caller-owned values
  * are never frozen or retained by the canonical result.
  */

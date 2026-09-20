@@ -2,8 +2,6 @@ import type {
   DirectElaborationPlan,
   DirectPlanProducer,
 } from '@comblang/compiler/direct-plan-schema';
-import type { DirectElaborationPlanV6, DirectPlanProducerV6 } from '@comblang/compiler/entity-v6';
-import type { DirectElaborationPlanV7 } from '@comblang/compiler/entity-v7';
 import type { EntityPhysicalRecord } from '@comblang/compiler/entity';
 import type { NetworkId, ProducerId, SourceSpan } from '@comblang/shared';
 
@@ -53,7 +51,7 @@ export interface DebugProducerEntry {
   readonly kindOrdinal: number;
   readonly source: SourceSpan;
   readonly instancePath: readonly string[];
-  readonly descriptor: DirectPlanProducer | DirectPlanProducerV6;
+  readonly descriptor: DirectPlanProducer;
 }
 
 export interface DebugEntityEntry {
@@ -77,6 +75,15 @@ interface ScopeContents {
   readonly entities: readonly DebugEntityEntry[];
   readonly children: readonly DebugScope[];
 }
+
+type DebugPlanInput = Pick<
+  DirectElaborationPlan,
+  'networks' | 'networkAliases' | 'networkTransfers' | 'producers'
+> & {
+  readonly debugInstances?: readonly {
+    readonly path: readonly string[];
+  }[];
+};
 
 function scopeLabel(path: readonly string[]): string {
   return path.length === 0 ? '<root>' : path.join(' / ');
@@ -277,7 +284,7 @@ export class DebugIndex {
   }
 
   static fromDirectPlan(
-    plan: DirectElaborationPlan | DirectElaborationPlanV6 | DirectElaborationPlanV7,
+    plan: DebugPlanInput,
     circuit: { readonly graph: { readonly producers: readonly { readonly id: ProducerId }[] } },
     networkId: (planName: string) => NetworkId,
     producerId: (planIndex: number) => ProducerId,

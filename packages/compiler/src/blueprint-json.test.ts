@@ -22,8 +22,8 @@ const compare = (name: string): LogicalDeciderCondition => ({
 });
 const deciderIr = (condition: LogicalDeciderCondition): NativeCircuitIr => ({
   format: 'comblang-ncir',
-  version: 2,
   networks: testNetworks,
+  entities: [],
   producers: [
     {
       id: producer(1),
@@ -95,8 +95,8 @@ describe('Factorio blueprint JSON generator', () => {
     const A = signal('virtual', 'signal-A');
     const ir: NativeCircuitIr = {
       format: 'comblang-ncir',
-      version: 2,
       networks: testNetworks,
+      entities: [],
       producers: [
         {
           id: producer(1),
@@ -141,8 +141,8 @@ describe('Factorio blueprint JSON generator', () => {
     const A = signal('virtual', 'signal-A');
     const ir: NativeCircuitIr = {
       format: 'comblang-ncir',
-      version: 2,
       networks: testNetworks,
+      entities: [],
       producers: [
         {
           id: producer(1),
@@ -253,7 +253,6 @@ describe('Factorio blueprint JSON generator', () => {
     const A = signal('virtual', 'signal-A');
     const ir: NativeCircuitIr = {
       format: 'comblang-ncir',
-      version: 2,
       networks: [
         {
           id: network(1),
@@ -268,6 +267,7 @@ describe('Factorio blueprint JSON generator', () => {
           provenance: { instancePath: [], expansionStack: [] },
         },
       ],
+      entities: [],
       producers: [
         {
           id: producer(1),
@@ -326,7 +326,6 @@ describe('Factorio blueprint JSON generator', () => {
     const IRON = signal('item', 'iron-plate');
     const ir: NativeCircuitIr = {
       format: 'comblang-ncir',
-      version: 2,
       networks: [
         {
           id: network(1),
@@ -335,6 +334,7 @@ describe('Factorio blueprint JSON generator', () => {
           provenance: { instancePath: [], expansionStack: [] },
         },
       ],
+      entities: [],
       producers: [
         {
           id: producer(1),
@@ -370,7 +370,6 @@ describe('Factorio blueprint JSON generator', () => {
     const A = signal('virtual', 'signal-A');
     const ir: NativeCircuitIr = {
       format: 'comblang-ncir',
-      version: 2,
       networks: [
         {
           id: network(1),
@@ -385,6 +384,7 @@ describe('Factorio blueprint JSON generator', () => {
           provenance: { instancePath: [], expansionStack: [] },
         },
       ],
+      entities: [],
       producers: [
         {
           id: producer(1),

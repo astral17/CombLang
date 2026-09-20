@@ -25,7 +25,7 @@ function arithmetic(id: string, input: string, destination: string): CircuitProd
 }
 
 function circuit(producers: readonly CircuitProducerNode[]): NativeCircuitIr {
-  return { format: 'comblang-ncir', version: 2, networks: [], producers };
+  return { format: 'comblang-ncir', networks: [], producers, entities: [] };
 }
 
 describe('resolved NCIR graph metrics', () => {

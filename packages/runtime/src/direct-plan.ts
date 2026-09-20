@@ -2,27 +2,44 @@ import type {
   DirectElaborationPlan,
   DirectPlanCapabilityUse,
   DirectPlanDebugValue,
+  DirectPlanDecider,
+  DirectPlanProducer,
   PlanArithmeticOperand,
   PlanDeciderCondition,
   PlanNetworkRef,
 } from '@comblang/compiler/direct-plan-schema';
-import type { Diagnostic, ProducerId, SourceSpan } from '@comblang/shared';
+import type { Diagnostic, NetworkId, ProducerId, SourceSpan } from '@comblang/shared';
 import type { TestObjectHandle, TestSession } from '@comblang/simulator';
 import type {
   EntityId,
+  EntityPlanRecord,
   EntityPlanDebugInstance,
   EntityPlanDebugValue,
+  EntityPhysicalConfiguration,
+  EntityDeciderPhysicalConfiguration,
+  EntitySelectorConfiguration,
   EntityPhysicalRecord,
-  ElaborationGraphV3,
-  NativeCircuitIrV3,
 } from '@comblang/compiler/entity';
+import type {
+  ElaborationGraph,
+  NativeCircuitIr,
+  CircuitProducerNode,
+  LogicalArithmeticOperand,
+  LogicalDeciderCondition,
+  LogicalDeciderOutput,
+  LogicalNetworkRef,
+} from '@comblang/compiler/ir';
 import type { TrustedEntityReplayContext } from '@comblang/compiler/entity-replay-context';
-import {
-  projectEntityDebugInstancesForV2,
-  validateEntityDirectPlan,
-} from './entity-plan-validation.js';
+import type { ResolvedCircuit } from '@comblang/compiler/resolved-circuit';
+import { constantConfigurationFromOutputs } from '@comblang/factorio';
+import { validateCanonicalEntityPlanData } from './entity-plan-validation.js';
 import { lowerPreparedEntityRecords, prepareEntityRecords } from './entity-lowering.js';
 import { entityObjectAdapter } from './entity-object-adapter.js';
+import {
+  canonicalCircuitGraph,
+  canonicalNativeCircuitIr,
+  canonicalResolvedCircuit,
+} from './canonical-circuit.js';
 
 import {
   DebugIndex,
@@ -106,6 +123,9 @@ function executeDebugValue(
     }
     return producer;
   }
+  if (value.kind === 'entity') {
+    return undefined;
+  }
   if (value.kind === 'literal') return value.value;
   if (value.kind === 'undefined') return undefined;
   if (value.kind === 'array') {
@@ -163,7 +183,7 @@ function materializeEntityDebugValue(
   return producerValue;
 }
 
-function materializeEntityDebugInstances(
+export function materializeEntityDebugInstances(
   planned: readonly EntityPlanDebugInstance[] | undefined,
   producerInstances: readonly ExecutedDebugInstance[],
   entities: ReadonlyMap<EntityId, DebugEntityEntry>,
@@ -683,9 +703,20 @@ function executeDirectPlan(
   });
 }
 
-export function tryElaborateDirectPlan(plan: DirectElaborationPlan): DirectPlanExecutionResult {
+function tryExecuteProducerPlan(plan: DirectElaborationPlan): DirectPlanExecutionResult {
   try {
-    return { execution: executeDirectPlan(plan), diagnostics: [] };
+    const execution = executeDirectPlan(plan);
+    return {
+      execution: Object.freeze({
+        ...execution,
+        circuit: Object.freeze({
+          ...execution.circuit,
+          graph: canonicalCircuitGraph(execution.circuit.graph) as ElaboratedCircuit['graph'],
+          ir: canonicalNativeCircuitIr(execution.circuit.ir) as ElaboratedCircuit['ir'],
+        }),
+      }),
+      diagnostics: [],
+    };
   } catch (error) {
     const diagnostic: Diagnostic =
       error instanceof RuntimeDiagnosticError
@@ -699,15 +730,149 @@ export function tryElaborateDirectPlan(plan: DirectElaborationPlan): DirectPlanE
   }
 }
 
-export function elaborateDirectPlan(plan: DirectElaborationPlan): ExecutedDirectPlan {
-  const result = tryElaborateDirectPlan(plan);
-  if (result.execution !== undefined) return result.execution;
-  throw new RuntimeDiagnosticError(result.diagnostics[0]!);
+function physicalNetworkRef(
+  value:
+    | { readonly refKind: 'single'; readonly network: string }
+    | { readonly refKind: 'pair'; readonly networks: readonly [string, string] },
+  ids: ReadonlyMap<string, NetworkId>,
+): LogicalNetworkRef {
+  const id = (name: string): NetworkId => {
+    const value = ids.get(name);
+    if (value === undefined) throw new Error(`Unknown physical Network: ${name}.`);
+    return value;
+  };
+  return value.refKind === 'single'
+    ? { refKind: 'single', network: id(value.network) }
+    : {
+        refKind: 'pair',
+        networks: [id(value.networks[0]), id(value.networks[1])],
+      };
+}
+
+function physicalArithmeticOperand(
+  operand: PlanArithmeticOperand,
+  ids: ReadonlyMap<string, NetworkId>,
+): LogicalArithmeticOperand {
+  if (operand.kind === 'constant') return operand;
+  const reference = physicalNetworkRef(operand, ids);
+  if (operand.refKind === 'single' && reference.refKind === 'single')
+    return { ...operand, network: reference.network };
+  if (operand.refKind === 'pair' && reference.refKind === 'pair')
+    return { ...operand, networks: reference.networks };
+  throw new Error('Mismatched logical Network reference.');
+}
+
+function physicalDeciderConfiguration(
+  producer: Extract<DirectPlanProducer, { readonly kind: 'decider' }>,
+  ids: ReadonlyMap<string, NetworkId>,
+): EntityDeciderPhysicalConfiguration {
+  const condition = (value: PlanDeciderCondition): LogicalDeciderCondition => {
+    if (value.kind === 'and' || value.kind === 'or')
+      return { kind: value.kind, conditions: value.conditions.map(condition) };
+    if (value.kind === 'compare-signals')
+      return {
+        kind: 'compare',
+        left: { kind: 'signal', signal: value.left.signal, ...physicalNetworkRef(value.left, ids) },
+        comparator: value.comparator,
+        right: {
+          kind: 'signal',
+          signal: value.right.signal,
+          ...physicalNetworkRef(value.right, ids),
+        },
+      };
+    return {
+      kind: 'compare',
+      left:
+        value.kind === 'compare-each'
+          ? { kind: 'wildcard', value: 'each', ...physicalNetworkRef(value, ids) }
+          : value.kind === 'compare-signal'
+            ? { kind: 'signal', signal: value.signal, ...physicalNetworkRef(value, ids) }
+            : {
+                kind: 'wildcard',
+                value: value.wildcard,
+                ...physicalNetworkRef(value, ids),
+              },
+      comparator: value.comparator,
+      right: { kind: 'constant', value: value.constant },
+    };
+  };
+  const output = (value: DirectPlanDecider['output']): LogicalDeciderOutput => {
+    if (value.kind === 'each-constant')
+      return { mode: 'constant', signal: { kind: 'wildcard', value: 'each' }, value: value.value };
+    if (value.kind === 'signal-constant')
+      return {
+        mode: 'constant',
+        signal: { kind: 'signal', signal: value.signal },
+        value: value.value,
+      };
+    if (value.kind === 'each')
+      return {
+        mode: 'copy',
+        signal: { kind: 'wildcard', value: 'each' },
+        input: physicalNetworkRef(value, ids),
+      };
+    if (value.kind === 'signal')
+      return {
+        mode: 'copy',
+        signal: { kind: 'signal', signal: value.signal },
+        input: physicalNetworkRef(value, ids),
+      };
+    return {
+      mode: 'copy',
+      signal: { kind: 'wildcard', value: value.wildcard },
+      input: physicalNetworkRef(value, ids),
+    };
+  };
+  return {
+    mode: 'decider',
+    condition: condition(producer.condition),
+    outputs: (producer.outputs ?? [producer.output]).map(output),
+    ...(producer.elseOutputs === undefined
+      ? {}
+      : { elseOutputs: producer.elseOutputs.map(output) }),
+  };
+}
+
+/** Lowers an already equality-validated linked Producer into physical Network IDs. */
+function physicalConfigurationForLinkedProducer(
+  producer: DirectPlanProducer,
+  ids: ReadonlyMap<string, NetworkId>,
+): EntityPhysicalConfiguration {
+  if (producer.kind === 'constant') {
+    return {
+      mode: 'constant',
+      value: producer.configuration ?? constantConfigurationFromOutputs(producer.outputs),
+    };
+  }
+  if (producer.kind === 'arithmetic') {
+    return {
+      mode: 'arithmetic',
+      left: physicalArithmeticOperand(producer.left, ids),
+      operation: producer.operation,
+      right: physicalArithmeticOperand(producer.right, ids),
+      output: producer.output,
+    };
+  }
+  if (producer.kind === 'decider') return physicalDeciderConfiguration(producer, ids);
+  return producer.operation === 'select'
+    ? {
+        mode: 'selector',
+        operation: 'select',
+        input: physicalNetworkRef(producer.input, ids),
+        selectMax: producer.selectMax,
+        index: producer.index,
+      }
+    : {
+        mode: 'selector',
+        operation: 'count',
+        input: physicalNetworkRef(producer.input, ids),
+        output: producer.output,
+      };
 }
 
 export interface ElaboratedEntityCircuit extends Omit<ElaboratedCircuit, 'graph' | 'ir'> {
-  readonly graph: ElaborationGraphV3;
-  readonly ir: NativeCircuitIrV3;
+  readonly graph: ElaborationGraph;
+  readonly ir: NativeCircuitIr;
 }
 
 export interface ExecutedEntityDirectPlan extends Omit<ExecutedDirectPlan, 'circuit'> {
@@ -724,38 +889,71 @@ export interface EntityDirectPlanExecutionResult {
   readonly diagnostics: readonly Diagnostic[];
 }
 
-/** Canonical replay is completed before any runtime allocation. Entities remain inert. */
-export function tryElaborateEntityDirectPlan(
-  input: unknown,
+/** Executes a validated canonical Entity plan before returning physical data. */
+function executeEntityPlan(
+  plan: DirectElaborationPlan,
   context: TrustedEntityReplayContext,
 ): EntityDirectPlanExecutionResult {
-  const validation = validateEntityDirectPlan(input, context);
-  if (!validation.value) return { diagnostics: validation.diagnostics };
-  const { plan } = validation.value;
   try {
     const {
       entities: planEntities,
       debugInstances: planDebugInstances,
-      context: replayContext,
-      version: _version,
       networks,
       ...common
     } = plan;
-    const preparedEntities = prepareEntityRecords(planEntities, context);
+    const preparationEntities = planEntities.map((entity) => {
+      const mode = entity.configuration?.mode;
+      if (
+        mode === 'constant' ||
+        mode === 'arithmetic' ||
+        mode === 'decider' ||
+        mode === 'selector'
+      ) {
+        const { configuration: _configuration, ...withoutPlanConfiguration } = entity;
+        return withoutPlanConfiguration;
+      }
+      return entity;
+    });
+    const preparedEntities = prepareEntityRecords(preparationEntities, context);
+    if (plan.context === undefined) {
+      throw runtimeFailure('RT1001', 'Entity execution requires canonical replay context.');
+    }
+    const contextReference = plan.context;
     let physicalEntities: readonly EntityPhysicalRecord[] = [];
     const execution = executeDirectPlan(
       {
         ...common,
-        version: 2,
-        ...(planDebugInstances === undefined
-          ? {}
-          : { debugInstances: projectEntityDebugInstancesForV2(planDebugInstances)! }),
-        networks: networks.map(
-          ({ generation: _generation, consumedAt: _consumedAt, ...network }) => network,
-        ),
+        entities: [],
+        ...(planDebugInstances === undefined ? {} : { debugInstances: planDebugInstances }),
+        networks,
       },
       (resolved) => {
-        physicalEntities = lowerPreparedEntityRecords(preparedEntities, resolved);
+        const ids = new Map<string, NetworkId>();
+        for (const [name, network] of resolved) {
+          ids.set(name, network.id);
+          ids.set(network.id, network.id);
+        }
+        const producers = new Map(
+          plan.producers
+            .filter((producer) => producer.entityId !== undefined)
+            .map((producer) => [producer.entityId!, producer] as const),
+        );
+        physicalEntities = lowerPreparedEntityRecords(preparedEntities, resolved).map((entity) => {
+          const planned = planEntities.find((candidate) => candidate.id === entity.id);
+          const producer = producers.get(entity.id);
+          if (
+            planned?.configuration !== undefined &&
+            planned.configuration.mode !== 'raw' &&
+            planned.configuration.mode !== 'typed' &&
+            producer !== undefined
+          ) {
+            return Object.freeze({
+              ...entity,
+              configuration: physicalConfigurationForLinkedProducer(producer, ids),
+            });
+          }
+          return entity;
+        });
         return physicalEntities;
       },
     );
@@ -763,14 +961,14 @@ export function tryElaborateEntityDirectPlan(
       ...execution.circuit,
       graph: Object.freeze({
         ...execution.circuit.graph,
-        version: 3,
-        context: replayContext,
+        context: contextReference,
+        producers: preserveEntityProducerMetadata(plan, execution.circuit.graph.producers),
         entities: physicalEntities,
       }),
       ir: Object.freeze({
         ...execution.circuit.ir,
-        version: 3,
-        context: replayContext,
+        context: contextReference,
+        producers: preserveEntityProducerMetadata(plan, execution.circuit.ir.producers),
         entities: physicalEntities,
       }),
     });
@@ -819,6 +1017,7 @@ export function tryElaborateEntityDirectPlan(
               debugInstances.map(({ name }, index) => `${index + 1}: ${name}`),
             );
           }
+
           const matches = debugInstances.filter(({ name }) => name === nameOrIndex);
           if (matches.length === 1) return matches[0]!;
           if (matches.length === 0) {
@@ -874,11 +1073,130 @@ export function tryElaborateEntityDirectPlan(
   }
 }
 
-export function elaborateEntityDirectPlan(
+function preserveEntityProducerMetadata(
+  plan: DirectElaborationPlan,
+  producers: readonly CircuitProducerNode[],
+): readonly CircuitProducerNode[] {
+  return producers.map((producer, index) => {
+    const planned = plan.producers[index];
+    if (planned === undefined) return producer;
+    return {
+      ...producer,
+      ...(planned.entityId === undefined ? {} : { entityId: planned.entityId }),
+      ...(planned.kind === 'decider'
+        ? {
+            outputOrigins: planned.outputOrigins,
+            ...(planned.elseOutputOrigins === undefined
+              ? {}
+              : { elseOutputOrigins: planned.elseOutputOrigins }),
+          }
+        : {}),
+      ...(planned.kind === 'constant' &&
+      planned.configuration !== undefined &&
+      producer.kind === 'constant'
+        ? { config: { ...producer.config, configuration: planned.configuration } }
+        : {}),
+    } as CircuitProducerNode;
+  });
+}
+
+export interface CanonicalDirectPlanExecutionResult extends DirectPlanExecutionResult {
+  readonly resolvedCircuit?: ResolvedCircuit;
+}
+
+export interface CanonicalDirectPlanValidationResult {
+  readonly value?: DirectElaborationPlan;
+  readonly diagnostics: readonly Diagnostic[];
+}
+
+/** Validates the complete canonical plan, including Entity/profile associations when present. */
+export function validateCanonicalDirectPlan(
+  input: unknown,
+  context?: TrustedEntityReplayContext,
+): CanonicalDirectPlanValidationResult {
+  const entityInput =
+    typeof input === 'object' && input !== null && !Array.isArray(input)
+      ? (input as { readonly entities?: unknown[] }).entities
+      : undefined;
+  const hasEntities = Array.isArray(entityInput) && entityInput.length > 0;
+  const producerValidation = validateDirectPlanEnvelope(
+    hasEntities ? { ...(input as object), debugInstances: [] } : input,
+  );
+  if (producerValidation.value === undefined) {
+    return { diagnostics: producerValidation.diagnostics };
+  }
+  const producerPlan = producerValidation.value.plan;
+  if (producerPlan.entities.length === 0) return { value: producerPlan, diagnostics: [] };
+  if (context === undefined) {
+    return {
+      diagnostics: [
+        {
+          code: 'RT1001',
+          severity: 'error',
+          message: 'Entity-bearing canonical plans require a trusted replay context.',
+        },
+      ],
+    };
+  }
+  const entityValidation = validateCanonicalEntityPlanData(input, context);
+  return {
+    ...(entityValidation.value === undefined ? {} : { value: entityValidation.value.plan }),
+    diagnostics: entityValidation.diagnostics,
+  };
+}
+
+function canonicalizeDirectExecution(
+  plan: DirectElaborationPlan,
+  execution: ExecutedDirectPlan,
+): CanonicalDirectPlanExecutionResult {
+  const circuit = execution.circuit;
+  const graph = canonicalCircuitGraph(circuit.graph) as ExecutedDirectPlan['circuit']['graph'];
+  const canonicalIr = canonicalNativeCircuitIr(circuit.ir) as ExecutedDirectPlan['circuit']['ir'];
+  const ir =
+    circuit.graph.entities === circuit.ir.entities
+      ? ({ ...canonicalIr, entities: graph.entities } as ExecutedDirectPlan['circuit']['ir'])
+      : canonicalIr;
+  return {
+    diagnostics: [],
+    execution: Object.freeze({
+      ...execution,
+      circuit: Object.freeze({ ...circuit, graph, ir }),
+    }),
+    resolvedCircuit: canonicalResolvedCircuit(undefined, plan, ir) as ResolvedCircuit,
+  };
+}
+
+/** Validates and executes the canonical direct-plan contract. */
+export function tryElaborateDirectPlan(
+  input: unknown,
+  context?: TrustedEntityReplayContext,
+): CanonicalDirectPlanExecutionResult {
+  const validation = validateCanonicalDirectPlan(input, context);
+  if (validation.value === undefined) return { diagnostics: validation.diagnostics };
+  const plan = validation.value;
+  if (plan.entities.length === 0) {
+    const result = tryExecuteProducerPlan(plan);
+    return result.execution === undefined
+      ? { diagnostics: result.diagnostics }
+      : canonicalizeDirectExecution(plan, result.execution);
+  }
+  if (context === undefined) throw new Error('unreachable: Entity context was validated above.');
+  const result = executeEntityPlan(plan, context);
+  return result.execution === undefined
+    ? { diagnostics: result.diagnostics }
+    : canonicalizeDirectExecution(plan, result.execution);
+}
+
+export function elaborateDirectPlan(
   input: unknown,
   context: TrustedEntityReplayContext,
-): ExecutedEntityDirectPlan {
-  const result = tryElaborateEntityDirectPlan(input, context);
-  if (result.execution) return result.execution;
+): ExecutedEntityDirectPlan;
+export function elaborateDirectPlan(input: unknown, context?: undefined): ExecutedDirectPlan;
+export function elaborateDirectPlan(
+  input: unknown,
+  context?: TrustedEntityReplayContext,
+): ExecutedDirectPlan | ExecutedEntityDirectPlan {
+  const result = tryElaborateDirectPlan(input, context);
+  if (result.execution !== undefined) return result.execution;
   throw new RuntimeDiagnosticError(result.diagnostics[0]!);
 }

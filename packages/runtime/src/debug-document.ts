@@ -1,10 +1,5 @@
 import type { EntityPhysicalRecord } from '@comblang/compiler/entity';
 import type { CircuitProducerNode, ElaborationGraph, EntityPlacement } from '@comblang/compiler/ir';
-import type { ElaborationGraphV3 } from '@comblang/compiler/entity';
-import type { ElaborationGraphV4 } from '@comblang/compiler/entity-v4';
-import type { ElaborationGraphV5, EntityPhysicalRecordV5 } from '@comblang/compiler/entity-v5';
-import type { ElaborationGraphV6, EntityPhysicalRecordV6 } from '@comblang/compiler/entity-v6';
-import type { ElaborationGraphV7, EntityPhysicalRecordV7 } from '@comblang/compiler/entity-v7';
 import type { NetworkId } from '@comblang/shared';
 import type { DeciderOutputOrigin } from '@comblang/compiler/direct-plan-schema';
 
@@ -26,8 +21,7 @@ export interface DebugDocumentProducer extends Omit<DebugProducerEntry, 'descrip
 }
 
 export interface DebugDocumentEntity extends Omit<DebugEntityEntry, 'record'> {
-  readonly record:
-    EntityPhysicalRecord | EntityPhysicalRecordV5 | EntityPhysicalRecordV6 | EntityPhysicalRecordV7;
+  readonly record: EntityPhysicalRecord;
 }
 
 interface DebugDocumentScopeV1 {
@@ -53,17 +47,12 @@ export interface DebugDocumentV2 {
 /** Inspection data only: cloned entries are not executable debug handles. */
 export type DebugDocument = DebugDocumentV1 | DebugDocumentV2;
 
+type DebugGraphInput = Pick<ElaborationGraph, 'producers'> & {
+  readonly entities?: readonly EntityPhysicalRecord[];
+};
+
 /** Serialize IDs from this execution's EG, never by matching array ordinals. */
-export function createDebugDocument(
-  index: DebugIndex,
-  graph:
-    | ElaborationGraph
-    | ElaborationGraphV3
-    | ElaborationGraphV4
-    | ElaborationGraphV5
-    | ElaborationGraphV6
-    | ElaborationGraphV7,
-): DebugDocument {
+export function createDebugDocument(index: DebugIndex, graph: DebugGraphInput): DebugDocument {
   const byId = new Map(graph.producers.map((producer) => [producer.id, producer]));
   const scopes = index.scopes.map((scope) => ({
     path: scope.path,
@@ -89,7 +78,7 @@ export function createDebugDocument(
     }),
   }));
   const document: DebugDocument =
-    graph.version === 3 || graph.version === 4 || graph.version === 5 || graph.version === 6
+    graph.entities !== undefined && graph.entities.length > 0
       ? {
           format: 'comblang-debug',
           version: 2,

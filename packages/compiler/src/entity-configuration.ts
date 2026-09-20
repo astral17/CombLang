@@ -3,7 +3,6 @@ import { circuitConstant, Signal, signalTypes, type SignalId } from '@comblang/f
 import type {
   EntityBehaviorKey,
   EntityConfiguration,
-  EntityOpaqueConfiguration,
   EntityFeatureProfile,
   EntityLaneKey,
   EntityNativeComparator,
@@ -14,11 +13,7 @@ import type {
   EntityRawConfiguration,
   EntityTypedConfiguration,
 } from './entity.js';
-import {
-  canonicalizeEntityRawJson,
-  canonicalizeEntityRawObject,
-  EntityRawJsonError,
-} from './entity-raw.js';
+import { canonicalizeEntityRawObject, EntityRawJsonError } from './entity-raw.js';
 
 type DataRecord = Record<string, unknown>;
 
@@ -294,24 +289,6 @@ function rawConfiguration(record: DataRecord, path: string): EntityRawConfigurat
   }
 }
 
-/** Preserves the old v3 typed/payload envelope without granting native authority. */
-function opaqueConfiguration(record: DataRecord, path: string): EntityOpaqueConfiguration {
-  exactKeys(record, ['mode', 'payload'], path);
-  if (!('payload' in record)) invalid('EC1001', `${path}.payload`, 'field is required.');
-  try {
-    return Object.freeze({
-      mode: 'typed',
-      payload: canonicalizeEntityRawJson(record.payload),
-    });
-  } catch (error) {
-    if (error instanceof EntityRawJsonError) {
-      const suffix = error.path === '$' ? '' : error.path.slice(1);
-      invalid('EC1001', `${path}.payload${suffix}`, error.message);
-    }
-    throw error;
-  }
-}
-
 /** Canonicalizes one plan configuration and resolves all profile-owned rule/lane checks. */
 export function canonicalizeEntityConfiguration(
   value: unknown,
@@ -320,11 +297,7 @@ export function canonicalizeEntityConfiguration(
 ): EntityConfiguration {
   const record = dataRecord(value, path);
   if (record.mode === 'raw') return rawConfiguration(record, path);
-  if (record.mode === 'typed') {
-    return 'payload' in record
-      ? opaqueConfiguration(record, path)
-      : typedConfiguration(record, path, profile);
-  }
+  if (record.mode === 'typed') return typedConfiguration(record, path, profile);
   invalid('EC1001', `${path}.mode`, 'expected raw or typed Entity configuration.');
 }
 
@@ -335,7 +308,6 @@ export function resolveEntityPhysicalConfiguration(
 ): EntityPhysicalConfiguration {
   const configuration = canonicalizeEntityConfiguration(value, profile, '$.configuration');
   if (configuration.mode === 'raw') return configuration;
-  if ('payload' in configuration) return configuration;
   const rule = findRule(profile, configuration.rule, '$.configuration.rule');
   const feature = findFeature(profile, rule.feature, '$.configuration.rule.feature');
   const connector = profile.connectors.find((candidate) => candidate.key === feature.connector);

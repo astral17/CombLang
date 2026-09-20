@@ -36,15 +36,7 @@ import {
   type FactorioDumpMetadata,
   type PrototypeProvider,
 } from '@comblang/prototypes';
-import {
-  runExecutedDirectPlanTests,
-  type ExecutedDirectPlan,
-  type ExecutedEntityDirectPlan,
-  type ExecutedEntityDirectPlanV4,
-  type ExecutedEntityDirectPlanV5,
-  type ExecutedEntityDirectPlanV6,
-  type ExecutedEntityDirectPlanV7,
-} from '@comblang/runtime';
+import { runExecutedDirectPlanTests, type ExecutedDirectPlan } from '@comblang/runtime';
 import {
   conservativeEntityProvisioningPolicy,
   EntityProvisioningService,
@@ -272,14 +264,7 @@ async function testCircuit(
   const project = parseProject([source]);
   const file = [...project.files.values()][0];
   const diagnostics: Diagnostic[] = [...projectOnlyDiagnostics(project)];
-  let execution:
-    | ExecutedDirectPlan
-    | ExecutedEntityDirectPlan
-    | ExecutedEntityDirectPlanV4
-    | ExecutedEntityDirectPlanV5
-    | ExecutedEntityDirectPlanV6
-    | ExecutedEntityDirectPlanV7
-    | undefined;
+  let execution: ExecutedDirectPlan | undefined;
 
   if (file !== undefined && !diagnostics.some(({ severity }) => severity === 'error')) {
     const compiled = compileParsedSourceProgram(file, environment);

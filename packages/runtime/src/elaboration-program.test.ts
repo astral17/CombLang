@@ -15,15 +15,16 @@ import {
 import { sourceFileId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
-import { elaborateDirectPlan, elaborateEntityDirectPlan } from './direct-plan.js';
-import { tryElaborateEntityV5DirectPlan } from './entity-v5.js';
-import { validateEntityDirectPlan } from './entity-plan-validation.js';
+import {
+  elaborateDirectPlan,
+  tryElaborateDirectPlan,
+  validateCanonicalDirectPlan,
+} from './direct-plan.js';
 import { RuntimeDiagnosticError } from './elaboration.js';
 import {
   ElaborationExecutionError,
   ElaborationOperationLimitError,
   executeElaborationProgram,
-  executeElaborationProgramV3,
 } from './elaboration-program.js';
 
 const loopSource = `const SIGNAL_A = Signal("virtual", "signal-A");
@@ -638,7 +639,6 @@ const source = CC(prototypes.item['iron-plate'].stackSize * PLATE);`,
     };
     const program = {
       format: 'comblang-elaboration-js' as const,
-      version: 2 as const,
       fileId: sourceFileId('entity-execution.factorio.ts'),
       runtimeParameter: 't',
       containsUnsupportedAsync: false,
@@ -650,13 +650,13 @@ if (alias !== first || first === second) throw new Error('Entity identity was no
 `,
     };
 
-    const plan = executeElaborationProgramV3(program, {
+    const plan = executeElaborationProgram(program, {
       trustedEntityReplayContext: context,
       entityPrototypeResolver: resolver,
     });
 
-    expect(plan.version).toBe(3);
-    if (plan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(plan).not.toHaveProperty('version');
+    if (plan.context === undefined) throw new Error('expected trusted replay context');
     expect(plan.context.profileSetIdentity).toBe(context.profileSetIdentity);
     expect(plan.entities).toHaveLength(2);
     expect(plan.entities.map(({ profile }) => profile.profileId)).toEqual([
@@ -674,23 +674,22 @@ if (alias !== first || first === second) throw new Error('Entity identity was no
     const call = `t.entityFromPrototype([{ value: ${JSON.stringify(syntheticZeroPortEntityProfile.ref.prototypeKey)}, source: { start: 1, end: 8 } }], { start: 1, end: 8 });`;
     const program = {
       format: 'comblang-elaboration-js' as const,
-      version: 2 as const,
       fileId: sourceFileId('entity-call-budget.factorio.ts'),
       runtimeParameter: 't',
       containsUnsupportedAsync: false,
       code: `const entity = ${call}`,
     };
 
-    const plan = executeElaborationProgramV3(program, {
+    const plan = executeElaborationProgram(program, {
       trustedEntityReplayContext: context,
       entityPrototypeResolver: resolver,
       dslCallBudget: 1,
     });
-    if (plan.version !== 3) throw new Error('Expected an Entity v3 plan.');
+    expect(plan).not.toHaveProperty('version');
     expect(plan.entities).toHaveLength(1);
 
     expect(() =>
-      executeElaborationProgramV3(
+      executeElaborationProgram(
         { ...program, code: `const first = ${call}\nconst second = ${call}` },
         {
           trustedEntityReplayContext: context,
@@ -714,23 +713,22 @@ if (alias !== first || first === second) throw new Error('Entity identity was no
       const call = `t.entityFamilyFromPrototype('${constructorName}', [{ value: ${JSON.stringify(syntheticZeroPortEntityProfile.ref.prototypeKey)}, source: { start: 1, end: 8 } }], { start: 1, end: 8 });`;
       const program = {
         format: 'comblang-elaboration-js' as const,
-        version: 2 as const,
         fileId: sourceFileId('lamp-call-budget.factorio.ts'),
         runtimeParameter: 't',
         containsUnsupportedAsync: false,
         code: `const lamp = ${call}`,
       };
 
-      const plan = executeElaborationProgramV3(program, {
+      const plan = executeElaborationProgram(program, {
         trustedEntityReplayContext: context,
         entityPrototypeResolver: resolver,
         dslCallBudget: 1,
       });
-      if (plan.version !== 3) throw new Error('Expected an Entity v3 plan.');
+      expect(plan).not.toHaveProperty('version');
       expect(plan.entities).toHaveLength(1);
 
       expect(() =>
-        executeElaborationProgramV3(
+        executeElaborationProgram(
           { ...program, code: `const first = ${call}\nconst second = ${call}` },
           {
             trustedEntityReplayContext: context,
@@ -748,7 +746,6 @@ if (alias !== first || first === second) throw new Error('Entity identity was no
     const call = `t.entityFamilyFromPrototype('Unknown', [{ value: ${JSON.stringify(syntheticZeroPortEntityProfile.ref.prototypeKey)}, source: { start: 1, end: 8 } }], { start: 1, end: 8 });`;
     const program = {
       format: 'comblang-elaboration-js' as const,
-      version: 2 as const,
       fileId: sourceFileId('entity-family-dispatch.factorio.ts'),
       runtimeParameter: 't',
       containsUnsupportedAsync: false,
@@ -756,7 +753,7 @@ if (alias !== first || first === second) throw new Error('Entity identity was no
     };
 
     expect(() =>
-      executeElaborationProgramV3(program, {
+      executeElaborationProgram(program, {
         trustedEntityReplayContext: context,
         entityPrototypeResolver: resolver,
       }),
@@ -776,12 +773,11 @@ if (Object.is(inline, entity)) throw new Error('distinct construction unexpected
     });
     expect(validateDslSemantics(parsed)).toEqual([]);
 
-    const plan = executeElaborationProgramV3(transformElaborationModule(parsed), {
+    const plan = executeElaborationProgram(transformElaborationModule(parsed), {
       trustedEntityReplayContext: context,
       entityPrototypeResolver: syntheticEntityResolver(),
     });
-    expect(plan.version).toBe(3);
-    if (plan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(plan).not.toHaveProperty('version');
     expect(plan.entities).toHaveLength(2);
     expect(plan.networks).toHaveLength(1);
     expect(plan.producers).toHaveLength(0);
@@ -802,7 +798,7 @@ entity({});`,
     const callStart = parsed.text.indexOf('entity({})');
     expect(callStart).toBeGreaterThanOrEqual(0);
     expect(() =>
-      executeElaborationProgramV3(transformElaborationModule(parsed), {
+      executeElaborationProgram(transformElaborationModule(parsed), {
         trustedEntityReplayContext: context,
         entityPrototypeResolver: syntheticEntityResolver(),
       }),
@@ -830,7 +826,7 @@ ${call};`,
       expect(validateDslSemantics(parsed)).toEqual([]);
 
       expect(() =>
-        executeElaborationProgramV3(transformElaborationModule(parsed), {
+        executeElaborationProgram(transformElaborationModule(parsed), {
           trustedEntityReplayContext: context,
           entityPrototypeResolver: syntheticEntityResolver(),
         }),
@@ -865,12 +861,11 @@ if (!Object.is(first, entity) || !Object.is(second, entity)) {
     });
     expect(validateDslSemantics(parsed)).toEqual([]);
 
-    const plan = executeElaborationProgramV3(transformElaborationModule(parsed), {
+    const plan = executeElaborationProgram(transformElaborationModule(parsed), {
       trustedEntityReplayContext: context,
       entityPrototypeResolver: syntheticEntityResolver(),
     });
-    expect(plan.version).toBe(3);
-    if (plan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(plan).not.toHaveProperty('version');
     expect(plan.networks).toHaveLength(1);
     expect(plan.networks[0]?.fixedColor).toBe('red');
     expect(plan.producers).toHaveLength(0);
@@ -894,12 +889,11 @@ entity(source);`,
     });
     expect(validateDslSemantics(parsed)).toEqual([]);
 
-    const plan = executeElaborationProgramV3(transformElaborationModule(parsed), {
+    const plan = executeElaborationProgram(transformElaborationModule(parsed), {
       trustedEntityReplayContext: context,
       entityPrototypeResolver: syntheticEntityResolver(),
     });
-    expect(plan.version).toBe(3);
-    if (plan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(plan).not.toHaveProperty('version');
     expect(plan.producers).toHaveLength(1);
     expect(plan.networks).toHaveLength(1);
     expect(plan.entities[0]?.connectorBindings).toHaveLength(1);
@@ -916,7 +910,7 @@ entity(123);`,
     expect(validateDslSemantics(invalidInput)).toEqual([]);
     const argumentStart = invalidInput.text.indexOf('123');
     expect(() =>
-      executeElaborationProgramV3(transformElaborationModule(invalidInput), {
+      executeElaborationProgram(transformElaborationModule(invalidInput), {
         trustedEntityReplayContext: context,
         entityPrototypeResolver: syntheticEntityResolver(),
       }),
@@ -941,7 +935,7 @@ entity(second);`,
     });
     expect(validateDslSemantics(conflicting)).toEqual([]);
     expect(() =>
-      executeElaborationProgramV3(transformElaborationModule(conflicting), {
+      executeElaborationProgram(transformElaborationModule(conflicting), {
         trustedEntityReplayContext: context,
         entityPrototypeResolver: syntheticEntityResolver(),
       }),
@@ -968,12 +962,11 @@ output += entity;`,
     });
     expect(validateDslSemantics(parsed)).toEqual([]);
 
-    const plan = executeElaborationProgramV3(transformElaborationModule(parsed), {
+    const plan = executeElaborationProgram(transformElaborationModule(parsed), {
       trustedEntityReplayContext: context,
       entityPrototypeResolver: syntheticEntityResolver(),
     });
-    expect(plan.version).toBe(3);
-    if (plan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(plan).not.toHaveProperty('version');
     expect(plan.networks).toHaveLength(2);
     expect(plan.networks.map(({ fixedColor }) => fixedColor)).toEqual(['red', 'green']);
     expect(plan.producers).toHaveLength(0);
@@ -1002,19 +995,18 @@ output += Entity('entity:synthetic-shared-two-color')(input);`,
     expect(validateDslSemantics(parsed)).toEqual([]);
 
     const program = transformElaborationModule(parsed);
-    const plan = executeElaborationProgramV3(program, {
+    const plan = executeElaborationProgram(program, {
       trustedEntityReplayContext: context,
       entityPrototypeResolver: syntheticEntityResolver(),
       dslCallBudget: 5,
     });
-    expect(plan.version).toBe(3);
-    if (plan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(plan).not.toHaveProperty('version');
     expect(plan.entities).toHaveLength(1);
     expect(plan.networks).toHaveLength(2);
     expect(plan.entities[0]?.connectorBindings).toHaveLength(2);
     expect(plan.producers).toHaveLength(0);
     expect(() =>
-      executeElaborationProgramV3(program, {
+      executeElaborationProgram(program, {
         trustedEntityReplayContext: context,
         entityPrototypeResolver: syntheticEntityResolver(),
         dslCallBudget: 4,
@@ -1035,7 +1027,7 @@ second += entity;`,
     expect(validateDslSemantics(parsed)).toEqual([]);
 
     expect(() =>
-      executeElaborationProgramV3(transformElaborationModule(parsed), {
+      executeElaborationProgram(transformElaborationModule(parsed), {
         trustedEntityReplayContext: context,
         entityPrototypeResolver: syntheticEntityResolver(),
       }),
@@ -1062,7 +1054,7 @@ Attach(new Network());`,
     expect(validateDslSemantics(parsed)).toEqual([]);
 
     expect(() =>
-      executeElaborationProgramV3(transformElaborationModule(parsed), {
+      executeElaborationProgram(transformElaborationModule(parsed), {
         trustedEntityReplayContext: context,
         entityPrototypeResolver: syntheticEntityResolver(),
       }),
@@ -1091,12 +1083,11 @@ output += holder[key];`,
     });
     expect(validateDslSemantics(parsed)).toEqual([]);
 
-    const plan = executeElaborationProgramV3(transformElaborationModule(parsed), {
+    const plan = executeElaborationProgram(transformElaborationModule(parsed), {
       trustedEntityReplayContext: context,
       entityPrototypeResolver: syntheticEntityResolver(),
     });
-    expect(plan.version).toBe(3);
-    if (plan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(plan).not.toHaveProperty('version');
     expect(plan.entities).toHaveLength(1);
     expect(plan.networks).toHaveLength(2);
     expect(plan.producers).toHaveLength(0);
@@ -1126,7 +1117,7 @@ stale(input);`,
     expect(staleCallStart).toBeGreaterThanOrEqual(0);
 
     expect(() =>
-      executeElaborationProgramV3(transformElaborationModule(parsed), {
+      executeElaborationProgram(transformElaborationModule(parsed), {
         trustedEntityReplayContext: context,
         entityPrototypeResolver: syntheticEntityResolver(),
       }),
@@ -1163,7 +1154,7 @@ destination += entity;`,
     expect(validateDslSemantics(parsed)).toEqual([]);
 
     expect(() =>
-      executeElaborationProgramV3(transformElaborationModule(parsed), {
+      executeElaborationProgram(transformElaborationModule(parsed), {
         trustedEntityReplayContext: context,
         entityPrototypeResolver: syntheticEntityResolver(),
       }),
@@ -1174,7 +1165,6 @@ destination += entity;`,
     const context = syntheticEntityExecutionContext();
     const program = {
       format: 'comblang-elaboration-js' as const,
-      version: 2 as const,
       fileId: sourceFileId('entity-capture.factorio.ts'),
       runtimeParameter: 't',
       containsUnsupportedAsync: false,
@@ -1190,14 +1180,13 @@ function Build() {
 }
 const dut = t.instantiate('dut', Build, { start: 43, end: 54 });`,
     };
-    const plan = executeElaborationProgramV3(program, {
+    const plan = executeElaborationProgram(program, {
       trustedEntityReplayContext: context,
       entityPrototypeResolver: syntheticEntityResolver(),
     });
-    expect(plan.version).toBe(3);
-    if (plan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(plan).not.toHaveProperty('version');
     expect(plan.debugInstances?.[0]?.value).toMatchObject({ kind: 'object' });
-    const execution = elaborateEntityDirectPlan(plan, context);
+    const execution = elaborateDirectPlan(plan, context);
     const value = execution.instance('dut').value as {
       readonly direct: object;
       readonly aliases: readonly object[];
@@ -1212,7 +1201,6 @@ const dut = t.instantiate('dut', Build, { start: 43, end: 54 });`,
     const context = syntheticEntityExecutionContext();
     const program = {
       format: 'comblang-elaboration-js' as const,
-      version: 2 as const,
       fileId: sourceFileId('entity-facet-execution.factorio.ts'),
       runtimeParameter: 't',
       containsUnsupportedAsync: false,
@@ -1224,13 +1212,12 @@ if (first !== second) throw new Error('Entity facet was not cached on its author
 `,
     };
 
-    const plan = executeElaborationProgramV3(program, {
+    const plan = executeElaborationProgram(program, {
       trustedEntityReplayContext: context,
       entityPrototypeResolver: syntheticEntityResolver(),
     });
 
-    expect(plan.version).toBe(3);
-    if (plan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(plan).not.toHaveProperty('version');
     expect(plan.networks).toHaveLength(1);
     expect(plan.networks[0]?.fixedColor).toBe('red');
     expect(plan.entities).toHaveLength(1);
@@ -1247,16 +1234,15 @@ if (first !== second) throw new Error('Entity facet was not cached on its author
         },
       },
     ]);
-    const replay = validateEntityDirectPlan(plan, context);
+    const replay = validateCanonicalDirectPlan(plan, context);
     expect(replay.diagnostics).toEqual([]);
-    expect(replay.value?.plan.entities[0]?.connectorBindings[0]?.generation).toBe(0);
+    expect(replay.value?.entities[0]?.connectorBindings[0]?.generation).toBe(0);
   });
 
   test('adopts a readable external Network once and rejects a conflicting rebind', () => {
     const context = syntheticEntityExecutionContext();
     const program = {
       format: 'comblang-elaboration-js' as const,
-      version: 2 as const,
       fileId: sourceFileId('entity-bind-execution.factorio.ts'),
       runtimeParameter: 't',
       containsUnsupportedAsync: false,
@@ -1273,7 +1259,7 @@ t.bindEntity(entity, 'shared', 'shared-red', other, 'input', { start: 118, end: 
     };
 
     expect(() =>
-      executeElaborationProgramV3(program, {
+      executeElaborationProgram(program, {
         trustedEntityReplayContext: context,
         entityPrototypeResolver: syntheticEntityResolver(),
       }),
@@ -1284,7 +1270,6 @@ t.bindEntity(entity, 'shared', 'shared-red', other, 'input', { start: 118, end: 
     const context = syntheticEntityExecutionContext();
     const program = {
       format: 'comblang-elaboration-js' as const,
-      version: 2 as const,
       fileId: sourceFileId('entity-color-bind.factorio.ts'),
       runtimeParameter: 't',
       containsUnsupportedAsync: false,
@@ -1296,7 +1281,7 @@ t.bindEntity(entity, 'shared', 'shared-green', external, 'input', { start: 50, e
 `,
     };
     expect(() =>
-      executeElaborationProgramV3(program, {
+      executeElaborationProgram(program, {
         trustedEntityReplayContext: context,
         entityPrototypeResolver: syntheticEntityResolver(),
       }),
@@ -1307,7 +1292,6 @@ t.bindEntity(entity, 'shared', 'shared-green', external, 'input', { start: 50, e
     const context = syntheticEntityExecutionContext();
     const outputProgram = {
       format: 'comblang-elaboration-js' as const,
-      version: 2 as const,
       fileId: sourceFileId('entity-output-bind.factorio.ts'),
       runtimeParameter: 't',
       containsUnsupportedAsync: false,
@@ -1317,12 +1301,11 @@ const external = t.network('external', undefined, { start: 9, end: 17 });
 t.bindEntity(entity, 'shared', 'shared-red', external, 'output', { start: 18, end: 49 });
 `,
     };
-    const outputPlan = executeElaborationProgramV3(outputProgram, {
+    const outputPlan = executeElaborationProgram(outputProgram, {
       trustedEntityReplayContext: context,
       entityPrototypeResolver: syntheticEntityResolver(),
     });
-    expect(outputPlan.version).toBe(3);
-    if (outputPlan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(outputPlan).not.toHaveProperty('version');
     expect(outputPlan.entities[0]?.connectorBindings[0]?.direction).toBe('output');
 
     const mismatchProgram = {
@@ -1334,7 +1317,7 @@ t.bindEntity(entity, 'shared', 'shared-red', external, 'output', { start: 18, en
       ),
     };
     expect(() =>
-      executeElaborationProgramV3(mismatchProgram, {
+      executeElaborationProgram(mismatchProgram, {
         trustedEntityReplayContext: context,
         entityPrototypeResolver: syntheticEntityResolver(),
       }),
@@ -1345,7 +1328,6 @@ t.bindEntity(entity, 'shared', 'shared-red', external, 'output', { start: 18, en
     const context = syntheticEntityExecutionContext();
     const program = {
       format: 'comblang-elaboration-js' as const,
-      version: 2 as const,
       fileId: sourceFileId('entity-stale-facet.factorio.ts'),
       runtimeParameter: 't',
       containsUnsupportedAsync: false,
@@ -1359,7 +1341,7 @@ t.entityFacet(entity, 'shared', 'shared-red', { start: 47, end: 78 });
     };
 
     expect(() =>
-      executeElaborationProgramV3(program, {
+      executeElaborationProgram(program, {
         trustedEntityReplayContext: context,
         entityPrototypeResolver: syntheticEntityResolver(),
       }),
@@ -1370,7 +1352,6 @@ t.entityFacet(entity, 'shared', 'shared-red', { start: 47, end: 78 });
     const context = syntheticEntityExecutionContext();
     const program = {
       format: 'comblang-elaboration-js' as const,
-      version: 2 as const,
       fileId: sourceFileId('entity-read-projection.factorio.ts'),
       runtimeParameter: 't',
       containsUnsupportedAsync: false,
@@ -1382,12 +1363,11 @@ if (input.name !== output.networks?.[0] && output.kind !== 'combinator') throw n
 `,
     };
 
-    const plan = executeElaborationProgramV3(program, {
+    const plan = executeElaborationProgram(program, {
       trustedEntityReplayContext: context,
       entityPrototypeResolver: syntheticEntityResolver(),
     });
-    expect(plan.version).toBe(3);
-    if (plan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(plan).not.toHaveProperty('version');
     expect(plan.producers).toHaveLength(1);
     expect(plan.entities[0]?.connectorBindings).toHaveLength(1);
 
@@ -1410,7 +1390,7 @@ t.networkArgument(entity, 'Read', 'input', 'readonly', undefined, { start: 9, en
 `,
     };
     expect(() =>
-      executeElaborationProgramV3(noDefaultProgram, {
+      executeElaborationProgram(noDefaultProgram, {
         trustedEntityReplayContext: noDefault,
         entityPrototypeResolver: syntheticEntityResolver(),
       }),
@@ -1425,7 +1405,7 @@ t.networkArgument(entity, 'Write', 'destination', 'ref', undefined, { start: 9, 
 `,
     };
     expect(() =>
-      executeElaborationProgramV3(writableProgram, {
+      executeElaborationProgram(writableProgram, {
         trustedEntityReplayContext: context,
         entityPrototypeResolver: syntheticEntityResolver(),
       }),
@@ -1436,7 +1416,6 @@ t.networkArgument(entity, 'Write', 'destination', 'ref', undefined, { start: 9, 
     const context = syntheticEntityExecutionContext();
     const program = {
       format: 'comblang-elaboration-js' as const,
-      version: 2 as const,
       fileId: sourceFileId('entity-return-ownership.factorio.ts'),
       runtimeParameter: 't',
       containsUnsupportedAsync: false,
@@ -1450,11 +1429,11 @@ const returnedFacet = t.entityFacet(returned, 'shared', 'shared-red', { start: 3
 if (returnedFacet.name !== localFacet.name) throw new Error('local Entity facet was not preserved');
 `,
     };
-    const plan = executeElaborationProgramV3(program, {
+    const plan = executeElaborationProgram(program, {
       trustedEntityReplayContext: context,
       entityPrototypeResolver: syntheticEntityResolver(),
     });
-    expect(plan.version).toBe(3);
+    expect(plan).not.toHaveProperty('version');
 
     const externalProgram = {
       ...program,
@@ -1467,12 +1446,11 @@ t.bindEntity(local, 'shared', 'shared-red', external, 'input', { start: 23, end:
 t.returnValue(local, { start: 55, end: 67 });
 `,
     };
-    const externalPlan = executeElaborationProgramV3(externalProgram, {
+    const externalPlan = executeElaborationProgram(externalProgram, {
       trustedEntityReplayContext: context,
       entityPrototypeResolver: syntheticEntityResolver(),
     });
-    expect(externalPlan.version).toBe(3);
-    if (externalPlan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(externalPlan).not.toHaveProperty('version');
     expect(externalPlan.entities[0]?.connectorBindings[0]?.network).toBe('external');
 
     const borrowedProgram = {
@@ -1488,7 +1466,7 @@ t.returnValue(local, { start: 77, end: 89 });
 `,
     };
     expect(() =>
-      executeElaborationProgramV3(borrowedProgram, {
+      executeElaborationProgram(borrowedProgram, {
         trustedEntityReplayContext: context,
         entityPrototypeResolver: syntheticEntityResolver(),
       }),
@@ -1505,7 +1483,7 @@ t.returnValue([local, localFacet], { start: 26, end: 39 });
 `,
     };
     expect(() =>
-      executeElaborationProgramV3(mixedReturnProgram, {
+      executeElaborationProgram(mixedReturnProgram, {
         trustedEntityReplayContext: context,
         entityPrototypeResolver: syntheticEntityResolver(),
       }),
@@ -1516,7 +1494,6 @@ t.returnValue([local, localFacet], { start: 26, end: 39 });
     const context = syntheticEntityExecutionContext();
     const staleProgram = {
       format: 'comblang-elaboration-js' as const,
-      version: 2 as const,
       fileId: sourceFileId('entity-stale-view.factorio.ts'),
       runtimeParameter: 't',
       containsUnsupportedAsync: false,
@@ -1529,7 +1506,7 @@ t.entityFacet(oldAlias, 'shared', 'shared-red', { start: 26, end: 57 });
 `,
     };
     expect(() =>
-      executeElaborationProgramV3(staleProgram, {
+      executeElaborationProgram(staleProgram, {
         trustedEntityReplayContext: context,
         entityPrototypeResolver: syntheticEntityResolver(),
       }),
@@ -1548,12 +1525,11 @@ if (result.a !== result.b) throw new Error('duplicate Entity aliases were not pr
 if (t.entityFacet(result.a, 'shared', 'shared-red', { start: 42, end: 73 }).name !== facet.name) throw new Error('returned Entity lost its facet');
 `,
     };
-    const plan = executeElaborationProgramV3(aliasProgram, {
+    const plan = executeElaborationProgram(aliasProgram, {
       trustedEntityReplayContext: context,
       entityPrototypeResolver: syntheticEntityResolver(),
     });
-    expect(plan.version).toBe(3);
-    if (plan.version !== 3) throw new Error('expected an Entity v3 plan');
+    expect(plan).not.toHaveProperty('version');
     expect(plan.entities).toHaveLength(1);
   });
 
@@ -1561,7 +1537,6 @@ if (t.entityFacet(result.a, 'shared', 'shared-red', { start: 42, end: 73 }).name
     const context = syntheticEntityExecutionContext();
     const program = {
       format: 'comblang-elaboration-js' as const,
-      version: 2 as const,
       fileId: sourceFileId('entity-stale-placement.factorio.ts'),
       runtimeParameter: 't',
       containsUnsupportedAsync: false,
@@ -1575,7 +1550,7 @@ t.place(stale, 1, 2, { start: 28, end: 41 });`,
     };
 
     expect(() =>
-      executeElaborationProgramV3(program, {
+      executeElaborationProgram(program, {
         trustedEntityReplayContext: context,
         entityPrototypeResolver: syntheticEntityResolver(),
       }),
@@ -1694,13 +1669,13 @@ globalThis.${globalKey} = Promise.resolve().then(() => value = 2);`,
     );
   });
 
-  test('validates the versioned hygienic runtime bridge metadata', () => {
+  test('validates the hygienic runtime bridge metadata', () => {
     const program = transformElaborationModule(
       parseFile({ path: 'runtime-envelope.factorio.ts', text: 'const input = new Network();' }),
     );
 
     expect(() =>
-      executeElaborationProgram({ ...program, version: 1 } as unknown as typeof program),
+      executeElaborationProgram({ ...program, format: 'other' } as unknown as typeof program),
     ).toThrow(/Unsupported elaboration JavaScript format/);
     expect(() => executeElaborationProgram({ ...program, runtimeParameter: 'bridge) {}' })).toThrow(
       /Invalid elaboration runtime parameter/,
@@ -5039,12 +5014,12 @@ const values = Duplicate(input);`,
 const entity = Constant(selectPrototype());`,
       }),
     );
-    const plan = executeElaborationProgramV3(one, {
+    const plan = executeElaborationProgram(one, {
       trustedEntityReplayContext: context,
       entityPrototypeResolver: resolver,
       dslCallBudget: 1,
     });
-    expect(plan.version).toBe(3);
+    expect(plan).not.toHaveProperty('version');
 
     const two = transformElaborationModule(
       parseFile({
@@ -5055,7 +5030,7 @@ const second = Constant(selectPrototype());`,
       }),
     );
     expect(() =>
-      executeElaborationProgramV3(two, {
+      executeElaborationProgram(two, {
         trustedEntityReplayContext: context,
         entityPrototypeResolver: resolver,
         dslCallBudget: 1,
@@ -5066,7 +5041,7 @@ const second = Constant(selectPrototype());`,
       parseFile({ path: 'invalid-constant-budget.factorio.ts', text: 'Constant();' }),
     );
     expect(() =>
-      executeElaborationProgramV3(invalid, {
+      executeElaborationProgram(invalid, {
         trustedEntityReplayContext: context,
         entityPrototypeResolver: resolver,
         dslCallBudget: 1,
@@ -5098,7 +5073,7 @@ const second = Constant(selectPrototype());`,
         text: 'const exact: ConstantCombinator = Constant({ sections: [] });',
       }),
     );
-    const plan = executeElaborationProgramV3(program, {
+    const plan = executeElaborationProgram(program, {
       trustedEntityReplayContext: context,
       entityPrototypeResolver: {
         database: context.database,
@@ -5115,7 +5090,7 @@ const second = Constant(selectPrototype());`,
         },
       },
     });
-    expect(plan.version).toBe(4);
+    expect(plan).not.toHaveProperty('version');
     expect(plan.diagnostics).toContainEqual(
       expect.objectContaining({ code: 'CL2001', severity: 'warning' }),
     );
@@ -5162,12 +5137,11 @@ const output = new Network();
 output += comb;`,
     });
     expect(validateDslSemantics(parsed)).toEqual([]);
-    const plan = executeElaborationProgramV3(transformElaborationModule(parsed), {
+    const plan = executeElaborationProgram(transformElaborationModule(parsed), {
       trustedEntityReplayContext: context,
       entityPrototypeResolver: resolver,
     });
-    expect(plan.version).toBe(5);
-    if (plan.version !== 5) throw new Error('Expected a v5 plan.');
+    expect(plan).not.toHaveProperty('version');
     expect(plan.producers).toMatchObject([
       {
         kind: 'arithmetic',
@@ -5180,14 +5154,14 @@ output += comb;`,
     ]);
     expect(plan.entities).toHaveLength(1);
     expect(plan.entities[0]?.configuration).toMatchObject({ mode: 'arithmetic' });
-    const lowered = tryElaborateEntityV5DirectPlan(plan, context);
+    const lowered = tryElaborateDirectPlan(plan, context);
     expect(lowered.diagnostics).toEqual([]);
-    expect(lowered.execution?.circuit.ir.version).toBe(5);
+    expect(lowered.execution?.circuit.ir).not.toHaveProperty('version');
     expect(lowered.execution?.circuit.ir.entities[0]?.configuration).toMatchObject({
       mode: 'arithmetic',
       left: { kind: 'signal', network: expect.stringMatching(/^network:/) },
     });
-    expect(lowered.resolvedCircuit?.format).toBe('comblang-resolved-entity-v5');
+    expect(lowered.resolvedCircuit?.format).toBe('comblang-resolved-circuit');
   });
 
   test('rolls back a caught exact Arithmetic failure before the next valid allocation', () => {
@@ -5233,13 +5207,12 @@ const valid: ArithmeticCombinator = Arithmetic({ left: input[A], operation: 'mul
 const output = new Network();
 output += valid;`,
     });
-    const plan = executeElaborationProgramV3(transformElaborationModule(parsed), {
+    const plan = executeElaborationProgram(transformElaborationModule(parsed), {
       trustedEntityReplayContext: context,
       entityPrototypeResolver: resolver,
     });
 
-    expect(plan.version).toBe(5);
-    if (plan.version !== 5) throw new Error('Expected a v5 plan.');
+    expect(plan).not.toHaveProperty('version');
     expect(plan.producers).toHaveLength(1);
     expect(plan.entities).toHaveLength(1);
     expect(plan.entities[0]?.ordinal).toBe(1);

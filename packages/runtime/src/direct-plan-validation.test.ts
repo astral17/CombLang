@@ -5,10 +5,9 @@ import { validateDirectPlanEnvelope } from './direct-plan-validation.js';
 const span = { fileId: 'schema.factorio.ts', start: 0, end: 1 };
 
 describe('direct plan envelope validation', () => {
-  test('accepts a minimal versioned transport without allocating a circuit', () => {
+  test('accepts a minimal canonical transport without allocating a circuit', () => {
     const plan = {
       format: 'comblang-direct-plan',
-      version: 2,
       networks: [{ name: 'input', source: span, instancePath: [] }],
       producers: [],
     };
@@ -23,10 +22,9 @@ describe('direct plan envelope validation', () => {
     expect(Object.isFrozen(result.value?.plan.networks[0])).toBe(true);
   });
 
-  test.each(['generation', 'consumedAt'])('rejects v3-only Network field %s in v2', (field) => {
+  test.each(['generation', 'consumedAt'])('accepts canonical Network field %s', (field) => {
     const plan: Record<string, unknown> = {
       format: 'comblang-direct-plan',
-      version: 2,
       networks: [
         {
           name: 'input',
@@ -38,16 +36,13 @@ describe('direct plan envelope validation', () => {
       producers: [],
     };
 
-    expect(validateDirectPlanEnvelope(plan).diagnostics[0]).toMatchObject({
-      code: 'RT1001',
-      message: 'Invalid Network descriptor in direct plan.',
-    });
+    expect(validateDirectPlanEnvelope(plan).diagnostics).toEqual([]);
   });
 
   test.each([
     {
       name: 'missing Network collection',
-      plan: { format: 'comblang-direct-plan', version: 2, producers: [] },
+      plan: { format: 'comblang-direct-plan', producers: [] },
       code: 'RT1001',
       message: 'Invalid direct elaboration plan envelope.',
     },
@@ -55,7 +50,6 @@ describe('direct plan envelope validation', () => {
       name: 'duplicate Network name',
       plan: {
         format: 'comblang-direct-plan',
-        version: 2,
         networks: [
           { name: 'input', source: span, instancePath: [] },
           { name: 'input', source: span, instancePath: [] },
@@ -69,7 +63,6 @@ describe('direct plan envelope validation', () => {
       name: 'non-array transfer collection',
       plan: {
         format: 'comblang-direct-plan',
-        version: 2,
         networks: [],
         producers: [],
         networkTransfers: {},
@@ -118,7 +111,6 @@ describe('direct plan envelope validation', () => {
   ])('rejects $name with its payload path', ({ mutate, path }) => {
     const plan: Record<string, unknown> = {
       format: 'comblang-direct-plan',
-      version: 2,
       networks: [{ name: 'input', source: span, instancePath: [] }],
       producers: [],
     };
@@ -132,7 +124,6 @@ describe('direct plan envelope validation', () => {
   test('accepts a complete arithmetic producer with single and pair inputs', () => {
     const plan = {
       format: 'comblang-direct-plan',
-      version: 2,
       networks: [
         { name: 'a', source: span, instancePath: [] },
         { name: 'b', source: span, instancePath: [] },
@@ -163,7 +154,6 @@ describe('direct plan envelope validation', () => {
   test('accepts and canonicalizes the discriminated Selector producer', () => {
     const plan = {
       format: 'comblang-direct-plan',
-      version: 2,
       networks: [
         { name: 'red', source: span, instancePath: [] },
         { name: 'green', source: span, instancePath: [] },
@@ -224,7 +214,6 @@ describe('direct plan envelope validation', () => {
     }
     const plan = {
       format: 'comblang-direct-plan',
-      version: 2,
       networks: [
         { name: 'input', source: span, instancePath: [] },
         { name: 'out', source: span, instancePath: [] },
@@ -252,7 +241,6 @@ describe('direct plan envelope validation', () => {
   ])('rejects Selector %s before replay', (_name, overrides, path) => {
     const plan = {
       format: 'comblang-direct-plan',
-      version: 2,
       networks: [
         { name: 'input', source: span, instancePath: [] },
         { name: 'out', source: span, instancePath: [] },
@@ -342,7 +330,6 @@ describe('direct plan envelope validation', () => {
     mutate(producer);
     const plan = {
       format: 'comblang-direct-plan',
-      version: 2,
       networks: [
         { name: 'input', source: span, instancePath: [] },
         { name: 'output', source: span, instancePath: [] },
@@ -358,7 +345,6 @@ describe('direct plan envelope validation', () => {
   test('accepts nested Decider conditions, repeated output rows, and empty constants', () => {
     const plan = {
       format: 'comblang-direct-plan',
-      version: 2,
       networks: [
         { name: 'input', source: span, instancePath: [] },
         { name: 'other', source: span, instancePath: [] },
@@ -524,7 +510,6 @@ describe('direct plan envelope validation', () => {
     mutate(producer);
     const plan = {
       format: 'comblang-direct-plan',
-      version: 2,
       networks: [
         { name: 'input', source: span, instancePath: [] },
         { name: 'output', source: span, instancePath: [] },
@@ -549,7 +534,6 @@ describe('direct plan envelope validation', () => {
       condition = { kind: 'and', conditions: [condition] };
     const plan = {
       format: 'comblang-direct-plan',
-      version: 2,
       networks: [
         { name: 'input', source: span, instancePath: [] },
         { name: 'output', source: span, instancePath: [] },
@@ -598,7 +582,6 @@ describe('direct plan envelope validation', () => {
   ])('rejects Constant $name before replay', ({ outputs, path }) => {
     const plan = {
       format: 'comblang-direct-plan',
-      version: 2,
       networks: [{ name: 'output', source: span, instancePath: [] }],
       producers: [
         {
@@ -627,7 +610,6 @@ describe('direct plan envelope validation', () => {
     });
     const plan = {
       format: 'comblang-direct-plan',
-      version: 2,
       networks: [{ name: 'output', source: span, instancePath: [] }],
       producers: [constant('same'), constant('same')],
     };
@@ -640,12 +622,10 @@ describe('direct plan envelope validation', () => {
     ]);
   });
 
-  test('canonicalizes legacy Decider output and freezes only known payload fields', () => {
+  test('canonicalizes single Decider output and freezes only known payload fields', () => {
     const output = { kind: 'each', refKind: 'single', network: 'input', ignored: true };
     const plan = {
       format: 'comblang-direct-plan',
-      version: 2,
-      ignored: { mutable: true },
       networks: [
         { name: 'input', source: span, instancePath: [], ignored: true },
         { name: 'output', source: span, instancePath: [] },
@@ -695,7 +675,6 @@ describe('direct plan envelope validation', () => {
   test('accepts and freezes nested debug values and related diagnostics', () => {
     const plan = {
       format: 'comblang-direct-plan',
-      version: 2,
       networks: [{ name: 'output', source: span, instancePath: [] }],
       producers: [
         {
@@ -782,7 +761,6 @@ describe('direct plan envelope validation', () => {
   ])('rejects $name before debug reconstruction', ({ value, path, code }) => {
     const plan = {
       format: 'comblang-direct-plan',
-      version: 2,
       networks: [{ name: 'output', source: span, instancePath: [] }],
       producers: [],
       debugInstances: [{ name: 'fixture', path: [], source: span, value }],
@@ -798,7 +776,6 @@ describe('direct plan envelope validation', () => {
     for (let depth = 0; depth < 130; depth += 1) value = { kind: 'array', values: [value] };
     const plan = {
       format: 'comblang-direct-plan',
-      version: 2,
       networks: [],
       producers: [],
       debugInstances: [{ name: 'fixture', path: [], source: span, value }],
@@ -841,7 +818,6 @@ describe('direct plan envelope validation', () => {
   ])('rejects diagnostic $name', ({ diagnostic, path }) => {
     const plan = {
       format: 'comblang-direct-plan',
-      version: 2,
       networks: [],
       producers: [],
       diagnostics: [diagnostic],

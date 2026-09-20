@@ -17,11 +17,6 @@ import type {
   SelectorProducerConfig,
   EntityPlacement,
 } from '@comblang/compiler/ir';
-import type { NativeCircuitIrV3 } from '@comblang/compiler/entity';
-import type { NativeCircuitIrV4 } from '@comblang/compiler/entity-v4';
-import type { NativeCircuitIrV5 } from '@comblang/compiler/entity-v5';
-import type { NativeCircuitIrV6 } from '@comblang/compiler/entity-v6';
-import type { NativeCircuitIrV7 } from '@comblang/compiler/entity-v7';
 import { constantConfigurationFromOutputs, SparseBus, type SignalId } from '@comblang/factorio';
 import {
   ArithmeticCombinatorDevice,
@@ -275,13 +270,7 @@ function unique<T>(values: Iterable<T>): T[] {
   return [...new Set(values)];
 }
 
-type SimulatableNativeCircuitIr =
-  | NativeCircuitIr
-  | NativeCircuitIrV3
-  | NativeCircuitIrV4
-  | NativeCircuitIrV5
-  | NativeCircuitIrV6
-  | NativeCircuitIrV7;
+type SimulatableNativeCircuitIr = Pick<NativeCircuitIr, 'networks' | 'producers'>;
 
 function simulationDevicesForIr(ir: SimulatableNativeCircuitIr): {
   readonly concrete: readonly SynchronousDevice[];
@@ -323,7 +312,9 @@ function simulationDevicesForIr(ir: SimulatableNativeCircuitIr): {
       const config = {
         id: producer.id as unknown as DeviceId,
         outputNetworks: producer.destinations,
-        configuration: constantConfigurationFromOutputs(producer.config.outputs),
+        configuration:
+          producer.config.configuration ??
+          constantConfigurationFromOutputs(producer.config.outputs),
       };
       concrete.push(new ConstantCombinatorDevice(config));
       value.push(new ConstantValueCombinatorDevice(config));
@@ -665,9 +656,9 @@ export class DslRuntime {
     const networks = [...this.#networks.values()];
     const graph: ElaborationGraph = Object.freeze({
       format: 'comblang-eg',
-      version: 2,
       networks: Object.freeze(networks),
       producers: Object.freeze(producers),
+      entities: [],
       attachments: Object.freeze(
         producers.flatMap((producer) =>
           (this.#attachments.get(producer.id) ?? []).map((attachment) =>
@@ -678,11 +669,11 @@ export class DslRuntime {
     });
     const ir: NativeCircuitIr = Object.freeze({
       format: 'comblang-ncir',
-      version: 2,
       networks: Object.freeze(
         networks.map((network) => Object.freeze({ ...network, color: colors.get(network.id)! })),
       ),
       producers: graph.producers,
+      entities: [],
     });
     return Object.freeze({
       graph,

@@ -61,8 +61,9 @@ only and does not add selector computation or native authority.
 
 The computation-bearing exact `Selector({ input, operation, ... })` overload is
 separate from this catalog surface. It currently supports only deterministic
-`select` and `count`, lowers through Entity v7, and uses the simulator/model and
-Blueprint preview boundaries documented in [Entity v7](entity-v7.md). The
+`select` and `count`, lowers through the canonical Entity pipeline, and uses the
+simulator/model and Blueprint preview boundaries documented in
+[Entity pipeline](entity-pipeline.md). The
 catalog's checked/raw structural configuration remains available for other
 operation groups; neither surface is native Selector conformance evidence.
 

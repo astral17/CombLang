@@ -16,12 +16,7 @@ import type {
   EntityRawJsonObject,
   EntityPhysicalRecord,
   EntityPhysicalTypedConfiguration,
-  NativeCircuitIrV3,
 } from './entity.js';
-import type { EntityPhysicalRecordV4, NativeCircuitIrV4 } from './entity-v4.js';
-import type { EntityPhysicalRecordV5, NativeCircuitIrV5 } from './entity-v5.js';
-import type { EntityPhysicalRecordV6, NativeCircuitIrV6 } from './entity-v6.js';
-import type { EntityPhysicalRecordV7, NativeCircuitIrV7 } from './entity-v7.js';
 
 import type { CircuitColor, CircuitProducerNode, NativeCircuitIr } from './ir.js';
 
@@ -251,28 +246,9 @@ export function generateBlueprintJson(
   ir: NativeCircuitIr,
   options: BlueprintJsonOptions = {},
 ): FactorioBlueprintJson {
-  return generatePreview(ir, options, []);
-}
-
-/** Internal Entity preview path; native import compatibility requires separate fixtures. */
-export function generateEntityBlueprintJson(
-  ir: NativeCircuitIrV3,
-  options: BlueprintJsonOptions = {},
-): FactorioBlueprintJson {
-  return generatePreview(
-    { format: 'comblang-ncir', version: 2, networks: ir.networks, producers: ir.producers },
-    options,
-    ir.entities,
-  );
-}
-
-/** Internal v4 preview path; linked Constant views share their Entity object number. */
-export function generateEntityComputationBlueprintJson(
-  ir: NativeCircuitIrV4,
-  options: BlueprintJsonOptions = {},
-): FactorioBlueprintJson {
-  const entitiesById = new Map(ir.entities.map((entity) => [entity.id, entity]));
-  const linked = new Map<ProducerId, EntityPhysicalRecordV4>();
+  const physicalEntities = ir.entities ?? [];
+  const entitiesById = new Map(physicalEntities.map((entity) => [entity.id, entity]));
+  const linked = new Map<ProducerId, EntityPhysicalRecord>();
   for (const producer of ir.producers) {
     if (producer.entityId === undefined) continue;
     const entity = entitiesById.get(producer.entityId);
@@ -280,98 +256,14 @@ export function generateEntityComputationBlueprintJson(
       throw new BlueprintJsonError(`Missing physical Entity for linked producer ${producer.id}.`);
     linked.set(producer.id, entity);
   }
-  return generatePreview(
-    { format: 'comblang-ncir', version: 2, networks: ir.networks, producers: ir.producers },
-    options,
-    ir.entities,
-    linked,
-  );
-}
-
-/** Cumulative v5 preview path; linked Constant and Arithmetic entities share their producer number. */
-export function generateEntityComputationBlueprintJsonV5(
-  ir: NativeCircuitIrV5,
-  options: BlueprintJsonOptions = {},
-): FactorioBlueprintJson {
-  const entitiesById = new Map(ir.entities.map((entity) => [entity.id, entity]));
-  const linked = new Map<ProducerId, EntityPhysicalRecordV5>();
-  for (const producer of ir.producers) {
-    if (producer.entityId === undefined) continue;
-    const entity = entitiesById.get(producer.entityId);
-    if (entity === undefined)
-      throw new BlueprintJsonError(`Missing physical Entity for linked producer ${producer.id}.`);
-    linked.set(producer.id, entity);
-  }
-  return generatePreview(
-    { format: 'comblang-ncir', version: 2, networks: ir.networks, producers: ir.producers },
-    options,
-    ir.entities,
-    linked,
-  );
-}
-
-/** Cumulative v6 preview path; linked Constant, Arithmetic, and Decider entities share their producer number. */
-export function generateEntityComputationBlueprintJsonV6(
-  ir: NativeCircuitIrV6,
-  options: BlueprintJsonOptions = {},
-): FactorioBlueprintJson {
-  const entitiesById = new Map(ir.entities.map((entity) => [entity.id, entity]));
-  const linked = new Map<ProducerId, EntityPhysicalRecordV6>();
-  for (const producer of ir.producers) {
-    if (producer.entityId === undefined) continue;
-    const entity = entitiesById.get(producer.entityId);
-    if (entity === undefined)
-      throw new BlueprintJsonError(`Missing physical Entity for linked producer ${producer.id}.`);
-    linked.set(producer.id, entity);
-  }
-  return generatePreview(
-    { format: 'comblang-ncir', version: 2, networks: ir.networks, producers: ir.producers },
-    options,
-    ir.entities,
-    linked,
-  );
-}
-
-/** Cumulative v7 preview path; linked Constant, Arithmetic, Decider, and Selector entities share their producer number. */
-export function generateEntityComputationBlueprintJsonV7(
-  ir: NativeCircuitIrV7,
-  options: BlueprintJsonOptions = {},
-): FactorioBlueprintJson {
-  const entitiesById = new Map(ir.entities.map((entity) => [entity.id, entity]));
-  const linked = new Map<ProducerId, EntityPhysicalRecordV7>();
-  for (const producer of ir.producers) {
-    if (!('entityId' in producer) || producer.entityId === undefined) continue;
-    const entity = entitiesById.get(producer.entityId);
-    if (entity === undefined)
-      throw new BlueprintJsonError(`Missing physical Entity for linked producer ${producer.id}.`);
-    linked.set(producer.id, entity);
-  }
-  return generatePreview(
-    { format: 'comblang-ncir', version: 2, networks: ir.networks, producers: ir.producers },
-    options,
-    ir.entities,
-    linked,
-  );
+  return generatePreview(ir, options, physicalEntities, linked);
 }
 
 function generatePreview(
   ir: NativeCircuitIr,
   options: BlueprintJsonOptions,
-  physicalEntities: readonly (
-    | EntityPhysicalRecord
-    | EntityPhysicalRecordV4
-    | EntityPhysicalRecordV5
-    | EntityPhysicalRecordV6
-    | EntityPhysicalRecordV7
-  )[],
-  linkedEntities: ReadonlyMap<
-    ProducerId,
-    | EntityPhysicalRecord
-    | EntityPhysicalRecordV4
-    | EntityPhysicalRecordV5
-    | EntityPhysicalRecordV6
-    | EntityPhysicalRecordV7
-  > = new Map(),
+  physicalEntities: readonly EntityPhysicalRecord[],
+  linkedEntities: ReadonlyMap<ProducerId, EntityPhysicalRecord> = new Map(),
 ): FactorioBlueprintJson {
   const maxRows = options.maxDeciderConditionRows ?? 1024;
   if (!Number.isSafeInteger(maxRows) || maxRows < 1) {

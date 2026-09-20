@@ -9,16 +9,14 @@ import {
   type SignalId,
 } from '@comblang/factorio';
 import type {
-  DirectElaborationPlanV3,
-  DirectElaborationPlanV4,
-  DirectElaborationPlanV5,
-  DirectElaborationPlanV6,
-  DirectElaborationPlanV7,
   ElaborationJavaScript,
   EntityBehaviorKey,
+  EntityArithmeticConfiguration,
+  EntityConstantConfiguration,
   EntityConfiguration,
   EntityConnectorBindingProvenance,
   EntityConnectorProfile,
+  EntityDeciderConfiguration,
   EntityLaneEndpoint,
   EntityLaneKey,
   EntityNativeComparator,
@@ -28,19 +26,8 @@ import type {
   EntityProfile,
   EntityProfileRef,
   EntityId,
+  EntitySelectorConfiguration,
 } from '@comblang/compiler';
-import type { EntityV4ConstantConfiguration } from '@comblang/compiler/entity-v4';
-import type { EntityV5ArithmeticConfiguration } from '@comblang/compiler/entity-v5';
-import type {
-  DirectPlanProducerV6,
-  EntityPlanRecordV6,
-  EntityV6DeciderConfiguration,
-} from '@comblang/compiler/entity-v6';
-import type { EntityPlanRecordV5 } from '@comblang/compiler/entity-v5';
-import type {
-  EntityPlanRecordV7,
-  EntityV7SelectorConfiguration,
-} from '@comblang/compiler/entity-v7';
 import { entityFamilyDslNames, type DslParameterContract } from '@comblang/language';
 import type {
   DirectElaborationPlan,
@@ -281,19 +268,19 @@ interface LinkedConstantAssociation {
 interface LinkedArithmeticAssociation {
   readonly kind: 'arithmetic';
   readonly entity: EntityValue;
-  readonly configuration: EntityV5ArithmeticConfiguration;
+  readonly configuration: EntityArithmeticConfiguration;
 }
 
 interface LinkedDeciderAssociation {
   readonly kind: 'decider';
   readonly entity: EntityValue;
-  readonly configuration: EntityV6DeciderConfiguration;
+  readonly configuration: EntityDeciderConfiguration;
 }
 
 interface LinkedSelectorAssociation {
   readonly kind: 'selector';
   readonly entity: EntityValue;
-  readonly configuration: EntityV7SelectorConfiguration;
+  readonly configuration: EntitySelectorConfiguration;
 }
 
 type LinkedProducerAssociation =
@@ -306,7 +293,7 @@ export interface ElaborationExecutionOptions {
   readonly dslCallBudget?: number;
   /** Explicit immutable prototype environment exposed to source as `prototypes`. */
   readonly prototypes?: PrototypeProvider;
-  /** Host-only v3 profile context; never exposed to executed source. */
+  /** Host-only profile context; never exposed to executed source. */
   readonly trustedEntityReplayContext?: TrustedEntityReplayContext;
   /** Narrow prototype lookup used by internal Entity construction tests. */
   readonly entityPrototypeResolver?: EntityPrototypeResolver;
@@ -545,7 +532,7 @@ class ElaborationRecorder {
       evaluateArguments: () => readonly CallArgument[],
       rawSpan: RawSpan,
     ): unknown => {
-      // Compatibility with already-generated v2 programs using argument thunks.
+      // Compatibility with previously generated programs using argument thunks.
       const prepared = this.api.prepareMember(receiver, key, rawSpan);
       return this.api.invokePrepared(prepared, evaluateArguments(), rawSpan);
     },
@@ -561,7 +548,7 @@ class ElaborationRecorder {
       return invocation?.arguments[index]?.source ?? invocation?.source ?? rawSpan;
     },
     enterFunction: (name: string, callableOrSpan: unknown, source?: RawSpan): void => {
-      // The two-argument form keeps already-generated v2 programs executable.
+      // The two-argument form keeps previously generated programs executable.
       const rawSpan = source ?? (callableOrSpan as RawSpan);
       const callable = source === undefined ? undefined : callableOrSpan;
       const pending = this.#pendingDebugInstance;
@@ -1855,7 +1842,7 @@ class ElaborationRecorder {
         const registry = this.#entityRegistry;
         if (registry === undefined) {
           throw new ElaborationExecutionError(
-            'Entity placement requires a trusted v3 context and prototype resolver.',
+            'Entity placement requires a trusted replay context and prototype resolver.',
             source,
             'RT2027',
           );
@@ -2059,13 +2046,7 @@ class ElaborationRecorder {
     },
   });
 
-  plan():
-    | DirectElaborationPlan
-    | DirectElaborationPlanV3
-    | DirectElaborationPlanV4
-    | DirectElaborationPlanV5
-    | DirectElaborationPlanV6
-    | DirectElaborationPlanV7 {
+  plan(): DirectElaborationPlan {
     if (this.#status === 'failed') throw this.#firstFailure;
     if (this.#status === 'sealed') {
       throw new Error('The elaboration runtime has already been sealed.');
@@ -2073,12 +2054,6 @@ class ElaborationRecorder {
     try {
       const hasLinkedDecider = this.#linkedProducers.some(
         ({ association }) => association.kind === 'decider',
-      );
-      const hasLinkedArithmetic = this.#linkedProducers.some(
-        ({ association }) => association.kind === 'arithmetic',
-      );
-      const hasLinkedSelector = this.#linkedProducers.some(
-        ({ association }) => association.kind === 'selector',
       );
       this.#finalizeUnusedCombinators();
       this.#validateFinalDeciderModes();
@@ -2118,10 +2093,13 @@ class ElaborationRecorder {
         networkTransfers: Object.freeze([...this.#networkTransfers]),
         networkPairs: Object.freeze([...this.#networkPairs]),
         capabilityUses: Object.freeze([...this.#capabilityUses]),
+        debugInstances: Object.freeze([
+          ...this.#debugInstances,
+        ]) as readonly DirectPlanDebugInstance[],
         producers: Object.freeze(
           this.#combinators.states().map((state) => {
             const producer = this.#combinators.toPlan(state);
-            const v6Producer =
+            const canonicalProducer =
               hasLinkedDecider && producer.kind === 'decider' && state.descriptor.kind === 'decider'
                 ? {
                     ...producer,
@@ -2139,8 +2117,8 @@ class ElaborationRecorder {
                 : producer;
             const linked = this.#linkedProducerByIdentity.get(state.identity);
             return linked === undefined
-              ? v6Producer
-              : Object.freeze({ ...v6Producer, entityId: linked.entity.id });
+              ? canonicalProducer
+              : Object.freeze({ ...canonicalProducer, entityId: linked.entity.id });
           }),
         ),
         diagnostics: Object.freeze([...this.#diagnostics]),
@@ -2152,40 +2130,7 @@ class ElaborationRecorder {
         }
       }
       const entities = this.#entityRegistry?.records() ?? [];
-      const v4Entities = entities.map((entity) => {
-        const linked = this.#linkedProducers.find(
-          ({ association }) =>
-            association.kind === 'constant' && association.entity.id === entity.id,
-        );
-        if (linked === undefined || linked.association.kind !== 'constant') return entity;
-        return Object.freeze({
-          ...entity,
-          configuration: {
-            mode: 'constant' as const,
-            value: linked.association.configuration,
-          } satisfies EntityV4ConstantConfiguration,
-        });
-      });
-      const v5Entities = entities.map((entity) => {
-        const linked = this.#linkedProducers.find(
-          ({ association }) => association.entity.id === entity.id,
-        );
-        return linked === undefined
-          ? entity
-          : linked.association.kind === 'constant'
-            ? Object.freeze({
-                ...entity,
-                configuration: {
-                  mode: 'constant' as const,
-                  value: linked.association.configuration,
-                } satisfies EntityV4ConstantConfiguration,
-              })
-            : Object.freeze({
-                ...entity,
-                configuration: linked.association.configuration,
-              });
-      });
-      const v6Entities = entities.map((entity) => {
+      const canonicalEntities = entities.map((entity) => {
         const linked = this.#linkedProducers.find(
           ({ association }) => association.entity.id === entity.id,
         );
@@ -2196,25 +2141,9 @@ class ElaborationRecorder {
               configuration: {
                 mode: 'constant' as const,
                 value: linked.association.configuration,
-              } satisfies EntityV4ConstantConfiguration,
+              } satisfies EntityConstantConfiguration,
             })
-          : linked.association.kind === 'arithmetic'
-            ? Object.freeze({ ...entity, configuration: linked.association.configuration })
-            : linked.association.kind === 'decider'
-              ? Object.freeze({ ...entity, configuration: linked.association.configuration })
-              : entity;
-      });
-      const v7Entities = entities.map((entity) => {
-        const linked = this.#linkedProducers.find(
-          ({ association }) => association.entity.id === entity.id,
-        );
-        if (linked?.association.kind !== 'selector') {
-          return v6Entities.find((candidate) => candidate.id === entity.id) ?? entity;
-        }
-        return Object.freeze({
-          ...entity,
-          configuration: linked.association.configuration,
-        });
+          : Object.freeze({ ...entity, configuration: linked.association.configuration });
       });
       const entityCommon = () => ({
         ...common,
@@ -2235,53 +2164,10 @@ class ElaborationRecorder {
           }),
         ),
       });
-      const plan:
-        | DirectElaborationPlan
-        | DirectElaborationPlanV3
-        | DirectElaborationPlanV4
-        | DirectElaborationPlanV5
-        | DirectElaborationPlanV6
-        | DirectElaborationPlanV7 = hasLinkedSelector
-        ? ({
-            ...entityCommon(),
-            version: 7 as const,
-            producers: common.producers as unknown as DirectElaborationPlanV7['producers'],
-            entities: Object.freeze(v7Entities) as readonly EntityPlanRecordV7[],
-          } satisfies DirectElaborationPlanV7)
-        : hasLinkedDecider
-          ? ({
-              ...entityCommon(),
-              version: 6 as const,
-              producers: common.producers as unknown as readonly DirectPlanProducerV6[],
-              entities: Object.freeze(v6Entities) as readonly EntityPlanRecordV6[],
-            } satisfies DirectElaborationPlanV6)
-          : hasLinkedArithmetic
-            ? {
-                ...entityCommon(),
-                version: 5 as const,
-                producers: common.producers as unknown as DirectElaborationPlanV5['producers'],
-                entities: Object.freeze(v5Entities) as readonly EntityPlanRecordV5[],
-              }
-            : this.#linkedProducers.some(({ association }) => association.kind === 'constant')
-              ? {
-                  ...entityCommon(),
-                  version: 4 as const,
-                  producers: common.producers as unknown as DirectElaborationPlanV4['producers'],
-                  entities: Object.freeze(v4Entities),
-                }
-              : entities.length === 0
-                ? {
-                    ...common,
-                    version: 2 as const,
-                    debugInstances: Object.freeze([
-                      ...this.#debugInstances,
-                    ]) as readonly DirectPlanDebugInstance[],
-                  }
-                : {
-                    ...entityCommon(),
-                    version: 3 as const,
-                    entities: Object.freeze([...entities]),
-                  };
+      const plan: DirectElaborationPlan = {
+        ...(entities.length === 0 ? common : entityCommon()),
+        entities: Object.freeze([...canonicalEntities]),
+      };
       this.#status = 'sealed';
       return plan;
     } catch (error) {
@@ -2461,7 +2347,7 @@ class ElaborationRecorder {
     const registry = this.#entityRegistry;
     if (context === undefined || registry === undefined) {
       throw new ElaborationExecutionError(
-        'Entity operation requires a trusted v3 context and prototype resolver.',
+        'Entity operation requires a trusted replay context and prototype resolver.',
         source,
         'RT2027',
       );
@@ -2840,7 +2726,7 @@ class ElaborationRecorder {
         const { placement: _placement, ...withoutPlacement } = descriptor;
         this.#combinators.update(value, withoutPlacement);
       }
-      const configuration: EntityV7SelectorConfiguration =
+      const configuration: EntitySelectorConfiguration =
         descriptor.operation === 'select'
           ? {
               mode: 'selector',
@@ -2877,7 +2763,7 @@ class ElaborationRecorder {
     const outputs =
       descriptor.outputs ?? (descriptor.output === undefined ? [] : [descriptor.output]);
     if (outputs.length === 0 && (descriptor.elseOutputs?.length ?? 0) === 0) return;
-    const configuration: EntityV6DeciderConfiguration = {
+    const configuration: EntityDeciderConfiguration = {
       mode: 'decider',
       condition: descriptor.condition,
       outputs,
@@ -4420,6 +4306,7 @@ class ElaborationRecorder {
           signal: this.#signalSnapshot(signal),
           value,
         })),
+        ...(profile === undefined ? {} : { configuration }),
         source: this.#span(rawSpan),
         instancePath: this.#path(),
       },
@@ -4457,7 +4344,7 @@ class ElaborationRecorder {
     const registry = this.#entityRegistry;
     if (registry === undefined || this.#entityContext === undefined) {
       throw new ElaborationExecutionError(
-        'Entity construction requires a trusted v3 context and prototype resolver.',
+        'Entity construction requires a trusted replay context and prototype resolver.',
         this.#span(rawSpan),
         'RT2027',
       );
@@ -4538,7 +4425,7 @@ class ElaborationRecorder {
     const resolver = this.#entityPrototypeResolver;
     if (context === undefined || resolver === undefined) {
       throw new ElaborationExecutionError(
-        'Entity construction requires a trusted v3 context and prototype resolver.',
+        'Entity construction requires a trusted replay context and prototype resolver.',
         this.#span(rawSpan),
         'RT2027',
       );
@@ -4894,7 +4781,7 @@ class ElaborationRecorder {
     const registry = this.#entityRegistry;
     if (context === undefined || registry === undefined) {
       throw new ElaborationExecutionError(
-        'Entity operation requires a trusted v3 context and prototype resolver.',
+        'Entity operation requires a trusted replay context and prototype resolver.',
         source,
         'RT2027',
       );
@@ -5705,14 +5592,8 @@ class ElaborationRecorder {
 function executeElaborationProgramInternal(
   program: ElaborationJavaScript,
   options: ElaborationExecutionOptions = {},
-):
-  | DirectElaborationPlan
-  | DirectElaborationPlanV3
-  | DirectElaborationPlanV4
-  | DirectElaborationPlanV5
-  | DirectElaborationPlanV6
-  | DirectElaborationPlanV7 {
-  if (program.format !== 'comblang-elaboration-js' || program.version !== 2) {
+): DirectElaborationPlan {
+  if (program.format !== 'comblang-elaboration-js') {
     throw new Error('Unsupported elaboration JavaScript format.');
   }
   if (!/^[$A-Z_a-z][$0-9A-Z_a-z]*$/.test(program.runtimeParameter)) {
@@ -5744,32 +5625,10 @@ function executeElaborationProgramInternal(
   return recorder.plan();
 }
 
-/** Executes the legacy source path and preserves its producer-only v2 contract. */
+/** Executes the canonical source path and preserves the host-supplied replay context. */
 export function executeElaborationProgram(
   program: ElaborationJavaScript,
   options: ElaborationExecutionOptions = {},
 ): DirectElaborationPlan {
-  const {
-    trustedEntityReplayContext: _context,
-    entityPrototypeResolver: _resolver,
-    ...legacy
-  } = options;
-  return executeElaborationProgramInternal(program, legacy) as DirectElaborationPlan;
-}
-
-/** Internal host/test boundary for execution sessions that may construct Entity records. */
-export function executeElaborationProgramV3(
-  program: ElaborationJavaScript,
-  options: ElaborationExecutionOptions & {
-    readonly trustedEntityReplayContext: TrustedEntityReplayContext;
-    readonly entityPrototypeResolver?: EntityPrototypeResolver;
-  },
-):
-  | DirectElaborationPlan
-  | DirectElaborationPlanV3
-  | DirectElaborationPlanV4
-  | DirectElaborationPlanV5
-  | DirectElaborationPlanV6
-  | DirectElaborationPlanV7 {
   return executeElaborationProgramInternal(program, options);
 }

@@ -1,5 +1,7 @@
 import type { SignalId } from '@comblang/factorio';
 import type { Diagnostic, SourceSpan } from '@comblang/shared';
+import type { EntityId, EntityPlanRecord, EntityReplayContextRef } from './entity.js';
+import type { ConstantConfiguration } from '@comblang/factorio';
 
 import type { ArithmeticOperation, CircuitColor, LogicalArithmeticOutput } from './ir.js';
 
@@ -65,11 +67,8 @@ export interface DirectPlanNetwork {
   readonly fixedColor?: CircuitColor;
   readonly source: SourceSpan;
   readonly instancePath: readonly string[];
-}
-
-/** Entity replay snapshot extending, but not widening, the producer-only v2 descriptor. */
-export interface DirectPlanNetworkV3 extends DirectPlanNetwork {
-  readonly generation: number;
+  /** Ownership generation is present when replay authority is attached. */
+  readonly generation?: number;
   /** A consumed physical Network cannot be used by an Entity facet. */
   readonly consumedAt?: SourceSpan;
 }
@@ -110,6 +109,7 @@ export interface DirectPlanCapabilityUse {
 
 export interface DirectPlanArithmetic {
   readonly kind: 'arithmetic';
+  readonly entityId?: EntityId;
   /** Explicit source Producer binding retained for debug queries. */
   readonly bindingName?: string;
   readonly debugCaptureIds?: readonly string[];
@@ -125,6 +125,7 @@ export interface DirectPlanArithmetic {
 
 export interface DirectPlanDecider {
   readonly kind: 'decider';
+  readonly entityId?: EntityId;
   /** Explicit source Producer binding retained for debug queries. */
   readonly bindingName?: string;
   readonly debugCaptureIds?: readonly string[];
@@ -146,9 +147,11 @@ export interface DirectPlanDecider {
   readonly source: SourceSpan;
   readonly instancePath: readonly string[];
   readonly placement?: PlanEntityPlacement;
+  readonly outputOrigins?: readonly DeciderOutputOrigin[];
+  readonly elseOutputOrigins?: readonly DeciderOutputOrigin[];
 }
 
-/** Internal row identity retained only by computation-bearing Entity v6 transport. */
+/** Internal row identity retained through canonical computation transport. */
 export type DeciderOutputSyntaxIntent =
   | 'implicit-concrete-copy'
   | 'implicit-each-copy'
@@ -166,10 +169,13 @@ export interface DeciderOutputOrigin {
 
 export interface DirectPlanConstant {
   readonly kind: 'constant';
+  readonly entityId?: EntityId;
   /** Explicit source Producer binding retained for debug queries. */
   readonly bindingName?: string;
   readonly debugCaptureIds?: readonly string[];
   readonly outputs: readonly { readonly signal: SignalId; readonly value: number }[];
+  /** Exact canonical Constant configuration retained for linked Entity equivalence. */
+  readonly configuration?: ConstantConfiguration;
   readonly destinations: readonly PlanAttachment[];
   readonly source: SourceSpan;
   readonly instancePath: readonly string[];
@@ -178,6 +184,7 @@ export interface DirectPlanConstant {
 
 interface DirectPlanSelectorBase {
   readonly kind: 'selector';
+  readonly entityId?: EntityId;
   readonly input: PlanNetworkRef;
   readonly destinations: readonly PlanAttachment[];
   readonly source: SourceSpan;
@@ -205,6 +212,7 @@ export type DirectPlanProducer =
 export type DirectPlanDebugValue =
   | { readonly kind: 'network'; readonly network: string }
   | { readonly kind: 'producer'; readonly captureId: string }
+  | { readonly kind: 'entity'; readonly entityId: EntityId }
   | { readonly kind: 'literal'; readonly value: string | number | boolean | null }
   | { readonly kind: 'undefined' }
   | { readonly kind: 'array'; readonly values: readonly DirectPlanDebugValue[] }
@@ -225,7 +233,7 @@ export interface DirectPlanDebugInstance {
 
 export interface DirectElaborationPlan {
   readonly format: 'comblang-direct-plan';
-  readonly version: 2;
+  readonly context?: EntityReplayContextRef;
   readonly networks: readonly DirectPlanNetwork[];
   readonly networkAliases?: readonly DirectPlanNetworkAlias[];
   readonly networkTransfers?: readonly DirectPlanNetworkTransfer[];
@@ -233,5 +241,6 @@ export interface DirectElaborationPlan {
   readonly capabilityUses?: readonly DirectPlanCapabilityUse[];
   readonly debugInstances?: readonly DirectPlanDebugInstance[];
   readonly producers: readonly DirectPlanProducer[];
+  readonly entities: readonly EntityPlanRecord[];
   readonly diagnostics?: readonly Diagnostic[];
 }

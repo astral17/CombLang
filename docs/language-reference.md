@@ -246,7 +246,7 @@ unsupported operation values. Use the structural checked/raw Entity overload
 for those native-shaped configurations; it remains inert and does not acquire
 Producer or simulator semantics. The exact select/count simulator and readable
 Blueprint output are deterministic CombLang model/preview surfaces, not native
-Factorio conformance. See [Entity v7](entity-v7.md).
+Factorio conformance. See [Entity pipeline](entity-pipeline.md).
 
 `machine.port(connector, lane)` selects an explicit connector lane. The exact
 four-argument `machine.bind(connector, lane, network, direction)` form binds
@@ -487,13 +487,13 @@ fails atomically before a producer or Entity is allocated.
 
 With trusted canonical `entity:decider-combinator` authority, exact `Decider`
 and provider-backed ergonomic `IF`/`when` share one physical linked Decider
-Entity and select cumulative Entity v6 when any linked Decider is present.
+Entity and use the canonical linked Entity path when any linked Decider is present.
 The producer retains topology and output-row provenance; the Entity owns native
 configuration and placement. Without trusted authority, ergonomic `IF`/`when`
 retain profile-free v2 behavior, while exact `Decider` fails because its exact
-Entity contract cannot be established. The v6 path reuses the current
+Entity contract cannot be established. The canonical path reuses the current
 simulation and readable Blueprint preview and is not Factorio import/export
-conformance evidence. See [Entity v6](entity-v6.md).
+conformance evidence. See [Entity pipeline](entity-pipeline.md).
 
 ## Constant combinator
 
@@ -581,8 +581,8 @@ concrete Signal or `Each`/`EACH`. Numeric values use the same signed-int32
 normalization as ordinary arithmetic. Exact Arithmetic requires the trusted
 base `entity:arithmetic-combinator` profile and creates one linked physical
 Entity; provider-backed ergonomic arithmetic also links when that base
-authority is present, while profile-free arithmetic remains v2. See
-[Entity v5](entity-v5.md) for the version matrix and replay boundary.
+authority is present, while profile-free arithmetic remains entity-free. See
+[Entity pipeline](entity-pipeline.md) for the replay boundary.
 
 ## Combinators and output connections
 

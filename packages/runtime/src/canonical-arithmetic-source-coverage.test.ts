@@ -1,24 +1,20 @@
 import {
   createTrustedEntityReplayContext,
-  generateEntityComputationBlueprintJsonV5,
+  generateBlueprintJson,
   syntheticZeroPortEntityProfile,
   transformElaborationModule,
 } from '@comblang/compiler';
 import type { EntityId, EntityProfile } from '@comblang/compiler/entity';
-import type { DirectElaborationPlanV5 } from '@comblang/compiler/entity-v5';
+import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
 import { signal } from '@comblang/factorio';
 import { parseFile, validateDslSemantics } from '@comblang/language';
 import type { EntityPrototype } from '@comblang/prototypes';
 import { sourceFileId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
-import { tryElaborateEntityV5DirectPlan } from './entity-v5.js';
-import {
-  ElaborationExecutionError,
-  executeElaborationProgram,
-  executeElaborationProgramV3,
-} from './elaboration-program.js';
+import { tryElaborateDirectPlan } from './direct-plan.js';
+import { ElaborationExecutionError, executeElaborationProgram } from './elaboration-program.js';
 
-const sourceFile = sourceFileId('entity-v5-source-coverage.ts');
+const sourceFile = sourceFileId('canonical-arithmetic-source-coverage.ts');
 const operations = [
   'add',
   'subtract',
@@ -53,12 +49,12 @@ function exactEnvironment(includeStructural = false) {
   const profiles = [
     profileFor(
       'entity:arithmetic-combinator',
-      'profile:source-coverage-arithmetic-v5',
+      'profile:source-coverage-arithmetic-canonical',
       'arithmetic-combinator',
     ),
     profileFor(
       'entity:constant-combinator',
-      'profile:source-coverage-constant-v5',
+      'profile:source-coverage-constant-canonical',
       'constant-combinator',
     ),
     ...(includeStructural
@@ -68,8 +64,8 @@ function exactEnvironment(includeStructural = false) {
   const context = createTrustedEntityReplayContext({
     database: profiles[0]!.ref.database,
     source: 'synthetic',
-    evidenceIdentity: 'source-coverage-v5-evidence',
-    policyIdentity: 'source-coverage-v5-policy',
+    evidenceIdentity: 'source-coverage-arithmetic-evidence',
+    policyIdentity: 'source-coverage-arithmetic-policy',
     profiles,
   });
   const prototypes = new Map<string, EntityPrototype>([
@@ -116,19 +112,18 @@ function exactEnvironment(includeStructural = false) {
   };
 }
 
-function exactPlan(text: string, environment = exactEnvironment()): DirectElaborationPlanV5 {
+function exactPlan(text: string, environment = exactEnvironment()): DirectElaborationPlan {
   const parsed = parseFile({ path: sourceFile, text });
   expect(validateDslSemantics(parsed)).toEqual([]);
-  const plan = executeElaborationProgramV3(transformElaborationModule(parsed), environment);
-  expect(plan.version).toBe(5);
-  if (plan.version !== 5) throw new Error('Expected a v5 exact Arithmetic plan.');
+  const plan = executeElaborationProgram(transformElaborationModule(parsed), environment);
+  expect(plan).not.toHaveProperty('version');
   return plan;
 }
 
 function failureFor(text: string, environment = exactEnvironment()): ElaborationExecutionError {
   const parsed = parseFile({ path: sourceFile, text });
   try {
-    executeElaborationProgramV3(transformElaborationModule(parsed), environment);
+    executeElaborationProgram(transformElaborationModule(parsed), environment);
     throw new Error('Expected exact Arithmetic source to fail.');
   } catch (error) {
     if (error instanceof ElaborationExecutionError) return error;
@@ -136,7 +131,7 @@ function failureFor(text: string, environment = exactEnvironment()): Elaboration
   }
 }
 
-describe('executed exact Arithmetic v5 source contract', () => {
+describe('executed canonical Arithmetic source contract', () => {
   test.each(operations)('accepts canonical operation %s', (operation) => {
     const plan = exactPlan(`const A = Signal('virtual', 'signal-A');
 const exact: ArithmeticCombinator = Arithmetic({ left: 2, operation: '${operation}', right: 3, output: A });
@@ -321,23 +316,22 @@ const exact: ArithmeticCombinator = Arithmetic({ left: input[A], operation: 'add
     );
   });
 
-  test('keeps ergonomic Arithmetic at v2 without a provider and upgrades it to v5 with one', () => {
+  test('keeps ergonomic Arithmetic without a provider and upgrades it with one', () => {
     const source = `const input = new Network();
 const output = new Network();
 output += input + 1;`;
     const profileFree = executeElaborationProgram(
       transformElaborationModule(parseFile({ path: sourceFile, text: source })),
     );
-    expect(profileFree.version).toBe(2);
+    expect(profileFree).not.toHaveProperty('version');
     expect(profileFree.producers[0]).not.toHaveProperty('entityId');
 
     const environment = exactEnvironment();
-    const providerBacked = executeElaborationProgramV3(
+    const providerBacked = executeElaborationProgram(
       transformElaborationModule(parseFile({ path: sourceFile, text: source })),
       environment,
     );
-    expect(providerBacked.version).toBe(5);
-    if (providerBacked.version !== 5) throw new Error('Expected provider-backed v5 plan.');
+    expect(providerBacked).not.toHaveProperty('version');
     expect(providerBacked.producers[0]).toMatchObject({
       kind: 'arithmetic',
       entityId: expect.any(String),
@@ -357,14 +351,12 @@ output += exact;
 output += constant;`,
       environment,
     );
-    const lowered = tryElaborateEntityV5DirectPlan(plan, environment.context);
+    const lowered = tryElaborateDirectPlan(plan, environment.context);
 
     expect(lowered.diagnostics).toEqual([]);
     expect(lowered.execution?.circuit.ir.entities).toHaveLength(2);
     expect(new Set(plan.producers.map(({ entityId }) => entityId)).size).toBe(2);
-    const blueprint = generateEntityComputationBlueprintJsonV5(
-      lowered.execution!.circuit.ir,
-    ).blueprint;
+    const blueprint = generateBlueprintJson(lowered.execution!.circuit.ir).blueprint;
     expect(blueprint.entities).toHaveLength(2);
     expect(blueprint.entities.map(({ name }) => name)).toEqual([
       'arithmetic-combinator',
@@ -372,7 +364,7 @@ output += constant;`,
     ]);
   });
 
-  test('preserves an unrelated structural Entity configuration beside linked v5 computation', () => {
+  test('preserves an unrelated structural Entity configuration beside linked computation', () => {
     const environment = exactEnvironment(true);
     const plan = exactPlan(
       `const A = Signal('virtual', 'signal-A');
@@ -387,9 +379,8 @@ output += exact;`,
       ({ profile }) => profile.prototypeKey === 'entity:synthetic-structural',
     );
 
-    expect(plan.version).toBe(5);
     expect(structuralEntity?.configuration).toEqual({ mode: 'raw', payload: {} });
-    const lowered = tryElaborateEntityV5DirectPlan(plan, environment.context);
+    const lowered = tryElaborateDirectPlan(plan, environment.context);
     expect(lowered.diagnostics).toEqual([]);
     expect(
       lowered.execution?.circuit.ir.entities.find(

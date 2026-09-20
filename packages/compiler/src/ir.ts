@@ -1,5 +1,7 @@
-import type { CircuitValue, SignalId } from '@comblang/factorio';
+import type { CircuitValue, ConstantConfiguration, SignalId } from '@comblang/factorio';
 import type { NetworkId, ProducerId, SourceSpan } from '@comblang/shared';
+import type { DeciderOutputOrigin } from './direct-plan-schema.js';
+import type { EntityId, EntityPhysicalRecord, EntityReplayContextRef } from './entity.js';
 
 export type CircuitColor = 'red' | 'green';
 
@@ -63,6 +65,8 @@ export interface ConstantProducerConfig {
     readonly signal: ConcreteConfigSignal;
     readonly value: ConcreteConfigNumber;
   }[];
+  /** Exact canonical Constant configuration retained for linked Entity equivalence. */
+  readonly configuration?: ConstantConfiguration;
 }
 
 export type SelectorIndex = ConcreteConfigNumber | ConcreteConfigSignal;
@@ -130,6 +134,7 @@ export type CircuitProducerNode =
   | {
       readonly id: ProducerId;
       readonly kind: 'arithmetic';
+      readonly entityId?: EntityId;
       readonly config: ArithmeticProducerConfig;
       readonly destinations: readonly NetworkId[];
       readonly provenance: Provenance;
@@ -138,6 +143,7 @@ export type CircuitProducerNode =
   | {
       readonly id: ProducerId;
       readonly kind: 'constant';
+      readonly entityId?: EntityId;
       readonly config: ConstantProducerConfig;
       readonly destinations: readonly NetworkId[];
       readonly provenance: Provenance;
@@ -146,7 +152,10 @@ export type CircuitProducerNode =
   | {
       readonly id: ProducerId;
       readonly kind: 'decider';
+      readonly entityId?: EntityId;
       readonly config: DeciderProducerConfig;
+      readonly outputOrigins?: readonly DeciderOutputOrigin[];
+      readonly elseOutputOrigins?: readonly DeciderOutputOrigin[];
       readonly destinations: readonly NetworkId[];
       readonly provenance: Provenance;
       readonly placement?: EntityPlacement;
@@ -154,6 +163,7 @@ export type CircuitProducerNode =
   | {
       readonly id: ProducerId;
       readonly kind: 'selector';
+      readonly entityId?: EntityId;
       readonly config: SelectorProducerConfig;
       readonly destinations: readonly NetworkId[];
       readonly provenance: Provenance;
@@ -168,10 +178,11 @@ export interface CircuitAttachment {
 
 export interface ElaborationGraph {
   readonly format: 'comblang-eg';
-  readonly version: 2;
+  readonly context?: EntityReplayContextRef;
   readonly networks: readonly CircuitNetworkNode[];
   readonly producers: readonly CircuitProducerNode[];
   readonly attachments: readonly CircuitAttachment[];
+  readonly entities: readonly EntityPhysicalRecord[];
 }
 
 export interface ResolvedCircuitNetworkNode extends CircuitNetworkNode {
@@ -180,7 +191,8 @@ export interface ResolvedCircuitNetworkNode extends CircuitNetworkNode {
 
 export interface NativeCircuitIr {
   readonly format: 'comblang-ncir';
-  readonly version: 2;
+  readonly context?: EntityReplayContextRef;
   readonly networks: readonly ResolvedCircuitNetworkNode[];
   readonly producers: readonly CircuitProducerNode[];
+  readonly entities: readonly EntityPhysicalRecord[];
 }

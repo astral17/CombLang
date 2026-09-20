@@ -1,22 +1,22 @@
 import {
   createTrustedEntityReplayContext,
-  generateEntityComputationBlueprintJsonV6,
+  generateBlueprintJson,
   syntheticZeroPortEntityProfile,
   transformElaborationModule,
 } from '@comblang/compiler';
 import type { EntityProfile } from '@comblang/compiler/entity';
-import type { DirectElaborationPlanV6 } from '@comblang/compiler/entity-v6';
+import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
 import { signal } from '@comblang/factorio';
 import type { EntityPrototype } from '@comblang/prototypes';
 import { parseFile, validateDslSemantics } from '@comblang/language';
 import { sourceFileId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 import { compileSourceProgram } from './source-compilation.js';
-import { executeElaborationProgram, executeElaborationProgramV3 } from './elaboration-program.js';
-import { tryElaborateEntityV6DirectPlan } from './entity-v6.js';
+import { executeElaborationProgram } from './elaboration-program.js';
+import { tryElaborateDirectPlan } from './direct-plan.js';
 import { createDebugDocument } from './debug-document.js';
 
-const sourceFile = sourceFileId('entity-v6-source-coverage.ts');
+const sourceFile = sourceFileId('canonical-decider-source-coverage.ts');
 
 function exactEnvironment(includeMixed = false) {
   const profile: EntityProfile = {
@@ -24,7 +24,7 @@ function exactEnvironment(includeMixed = false) {
     ref: {
       ...syntheticZeroPortEntityProfile.ref,
       prototypeKey: 'entity:decider-combinator',
-      profileId: 'profile:source-coverage-decider-v6' as EntityProfile['ref']['profileId'],
+      profileId: 'profile:source-coverage-decider-canonical' as EntityProfile['ref']['profileId'],
     },
     prototypeType: 'decider-combinator',
   };
@@ -34,7 +34,8 @@ function exactEnvironment(includeMixed = false) {
         ref: {
           ...syntheticZeroPortEntityProfile.ref,
           prototypeKey: `entity:${family}`,
-          profileId: `profile:source-coverage-${family}-v6` as EntityProfile['ref']['profileId'],
+          profileId:
+            `profile:source-coverage-${family}-canonical` as EntityProfile['ref']['profileId'],
         },
         prototypeType: family,
       }))
@@ -42,8 +43,8 @@ function exactEnvironment(includeMixed = false) {
   const context = createTrustedEntityReplayContext({
     database: profile.ref.database,
     source: 'synthetic',
-    evidenceIdentity: 'source-coverage-v6-evidence',
-    policyIdentity: 'source-coverage-v6-policy',
+    evidenceIdentity: 'source-coverage-decider-evidence',
+    policyIdentity: 'source-coverage-decider-policy',
     profiles: [profile, ...extraProfiles],
   });
   const prototypes = new Map<string, EntityPrototype>([
@@ -90,16 +91,15 @@ const exact: DeciderCombinator = Decider({
 const output = new Network();
 output += exact;`;
 
-function exactPlan(text = exactSource): DirectElaborationPlanV6 {
+function exactPlan(text = exactSource): DirectElaborationPlan {
   const parsed = parseFile({ path: sourceFile, text });
   expect(validateDslSemantics(parsed)).toEqual([]);
-  const plan = executeElaborationProgramV3(transformElaborationModule(parsed), exactEnvironment());
-  expect(plan.version).toBe(6);
-  if (plan.version !== 6) throw new Error('Expected a v6 exact Decider plan.');
+  const plan = executeElaborationProgram(transformElaborationModule(parsed), exactEnvironment());
+  expect(plan).not.toHaveProperty('version');
   return plan;
 }
 
-describe('executed exact Decider v6 source contract', () => {
+describe('executed canonical Decider source contract', () => {
   test('normalizes exact rows once and retains one linked Entity', () => {
     const plan = exactPlan();
     expect(plan.producers).toHaveLength(1);
@@ -115,9 +115,11 @@ describe('executed exact Decider v6 source contract', () => {
     });
     const producer = plan.producers[0];
     if (producer?.kind !== 'decider') throw new Error('Expected a Decider producer.');
-    expect(producer.outputOrigins).toHaveLength(2);
-    expect(producer.elseOutputOrigins).toHaveLength(1);
-    expect(producer.outputOrigins.every((origin) => origin.syntaxIntent === 'exact')).toBe(true);
+    expect(producer.outputOrigins ?? []).toHaveLength(2);
+    expect(producer.elseOutputOrigins ?? []).toHaveLength(1);
+    expect((producer.outputOrigins ?? []).every((origin) => origin.syntaxIntent === 'exact')).toBe(
+      true,
+    );
     expect(producer.elseOutputOrigins?.[0]?.syntaxIntent).toBe('exact');
     expect(plan.entities[0]?.configuration).toMatchObject({
       mode: 'decider',
@@ -126,20 +128,20 @@ describe('executed exact Decider v6 source contract', () => {
     });
   });
 
-  test('lowers v6 through the existing simulator and resolved transport', () => {
+  test('lowers through the existing simulator and resolved transport', () => {
     const plan = exactPlan();
-    const lowered = tryElaborateEntityV6DirectPlan(plan, exactEnvironment().context);
+    const lowered = tryElaborateDirectPlan(plan, exactEnvironment().context);
     expect(lowered.diagnostics).toEqual([]);
-    expect(lowered.execution?.circuit.graph.version).toBe(6);
-    expect(lowered.execution?.circuit.ir.version).toBe(6);
+    expect(lowered.execution?.circuit.graph).not.toHaveProperty('version');
+    expect(lowered.execution?.circuit.ir).not.toHaveProperty('version');
     expect(lowered.execution?.circuit.ir.producers[0]).toMatchObject({
       kind: 'decider',
       entityId: plan.producers[0]!.entityId,
       outputOrigins: plan.producers[0]!.kind === 'decider' ? plan.producers[0]!.outputOrigins : [],
     });
-    expect(lowered.resolvedCircuit?.format).toBe('comblang-resolved-entity-v6');
+    expect(lowered.resolvedCircuit?.format).toBe('comblang-resolved-circuit');
     expect(lowered.execution?.circuit.createSimulation()).toBeDefined();
-    const blueprint = generateEntityComputationBlueprintJsonV6(lowered.execution!.circuit.ir);
+    const blueprint = generateBlueprintJson(lowered.execution!.circuit.ir);
     expect(blueprint.blueprint.entities).toHaveLength(1);
     expect(blueprint.blueprint.entities[0]).toMatchObject({ name: 'decider-combinator' });
     const debugProducer = lowered.execution!.debug.root.combinator(1).descriptor;
@@ -188,7 +190,7 @@ ${body}`,
       });
       expect(validateDslSemantics(parsed)).toEqual([]);
       expect(() =>
-        executeElaborationProgramV3(transformElaborationModule(parsed), exactEnvironment()),
+        executeElaborationProgram(transformElaborationModule(parsed), exactEnvironment()),
       ).toThrow(message);
     };
 
@@ -244,7 +246,7 @@ const gate = Decider({ condition: input[A] > 0, outputs: rows });`,
       ...unavailable.entityPrototypeResolver,
       getEntity: () => undefined,
     };
-    expect(() => executeElaborationProgramV3(transformed, unavailable)).toThrow(
+    expect(() => executeElaborationProgram(transformed, unavailable)).toThrow(
       'not available in the selected provider',
     );
 
@@ -259,7 +261,7 @@ const gate = Decider({ condition: input[A] > 0, outputs: rows });`,
         tileHeight: 1,
       }),
     };
-    expect(() => executeElaborationProgramV3(transformed, corrupt)).toThrow(
+    expect(() => executeElaborationProgram(transformed, corrupt)).toThrow(
       'does not match base provider prototype data',
     );
 
@@ -269,7 +271,8 @@ const gate = Decider({ condition: input[A] > 0, outputs: rows });`,
       ref: {
         ...syntheticZeroPortEntityProfile.ref,
         prototypeKey: 'entity:decider-combinator',
-        profileId: 'profile:source-coverage-wrong-family-v6' as EntityProfile['ref']['profileId'],
+        profileId:
+          'profile:source-coverage-wrong-family-canonical' as EntityProfile['ref']['profileId'],
       },
       prototypeType: 'arithmetic-combinator' as const,
     };
@@ -281,7 +284,7 @@ const gate = Decider({ condition: input[A] > 0, outputs: rows });`,
       profiles: [wrongProfile],
     });
     wrongFamily.trustedEntityReplayContext = wrongFamily.context;
-    expect(() => executeElaborationProgramV3(transformed, wrongFamily)).toThrow(
+    expect(() => executeElaborationProgram(transformed, wrongFamily)).toThrow(
       'does not assert prototypeType "decider-combinator"',
     );
   });
@@ -304,12 +307,11 @@ const gate = Decider({ condition: input[A] > 0, outputs: rows });`,
           return prototype;
         },
       };
-      const plan = executeElaborationProgramV3(
+      const plan = executeElaborationProgram(
         transformElaborationModule(parseFile({ path: sourceFile, text: source })),
         environment,
       );
-      expect(plan.version).toBe(6);
-      if (plan.version !== 6) throw new Error('Expected a v6 ergonomic Decider plan.');
+      expect(plan).not.toHaveProperty('version');
       expect(plan.producers).toHaveLength(1);
       expect(plan.entities).toHaveLength(1);
       expect(plan.producers[0]?.entityId).toBe(plan.entities[0]?.id);
@@ -360,8 +362,10 @@ const output = new Network();
       'each-constant',
     ]);
     expect(producer.elseOutputs?.[0]).toEqual(producer.elseOutputs?.[1]);
-    expect(producer.outputOrigins.map((origin) => origin.ordinal)).toEqual([0, 1, 2, 3, 4]);
-    expect(producer.outputOrigins.every((origin) => origin.syntaxIntent === 'exact')).toBe(true);
+    expect((producer.outputOrigins ?? []).map((origin) => origin.ordinal)).toEqual([0, 1, 2, 3, 4]);
+    expect((producer.outputOrigins ?? []).every((origin) => origin.syntaxIntent === 'exact')).toBe(
+      true,
+    );
   });
 
   test('allows an empty normal branch when the false branch carries rows', () => {
@@ -419,13 +423,13 @@ output += gate;`;
     expect(producer.elseOutputs).toHaveLength(1);
   });
 
-  test('source compilation exposes v6 execution and resolved circuit', () => {
+  test('source compilation exposes canonical execution and resolved circuit', () => {
     const environment = exactEnvironment();
     const result = compileSourceProgram({ path: sourceFile, text: exactSource }, environment);
     expect(result.pipelineDiagnostics).toEqual([]);
-    expect(result.plan?.version).toBe(6);
-    expect(result.execution?.circuit.ir.version).toBe(6);
-    expect(result.resolvedCircuit?.format).toBe('comblang-resolved-entity-v6');
+    expect(result.plan).not.toHaveProperty('version');
+    expect(result.execution?.circuit.ir).not.toHaveProperty('version');
+    expect(result.resolvedCircuit?.format).toBe('comblang-resolved-circuit');
   });
 
   test.each([
@@ -478,8 +482,7 @@ const output = new Network();
 output += first;
 output += second;`;
     const plan = exactPlan(source);
-    expect(plan.version).toBe(6);
-    if (plan.version !== 6) throw new Error('Expected cumulative v6 plan.');
+    expect(plan).not.toHaveProperty('version');
     expect(plan.entities).toHaveLength(2);
     expect(plan.producers).toHaveLength(2);
     const linkedIds = plan.producers.map((producer) => producer.entityId);
@@ -505,13 +508,12 @@ elseAlias(input[A]);
 const output = new Network();
 output += gate;`;
     const plan = exactPlan(source);
-    expect(plan.version).toBe(6);
-    if (plan.version !== 6) throw new Error('Expected a v6 Decider plan.');
+    expect(plan).not.toHaveProperty('version');
     const producer = plan.producers[0];
     if (producer?.kind !== 'decider') throw new Error('Expected a Decider producer.');
     expect(producer.outputs).toHaveLength(3);
     expect(producer.elseOutputs).toHaveLength(1);
-    expect(producer.outputOrigins.map((origin) => origin.source.start)).toEqual([
+    expect((producer.outputOrigins ?? []).map((origin) => origin.source.start)).toEqual([
       source.indexOf('input[A]', source.indexOf('gate.then(input[A])')),
       source.indexOf('...rows'),
       source.indexOf('...rows'),
@@ -519,7 +521,7 @@ output += gate;`;
     expect(producer.elseOutputOrigins?.[0]?.source.start).toBe(
       source.indexOf('input[A]', source.indexOf('elseAlias(input[A])')),
     );
-    expect(producer.outputOrigins.map((origin) => origin.ordinal)).toEqual([0, 1, 2]);
+    expect((producer.outputOrigins ?? []).map((origin) => origin.ordinal)).toEqual([0, 1, 2]);
     expect(producer.elseOutputOrigins?.[0]?.ordinal).toBe(0);
   });
 
@@ -534,18 +536,16 @@ const gate: DeciderCombinator = Decider({
 const output = new Network();
 output += gate;`;
     const plan = exactPlan(source);
-    if (plan.version !== 6) throw new Error('Expected a v6 Decider plan.');
     const producer = plan.producers[0];
     if (producer?.kind !== 'decider') throw new Error('Expected a Decider producer.');
-    expect(
-      source.slice(producer.outputOrigins[0]!.source.start, producer.outputOrigins[0]!.source.end),
-    ).toBe('1 * A');
-    expect(
-      source.slice(
-        producer.elseOutputOrigins![0]!.source.start,
-        producer.elseOutputOrigins![0]!.source.end,
-      ),
-    ).toBe('input[A]');
+    const outputOrigin = producer.outputOrigins?.[0];
+    const elseOutputOrigin = producer.elseOutputOrigins?.[0];
+    if (outputOrigin === undefined || elseOutputOrigin === undefined)
+      throw new Error('Expected Decider output origins.');
+    expect(source.slice(outputOrigin.source.start, outputOrigin.source.end)).toBe('1 * A');
+    expect(source.slice(elseOutputOrigin.source.start, elseOutputOrigin.source.end)).toBe(
+      'input[A]',
+    );
   });
 
   test('moves producer-owned pre-link placement onto the single linked Entity', () => {
@@ -555,12 +555,12 @@ gate.then(input);
 const output = new Network();
 output += gate;`;
     const plan = exactPlan(source);
-    expect(plan.version).toBe(6);
+    expect(plan).not.toHaveProperty('version');
     expect(plan.producers[0]).not.toHaveProperty('placement');
     expect(plan.entities[0]?.placement).toEqual({ x: 3, y: 4, direction: 8 });
   });
 
-  test('selects cumulative v6 for mixed linked Constant, Arithmetic, and Decider producers', () => {
+  test('selects cumulative output for mixed linked Constant, Arithmetic, and Decider producers', () => {
     const parsed = parseFile({
       path: sourceFile,
       text: `const A = Signal('virtual', 'signal-A');
@@ -574,12 +574,11 @@ output += arithmetic;
 output += decider;`,
     });
     expect(validateDslSemantics(parsed)).toEqual([]);
-    const plan = executeElaborationProgramV3(
+    const plan = executeElaborationProgram(
       transformElaborationModule(parsed),
       exactEnvironment(true),
     );
-    expect(plan.version).toBe(6);
-    if (plan.version !== 6) throw new Error('Expected cumulative v6 plan.');
+    expect(plan).not.toHaveProperty('version');
     expect(plan.entities).toHaveLength(3);
     expect(plan.producers).toHaveLength(3);
     expect(plan.producers.map((producer) => producer.kind)).toEqual([
@@ -598,6 +597,6 @@ const output = new Network();
 output += IF(input > 0, input);`,
     });
     const plan = executeElaborationProgram(transformElaborationModule(parsed));
-    expect(plan.version).toBe(2);
+    expect(plan).not.toHaveProperty('version');
   });
 });

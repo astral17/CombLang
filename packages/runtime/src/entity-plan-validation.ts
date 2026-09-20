@@ -1,5 +1,4 @@
 import type {
-  DirectElaborationPlanV3,
   EntityPlanConnectorBinding,
   EntityConnectorKey,
   EntityId,
@@ -8,14 +7,10 @@ import type {
   EntityPlanDebugInstance,
   EntityPlanDebugValue,
   EntityProfileRef,
+  EntityPlanConfiguration,
   EntityPlanRecord,
 } from '@comblang/compiler/entity';
-import type {
-  DirectPlanDebugInstance,
-  DirectPlanDebugValue,
-  DirectPlanNetwork,
-  DirectPlanNetworkV3,
-} from '@comblang/compiler/direct-plan-schema';
+import type { DirectPlanNetwork } from '@comblang/compiler/direct-plan-schema';
 import {
   entityReplayContextRef,
   resolveEntityReplayContext,
@@ -30,16 +25,24 @@ import type { EntityPlacement } from '@comblang/compiler/ir';
 import type { Diagnostic, SourceSpan } from '@comblang/shared';
 
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
+import type { DirectPlanProducer } from '@comblang/compiler/direct-plan-schema';
+import { canonicalizeConstantConfiguration, ConstantConfigurationError } from '@comblang/factorio';
 import { validateDirectPlanEnvelope } from './direct-plan-validation.js';
+import {
+  CanonicalEntityAssociationError,
+  validateCanonicalEntityAssociations,
+} from './canonical-entity-associations.js';
 
 type DataRecord = Record<string, unknown>;
 
-interface V3NetworkDeclaration {
+interface NetworkDeclaration {
   readonly path: string;
   readonly fixedColor?: 'red' | 'green';
   readonly generation: number;
   readonly consumedAt?: SourceSpan;
 }
+
+type EntityPlanNetwork = DirectPlanNetwork & { readonly generation: number };
 
 export class EntityPlanValidationError extends Error {
   readonly code: string;
@@ -57,13 +60,13 @@ export class EntityPlanValidationError extends Error {
   }
 }
 
-export interface ValidatedEntityPlanV3 {
-  readonly plan: DirectElaborationPlanV3;
+export interface ValidatedEntityPlan {
+  readonly plan: DirectElaborationPlan;
   readonly context: TrustedEntityReplayContext;
 }
 
 export interface EntityPlanValidationResult {
-  readonly value?: ValidatedEntityPlanV3;
+  readonly value?: ValidatedEntityPlan;
   readonly diagnostics: readonly Diagnostic[];
 }
 
@@ -277,7 +280,7 @@ function parseBindingProvenance(
   });
 }
 
-function parseV3Network(value: unknown, path: string): DirectPlanNetworkV3 {
+function parseNetwork(value: unknown, path: string): EntityPlanNetwork {
   const record = dataRecord(value, path);
   exactKeys(
     record,
@@ -303,26 +306,17 @@ function parseV3Network(value: unknown, path: string): DirectPlanNetworkV3 {
   });
 }
 
-function v3Networks(value: unknown, path: string): readonly DirectPlanNetworkV3[] {
+function parseNetworks(value: unknown, path: string): readonly EntityPlanNetwork[] {
   return Object.freeze(
-    dataArray(value, path).map((entry, index) => parseV3Network(entry, `${path}[${index}]`)),
+    dataArray(value, path).map((entry, index) => parseNetwork(entry, `${path}[${index}]`)),
   );
-}
-
-function v2Network(network: DirectPlanNetworkV3): DirectPlanNetwork {
-  return Object.freeze({
-    name: network.name,
-    ...(network.fixedColor === undefined ? {} : { fixedColor: network.fixedColor }),
-    source: network.source,
-    instancePath: network.instancePath,
-  });
 }
 
 function parseBindings(
   value: unknown,
   path: string,
   networkNames: ReadonlySet<string>,
-  networkDeclarations: ReadonlyMap<string, V3NetworkDeclaration>,
+  networkDeclarations: ReadonlyMap<string, NetworkDeclaration>,
   profile: ReturnType<typeof resolveEntityReplayProfile>,
 ): readonly EntityPlanConnectorBinding[] {
   const bindings = dataArray(value, path).map((entry, index) => {
@@ -415,12 +409,342 @@ function parseBindings(
   );
 }
 
+function runtimeSignalHandleRecord(value: unknown, path: string): DataRecord | undefined {
+  if (value === null || typeof value !== 'object' || !Object.isFrozen(value)) return undefined;
+  const keys = Reflect.ownKeys(value);
+  if (!keys.includes(Symbol.toPrimitive)) return undefined;
+  if (
+    keys.some(
+      (key) =>
+        (typeof key === 'symbol' && key !== Symbol.toPrimitive) ||
+        (typeof key === 'string' && !['type', 'name', 'quality'].includes(key)),
+    )
+  )
+    return undefined;
+  const primitive = Object.getOwnPropertyDescriptor(value, Symbol.toPrimitive);
+  if (primitive === undefined || !('value' in primitive) || typeof primitive.value !== 'function')
+    invalid('RT3000', `${path}[Symbol.toPrimitive]`, 'Signal handles must be data-only.');
+  const record = Object.create(null) as DataRecord;
+  for (const key of ['type', 'name', 'quality']) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor !== undefined) {
+      if (!('value' in descriptor))
+        invalid('RT3000', `${path}.${key}`, 'accessors are not allowed.');
+      record[key] = descriptor.value;
+    }
+  }
+  return record;
+}
+
+function planSignalShape(value: unknown, path: string): void {
+  const record = runtimeSignalHandleRecord(value, path) ?? dataRecord(value, path);
+  exactKeys(record, ['type', 'name', 'quality'], path);
+}
+
+function planNetworkRefShape(
+  value: unknown,
+  path: string,
+  additionalKeys: readonly string[] = [],
+): void {
+  const record = dataRecord(value, path);
+  if (record.refKind === 'single') {
+    exactKeys(record, ['refKind', 'network', ...additionalKeys], path);
+    return;
+  }
+  if (record.refKind === 'pair') {
+    exactKeys(record, ['refKind', 'networks', ...additionalKeys], path);
+    dataArray(record.networks, `${path}.networks`);
+    return;
+  }
+  invalid('RT3003', `${path}.refKind`, 'unknown Network reference tag.');
+}
+
+function planArithmeticOperandShape(value: unknown, path: string): void {
+  const record = dataRecord(value, path);
+  if (record.kind === 'constant') {
+    exactKeys(record, ['kind', 'value'], path);
+    return;
+  }
+  if (record.kind === 'signal') {
+    exactKeys(record, ['kind', 'signal', 'refKind', 'network', 'networks'], path);
+    planSignalShape(record.signal, `${path}.signal`);
+    planNetworkRefShape(record, path, ['kind', 'signal']);
+    return;
+  }
+  if (record.kind === 'each') {
+    exactKeys(record, ['kind', 'refKind', 'network', 'networks'], path);
+    planNetworkRefShape(record, path, ['kind']);
+    return;
+  }
+  invalid('RT3003', `${path}.kind`, 'unknown arithmetic operand tag.');
+}
+
+function planArithmeticOutputShape(value: unknown, path: string): void {
+  const record = dataRecord(value, path);
+  if (record.kind === 'each') {
+    exactKeys(record, ['kind'], path);
+    return;
+  }
+  if (record.kind === 'signal') {
+    exactKeys(record, ['kind', 'signal'], path);
+    planSignalShape(record.signal, `${path}.signal`);
+    return;
+  }
+  invalid('RT3003', `${path}.kind`, 'unknown arithmetic output tag.');
+}
+
+function planConditionShape(value: unknown, path: string, depth = 0): void {
+  if (depth > 128) invalid('RT3003', path, 'condition nesting exceeds the 128 level limit.');
+  const record = dataRecord(value, path);
+  if (record.kind === 'and' || record.kind === 'or') {
+    exactKeys(record, ['kind', 'conditions'], path);
+    dataArray(record.conditions, `${path}.conditions`).forEach((entry, index) =>
+      planConditionShape(entry, `${path}.conditions[${index}]`, depth + 1),
+    );
+    return;
+  }
+  if (record.kind === 'compare-each') {
+    exactKeys(record, ['kind', 'comparator', 'constant', 'refKind', 'network', 'networks'], path);
+    planNetworkRefShape(record, path, ['kind', 'comparator', 'constant']);
+    return;
+  }
+  if (record.kind === 'compare-signal') {
+    exactKeys(
+      record,
+      ['kind', 'signal', 'comparator', 'constant', 'refKind', 'network', 'networks'],
+      path,
+    );
+    planSignalShape(record.signal, `${path}.signal`);
+    planNetworkRefShape(record, path, ['kind', 'signal', 'comparator', 'constant']);
+    return;
+  }
+  if (record.kind === 'compare-wildcard') {
+    exactKeys(
+      record,
+      ['kind', 'wildcard', 'comparator', 'constant', 'refKind', 'network', 'networks'],
+      path,
+    );
+    planNetworkRefShape(record, path, ['kind', 'wildcard', 'comparator', 'constant']);
+    return;
+  }
+  if (record.kind === 'compare-signals') {
+    exactKeys(record, ['kind', 'left', 'comparator', 'right'], path);
+    for (const side of ['left', 'right'] as const) {
+      const operandPath = `${path}.${side}`;
+      const operand = dataRecord(record[side], operandPath);
+      exactKeys(operand, ['signal', 'refKind', 'network', 'networks'], operandPath);
+      planSignalShape(operand.signal, `${operandPath}.signal`);
+      planNetworkRefShape(operand, operandPath, ['signal']);
+    }
+    return;
+  }
+  invalid('RT3003', `${path}.kind`, 'unknown Decider condition tag.');
+}
+
+function planDeciderOutputShape(value: unknown, path: string): void {
+  const record = dataRecord(value, path);
+  if (record.kind === 'each-constant') {
+    exactKeys(record, ['kind', 'value'], path);
+    return;
+  }
+  if (record.kind === 'signal-constant') {
+    exactKeys(record, ['kind', 'signal', 'value'], path);
+    planSignalShape(record.signal, `${path}.signal`);
+    return;
+  }
+  if (record.kind === 'each') {
+    exactKeys(record, ['kind', 'refKind', 'network', 'networks'], path);
+    planNetworkRefShape(record, path, ['kind']);
+    return;
+  }
+  if (record.kind === 'signal') {
+    exactKeys(record, ['kind', 'signal', 'refKind', 'network', 'networks'], path);
+    planSignalShape(record.signal, `${path}.signal`);
+    planNetworkRefShape(record, path, ['kind', 'signal']);
+    return;
+  }
+  if (record.kind === 'wildcard') {
+    exactKeys(record, ['kind', 'wildcard', 'refKind', 'network', 'networks'], path);
+    planNetworkRefShape(record, path, ['kind', 'wildcard']);
+    return;
+  }
+  invalid('RT3003', `${path}.kind`, 'unknown Decider output tag.');
+}
+
+function planConfigurationShape(value: unknown, path: string): DataRecord {
+  const record = dataRecord(value, path);
+  if (record.mode === 'constant') {
+    exactKeys(record, ['mode', 'value'], path);
+    return record;
+  }
+  if (record.mode === 'arithmetic') {
+    exactKeys(record, ['mode', 'left', 'operation', 'right', 'output'], path);
+    planArithmeticOperandShape(record.left, `${path}.left`);
+    planArithmeticOperandShape(record.right, `${path}.right`);
+    planArithmeticOutputShape(record.output, `${path}.output`);
+    return record;
+  }
+  if (record.mode === 'decider') {
+    exactKeys(record, ['mode', 'condition', 'outputs', 'elseOutputs'], path);
+    planConditionShape(record.condition, `${path}.condition`);
+    dataArray(record.outputs, `${path}.outputs`).forEach((entry, index) =>
+      planDeciderOutputShape(entry, `${path}.outputs[${index}]`),
+    );
+    if (record.elseOutputs !== undefined) {
+      dataArray(record.elseOutputs, `${path}.elseOutputs`).forEach((entry, index) =>
+        planDeciderOutputShape(entry, `${path}.elseOutputs[${index}]`),
+      );
+    }
+    return record;
+  }
+  if (record.mode === 'selector') {
+    if (record.operation === 'select') {
+      exactKeys(record, ['mode', 'operation', 'input', 'selectMax', 'index'], path);
+      planNetworkRefShape(record.input, `${path}.input`);
+      if (typeof record.index === 'object' && record.index !== null) {
+        planSignalShape(record.index, `${path}.index`);
+      }
+      return record;
+    }
+    if (record.operation === 'count') {
+      exactKeys(record, ['mode', 'operation', 'input', 'output'], path);
+      planNetworkRefShape(record.input, `${path}.input`);
+      planSignalShape(record.output, `${path}.output`);
+      return record;
+    }
+    invalid('RT3003', `${path}.operation`, 'unknown Selector operation.');
+  }
+  return record;
+}
+
+function rejectComputationCycles(value: unknown, path: string, seen = new WeakSet<object>()): void {
+  if (value === null || typeof value !== 'object') return;
+  if (runtimeSignalHandleRecord(value, path) !== undefined) return;
+  if (seen.has(value)) invalid('RT3003', path, 'cyclic computation configuration is not allowed.');
+  seen.add(value);
+  try {
+    if (Array.isArray(value)) {
+      dataArray(value, path).forEach((entry, index) =>
+        rejectComputationCycles(entry, `${path}[${index}]`, seen),
+      );
+      return;
+    }
+    const record = dataRecord(value, path);
+    for (const [key, child] of Object.entries(record))
+      rejectComputationCycles(child, `${path}.${key}`, seen);
+  } finally {
+    seen.delete(value);
+  }
+}
+
+function strictComputationConfiguration(
+  value: unknown,
+  path: string,
+  networks: readonly EntityPlanNetwork[],
+  source: SourceSpan,
+  instancePath: readonly string[],
+): EntityPlanConfiguration {
+  rejectComputationCycles(value, path);
+  const record = planConfigurationShape(value, path);
+  if (record.mode === 'constant') {
+    try {
+      return Object.freeze({
+        mode: 'constant',
+        value: canonicalizeConstantConfiguration(record.value, undefined, `${path}.value`),
+      });
+    } catch (error) {
+      if (error instanceof EntityConfigurationError) invalid('RT3003', error.path, error.detail);
+      if (error instanceof ConstantConfigurationError) invalid('RT3003', error.path, error.detail);
+      throw error;
+    }
+  }
+
+  const { mode: _mode, ...computation } = record;
+  const producer = {
+    kind: record.mode,
+    ...computation,
+    source,
+    instancePath,
+    destinations: [],
+    ...(record.mode === 'decider'
+      ? {
+          output:
+            (record.outputs as readonly unknown[])[0] ??
+            (record.elseOutputs as readonly unknown[] | undefined)?.[0],
+        }
+      : {}),
+  };
+  const validation = validateDirectPlanEnvelope({
+    format: 'comblang-direct-plan',
+    networks,
+    producers: [producer],
+    entities: [],
+  });
+  if (validation.value === undefined) {
+    const diagnostic = validation.diagnostics[0];
+    invalid(
+      'RT3003',
+      path,
+      diagnostic?.message.replace(/^\$\.producers\[0\]/, path) ??
+        'invalid canonical computation configuration.',
+    );
+  }
+  const canonical = validation.value.plan.producers[0] as DirectPlanProducer;
+  if (canonical.kind === 'arithmetic') {
+    return Object.freeze({
+      mode: 'arithmetic',
+      left: canonical.left,
+      operation: canonical.operation,
+      right: canonical.right,
+      output: canonical.output,
+    });
+  }
+  if (canonical.kind === 'decider') {
+    return Object.freeze({
+      mode: 'decider',
+      condition: canonical.condition,
+      outputs: Object.freeze(canonical.outputs ?? [canonical.output]),
+      ...(canonical.elseOutputs === undefined
+        ? {}
+        : { elseOutputs: Object.freeze(canonical.elseOutputs) }),
+    });
+  }
+  if (canonical.kind === 'selector') {
+    return canonical.operation === 'select'
+      ? Object.freeze({
+          mode: 'selector',
+          operation: 'select',
+          input: canonical.input,
+          selectMax: canonical.selectMax,
+          index: canonical.index,
+        })
+      : Object.freeze({
+          mode: 'selector',
+          operation: 'count',
+          input: canonical.input,
+          output: canonical.output,
+        });
+  }
+  return invalid('RT3003', path, 'unsupported computation Entity configuration.');
+}
+
 function parseConfiguration(
   value: unknown,
   path: string,
   profile: ReturnType<typeof resolveEntityReplayProfile>,
+  networks: readonly EntityPlanNetwork[],
+  source: SourceSpan,
+  instancePath: readonly string[],
 ): EntityPlanRecord['configuration'] {
   try {
+    const record = dataRecord(value, path);
+    if (
+      record.mode === 'constant' ||
+      record.mode === 'arithmetic' ||
+      record.mode === 'decider' ||
+      record.mode === 'selector'
+    )
+      return strictComputationConfiguration(value, path, networks, source, instancePath);
     return canonicalizeEntityConfiguration(value, profile, path);
   } catch (error) {
     if (error instanceof EntityConfigurationError) {
@@ -434,8 +758,9 @@ function parseEntity(
   value: unknown,
   path: string,
   context: TrustedEntityReplayContext,
+  networks: readonly EntityPlanNetwork[],
   networkNames: ReadonlySet<string>,
-  networkDeclarations: ReadonlyMap<string, V3NetworkDeclaration>,
+  networkDeclarations: ReadonlyMap<string, NetworkDeclaration>,
 ): EntityPlanRecord {
   const record = dataRecord(value, path);
   exactKeys(
@@ -444,12 +769,6 @@ function parseEntity(
     path,
   );
   const profile = parseProfileRef(record.profile, `${path}.profile`, context);
-  const configuration =
-    'configuration' in record
-      ? parseConfiguration(record.configuration, `${path}.configuration`, profile.profile)
-      : undefined;
-  const placement =
-    'placement' in record ? parsePlacement(record.placement, `${path}.placement`) : undefined;
   const provenanceRecord = dataRecord(record.provenance, `${path}.provenance`);
   exactKeys(
     provenanceRecord,
@@ -468,6 +787,19 @@ function parseEntity(
       `${path}.provenance.creationRevision`,
     ),
   });
+  const configuration =
+    'configuration' in record
+      ? parseConfiguration(
+          record.configuration,
+          `${path}.configuration`,
+          profile.profile,
+          networks,
+          provenance.source,
+          provenance.instancePath,
+        )
+      : undefined;
+  const placement =
+    'placement' in record ? parsePlacement(record.placement, `${path}.placement`) : undefined;
   const connectorBindings = parseBindings(
     record.connectorBindings,
     `${path}.connectorBindings`,
@@ -492,40 +824,6 @@ function deepFreeze<T>(value: T): T {
     if (!Object.isFrozen(value)) Object.freeze(value);
   }
   return value;
-}
-
-function basePlan(
-  value: DataRecord,
-  networks: unknown = value.networks,
-  debugInstances: unknown = value.debugInstances,
-): DirectElaborationPlan {
-  const projected: Record<string, unknown> = {
-    format: value.format,
-    version: 2,
-    networks,
-    producers: value.producers,
-  };
-  for (const key of [
-    'networkAliases',
-    'networkTransfers',
-    'networkPairs',
-    'capabilityUses',
-    'debugInstances',
-    'diagnostics',
-  ]) {
-    if (key in value) projected[key] = value[key];
-  }
-  if (debugInstances !== undefined) projected.debugInstances = debugInstances;
-  const result = validateDirectPlanEnvelope(projected);
-  if (result.value === undefined) {
-    const diagnostic = result.diagnostics[0];
-    invalid(
-      diagnostic?.code ?? 'RT1001',
-      '$',
-      diagnostic?.message ?? 'invalid producer-only v2 data.',
-    );
-  }
-  return result.value.plan;
 }
 
 const maximumEntityDebugDepth = 128;
@@ -696,7 +994,7 @@ function parseEntityDebugValue(
       ),
     });
   }
-  return debugInvalid('RT3000', `${path}.kind`, 'unknown v3 debug value tag.');
+  return debugInvalid('RT3000', `${path}.kind`, 'unknown Entity debug value tag.');
 }
 
 function parseEntityDebugInstances(
@@ -734,43 +1032,21 @@ function parseEntityDebugInstances(
   );
 }
 
-function producerDebugValue(value: EntityPlanDebugValue): DirectPlanDebugValue {
-  if (value.kind === 'entity') return { kind: 'undefined' };
-  if (value.kind === 'array') {
-    return {
-      kind: 'array',
-      values: value.values.map((item) => producerDebugValue(item)),
-    };
-  }
-  if (value.kind === 'object') {
-    return {
-      kind: 'object',
-      entries: value.entries.map((entry) => ({
-        key: entry.key,
-        value: producerDebugValue(entry.value),
-      })),
-    };
-  }
-  return value;
-}
-
-export function projectEntityDebugInstancesForV2(
-  instances: readonly EntityPlanDebugInstance[] | undefined,
-): readonly DirectPlanDebugInstance[] | undefined {
-  if (instances === undefined) return undefined;
-  return instances.map(({ value, ...instance }) => ({
-    ...instance,
-    value: producerDebugValue(value),
-  }));
-}
-
-function validateValue(value: unknown, context: TrustedEntityReplayContext): ValidatedEntityPlanV3 {
+function validateValue(value: unknown, context: TrustedEntityReplayContext): ValidatedEntityPlan {
   const record = dataRecord(value, '$');
+  const envelope = validateDirectPlanEnvelope({ ...record, debugInstances: [] });
+  if (envelope.value === undefined) {
+    const diagnostic = envelope.diagnostics[0];
+    invalid(
+      diagnostic?.code ?? 'RT1001',
+      '$',
+      diagnostic?.message ?? 'invalid canonical direct plan envelope.',
+    );
+  }
   exactKeys(
     record,
     [
       'format',
-      'version',
       'context',
       'networks',
       'networkAliases',
@@ -786,8 +1062,6 @@ function validateValue(value: unknown, context: TrustedEntityReplayContext): Val
   );
   if (record.format !== 'comblang-direct-plan')
     invalid('RT1001', '$.format', 'unsupported direct plan format.');
-  if (record.version !== 3)
-    invalid('RT1001', '$.version', 'Entity semantic plans require version 3.');
   const contextReference = parseContextReference(record.context, '$.context');
   try {
     resolveEntityReplayContext(contextReference, context);
@@ -798,9 +1072,9 @@ function validateValue(value: unknown, context: TrustedEntityReplayContext): Val
       error instanceof Error ? error.message : 'replay context mismatch.',
     );
   }
-  const networks = v3Networks(record.networks, '$.networks');
+  const networks = parseNetworks(record.networks, '$.networks');
   const networkNames = new Set(networks.map(({ name }) => name));
-  const networkDeclarations = new Map<string, V3NetworkDeclaration>(
+  const networkDeclarations = new Map<string, NetworkDeclaration>(
     networks.map(({ name, fixedColor, generation, consumedAt }, index) => [
       name,
       {
@@ -812,7 +1086,14 @@ function validateValue(value: unknown, context: TrustedEntityReplayContext): Val
     ]),
   );
   const entities = dataArray(record.entities, '$.entities').map((entry, index) =>
-    parseEntity(entry, `$.entities[${index}]`, context, networkNames, networkDeclarations),
+    parseEntity(
+      entry,
+      `$.entities[${index}]`,
+      context,
+      networks,
+      networkNames,
+      networkDeclarations,
+    ),
   );
   const ids = entities.map(({ id }) => id);
   if (new Set(ids).size !== ids.length)
@@ -826,24 +1107,27 @@ function validateValue(value: unknown, context: TrustedEntityReplayContext): Val
     '$.debugInstances',
     entityIds,
   );
-  const plan = basePlan(
-    record,
-    networks.map(v2Network),
-    projectEntityDebugInstancesForV2(debugInstances),
-  );
-  const canonical: DirectElaborationPlanV3 = deepFreeze({
+  const plan = envelope.value.plan;
+  const canonical: DirectElaborationPlan = deepFreeze({
     ...plan,
-    version: 3,
     context: contextReference,
     networks,
     entities: Object.freeze([...entities].sort((left, right) => left.ordinal - right.ordinal)),
     ...(debugInstances === undefined ? {} : { debugInstances }),
   });
+  try {
+    validateCanonicalEntityAssociations(canonical, context);
+  } catch (error) {
+    if (error instanceof CanonicalEntityAssociationError) {
+      invalid(error.code, error.path, error.detail);
+    }
+    throw error;
+  }
   return { plan: canonical, context };
 }
 
-/** Validates v3 Entity semantics and the embedded producer-only v2 subset before allocation. */
-export function validateEntityDirectPlan(
+/** Validates canonical Entity semantics and the embedded producer subset before allocation. */
+export function validateCanonicalEntityPlanData(
   value: unknown,
   context: TrustedEntityReplayContext,
 ): EntityPlanValidationResult {
@@ -864,26 +1148,4 @@ export function validateEntityDirectPlan(
     }
     throw error;
   }
-}
-
-/** Explicitly upgrades a validated producer-only v2 plan without inventing Entity capabilities. */
-export function adaptProducerOnlyPlanV2ToV3(
-  value: unknown,
-  context: TrustedEntityReplayContext,
-): DirectElaborationPlanV3 {
-  const record = dataRecord(value, '$');
-  if (record.format !== 'comblang-direct-plan' || record.version !== 2) {
-    invalid('RT1001', '$.version', 'only producer-only Direct Plan v2 can be adapted.');
-  }
-  const plan = basePlan(record);
-  const reference = entityReplayContextRef(context);
-  return deepFreeze({
-    ...plan,
-    version: 3,
-    context: reference,
-    networks: Object.freeze(
-      plan.networks.map((network) => Object.freeze({ ...network, generation: 0 })),
-    ),
-    entities: Object.freeze([]),
-  });
 }

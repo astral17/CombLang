@@ -1,10 +1,7 @@
 import { describe, expect, test, vi } from 'vitest';
 import { signal } from '@comblang/factorio';
 import { sourceFileId, sourceSpan } from '@comblang/shared';
-import {
-  generateBlueprintJson,
-  generateEntityBlueprintJson,
-} from '@comblang/compiler/blueprint-json';
+import { generateBlueprintJson } from '@comblang/compiler/blueprint-json';
 import {
   syntheticZeroPortEntityProfile as zero,
   syntheticSharedTwoColorEntityProfile as shared,
@@ -15,22 +12,18 @@ import {
   entityReplayContextRef,
 } from '@comblang/compiler/entity-replay-context';
 import type {
-  DirectElaborationPlanV3,
   EntityBehaviorKey,
   EntityLaneKey,
   EntityPlanRecord,
   EntityProfile,
 } from '@comblang/compiler/entity';
-import {
-  elaborateDirectPlan,
-  elaborateEntityDirectPlan,
-  tryElaborateDirectPlan,
-  tryElaborateEntityDirectPlan,
-} from './direct-plan.js';
+import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
+import { elaborateDirectPlan, tryElaborateDirectPlan } from './direct-plan.js';
 import { projectEntityObjectConnectors } from './entity-object-adapter.js';
 import { createDebugDocument } from './debug-document.js';
 import { DslRuntime } from './elaboration.js';
 import { lowerEntityRecords } from './entity-lowering.js';
+import { canonicalDirectPlan } from './canonical-circuit.js';
 
 const source = sourceSpan(sourceFileId('physical.ts'), 1, 10);
 const contextFor = (profiles: readonly EntityProfile[] = [zero, shared]) =>
@@ -124,9 +117,8 @@ const feedbackProfile: EntityProfile = {
 };
 function fixture() {
   const context = contextFor();
-  const plan: DirectElaborationPlanV3 = {
+  const plan: DirectElaborationPlan = {
     format: 'comblang-direct-plan',
-    version: 3,
     context: entityReplayContextRef(context),
     networks: [
       { name: 'input', fixedColor: 'red', generation: 0, source, instancePath: [] },
@@ -159,7 +151,7 @@ function fixture() {
 describe('physical Entity preview vertical slice', () => {
   test('maps names to graph IDs once and connects Entity/combinator lanes', () => {
     const { plan, context } = fixture();
-    const execution = elaborateEntityDirectPlan(plan, context);
+    const execution = elaborateDirectPlan(plan, context);
     const { graph, ir } = execution.circuit;
     expect(graph.entities).toBe(ir.entities);
     expect(graph.entities).toHaveLength(2);
@@ -176,7 +168,7 @@ describe('physical Entity preview vertical slice', () => {
     ]);
     expect(execution.network('input').id).not.toBe('input');
     expect(Object.isFrozen(ir.entities[1]!.connectorBindings[0]!.endpoint)).toBe(true);
-    const preview = generateEntityBlueprintJson(ir).blueprint;
+    const preview = generateBlueprintJson(ir).blueprint;
     expect(preview.entities).toHaveLength(3);
     expect(preview.entities[0]).toMatchObject({
       entity_number: 1,
@@ -204,7 +196,7 @@ describe('physical Entity preview vertical slice', () => {
 
   test('projects bound lanes into deterministic connector descriptors', () => {
     const { plan, context } = fixture();
-    const execution = elaborateEntityDirectPlan(plan, context);
+    const execution = elaborateDirectPlan(plan, context);
     const record = execution.entity(2);
     const inputId = execution.network('input').id;
     const greenId = execution.network('green').id;
@@ -245,7 +237,7 @@ describe('physical Entity preview vertical slice', () => {
         },
       ],
     };
-    const execution = elaborateEntityDirectPlan(outputPlan, context);
+    const execution = elaborateDirectPlan(outputPlan, context);
     const first = execution.createTestSession();
     const firstById = execution.entityObject(first, execution.entity(2).id);
     const firstByOrdinal = execution.entityObject(first, 2);
@@ -264,7 +256,7 @@ describe('physical Entity preview vertical slice', () => {
     const second = execution.createTestSession();
     const secondObject = execution.entityObject(second, 2);
     expect(secondObject).not.toBe(firstById);
-    const foreign = elaborateEntityDirectPlan(outputPlan, context).createTestSession();
+    const foreign = elaborateDirectPlan(outputPlan, context).createTestSession();
     expect(() => execution.entityObject(foreign, 2)).toThrow(
       'TestSession created by this execution',
     );
@@ -280,7 +272,7 @@ describe('physical Entity preview vertical slice', () => {
 
   test('preserves generic bridge semantics for inputs, outputs, providers, traces, and feedback', () => {
     const { plan, context } = fixture();
-    const inputExecution = elaborateEntityDirectPlan(
+    const inputExecution = elaborateDirectPlan(
       {
         ...plan,
         producers: [],
@@ -310,7 +302,7 @@ describe('physical Entity preview vertical slice', () => {
       ]),
     );
 
-    const outputExecution = elaborateEntityDirectPlan(
+    const outputExecution = elaborateDirectPlan(
       {
         ...plan,
         producers: [],
@@ -342,7 +334,7 @@ describe('physical Entity preview vertical slice', () => {
       ]),
     );
 
-    const strictExecution = elaborateEntityDirectPlan(
+    const strictExecution = elaborateDirectPlan(
       {
         ...plan,
         producers: [],
@@ -368,7 +360,7 @@ describe('physical Entity preview vertical slice', () => {
     expect(strictSession.readValue(strictExecution.network('input')).kind).toBe('unknown');
 
     const feedbackContext = contextFor([zero, shared, feedbackProfile]);
-    const feedbackPlan: DirectElaborationPlanV3 = {
+    const feedbackPlan: DirectElaborationPlan = {
       ...plan,
       context: entityReplayContextRef(feedbackContext),
       networks: [{ name: 'loop', fixedColor: 'red', generation: 0, source, instancePath: [] }],
@@ -383,7 +375,7 @@ describe('physical Entity preview vertical slice', () => {
         },
       ],
     };
-    const feedbackExecution = elaborateEntityDirectPlan(feedbackPlan, feedbackContext);
+    const feedbackExecution = elaborateDirectPlan(feedbackPlan, feedbackContext);
     const feedbackSession = feedbackExecution.createTestSession();
     const feedbackObject = feedbackExecution.entityObject(feedbackSession, 1);
     const seenInputs: string[] = [];
@@ -416,7 +408,7 @@ describe('physical Entity preview vertical slice', () => {
 
   test('does not synthesize output defaults for input-only or zero-port Entities', () => {
     const { plan, context } = fixture();
-    const execution = elaborateEntityDirectPlan(
+    const execution = elaborateDirectPlan(
       {
         ...plan,
         producers: [],
@@ -443,7 +435,7 @@ describe('physical Entity preview vertical slice', () => {
         instancePath: ['DUT nested'],
       },
     };
-    const execution = elaborateEntityDirectPlan({ ...plan, entities: [entity(), nested] }, context);
+    const execution = elaborateDirectPlan({ ...plan, entities: [entity(), nested] }, context);
     const root = execution.debug.root;
     expect(root.entities).toHaveLength(1);
     expect(root.entity(1)).toMatchObject({
@@ -466,14 +458,14 @@ describe('physical Entity preview vertical slice', () => {
       record: execution.entity(1),
     });
     expect(JSON.parse(JSON.stringify(document))).toEqual(document);
-    const zeroExecution = elaborateEntityDirectPlan({ ...plan, entities: [] }, context);
+    const zeroExecution = elaborateDirectPlan({ ...plan, entities: [] }, context);
     const zeroEntityDocument = createDebugDocument(
       zeroExecution.debug,
       zeroExecution.circuit.graph,
     );
-    expect(zeroEntityDocument.version).toBe(2);
-    if (zeroEntityDocument.version !== 2) throw new Error('expected Entity-aware debug document');
-    expect(zeroEntityDocument.scopes.every(({ entities }) => entities.length === 0)).toBe(true);
+    expect(zeroEntityDocument.version).toBe(1);
+    if (zeroEntityDocument.version !== 1) throw new Error('expected producer-only debug document');
+    expect(zeroEntityDocument.scopes.every((scope) => !('entities' in scope))).toBe(true);
     expect(root.combinators()).toHaveLength(1);
     expect(() => root.entity(2)).toThrowError(expect.objectContaining({ code: 'DBG1001' }));
   });
@@ -509,7 +501,7 @@ describe('physical Entity preview vertical slice', () => {
         },
       ],
     };
-    const execution = elaborateEntityDirectPlan(captured, context);
+    const execution = elaborateDirectPlan(captured, context);
     const value = execution.instance('dut').value as {
       readonly direct: { readonly kind: 'entity'; readonly entityId: EntityPlanRecord['id'] };
       readonly aliases: readonly {
@@ -533,7 +525,7 @@ describe('physical Entity preview vertical slice', () => {
     };
     const allocate = vi.spyOn(DslRuntime.prototype, 'network');
     try {
-      const result = tryElaborateEntityDirectPlan(orphan, context);
+      const result = tryElaborateDirectPlan(orphan, context);
       expect(result.execution).toBeUndefined();
       expect(result.diagnostics[0]).toMatchObject({
         code: 'RT3003',
@@ -553,7 +545,7 @@ describe('physical Entity preview vertical slice', () => {
         },
       ],
     };
-    expect(tryElaborateEntityDirectPlan(malformed, context).diagnostics[0]).toMatchObject({
+    expect(tryElaborateDirectPlan(malformed, context).diagnostics[0]).toMatchObject({
       code: 'RT3000',
       message: expect.stringContaining('$.debugInstances[0].value.entityId'),
       span: source,
@@ -569,7 +561,7 @@ describe('physical Entity preview vertical slice', () => {
       ...captured,
       debugInstances: [{ ...captured.debugInstances[0]!, value: deepValue }],
     };
-    expect(tryElaborateEntityDirectPlan(tooDeep, context).diagnostics[0]).toMatchObject({
+    expect(tryElaborateDirectPlan(tooDeep, context).diagnostics[0]).toMatchObject({
       code: 'RT3000',
       message: expect.stringContaining('$.debugInstances[0].value'),
       span: source,
@@ -595,7 +587,7 @@ describe('physical Entity preview vertical slice', () => {
         { name: 'alias', network: 'survivor', moved: false, source, instancePath: [] },
       ],
     };
-    const execution = elaborateEntityDirectPlan(transferred, context);
+    const execution = elaborateDirectPlan(transferred, context);
     expect(execution.circuit.graph.networks).toHaveLength(2);
     expect(
       execution.entity(2).connectorBindings.find((b) => b.endpoint.color === 'red')!.network,
@@ -604,7 +596,7 @@ describe('physical Entity preview vertical slice', () => {
     expect(
       execution.circuit.graph.networks.find((n) => n.id === execution.network('survivor').id)?.name,
     ).toBe('survivor');
-    expect(generateEntityBlueprintJson(execution.circuit.ir).blueprint.wires).toEqual([
+    expect(generateBlueprintJson(execution.circuit.ir).blueprint.wires).toEqual([
       [1, 1, 3, 1],
       [1, 2, 3, 2],
     ]);
@@ -614,7 +606,7 @@ describe('physical Entity preview vertical slice', () => {
     const { plan, context } = fixture();
     const allocate = vi.spyOn(DslRuntime.prototype, 'network');
     try {
-      const result = tryElaborateEntityDirectPlan(
+      const result = tryElaborateDirectPlan(
         { ...plan, context: { ...plan.context, evidenceIdentity: 'forged' } },
         context,
       );
@@ -662,7 +654,7 @@ describe('physical Entity preview vertical slice', () => {
     };
     const allocate = vi.spyOn(DslRuntime.prototype, 'network');
     try {
-      const result = tryElaborateEntityDirectPlan(configured, providerContext);
+      const result = tryElaborateDirectPlan(configured, providerContext);
       expect(result.execution).toBeUndefined();
       expect(result.diagnostics[0]).toMatchObject({
         code: 'RT3003',
@@ -684,7 +676,7 @@ describe('physical Entity preview vertical slice', () => {
       })),
     };
     const context = contextFor([zero, profile]);
-    const result = tryElaborateEntityDirectPlan(
+    const result = tryElaborateDirectPlan(
       { ...plan, context: entityReplayContextRef(context) },
       context,
     );
@@ -703,7 +695,7 @@ describe('physical Entity preview vertical slice', () => {
     ) => {
       const allocate = vi.spyOn(DslRuntime.prototype, 'network');
       try {
-        const result = tryElaborateEntityDirectPlan(plan, context);
+        const result = tryElaborateDirectPlan(plan, context);
         expect(result.execution).toBeUndefined();
         expect(result.diagnostics[0]?.code).toBe(code);
         expect(allocate).not.toHaveBeenCalled();
@@ -784,10 +776,9 @@ describe('physical Entity preview vertical slice', () => {
       context: entityReplayContextRef(context),
       entities: [record],
     };
-    expect(tryElaborateEntityDirectPlan(plan, context).diagnostics[0]?.code).toBe('RT3010');
+    expect(tryElaborateDirectPlan(plan, context).diagnostics[0]?.code).toBe('RT3010');
     expect(
-      elaborateEntityDirectPlan({ ...plan, entities: [entity(ambiguous)] }, context).circuit.ir
-        .entities,
+      elaborateDirectPlan({ ...plan, entities: [entity(ambiguous)] }, context).circuit.ir.entities,
     ).toHaveLength(1);
   });
 
@@ -805,12 +796,12 @@ describe('physical Entity preview vertical slice', () => {
         },
       ],
     };
-    const execution = elaborateEntityDirectPlan(configured, context);
+    const execution = elaborateDirectPlan(configured, context);
     expect(execution.entity(1).configuration).toEqual({
       mode: 'raw',
       payload: { recipe: 'iron-gear-wheel', control_behavior: { read_contents: true } },
     });
-    expect(generateEntityBlueprintJson(execution.circuit.ir).blueprint.entities[1]).toMatchObject({
+    expect(generateBlueprintJson(execution.circuit.ir).blueprint.entities[1]).toMatchObject({
       recipe: 'iron-gear-wheel',
       control_behavior: { read_contents: true },
       entity_number: 2,
@@ -820,21 +811,19 @@ describe('physical Entity preview vertical slice', () => {
     });
   });
 
-  test('accepts deprecated opaque typed v3 configuration until preview and rejects it explicitly', () => {
+  test('rejects the removed opaque typed configuration before preview', () => {
     const { plan, context } = fixture();
     const configured = {
       ...plan,
       entities: [
-        { ...entity(), configuration: { mode: 'typed' as const, payload: { legacy: true } } },
+        {
+          ...entity(),
+          configuration: { mode: 'typed' as const, payload: { legacy: true } } as never,
+        },
       ],
     };
-    const execution = elaborateEntityDirectPlan(configured, context);
-    expect(execution.entity(1).configuration).toEqual({
-      mode: 'typed',
-      payload: { legacy: true },
-    });
-    expect(() => generateEntityBlueprintJson(execution.circuit.ir)).toThrowError(
-      expect.objectContaining({ code: 'BP1001', span: source }),
+    expect(() => elaborateDirectPlan(configured, context)).toThrowError(
+      expect.objectContaining({ diagnostic: expect.objectContaining({ code: 'RT3003' }) }),
     );
   });
 
@@ -860,7 +849,7 @@ describe('physical Entity preview vertical slice', () => {
         },
       ],
     };
-    const execution = elaborateEntityDirectPlan(configured, context);
+    const execution = elaborateDirectPlan(configured, context);
     configuration.lanes.reverse();
     configuration.condition.signal.name = 'signal-mutated-after-elaboration';
 
@@ -899,7 +888,7 @@ describe('physical Entity preview vertical slice', () => {
       connectors: ['shared'],
     });
 
-    const previewEntity = generateEntityBlueprintJson(execution.circuit.ir).blueprint.entities[1]!;
+    const previewEntity = generateBlueprintJson(execution.circuit.ir).blueprint.entities[1]!;
     expect(previewEntity).toMatchObject({
       entity_number: 2,
       name: 'synthetic-shared-two-color',
@@ -921,7 +910,7 @@ describe('physical Entity preview vertical slice', () => {
       },
     };
     expect(() =>
-      generateEntityBlueprintJson({ ...execution.circuit.ir, entities: [unsupported] }),
+      generateBlueprintJson({ ...execution.circuit.ir, entities: [unsupported] }),
     ).toThrowError(expect.objectContaining({ code: 'BP1001', span: source }));
 
     const corruptions: readonly unknown[] = [
@@ -946,26 +935,20 @@ describe('physical Entity preview vertical slice', () => {
     for (const configurationCandidate of corruptions) {
       const corrupted = { ...physical, configuration: configurationCandidate as never };
       expect(() =>
-        generateEntityBlueprintJson({ ...execution.circuit.ir, entities: [corrupted] }),
+        generateBlueprintJson({ ...execution.circuit.ir, entities: [corrupted] }),
       ).toThrowError(expect.objectContaining({ code: 'BP1001', span: source }));
     }
   });
 
-  test('keeps producer-only v2 graph, IR, and blueprint identical', () => {
+  test('keeps producer-only graph, IR, and blueprint identical', () => {
     const { plan, context } = fixture();
-    const v2 = {
-      format: 'comblang-direct-plan' as const,
-      version: 2 as const,
-      networks: plan.networks.map(({ generation: _g, ...n }) => n),
-      producers: plan.producers,
-    };
-    const previous = elaborateDirectPlan(v2);
-    const current = elaborateEntityDirectPlan({ ...plan, entities: [] }, context);
-    const { entities: _entities, context: _context, ...graph } = current.circuit.graph;
-    const { entities: _irEntities, context: _irContext, ...ir } = current.circuit.ir;
-    expect({ ...graph, version: 2 }).toEqual(previous.circuit.graph);
-    expect({ ...ir, version: 2 }).toEqual(previous.circuit.ir);
-    expect(generateEntityBlueprintJson(current.circuit.ir)).toEqual(
+    const previous = elaborateDirectPlan({ ...plan, entities: [] });
+    const current = elaborateDirectPlan(canonicalDirectPlan({ ...plan, entities: [] }));
+    expect(Object.hasOwn(current.circuit.graph, 'version')).toBe(false);
+    expect(Object.hasOwn(current.circuit.ir, 'version')).toBe(false);
+    expect(current.circuit.graph.entities).toEqual([]);
+    expect(current.circuit.ir.entities).toEqual([]);
+    expect(generateBlueprintJson(current.circuit.ir)).toEqual(
       generateBlueprintJson(previous.circuit.ir),
     );
   });
@@ -996,7 +979,7 @@ describe('physical Entity preview vertical slice', () => {
         },
       ],
     };
-    const execution = elaborateEntityDirectPlan(debugPlan, context);
+    const execution = elaborateDirectPlan(debugPlan, context);
 
     expect(execution.capabilityUses).toEqual(capabilityUses);
     expect(execution.instances).toHaveLength(1);
@@ -1044,11 +1027,11 @@ describe('physical Entity preview vertical slice', () => {
     };
     const context = contextFor([zero, profile]);
     const { plan } = fixture();
-    const execution = elaborateEntityDirectPlan(
+    const execution = elaborateDirectPlan(
       { ...plan, context: entityReplayContextRef(context) },
       context,
     );
-    expect(generateEntityBlueprintJson(execution.circuit.ir).blueprint.wires).toEqual([
+    expect(generateBlueprintJson(execution.circuit.ir).blueprint.wires).toEqual([
       [1, 1, 3, 3],
       [1, 2, 3, 4],
     ]);
@@ -1056,7 +1039,7 @@ describe('physical Entity preview vertical slice', () => {
 
   test('automatic placement skips occupied producer and explicit Entity positions', () => {
     const { plan, context } = fixture();
-    const execution = elaborateEntityDirectPlan(
+    const execution = elaborateDirectPlan(
       {
         ...plan,
         entities: [
@@ -1067,7 +1050,7 @@ describe('physical Entity preview vertical slice', () => {
       },
       context,
     );
-    const preview = generateEntityBlueprintJson(execution.circuit.ir).blueprint;
+    const preview = generateBlueprintJson(execution.circuit.ir).blueprint;
     expect(preview.entities.map((e) => e.position)).toEqual([
       { x: 0.5, y: 0.5 },
       { x: 4.5, y: 0.5 },
@@ -1079,7 +1062,7 @@ describe('physical Entity preview vertical slice', () => {
 
   test('detaches physical records and guards corrupt native metadata at preview', () => {
     const { plan, context } = fixture();
-    const execution = elaborateEntityDirectPlan(plan, context);
+    const execution = elaborateDirectPlan(plan, context);
     expect(Object.isFrozen(plan.entities[0])).toBe(false);
     expect(execution.entity(1)).not.toBe(plan.entities[0]);
     const ir = execution.circuit.ir;
@@ -1093,11 +1076,11 @@ describe('physical Entity preview vertical slice', () => {
           nativeConnector,
         })),
       };
-      expect(() => generateEntityBlueprintJson({ ...ir, entities: [corrupt] })).toThrow(
+      expect(() => generateBlueprintJson({ ...ir, entities: [corrupt] })).toThrow(
         /connector ordinal/,
       );
     }
-    expect(() => generateEntityBlueprintJson({ ...ir, entities: [wired, wired] })).toThrow(
+    expect(() => generateBlueprintJson({ ...ir, entities: [wired, wired] })).toThrow(
       /Duplicate physical/,
     );
   });

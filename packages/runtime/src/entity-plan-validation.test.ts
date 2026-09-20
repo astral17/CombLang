@@ -16,15 +16,12 @@ import type {
   EntityProfile,
   EntityPlanRecord,
 } from '@comblang/compiler/entity';
-import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
 import { sourceFileId, sourceSpan } from '@comblang/shared';
 
-import {
-  adaptProducerOnlyPlanV2ToV3,
-  EntityPlanValidationError,
-  validateEntityDirectPlan,
-} from './entity-plan-validation.js';
+import { validateCanonicalEntityPlanData } from './entity-plan-validation.js';
 import { tryElaborateDirectPlan } from './direct-plan.js';
+
+const validatePlan = validateCanonicalEntityPlanData;
 
 function contextFor(
   profile: EntityProfile = syntheticZeroPortEntityProfile,
@@ -79,7 +76,6 @@ function planFor(
   const reference = entityReplayContextRef(context);
   return {
     format: 'comblang-direct-plan',
-    version: 3,
     context: reference,
     networks: [],
     producers: [],
@@ -87,13 +83,13 @@ function planFor(
   };
 }
 
-describe('v3 Entity plan validation and v2 migration', () => {
+describe('canonical Entity plan validation', () => {
   test('validates a zero-port Entity before allocation and returns a frozen canonical plan', () => {
     const context = contextFor();
-    const result = validateEntityDirectPlan(planFor(context), context);
+    const result = validatePlan(planFor(context), context);
 
     expect(result.diagnostics).toEqual([]);
-    expect(result.value?.plan.version).toBe(3);
+    expect(result.value?.plan).not.toHaveProperty('version');
     expect(result.value?.plan.entities).toHaveLength(1);
     expect(Object.isFrozen(result.value?.plan)).toBe(true);
     expect(Object.isFrozen(result.value?.plan.entities)).toBe(true);
@@ -103,14 +99,14 @@ describe('v3 Entity plan validation and v2 migration', () => {
     const context = contextFor();
     const forged = jsonCopy(planFor(context));
     forged.entities[0].profile.connectors = [];
-    expect(validateEntityDirectPlan(forged, context).diagnostics[0]).toMatchObject({
+    expect(validatePlan(forged, context).diagnostics[0]).toMatchObject({
       code: 'RT3000',
       message: expect.stringContaining('$.entities[0].profile.connectors'),
     });
 
     const duplicate = jsonCopy(planFor(context));
     duplicate.entities.push({ ...duplicate.entities[0] });
-    expect(validateEntityDirectPlan(duplicate, context).diagnostics[0]).toMatchObject({
+    expect(validatePlan(duplicate, context).diagnostics[0]).toMatchObject({
       code: 'RT3003',
       message: expect.stringContaining('Entity IDs must be unique'),
     });
@@ -120,7 +116,7 @@ describe('v3 Entity plan validation and v2 migration', () => {
       ...missingReference.entities[0]!.profile,
       profileId: 'profile:missing-v1',
     };
-    expect(validateEntityDirectPlan(missingReference, context).diagnostics[0]).toMatchObject({
+    expect(validatePlan(missingReference, context).diagnostics[0]).toMatchObject({
       code: 'RT3002',
       message: expect.stringContaining('$.entities[0].profile.profileId'),
     });
@@ -130,7 +126,7 @@ describe('v3 Entity plan validation and v2 migration', () => {
     const context = contextFor();
     const wrongEnvironment = jsonCopy(planFor(context));
     wrongEnvironment.context.evidenceIdentity = 'evidence-other-v1';
-    expect(validateEntityDirectPlan(wrongEnvironment, context).diagnostics[0]).toMatchObject({
+    expect(validatePlan(wrongEnvironment, context).diagnostics[0]).toMatchObject({
       code: 'RT3001',
       message: expect.stringContaining('$.context'),
     });
@@ -168,7 +164,7 @@ describe('v3 Entity plan validation and v2 migration', () => {
         instancePath: [],
       },
     ];
-    expect(validateEntityDirectPlan(plan, context).diagnostics).toEqual([]);
+    expect(validatePlan(plan, context).diagnostics).toEqual([]);
   });
 
   test('canonicalizes typed configuration during replay validation', () => {
@@ -177,7 +173,7 @@ describe('v3 Entity plan validation and v2 migration', () => {
       ...entityFor(syntheticSharedTwoColorEntityProfile),
       configuration: typedConfiguration(),
     });
-    const result = validateEntityDirectPlan(plan, context);
+    const result = validatePlan(plan, context);
 
     expect(result.diagnostics).toEqual([]);
     expect(result.value?.plan.entities[0]?.configuration).toEqual({
@@ -193,21 +189,18 @@ describe('v3 Entity plan validation and v2 migration', () => {
     });
   });
 
-  test('accepts the deprecated opaque typed v3 payload during replay', () => {
+  test('rejects the removed opaque typed payload during replay', () => {
     const context = contextFor(syntheticSharedTwoColorEntityProfile);
-    const result = validateEntityDirectPlan(
+    const result = validatePlan(
       planFor(context, {
         ...entityFor(syntheticSharedTwoColorEntityProfile),
-        configuration: { mode: 'typed', payload: { legacy: true } },
+        configuration: { mode: 'typed', payload: { legacy: true } } as never,
       }),
       context,
     );
 
-    expect(result.diagnostics).toEqual([]);
-    expect(result.value?.plan.entities[0]?.configuration).toEqual({
-      mode: 'typed',
-      payload: { legacy: true },
-    });
+    expect(result.value).toBeUndefined();
+    expect(result.diagnostics[0]).toMatchObject({ code: 'RT3003' });
   });
 
   test('rejects non-synthetic typed configuration without verified positive evidence', () => {
@@ -222,7 +215,7 @@ describe('v3 Entity plan validation and v2 migration', () => {
       policyIdentity: 'provider-policy-v1',
       profiles: [providerProfile],
     });
-    const result = validateEntityDirectPlan(
+    const result = validatePlan(
       planFor(context, { ...entityFor(providerProfile), configuration: typedConfiguration() }),
       context,
     );
@@ -267,14 +260,14 @@ describe('v3 Entity plan validation and v2 migration', () => {
 
     const missingDirection = jsonCopy(plan);
     delete missingDirection.entities[0].connectorBindings[0].direction;
-    expect(validateEntityDirectPlan(missingDirection, context).diagnostics[0]).toMatchObject({
+    expect(validatePlan(missingDirection, context).diagnostics[0]).toMatchObject({
       code: 'RT3000',
       message: expect.stringContaining('$.entities[0].connectorBindings[0].direction'),
     });
 
     const missingProvenanceField = jsonCopy(plan);
     delete missingProvenanceField.entities[0].connectorBindings[0].provenance.operationOrdinal;
-    expect(validateEntityDirectPlan(missingProvenanceField, context).diagnostics[0]).toMatchObject({
+    expect(validatePlan(missingProvenanceField, context).diagnostics[0]).toMatchObject({
       code: 'RT3000',
       message: expect.stringContaining(
         '$.entities[0].connectorBindings[0].provenance.operationOrdinal',
@@ -314,7 +307,7 @@ describe('v3 Entity plan validation and v2 migration', () => {
         instancePath: [],
       },
     ];
-    expect(validateEntityDirectPlan(plan, context).diagnostics[0]).toMatchObject({
+    expect(validatePlan(plan, context).diagnostics[0]).toMatchObject({
       code: 'RT3002',
       message: expect.stringContaining('generation'),
     });
@@ -322,7 +315,7 @@ describe('v3 Entity plan validation and v2 migration', () => {
     const consumed = jsonCopy(plan);
     consumed.networks[0].generation = 1;
     consumed.networks[0].consumedAt = sourceSpan(sourceFileId('entity.ts'), 2, 3);
-    expect(validateEntityDirectPlan(consumed, context).diagnostics[0]).toMatchObject({
+    expect(validatePlan(consumed, context).diagnostics[0]).toMatchObject({
       code: 'RT3002',
       message: expect.stringContaining('consumed'),
     });
@@ -330,7 +323,7 @@ describe('v3 Entity plan validation and v2 migration', () => {
     const missingGeneration = jsonCopy(plan);
     missingGeneration.networks[0].generation = 1;
     delete missingGeneration.entities[0].connectorBindings[0].generation;
-    expect(validateEntityDirectPlan(missingGeneration, context).diagnostics[0]).toMatchObject({
+    expect(validatePlan(missingGeneration, context).diagnostics[0]).toMatchObject({
       code: 'RT3000',
       message: expect.stringContaining('generation'),
     });
@@ -390,25 +383,25 @@ describe('v3 Entity plan validation and v2 migration', () => {
         instancePath: [],
       },
     ];
-    expect(validateEntityDirectPlan(plan, context).diagnostics).toEqual([]);
+    expect(validatePlan(plan, context).diagnostics).toEqual([]);
 
     const missingColor = jsonCopy(plan);
     delete missingColor.networks[0].fixedColor;
-    expect(validateEntityDirectPlan(missingColor, context).diagnostics[0]).toMatchObject({
+    expect(validatePlan(missingColor, context).diagnostics[0]).toMatchObject({
       code: 'RT3002',
       message: expect.stringContaining('$.networks[0].fixedColor'),
     });
 
     const oppositeColor = jsonCopy(plan);
     oppositeColor.networks[0].fixedColor = 'green';
-    expect(validateEntityDirectPlan(oppositeColor, context).diagnostics[0]).toMatchObject({
+    expect(validatePlan(oppositeColor, context).diagnostics[0]).toMatchObject({
       code: 'RT3002',
       message: expect.stringContaining('$.networks[0].fixedColor'),
     });
 
     const incompatibleReuse = jsonCopy(plan);
     incompatibleReuse.entities[0].connectorBindings[1].network = 'red-network';
-    expect(validateEntityDirectPlan(incompatibleReuse, context).diagnostics[0]).toMatchObject({
+    expect(validatePlan(incompatibleReuse, context).diagnostics[0]).toMatchObject({
       code: 'RT3002',
       message: expect.stringContaining('$.networks[0].fixedColor'),
     });
@@ -426,54 +419,39 @@ describe('v3 Entity plan validation and v2 migration', () => {
     };
     const plan = jsonCopy(planFor(context, entityFor(syntheticZeroPortEntityProfile)));
     plan.entities.push(second);
-    expect(validateEntityDirectPlan(plan, context).diagnostics).toEqual([]);
+    expect(validatePlan(plan, context).diagnostics).toEqual([]);
 
     const missingContext = contextFor(syntheticZeroPortEntityProfile);
     const missingPlan = jsonCopy(
       planFor(missingContext, entityFor(syntheticZeroPortEntityProfile)),
     );
     missingPlan.entities.push(second);
-    expect(validateEntityDirectPlan(missingPlan, missingContext).diagnostics[0]).toMatchObject({
+    expect(validatePlan(missingPlan, missingContext).diagnostics[0]).toMatchObject({
       code: 'RT3002',
       message: expect.stringContaining('$.entities[1].profile.profileId'),
     });
   });
 
-  test('adapts only validated producer-only v2 and never invents Entity capabilities', () => {
+  test('rejects removed numeric plan envelopes', () => {
     const context = contextFor();
-    const v2: DirectElaborationPlan = {
+    const versioned = {
       format: 'comblang-direct-plan',
       version: 2,
       networks: [],
       producers: [],
+      entities: [],
     };
-    const v3 = adaptProducerOnlyPlanV2ToV3(v2, context);
-
-    expect(v3.entities).toEqual([]);
-    expect(v3.producers).toEqual(v2.producers);
-    expect(validateEntityDirectPlan(v3, context).diagnostics).toEqual([]);
-    expect(() => adaptProducerOnlyPlanV2ToV3(v3, context)).toThrowError(
-      expect.objectContaining({ code: 'RT1001', path: '$.version' }),
-    );
-    expect(
-      tryElaborateDirectPlan(v3 as unknown as DirectElaborationPlan).diagnostics[0],
-    ).toMatchObject({
+    expect(validateCanonicalEntityPlanData(versioned, context).diagnostics[0]).toMatchObject({
       code: 'RT1001',
     });
+    expect(tryElaborateDirectPlan(versioned).diagnostics[0]).toMatchObject({ code: 'RT1001' });
   });
 
-  test('returns structured validation errors for malformed mandatory v3 fields', () => {
+  test('returns structured validation errors for malformed mandatory canonical fields', () => {
     const context = contextFor();
     const malformed = planFor(context);
     delete malformed.entities;
-    const result = validateEntityDirectPlan(malformed, context);
+    const result = validatePlan(malformed, context);
     expect(result.diagnostics[0]).toMatchObject({ code: 'RT3000' });
-
-    try {
-      adaptProducerOnlyPlanV2ToV3({ version: 3 }, context);
-      throw new Error('expected adapter failure');
-    } catch (error) {
-      expect(error).toBeInstanceOf(EntityPlanValidationError);
-    }
   });
 });

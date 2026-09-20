@@ -19,7 +19,6 @@ import { printErasedTypeScript } from './typescript-erase.js';
 
 export interface ElaborationJavaScript {
   readonly format: 'comblang-elaboration-js';
-  readonly version: 2;
   readonly fileId: ParsedSourceFile['id'];
   readonly runtimeParameter: string;
   readonly containsUnsupportedAsync: boolean;
@@ -443,7 +442,6 @@ export function transformElaborationModule(
   transformed.dispose();
   return {
     format: 'comblang-elaboration-js',
-    version: 2,
     fileId: file.id,
     runtimeParameter,
     containsUnsupportedAsync,

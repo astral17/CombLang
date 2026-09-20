@@ -60,7 +60,10 @@ export function prepareEntityRecords(
     let physicalConfiguration: EntityPhysicalRecord['configuration'];
     if (record.configuration !== undefined) {
       try {
-        physicalConfiguration = resolveEntityPhysicalConfiguration(record.configuration, profile);
+        physicalConfiguration = resolveEntityPhysicalConfiguration(
+          record.configuration as import('@comblang/compiler/entity').EntityConfiguration,
+          profile,
+        );
       } catch (error) {
         if (error instanceof EntityConfigurationError) fail(error.message, source);
         throw error;

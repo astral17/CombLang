@@ -1,9 +1,5 @@
-import {
-  parseResolvedEntityV6Circuit,
-  type ResolvedEntityV6Circuit,
-} from '@comblang/compiler/resolved-entity-v6';
-import type { NativeCircuitIrV6 } from '@comblang/compiler/entity-v6';
-import { cloneAndDeepFreeze } from '@comblang/compiler/immutable';
+import { parseResolvedCircuit, type ResolvedCircuit } from '@comblang/compiler/resolved-circuit';
+import type { NativeCircuitIr } from '@comblang/compiler/ir';
 import type { SparseBus } from '@comblang/factorio';
 import type { NetworkId } from '@comblang/shared';
 import type { SimulationKernel } from '@comblang/simulator';
@@ -13,33 +9,33 @@ import {
   type NativeCircuitSimulationInitialValue,
 } from './elaboration.js';
 
-export interface ResolvedEntityV6CircuitNetworkHandle {
+export interface CanonicalResolvedCircuitNetworkHandle {
   readonly kind: 'network';
   readonly id: NetworkId;
 }
 
-export interface ResolvedEntityV6CircuitSimulationInitialValue {
-  readonly network: ResolvedEntityV6CircuitNetworkHandle;
+export interface CanonicalResolvedCircuitSimulationInitialValue {
+  readonly network: CanonicalResolvedCircuitNetworkHandle;
   readonly values: SparseBus;
 }
 
-export interface ResolvedEntityV6CircuitRuntime {
-  readonly artifact: ResolvedEntityV6Circuit;
-  readonly ir: NativeCircuitIrV6;
-  readonly networks: readonly ResolvedEntityV6CircuitNetworkHandle[];
-  network(id: NetworkId): ResolvedEntityV6CircuitNetworkHandle;
+export interface CanonicalResolvedCircuitRuntime {
+  readonly artifact: ResolvedCircuit;
+  readonly ir: NativeCircuitIr;
+  readonly networks: readonly CanonicalResolvedCircuitNetworkHandle[];
+  network(id: NetworkId): CanonicalResolvedCircuitNetworkHandle;
   createSimulation(
-    initial?: readonly ResolvedEntityV6CircuitSimulationInitialValue[],
+    initial?: readonly CanonicalResolvedCircuitSimulationInitialValue[],
   ): SimulationKernel;
 }
 
-export function hydrateResolvedEntityV6Circuit(input: unknown): ResolvedEntityV6CircuitRuntime {
-  const artifact = cloneAndDeepFreeze(parseResolvedEntityV6Circuit(input));
-  const handles = new Map<NetworkId, ResolvedEntityV6CircuitNetworkHandle>();
+export function hydrateResolvedCircuit(input: unknown): CanonicalResolvedCircuitRuntime {
+  const artifact = parseResolvedCircuit(input);
+  const handles = new Map<NetworkId, CanonicalResolvedCircuitNetworkHandle>();
   for (const network of artifact.ir.networks)
     handles.set(network.id, Object.freeze({ kind: 'network', id: network.id }));
   const ownedHandles = new Set(handles.values());
-  const network = (id: NetworkId): ResolvedEntityV6CircuitNetworkHandle => {
+  const network = (id: NetworkId): CanonicalResolvedCircuitNetworkHandle => {
     const handle = handles.get(id);
     if (handle === undefined)
       throw new RuntimeDiagnosticError({
@@ -50,7 +46,7 @@ export function hydrateResolvedEntityV6Circuit(input: unknown): ResolvedEntityV6
     return handle;
   };
   const createSimulation = (
-    initial: readonly ResolvedEntityV6CircuitSimulationInitialValue[] = [],
+    initial: readonly CanonicalResolvedCircuitSimulationInitialValue[] = [],
   ): SimulationKernel => {
     const nativeInitial: NativeCircuitSimulationInitialValue[] = initial.map((value) => {
       if (!ownedHandles.has(value.network))

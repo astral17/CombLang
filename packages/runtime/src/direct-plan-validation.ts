@@ -13,8 +13,14 @@ import type {
   PlanNetworkRef,
 } from '@comblang/compiler/direct-plan-schema';
 import type { ArithmeticOperation, LogicalArithmeticOutput } from '@comblang/compiler';
-import { circuitConstant, type SignalId, type SignalType } from '@comblang/factorio';
+import {
+  canonicalizeConstantConfiguration,
+  circuitConstant,
+  type SignalId,
+  type SignalType,
+} from '@comblang/factorio';
 import type { Diagnostic, SourceSpan } from '@comblang/shared';
+import type { EntityId } from '@comblang/compiler/entity';
 
 export interface ValidatedDirectPlanEnvelope {
   readonly plan: DirectElaborationPlan;
@@ -42,7 +48,37 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function descriptorSpan(value: unknown, key: 'source' | 'provenance'): SourceSpan | undefined {
+function dataRecordError(value: unknown, path: string): string | undefined {
+  if (!isRecord(value) || Array.isArray(value)) return `${path}: expected a data record.`;
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null)
+    return `${path}: expected a plain data record.`;
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string') return `${path}: symbol keys are not allowed.`;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !('value' in descriptor))
+      return `${path}: accessors are not allowed.`;
+  }
+  return undefined;
+}
+
+function dataArrayError(value: unknown, path: string): string | undefined {
+  if (!Array.isArray(value)) return `${path}: expected an array.`;
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (descriptor === undefined) return `${path}: array holes are not allowed.`;
+    if (!('value' in descriptor)) return `${path}: accessors are not allowed.`;
+  }
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string') return `${path}: symbol keys are not allowed.`;
+  }
+  return undefined;
+}
+
+function descriptorSpan(
+  value: unknown,
+  key: 'source' | 'provenance' | 'consumedAt',
+): SourceSpan | undefined {
   if (!isRecord(value)) return undefined;
   const valueSpan = value[key];
   if (!isRecord(valueSpan)) return undefined;
@@ -323,6 +359,17 @@ function validateConstantProducer(
     if (!isCircuitValue(output.value))
       return payloadFailure(`${outputPath}.value`, 'expected a signed int32 circuit value.', span);
   }
+  if (producer.configuration !== undefined) {
+    try {
+      canonicalizeConstantConfiguration(producer.configuration, undefined, `${path}.configuration`);
+    } catch (error) {
+      return payloadFailure(
+        `${path}.configuration`,
+        error instanceof Error ? error.message : 'invalid Constant configuration.',
+        span,
+      );
+    }
+  }
   return undefined;
 }
 
@@ -338,6 +385,7 @@ function validateSelectorProducer(
     'kind',
     'input',
     'operation',
+    'entityId',
     'bindingName',
     'debugCaptureIds',
     'destinations',
@@ -445,6 +493,7 @@ function validateDebugValue(
     return typeof value.captureId === 'string' && captureIds.has(value.captureId)
       ? undefined
       : payloadFailure(`${path}.captureId`, 'unknown Producer debug capture.', span);
+  if (value.kind === 'entity') return undefined;
   if (value.kind === 'undefined') return undefined;
   if (value.kind === 'literal') {
     const literal = value.value;
@@ -657,6 +706,7 @@ function canonicalAttachment(value: unknown): PlanAttachment {
 function canonicalProducer(value: unknown): DirectPlanProducer {
   const producer = value as Record<string, unknown>;
   const common = {
+    ...(producer.entityId === undefined ? {} : { entityId: producer.entityId as EntityId }),
     ...(producer.bindingName === undefined ? {} : { bindingName: producer.bindingName as string }),
     ...(producer.debugCaptureIds === undefined
       ? {}
@@ -688,11 +738,20 @@ function canonicalProducer(value: unknown): DirectPlanProducer {
       operation: producer.operation as ArithmeticOperation,
       right: canonicalArithmeticOperand(producer.right),
       output: canonicalArithmeticOutput(producer.output),
-    });
+    }) as DirectPlanProducer;
   if (producer.kind === 'constant')
     return Object.freeze({
       kind: 'constant',
       ...common,
+      ...(producer.configuration === undefined
+        ? {}
+        : {
+            configuration: canonicalizeConstantConfiguration(
+              producer.configuration,
+              undefined,
+              '$.producers[].configuration',
+            ),
+          }),
       outputs: Object.freeze(
         (producer.outputs as unknown[]).map((output) => {
           const record = output as Record<string, unknown>;
@@ -702,7 +761,7 @@ function canonicalProducer(value: unknown): DirectPlanProducer {
           });
         }),
       ),
-    });
+    }) as DirectPlanProducer;
   if (producer.kind === 'selector') {
     const input = canonicalNetworkRef(producer.input as Record<string, unknown>);
     return Object.freeze({
@@ -737,7 +796,11 @@ function canonicalProducer(value: unknown): DirectPlanProducer {
             (producer.elseOutputs as unknown[]).map((output) => canonicalDeciderOutput(output)),
           ),
         }),
-  });
+    ...(producer.outputOrigins === undefined ? {} : { outputOrigins: producer.outputOrigins }),
+    ...(producer.elseOutputOrigins === undefined
+      ? {}
+      : { elseOutputOrigins: producer.elseOutputOrigins }),
+  }) as DirectPlanProducer;
 }
 
 function canonicalDebugValue(value: unknown): DirectPlanDebugValue {
@@ -746,6 +809,8 @@ function canonicalDebugValue(value: unknown): DirectPlanDebugValue {
     return Object.freeze({ kind: 'network', network: debug.network as string });
   if (debug.kind === 'producer')
     return Object.freeze({ kind: 'producer', captureId: debug.captureId as string });
+  if (debug.kind === 'entity')
+    return Object.freeze({ kind: 'entity', entityId: debug.entityId as EntityId });
   if (debug.kind === 'undefined') return Object.freeze({ kind: 'undefined' });
   if (debug.kind === 'literal')
     return Object.freeze({
@@ -794,7 +859,7 @@ function canonicalDiagnostic(value: unknown): Diagnostic {
   });
 }
 
-function canonicalPlanFromValidated(value: Record<string, unknown>): DirectElaborationPlan {
+function canonicalPlan(value: Record<string, unknown>): DirectElaborationPlan {
   const networks = Object.freeze(
     (value.networks as unknown[]).map((item) => {
       const network = item as Record<string, unknown>;
@@ -805,13 +870,20 @@ function canonicalPlanFromValidated(value: Record<string, unknown>): DirectElabo
           : { fixedColor: network.fixedColor as 'red' | 'green' }),
         source: canonicalSpan(network.source),
         instancePath: canonicalPath(network.instancePath),
+        ...(network.generation === undefined ? {} : { generation: network.generation as number }),
+        ...(network.consumedAt === undefined
+          ? {}
+          : { consumedAt: canonicalSpan(network.consumedAt) }),
       });
     }),
   );
   return Object.freeze({
     format: 'comblang-direct-plan',
-    version: 2,
     networks,
+    ...(value.context === undefined
+      ? {}
+      : { context: value.context as DirectElaborationPlan['context'] }),
+    entities: Object.freeze(value.entities === undefined ? [] : [...(value.entities as unknown[])]),
     ...(value.networkAliases === undefined
       ? {}
       : {
@@ -904,15 +976,48 @@ function canonicalPlanFromValidated(value: Record<string, unknown>): DirectElabo
             (value.diagnostics as unknown[]).map((diagnostic) => canonicalDiagnostic(diagnostic)),
           ),
         }),
-  });
+  }) as DirectElaborationPlan;
 }
 
-/** Validates the versioned transport envelope before any runtime graph is allocated. */
+/** Validates the canonical transport envelope before any runtime graph is allocated. */
 export function validateDirectPlanEnvelope(plan: unknown): DirectPlanEnvelopeValidationResult {
-  if (!isRecord(plan) || plan.format !== 'comblang-direct-plan' || plan.version !== 2)
+  const rootError = dataRecordError(plan, '$');
+  if (rootError !== undefined) return failure('RT1001', rootError);
+  if (!isRecord(plan) || plan.format !== 'comblang-direct-plan')
     return failure('RT1001', 'Unsupported direct elaboration plan format.');
+  const allowedRootKeys = new Set([
+    'format',
+    'context',
+    'networks',
+    'networkAliases',
+    'networkTransfers',
+    'networkPairs',
+    'capabilityUses',
+    'debugInstances',
+    'producers',
+    'entities',
+    'diagnostics',
+  ]);
+  if (Object.hasOwn(plan, 'version'))
+    return failure('RT1001', 'Canonical direct elaboration plans must omit numeric version.');
+  if (Reflect.ownKeys(plan).some((key) => typeof key !== 'string' || !allowedRootKeys.has(key)))
+    return failure('RT1001', 'Canonical direct elaboration plan contains an unknown field.');
   if (!Array.isArray(plan.networks) || !Array.isArray(plan.producers))
     return failure('RT1001', 'Invalid direct elaboration plan envelope.');
+  const requiredArrays = [
+    ['networks', plan.networks],
+    ['producers', plan.producers],
+  ] as const;
+  for (const [key, value] of requiredArrays) {
+    const arrayError = dataArrayError(value, `$.${key}`);
+    if (arrayError !== undefined) return failure('RT1001', arrayError);
+    for (const [index, entry] of value.entries()) {
+      const recordError = dataRecordError(entry, `$.${key}[${index}]`);
+      if (recordError !== undefined) return failure('RT1001', recordError);
+    }
+  }
+  if (plan.entities !== undefined && !Array.isArray(plan.entities))
+    return failure('RT1001', 'Invalid Entity collection in direct plan.');
   if (exceedsLimit(plan.networks) || exceedsLimit(plan.producers))
     return payloadFailure('$', 'top-level collection exceeds the 100000 item limit.');
 
@@ -925,8 +1030,10 @@ export function validateDirectPlanEnvelope(plan: unknown): DirectPlanEnvelopeVal
       (candidate.fixedColor !== undefined &&
         candidate.fixedColor !== 'red' &&
         candidate.fixedColor !== 'green') ||
-      'generation' in candidate ||
-      'consumedAt' in candidate ||
+      (candidate.generation !== undefined &&
+        (!Number.isSafeInteger(candidate.generation) || Number(candidate.generation) < 0)) ||
+      (candidate.consumedAt !== undefined &&
+        descriptorSpan(candidate, 'consumedAt') === undefined) ||
       descriptorSpan(candidate, 'source') === undefined ||
       !isInstancePath(candidate.instancePath)
     )
@@ -1007,6 +1114,11 @@ export function validateDirectPlanEnvelope(plan: unknown): DirectPlanEnvelopeVal
         'unknown Producer tag.',
         descriptorSpan(producer, 'source'),
       );
+    if (
+      producer.entityId !== undefined &&
+      (typeof producer.entityId !== 'string' || producer.entityId.length === 0)
+    )
+      return payloadFailure(`${path}.entityId`, 'expected a non-empty Entity ID.');
     if (
       descriptorSpan(producer, 'source') === undefined ||
       !isInstancePath(producer.instancePath) ||
@@ -1121,15 +1233,15 @@ export function validateDirectPlanEnvelope(plan: unknown): DirectPlanEnvelopeVal
     if (invalid !== undefined) return invalid;
   }
 
-  const canonicalPlan = canonicalPlanFromValidated(plan);
+  const canonical = canonicalPlan(plan);
   const canonicalDeclarations = new Map(
-    canonicalPlan.networks.map((network) => [network.name, network]),
+    canonical.networks.map((network) => [network.name, network]),
   );
-  const canonicalAliases = canonicalPlan.networkAliases ?? Object.freeze([]);
-  const canonicalCapabilityUses = canonicalPlan.capabilityUses ?? Object.freeze([]);
+  const canonicalAliases = canonical.networkAliases ?? Object.freeze([]);
+  const canonicalCapabilityUses = canonical.capabilityUses ?? Object.freeze([]);
   return {
     value: {
-      plan: canonicalPlan,
+      plan: canonical,
       declarations: canonicalDeclarations,
       aliases: canonicalAliases,
       capabilityUses: canonicalCapabilityUses,

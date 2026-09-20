@@ -75,7 +75,7 @@ describe('host Entity provisioning service', () => {
     expect(provisioned.profiles).toEqual([]);
     expect(provisioned.entityReplayContext).toMatchObject({
       source: 'provider',
-      profileSetIdentity: expect.stringMatching(/^entity-profile-set-v2-sha256:[0-9a-f]{64}$/),
+      profileSetIdentity: expect.stringMatching(/^entity-profile-set-sha256:[0-9a-f]{64}$/),
     });
   });
 

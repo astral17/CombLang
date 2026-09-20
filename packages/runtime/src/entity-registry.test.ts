@@ -251,22 +251,20 @@ describe('session-local Entity registry', () => {
     expect(registry.records()).toHaveLength(1);
   });
 
-  test('retains the deprecated opaque typed v3 payload without granting capability authority', () => {
+  test('rejects the removed opaque typed payload', () => {
     const registry = new EntityRegistry(
       context([syntheticZeroPortEntityProfile, syntheticSharedTwoColorEntityProfile]),
       createSyntheticEntityPrototypeResolver(),
     );
-    const configuration = { mode: 'typed' as const, payload: { legacy: false } };
-    const entity = registry.create(
-      request({ profile: syntheticSharedTwoColorEntityProfile.ref, configuration }),
-    );
-    configuration.payload.legacy = true;
-
-    expect(registry.record(entity).configuration).toEqual({
-      mode: 'typed',
-      payload: { legacy: false },
-    });
-    expect(registry.records()).toHaveLength(1);
+    expect(() =>
+      registry.create(
+        request({
+          profile: syntheticSharedTwoColorEntityProfile.ref,
+          configuration: { mode: 'typed', payload: { legacy: false } } as never,
+        }),
+      ),
+    ).toThrowError(expect.objectContaining({ code: 'EN1000' }));
+    expect(registry.records()).toHaveLength(0);
   });
 
   test('reports malformed construction metadata as structured errors', () => {

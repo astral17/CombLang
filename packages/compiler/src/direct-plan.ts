@@ -1636,9 +1636,9 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
   return {
     plan: {
       format: 'comblang-direct-plan',
-      version: 2,
       networks,
       producers,
+      entities: [],
     },
     diagnostics,
   };

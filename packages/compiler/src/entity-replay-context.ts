@@ -122,10 +122,7 @@ function transportRecord(value: unknown): Record<string, unknown> {
   return record;
 }
 
-const legacyProfileSetIdentities = new WeakMap<
-  TrustedEntityReplayContext,
-  ReadonlySet<EntityProfileSetId>
->();
+const profileSetIdentityPattern = /^entity-profile-set-sha256:[0-9a-f]{64}$/;
 
 function profileSetIdentity(profiles: readonly EntityProfile[]): EntityProfileSetId {
   const entries = [...profiles]
@@ -135,21 +132,15 @@ function profileSetIdentity(profiles: readonly EntityProfile[]): EntityProfileSe
       return 0;
     })
     .map((profile) => canonicalizeEntityProfile(profile));
-  return `entity-profile-set-v2-sha256:${sha256Utf8Hex(JSON.stringify(entries))}` as EntityProfileSetId;
+  return `entity-profile-set-sha256:${sha256Utf8Hex(JSON.stringify(entries))}` as EntityProfileSetId;
 }
 
-function legacyProfileSetIdentity(profiles: readonly EntityProfile[]): EntityProfileSetId {
-  const entries = [...profiles]
-    .sort((left, right) => {
-      if (left.ref.profileId < right.ref.profileId) return -1;
-      if (left.ref.profileId > right.ref.profileId) return 1;
-      return 0;
-    })
-    .map((profile) => {
-      const { prototypeType: _prototypeType, ...legacyProfile } = profile;
-      return canonicalizeEntityProfile(legacyProfile);
-    });
-  return `entity-profile-set-v1:${JSON.stringify(entries)}` as EntityProfileSetId;
+function profileSetReferenceIdentity(value: unknown, path: string): EntityProfileSetId {
+  const candidate = identity(value, path);
+  if (!profileSetIdentityPattern.test(candidate)) {
+    invalid('ER1000', path, 'expected a canonical entity-profile-set-sha256 identity.');
+  }
+  return candidate as EntityProfileSetId;
 }
 
 function contextRef(value: unknown): EntityReplayContextRef {
@@ -165,10 +156,10 @@ function contextRef(value: unknown): EntityReplayContextRef {
     database: databaseRef(record.database, '$.database'),
     evidenceIdentity: identity(record.evidenceIdentity, '$.evidenceIdentity'),
     policyIdentity: identity(record.policyIdentity, '$.policyIdentity'),
-    profileSetIdentity: identity(
+    profileSetIdentity: profileSetReferenceIdentity(
       record.profileSetIdentity,
       '$.profileSetIdentity',
-    ) as EntityProfileSetId,
+    ),
   });
 }
 
@@ -235,10 +226,6 @@ export function createTrustedEntityReplayContext(
     policyIdentity,
     profiles: Object.freeze(profiles),
   });
-  legacyProfileSetIdentities.set(
-    trusted,
-    new Set<EntityProfileSetId>([legacyProfileSetIdentity(profiles)]),
-  );
   return trusted;
 }
 
@@ -254,11 +241,7 @@ export function resolveEntityReplayContext(
   ) {
     invalid('ER1001', '$.database', 'plan database reference does not match replay context.');
   }
-  const legacyIdentities = legacyProfileSetIdentities.get(context);
-  if (
-    ref.profileSetIdentity !== context.profileSetIdentity &&
-    !legacyIdentities?.has(ref.profileSetIdentity)
-  ) {
+  if (ref.profileSetIdentity !== context.profileSetIdentity) {
     invalid('ER1001', '$.profileSetIdentity', 'plan profile set does not match replay context.');
   }
   if (ref.evidenceIdentity !== context.evidenceIdentity) {
@@ -298,7 +281,7 @@ export function resolveEntityReplayProfile(
   return profile;
 }
 
-/** Constructs the identity-only context reference carried by a v3 plan. */
+/** Constructs the identity-only context reference carried by a semantic plan. */
 export function entityReplayContextRef(
   context: TrustedEntityReplayContext,
 ): EntityReplayContextRef {
@@ -335,16 +318,16 @@ export function cloneEntityReplayContextTransport(value: unknown): EntityReplayC
     protocolVersion: entitySemanticVersion,
     source: source(record.source, '$.source'),
     database: databaseRef(record.database, '$.database'),
-    profileSetIdentity: identity(
+    profileSetIdentity: profileSetReferenceIdentity(
       record.profileSetIdentity,
       '$.profileSetIdentity',
-    ) as EntityProfileSetId,
+    ),
     evidenceIdentity: identity(record.evidenceIdentity, '$.evidenceIdentity'),
     policyIdentity: identity(record.policyIdentity, '$.policyIdentity'),
   });
 }
 
-/** Cache identity includes every value that can change v3 acceptance. */
+/** Cache identity includes every value that can change replay acceptance. */
 export function entityReplayContextIdentity(value: EntityReplayContextTransport): string {
   const context = cloneEntityReplayContextTransport(value);
   return JSON.stringify([

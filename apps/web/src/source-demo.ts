@@ -13,7 +13,6 @@ import type { SimulationSnapshot } from '@comblang/simulator';
 
 import {
   createSourceCircuitArtifact,
-  type SourcePlan,
   type SourceCircuitArtifact,
 } from './source-circuit-artifact.js';
 
@@ -79,7 +78,10 @@ export function captureTimeline(
 type DirectExecution = SourceCircuitArtifact['execution'];
 type ConcreteSimulation = ReturnType<DirectExecution['circuit']['createSimulation']>;
 
-function sourceFacingColors(plan: SourcePlan, executed: DirectExecution): SourcePlanDemo['colors'] {
+function sourceFacingColors(
+  plan: DirectElaborationPlan,
+  executed: DirectExecution,
+): SourcePlanDemo['colors'] {
   const aliasesById = new Map<NetworkId, string>();
   for (const alias of plan.networkAliases ?? []) {
     if (alias.instancePath.length !== 0 || alias.moved) continue;
@@ -221,7 +223,7 @@ export class SourceSimulationController {
 }
 
 function isSourceCircuitArtifact(
-  source: SourcePlan | SourceCircuitArtifact,
+  source: DirectElaborationPlan | SourceCircuitArtifact,
 ): source is SourceCircuitArtifact {
   return 'execution' in source;
 }

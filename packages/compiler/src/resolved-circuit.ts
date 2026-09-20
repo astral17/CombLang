@@ -1,15 +1,17 @@
-import { Signal, type SignalId, type SignalType } from '@comblang/factorio';
+import {
+  Signal,
+  canonicalizeConstantConfiguration,
+  constantConfigurationFromOutputs,
+  type SignalId,
+  type SignalType,
+} from '@comblang/factorio';
 import type { Diagnostic, SourceSpan } from '@comblang/shared';
 
 import {
   canonicalizeEntityNativeSingleCondition,
   EntityConfigurationError,
 } from './entity-configuration.js';
-import {
-  canonicalizeEntityRawObject,
-  canonicalizeEntityRawJson,
-  EntityRawJsonError,
-} from './entity-raw.js';
+import { canonicalizeEntityRawObject, EntityRawJsonError } from './entity-raw.js';
 import type {
   EntityPhysicalConfiguration,
   EntityPhysicalRecord,
@@ -21,9 +23,9 @@ import type {
   EntityReplayContextRef,
   EntityProfileRef,
   EntityNativeComparator,
-  NativeCircuitIrV3,
-  DirectElaborationPlanV3,
 } from './entity.js';
+import type { DirectElaborationPlan } from './direct-plan-schema.js';
+import type { NativeCircuitIr } from './ir.js';
 import type {
   ArithmeticOperation,
   CircuitProducerNode,
@@ -40,20 +42,20 @@ import type {
   CircuitColor,
   SelectorProducerConfig,
 } from './ir.js';
+import type { DeciderOutputOrigin, DeciderOutputSyntaxIntent } from './direct-plan-schema.js';
 
-export const resolvedSourceCircuitFormat = 'comblang-resolved-source-circuit' as const;
-export const resolvedSourceCircuitVersion = 1 as const;
+export const resolvedCircuitFormat = 'comblang-resolved-circuit' as const;
+const profileSetIdentityPattern = /^entity-profile-set-sha256:[0-9a-f]{64}$/;
 
 /** Cloneable physical output of one already-authorized source compilation. */
-export interface ResolvedSourceCircuit {
-  readonly format: typeof resolvedSourceCircuitFormat;
-  readonly version: typeof resolvedSourceCircuitVersion;
+export interface ResolvedCircuit {
+  readonly format: typeof resolvedCircuitFormat;
   /** Accidental/stale-response correlation only; it grants no replay authority. */
-  readonly planFingerprint: string;
-  readonly ir: NativeCircuitIrV3;
+  readonly planFingerprint: `plan-fnv1a64:${string}`;
+  readonly ir: NativeCircuitIr;
 }
 
-export class ResolvedSourceCircuitError extends Error {
+export class ResolvedCircuitError extends Error {
   readonly code = 'RSC1001';
 
   constructor(
@@ -61,17 +63,16 @@ export class ResolvedSourceCircuitError extends Error {
     readonly detail: string,
   ) {
     super(`${path}: ${detail}`);
-    this.name = 'ResolvedSourceCircuitError';
+    this.name = 'ResolvedCircuitError';
   }
 }
 
-export interface ResolvedSourceCircuitValidationResult {
-  readonly value?: ResolvedSourceCircuit;
+export interface ResolvedCircuitValidationResult {
+  readonly value?: ResolvedCircuit;
   readonly diagnostics: readonly Diagnostic[];
 }
 
 type DataRecord = Record<string, unknown>;
-type Fail = (path: string, detail: string) => never;
 
 const arithmeticOperations = new Set<ArithmeticOperation>([
   'add',
@@ -90,7 +91,7 @@ const comparators = new Set<EntityNativeComparator>(['>', '<', '=', '>=', '<=', 
 const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const maximumArrayLength = 100_000;
 const maximumConditionDepth = 128;
-const planFingerprintPattern = /^v1-[0-9a-f]{16}$/;
+const planFingerprintPattern = /^plan-fnv1a64:[0-9a-f]{16}$/;
 
 function stableJson(value: unknown): string {
   if (value === null) return 'null';
@@ -114,9 +115,11 @@ function stableJson(value: unknown): string {
 
 /**
  * Computes a synchronous, deterministic correlation identity for a canonical
- * v3 plan. This is stale-response detection only and grants no authority.
+ * plan. This is stale-response detection only and grants no authority.
  */
-export function resolvedSourceCircuitPlanFingerprint(plan: DirectElaborationPlanV3): string {
+export function resolvedCircuitPlanFingerprint(
+  plan: DirectElaborationPlan,
+): `plan-fnv1a64:${string}` {
   const serialized = stableJson(plan);
   let hash = 0xcbf29ce484222325n;
   const mask = 0xffffffffffffffffn;
@@ -124,11 +127,11 @@ export function resolvedSourceCircuitPlanFingerprint(plan: DirectElaborationPlan
     hash ^= BigInt(serialized.charCodeAt(index));
     hash = (hash * 0x100000001b3n) & mask;
   }
-  return `v1-${hash.toString(16).padStart(16, '0')}`;
+  return `plan-fnv1a64:${hash.toString(16).padStart(16, '0')}`;
 }
 
 function invalid(path: string, detail: string): never {
-  throw new ResolvedSourceCircuitError(path, detail);
+  throw new ResolvedCircuitError(path, detail);
 }
 
 function deepFreeze<T>(value: T): T {
@@ -160,7 +163,7 @@ function dataRecord(value: unknown, path: string): DataRecord {
 function exactKeys(record: DataRecord, allowed: readonly string[], path: string): void {
   const allowedSet = new Set(allowed);
   for (const key of Object.keys(record)) {
-    if (!allowedSet.has(key)) invalid(`${path}.${key}`, 'unknown resolved circuit field.');
+    if (!allowedSet.has(key)) invalid(`${path}.${key}`, 'unknown field in resolved circuit.');
   }
 }
 
@@ -513,15 +516,19 @@ function context(value: unknown, path: string): EntityReplayContextRef {
   exactKeys(record, ['database', 'profileSetIdentity', 'evidenceIdentity', 'policyIdentity'], path);
   const database = dataRecord(record.database, `${path}.database`);
   exactKeys(database, ['schemaVersion', 'identity'], `${path}.database`);
+  const profileSetIdentity = text(record.profileSetIdentity, `${path}.profileSetIdentity`);
+  if (!profileSetIdentityPattern.test(profileSetIdentity)) {
+    invalid(
+      `${path}.profileSetIdentity`,
+      'expected a canonical entity-profile-set-sha256 identity.',
+    );
+  }
   return Object.freeze({
     database: Object.freeze({
       schemaVersion: positive(database.schemaVersion, `${path}.database.schemaVersion`),
       identity: text(database.identity, `${path}.database.identity`),
     }),
-    profileSetIdentity: text(
-      record.profileSetIdentity,
-      `${path}.profileSetIdentity`,
-    ) as EntityReplayContextRef['profileSetIdentity'],
+    profileSetIdentity: profileSetIdentity as EntityReplayContextRef['profileSetIdentity'],
     evidenceIdentity: text(record.evidenceIdentity, `${path}.evidenceIdentity`),
     policyIdentity: text(record.policyIdentity, `${path}.policyIdentity`),
   });
@@ -551,8 +558,83 @@ function profile(
   });
 }
 
-function physicalConfiguration(value: unknown, path: string): EntityPhysicalConfiguration {
+function physicalConfiguration(
+  value: unknown,
+  path: string,
+  networkIds: ReadonlySet<string>,
+): EntityPhysicalConfiguration {
   const record = dataRecord(value, path);
+  if (record.mode === 'constant') {
+    exactKeys(record, ['mode', 'value'], path);
+    try {
+      return Object.freeze({
+        mode: 'constant',
+        value: canonicalizeConstantConfiguration(record.value, undefined, `${path}.value`),
+      });
+    } catch (error) {
+      invalid(path, error instanceof Error ? error.message : 'invalid Constant configuration.');
+    }
+  }
+  if (record.mode === 'arithmetic') {
+    exactKeys(record, ['mode', 'left', 'operation', 'right', 'output'], path);
+    return Object.freeze({
+      mode: 'arithmetic',
+      left: arithmeticOperand(record.left, `${path}.left`, networkIds),
+      operation: (() => {
+        if (
+          typeof record.operation !== 'string' ||
+          !arithmeticOperations.has(record.operation as ArithmeticOperation)
+        )
+          invalid(`${path}.operation`, 'unknown arithmetic operation.');
+        return record.operation as ArithmeticOperation;
+      })(),
+      right: arithmeticOperand(record.right, `${path}.right`, networkIds),
+      output: arithmeticOutput(record.output, `${path}.output`),
+    });
+  }
+  if (record.mode === 'decider') {
+    exactKeys(record, ['mode', 'condition', 'outputs', 'elseOutputs'], path);
+    const outputs = dataArray(record.outputs, `${path}.outputs`).map((entry, index) =>
+      deciderOutput(entry, `${path}.outputs[${index}]`, networkIds),
+    );
+    const elseOutputs =
+      record.elseOutputs === undefined
+        ? undefined
+        : dataArray(record.elseOutputs, `${path}.elseOutputs`).map((entry, index) =>
+            deciderOutput(entry, `${path}.elseOutputs[${index}]`, networkIds),
+          );
+    return Object.freeze({
+      mode: 'decider',
+      condition: deciderCondition(record.condition, `${path}.condition`, networkIds),
+      outputs: Object.freeze(outputs),
+      ...(elseOutputs === undefined ? {} : { elseOutputs: Object.freeze(elseOutputs) }),
+    });
+  }
+  if (record.mode === 'selector') {
+    const input = networkRef(record.input, `${path}.input`, networkIds);
+    if (record.operation === 'select') {
+      exactKeys(record, ['mode', 'operation', 'input', 'selectMax', 'index'], path);
+      if (typeof record.selectMax !== 'boolean')
+        invalid(`${path}.selectMax`, 'expected a boolean.');
+      return Object.freeze({
+        mode: 'selector',
+        operation: 'select',
+        input,
+        selectMax: record.selectMax,
+        index: selectorIndex(record.index, `${path}.index`),
+      });
+    }
+    if (record.operation === 'count') {
+      exactKeys(record, ['mode', 'operation', 'input', 'output'], path);
+      return Object.freeze({
+        mode: 'selector',
+        operation: 'count',
+        input,
+        output: signal(record.output, `${path}.output`),
+      });
+    }
+    invalid(`${path}.operation`, 'unknown Selector operation.');
+  }
   if (record.mode === 'raw') {
     exactKeys(record, ['mode', 'payload'], path);
     try {
@@ -566,16 +648,6 @@ function physicalConfiguration(value: unknown, path: string): EntityPhysicalConf
     }
   }
   if (record.mode !== 'typed') invalid(`${path}.mode`, 'expected raw or typed configuration.');
-  if ('payload' in record) {
-    exactKeys(record, ['mode', 'payload'], path);
-    try {
-      return Object.freeze({ mode: 'typed', payload: canonicalizeEntityRawJson(record.payload) });
-    } catch (error) {
-      if (error instanceof EntityRawJsonError)
-        invalid(`${path}${error.path.slice(1)}`, error.message);
-      throw error;
-    }
-  }
   exactKeys(
     record,
     ['mode', 'rule', 'feature', 'nativeField', 'connector', 'lanes', 'laneMask', 'condition'],
@@ -731,7 +803,13 @@ function entity(
     prototypeName,
     ...(record.configuration === undefined
       ? {}
-      : { configuration: physicalConfiguration(record.configuration, `${path}.configuration`) }),
+      : {
+          configuration: physicalConfiguration(
+            record.configuration,
+            `${path}.configuration`,
+            networkIds,
+          ),
+        }),
     connectorBindings: Object.freeze(bindings),
     ...(record.placement === undefined
       ? {}
@@ -754,13 +832,74 @@ function entity(
   });
 }
 
+const deciderSyntaxIntents = new Set<DeciderOutputSyntaxIntent>([
+  'implicit-concrete-copy',
+  'implicit-each-copy',
+  'explicit-wildcard-copy',
+  'explicit-constant',
+  'exact',
+]);
+
+function deciderOrigin(
+  value: unknown,
+  path: string,
+  branch: 'normal' | 'else',
+  ordinal: number,
+): DeciderOutputOrigin {
+  const record = dataRecord(value, path);
+  exactKeys(record, ['branch', 'ordinal', 'source', 'instancePath', 'syntaxIntent'], path);
+  if (record.branch !== branch) invalid(`${path}.branch`, `expected ${branch} branch origin.`);
+  if (record.ordinal !== ordinal) invalid(`${path}.ordinal`, `expected dense ordinal ${ordinal}.`);
+  if (
+    typeof record.syntaxIntent !== 'string' ||
+    !deciderSyntaxIntents.has(record.syntaxIntent as DeciderOutputSyntaxIntent)
+  )
+    invalid(`${path}.syntaxIntent`, 'unknown Decider output syntax intent.');
+  return Object.freeze({
+    branch,
+    ordinal,
+    source: sourceSpan(record.source, `${path}.source`),
+    instancePath: stringArray(record.instancePath, `${path}.instancePath`),
+    syntaxIntent: record.syntaxIntent as DeciderOutputSyntaxIntent,
+  });
+}
+
+function deciderOrigins(
+  value: unknown,
+  path: string,
+  branch: 'normal' | 'else',
+  count: number,
+): readonly DeciderOutputOrigin[] {
+  const entries = dataArray(value, path);
+  if (entries.length !== count)
+    invalid(path, 'Decider output origins must align with output rows.');
+  return Object.freeze(
+    entries.map((entry, index) => deciderOrigin(entry, `${path}[${index}]`, branch, index)),
+  );
+}
+
 function producer(
   value: unknown,
   path: string,
   networkIds: ReadonlySet<string>,
 ): CircuitProducerNode {
   const record = dataRecord(value, path);
-  exactKeys(record, ['id', 'kind', 'config', 'destinations', 'provenance', 'placement'], path);
+  const producerKeys = [
+    'id',
+    'kind',
+    'config',
+    'destinations',
+    'provenance',
+    'placement',
+    'entityId',
+  ];
+  exactKeys(
+    record,
+    record.kind === 'decider'
+      ? [...producerKeys, 'outputOrigins', 'elseOutputOrigins']
+      : producerKeys,
+    path,
+  );
   const destinations = dataArray(record.destinations, `${path}.destinations`).map(
     (destination, index) => {
       const id = text(destination, `${path}.destinations[${index}]`);
@@ -772,6 +911,9 @@ function producer(
     invalid(`${path}.destinations`, 'producer destination is repeated.');
   const common = {
     id: text(record.id, `${path}.id`) as never,
+    ...(record.entityId === undefined
+      ? {}
+      : { entityId: text(record.entityId, `${path}.entityId`) as never }),
     destinations: Object.freeze(destinations),
     provenance: provenance(record.provenance, `${path}.provenance`),
     ...(record.placement === undefined
@@ -800,7 +942,7 @@ function producer(
   }
   if (record.kind === 'constant') {
     const config = dataRecord(record.config, `${path}.config`);
-    exactKeys(config, ['outputs'], `${path}.config`);
+    exactKeys(config, ['outputs', 'configuration'], `${path}.config`);
     const outputs = dataArray(config.outputs, `${path}.config.outputs`).map((entry, index) => {
       const output = dataRecord(entry, `${path}.config.outputs[${index}]`);
       exactKeys(output, ['signal', 'value'], `${path}.config.outputs[${index}]`);
@@ -809,7 +951,22 @@ function producer(
         value: int32(output.value, `${path}.config.outputs[${index}].value`),
       });
     });
-    return { ...common, kind: 'constant', config: { outputs: Object.freeze(outputs) } };
+    return {
+      ...common,
+      kind: 'constant',
+      config: {
+        outputs: Object.freeze(outputs),
+        ...(config.configuration === undefined
+          ? {}
+          : {
+              configuration: canonicalizeConstantConfiguration(
+                config.configuration,
+                undefined,
+                `${path}.config.configuration`,
+              ),
+            }),
+      },
+    };
   }
   if (record.kind === 'selector') {
     const config = dataRecord(record.config, `${path}.config`);
@@ -855,16 +1012,45 @@ function producer(
     if (config.elseOutputs !== undefined && !Array.isArray(config.elseOutputs)) {
       invalid(`${path}.config.elseOutputs`, 'expected a plain output array.');
     }
+    const outputs = parseOutputs(config.outputs, `${path}.config.outputs`);
+    const elseOutputs =
+      config.elseOutputs === undefined
+        ? undefined
+        : parseOutputs(config.elseOutputs, `${path}.config.elseOutputs`);
+    const outputOrigins =
+      record.outputOrigins === undefined
+        ? undefined
+        : deciderOrigins(record.outputOrigins, `${path}.outputOrigins`, 'normal', outputs.length);
+    const elseOutputOrigins =
+      record.elseOutputOrigins === undefined
+        ? undefined
+        : deciderOrigins(
+            record.elseOutputOrigins,
+            `${path}.elseOutputOrigins`,
+            'else',
+            elseOutputs?.length ?? 0,
+          );
+    if (record.entityId !== undefined && outputOrigins === undefined)
+      invalid(`${path}.outputOrigins`, 'linked Decider output origins are required.');
+    if (elseOutputs === undefined && elseOutputOrigins !== undefined)
+      invalid(`${path}.elseOutputOrigins`, 'else output origins require else outputs.');
+    if (
+      record.entityId !== undefined &&
+      elseOutputs !== undefined &&
+      elseOutputs.length > 0 &&
+      elseOutputOrigins === undefined
+    )
+      invalid(`${path}.elseOutputOrigins`, 'else output origins are required.');
     return {
       ...common,
       kind: 'decider',
       config: {
         condition: deciderCondition(config.condition, `${path}.config.condition`, networkIds),
-        outputs: parseOutputs(config.outputs, `${path}.config.outputs`),
-        ...(config.elseOutputs === undefined
-          ? {}
-          : { elseOutputs: parseOutputs(config.elseOutputs, `${path}.config.elseOutputs`) }),
+        outputs,
+        ...(elseOutputs === undefined ? {} : { elseOutputs }),
       },
+      ...(outputOrigins === undefined ? {} : { outputOrigins }),
+      ...(elseOutputOrigins === undefined ? {} : { elseOutputOrigins }),
     };
   }
   invalid(`${path}.kind`, 'unknown Producer kind.');
@@ -942,7 +1128,103 @@ function validateDeciderOutputColors(
   if (output.input !== undefined) validateNetworkRefColors(output.input, `${path}.input`, colors);
 }
 
-function validatePhysicalInvariants(ir: NativeCircuitIrV3): void {
+type ResolvedEntityFamily =
+  'constant-combinator' | 'arithmetic-combinator' | 'decider-combinator' | 'selector-combinator';
+
+function resolvedProducerFamily(kind: CircuitProducerNode['kind']): ResolvedEntityFamily {
+  return `${kind}-combinator` as ResolvedEntityFamily;
+}
+
+function resolvedConfigurationFamily(
+  mode: EntityPhysicalConfiguration['mode'] | undefined,
+): ResolvedEntityFamily | undefined {
+  if (mode === 'constant' || mode === 'arithmetic' || mode === 'decider' || mode === 'selector')
+    return `${mode}-combinator` as ResolvedEntityFamily;
+  return undefined;
+}
+
+function expectedResolvedEntityConfiguration(
+  producer: CircuitProducerNode,
+): EntityPhysicalConfiguration {
+  if (producer.kind === 'constant') {
+    return {
+      mode: 'constant',
+      value:
+        producer.config.configuration ?? constantConfigurationFromOutputs(producer.config.outputs),
+    };
+  }
+  if (producer.kind === 'arithmetic') {
+    return { mode: 'arithmetic', ...producer.config };
+  }
+  if (producer.kind === 'decider') {
+    return { mode: 'decider', ...producer.config };
+  }
+  return { mode: 'selector', ...producer.config };
+}
+
+function validateResolvedEntityAssociations(ir: NativeCircuitIr): void {
+  const entities = new Map<
+    string,
+    { readonly index: number; readonly value: EntityPhysicalRecord }
+  >();
+  ir.entities.forEach((entity, index) => entities.set(entity.id, { index, value: entity }));
+  const linked = new Map<string, number>();
+
+  ir.producers.forEach((producer, producerIndex) => {
+    if (producer.entityId === undefined) return;
+    const producerPath = `$.ir.producers[${producerIndex}]`;
+    const entityEntry = entities.get(producer.entityId);
+    if (entityEntry === undefined)
+      invalid(`${producerPath}.entityId`, 'producer references an unknown Entity ID.');
+    if (linked.has(producer.entityId))
+      invalid(`${producerPath}.entityId`, 'an Entity may have only one linked producer.');
+    if (producer.placement !== undefined)
+      invalid(`${producerPath}.placement`, 'a linked producer must omit placement.');
+
+    const entityPath = `$.ir.entities[${entityEntry.index}]`;
+    const entity = entityEntry.value;
+    const family = resolvedProducerFamily(producer.kind);
+    if (entity.prototypeName !== family)
+      invalid(`${entityPath}.prototypeName`, `linked Entity prototypeName must be ${family}.`);
+    if (entity.profile.prototypeKey !== `entity:${family}`)
+      invalid(
+        `${entityPath}.profile.prototypeKey`,
+        `linked Entity profile must use the exact entity:${family} base key.`,
+      );
+    const configurationFamily = resolvedConfigurationFamily(entity.configuration?.mode);
+    if (configurationFamily === undefined)
+      invalid(
+        `${entityPath}.configuration`,
+        'linked Entity must declare a supported combinator configuration.',
+      );
+    if (configurationFamily !== family)
+      invalid(
+        `${entityPath}.configuration`,
+        'linked Entity configuration family does not match its producer.',
+      );
+    if (
+      stableJson(entity.configuration) !== stableJson(expectedResolvedEntityConfiguration(producer))
+    )
+      invalid(
+        `${entityPath}.configuration`,
+        'linked Entity configuration must exactly equal its physical Producer configuration.',
+      );
+    linked.set(producer.entityId, producerIndex);
+  });
+
+  ir.entities.forEach((entity, entityIndex) => {
+    if (
+      resolvedConfigurationFamily(entity.configuration?.mode) !== undefined &&
+      !linked.has(entity.id)
+    )
+      invalid(
+        `$.ir.entities[${entityIndex}].configuration`,
+        'configured Entity must have one linked physical Producer in the same family.',
+      );
+  });
+}
+
+function validatePhysicalInvariants(ir: NativeCircuitIr): void {
   const colors = new Map<string, CircuitColor>(ir.networks.map(({ id, color }) => [id, color]));
   ir.producers.forEach((producer, producerIndex) => {
     const path = `$.ir.producers[${producerIndex}]`;
@@ -986,15 +1268,16 @@ function validatePhysicalInvariants(ir: NativeCircuitIrV3): void {
       }
     });
   });
+  validateResolvedEntityAssociations(ir);
 }
 
-function ir(value: unknown): NativeCircuitIrV3 {
+function ir(value: unknown): NativeCircuitIr {
   const record = dataRecord(value, '$.ir');
-  exactKeys(record, ['format', 'version', 'context', 'networks', 'producers', 'entities'], '$.ir');
+  exactKeys(record, ['format', 'context', 'networks', 'producers', 'entities'], '$.ir');
   if (record.format !== 'comblang-ncir')
     invalid('$.ir.format', 'unsupported resolved circuit IR format.');
-  if (record.version !== 3) invalid('$.ir.version', 'resolved circuit IR requires version 3.');
-  const resolvedContext = context(record.context, '$.ir.context');
+  const resolvedContext =
+    record.context === undefined ? undefined : context(record.context, '$.ir.context');
   const networks = dataArray(record.networks, '$.ir.networks').map((entry, index) =>
     network(entry, `$.ir.networks[${index}]`),
   );
@@ -1006,19 +1289,32 @@ function ir(value: unknown): NativeCircuitIrV3 {
   const producerIds = producers.map(({ id }) => id);
   if (new Set(producerIds).size !== producerIds.length)
     invalid('$.ir.producers', 'Producer IDs must be unique.');
-  const entities = dataArray(record.entities, '$.ir.entities').map((entry, index) =>
-    entity(entry, `$.ir.entities[${index}]`, resolvedContext.database, networkIds),
+  const rawEntities = dataArray(record.entities, '$.ir.entities');
+  if (rawEntities.length > 0 && resolvedContext === undefined)
+    invalid('$.ir.context', 'Entity-bearing resolved circuits require replay context.');
+  if (rawEntities.length === 0 && resolvedContext !== undefined)
+    invalid('$.ir.context', 'Entity-free resolved circuits must omit replay context.');
+  const entities = rawEntities.map((entry, index) =>
+    entity(entry, `$.ir.entities[${index}]`, resolvedContext!.database, networkIds),
   );
   const entityIds = entities.map(({ id }) => id);
   if (new Set(entityIds).size !== entityIds.length)
     invalid('$.ir.entities', 'Entity IDs must be unique.');
+  const entityIdSet = new Set(entityIds);
+  producers.forEach((producer, producerIndex) => {
+    if (producer.entityId !== undefined && !entityIdSet.has(producer.entityId)) {
+      invalid(
+        `$.ir.producers[${producerIndex}].entityId`,
+        'producer references an unknown Entity ID.',
+      );
+    }
+  });
   const ordinals = entities.map(({ ordinal }) => ordinal);
   if (new Set(ordinals).size !== ordinals.length)
     invalid('$.ir.entities', 'Entity ordinals must be unique.');
   const parsed = Object.freeze({
     format: 'comblang-ncir',
-    version: 3,
-    context: resolvedContext,
+    ...(resolvedContext === undefined ? {} : { context: resolvedContext }),
     networks: Object.freeze(networks),
     producers: Object.freeze(producers),
     entities: Object.freeze([...entities].sort((left, right) => left.ordinal - right.ordinal)),
@@ -1028,33 +1324,28 @@ function ir(value: unknown): NativeCircuitIrV3 {
 }
 
 /** Parses, clones, validates, and deeply freezes one resolved physical circuit. */
-export function parseResolvedSourceCircuit(value: unknown): ResolvedSourceCircuit {
+export function parseResolvedCircuit(value: unknown): ResolvedCircuit {
   const record = dataRecord(value, '$');
-  exactKeys(record, ['format', 'version', 'planFingerprint', 'ir'], '$');
-  if (record.format !== resolvedSourceCircuitFormat)
-    invalid('$.format', 'unsupported resolved source circuit format.');
-  if (record.version !== resolvedSourceCircuitVersion)
-    invalid('$.version', 'unsupported resolved source circuit version.');
+  exactKeys(record, ['format', 'planFingerprint', 'ir'], '$');
+  if (record.format !== resolvedCircuitFormat)
+    invalid('$.format', 'unsupported resolved circuit format.');
   const fingerprint = text(record.planFingerprint, '$.planFingerprint');
   if (!planFingerprintPattern.test(fingerprint)) {
-    invalid('$.planFingerprint', 'expected a canonical v1 plan fingerprint.');
+    invalid('$.planFingerprint', 'expected a canonical plan-fnv1a64 fingerprint.');
   }
   return deepFreeze({
-    format: resolvedSourceCircuitFormat,
-    version: resolvedSourceCircuitVersion,
+    format: resolvedCircuitFormat,
     planFingerprint: fingerprint,
     ir: ir(record.ir),
-  });
+  }) as unknown as ResolvedCircuit;
 }
 
 /** Result-oriented wrapper for transport boundaries that must retain diagnostics. */
-export function validateResolvedSourceCircuit(
-  value: unknown,
-): ResolvedSourceCircuitValidationResult {
+export function validateResolvedCircuit(value: unknown): ResolvedCircuitValidationResult {
   try {
-    return { value: parseResolvedSourceCircuit(value), diagnostics: [] };
+    return { value: parseResolvedCircuit(value), diagnostics: [] };
   } catch (error) {
-    if (error instanceof ResolvedSourceCircuitError) {
+    if (error instanceof ResolvedCircuitError) {
       return {
         diagnostics: [{ code: error.code, severity: 'error', message: error.message }],
       };
@@ -1064,8 +1355,7 @@ export function validateResolvedSourceCircuit(
         {
           code: 'RSC1099',
           severity: 'error',
-          message:
-            error instanceof Error ? error.message : 'Resolved source circuit validation failed.',
+          message: error instanceof Error ? error.message : 'Resolved circuit validation failed.',
         },
       ],
     };
@@ -1073,4 +1363,4 @@ export function validateResolvedSourceCircuit(
 }
 
 /** Alias used by callers that emphasize the detached snapshot boundary. */
-export const snapshotResolvedSourceCircuit = parseResolvedSourceCircuit;
+export const snapshotResolvedCircuit = parseResolvedCircuit;

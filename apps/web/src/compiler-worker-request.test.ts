@@ -8,7 +8,7 @@ import {
 } from '@comblang/prototypes';
 import { syntheticZeroPortEntityProfile } from '@comblang/compiler/entity-fixtures';
 import type { EntityProfile } from '@comblang/compiler/entity';
-import { generateEntityBlueprintJson } from '@comblang/compiler/blueprint-json';
+import { generateBlueprintJson } from '@comblang/compiler/blueprint-json';
 import {
   createTrustedEntityReplayContext,
   entityReplayContextTransport,
@@ -327,8 +327,8 @@ const output = Scale(input[A]);`,
 
     expect(first.result.compilerDiagnostics).toEqual([]);
     const firstCircuit = first.result.resolvedCircuit;
-    if (firstCircuit?.format !== 'comblang-resolved-source-circuit') {
-      throw new Error('Expected a Worker resolved v3 source circuit.');
+    if (firstCircuit?.format !== 'comblang-resolved-circuit') {
+      throw new Error('Expected a Worker canonical resolved circuit.');
     }
     expect(firstCircuit.ir.entities[0]?.configuration).toEqual({
       mode: 'raw',
@@ -339,7 +339,7 @@ const output = Scale(input[A]);`,
         modded_field: { empty: [], zero: 0, disabled: false },
       },
     });
-    expect(generateEntityBlueprintJson(firstCircuit.ir).blueprint.entities[0]).toMatchObject({
+    expect(generateBlueprintJson(firstCircuit.ir).blueprint.entities[0]).toMatchObject({
       recipe: 'iron-gear-wheel',
       control_behavior: { read_contents: true, enabled: false },
       sections: [{ filters: [{ name: 'iron-plate', count: 0 }], active: false }],
@@ -381,7 +381,6 @@ output += exact;`,
 
     expect(response.result.compilerDiagnostics).toEqual([]);
     expect(response.result.plan).toMatchObject({
-      version: 4,
       entities: [
         {
           configuration: {
@@ -391,13 +390,8 @@ output += exact;`,
         },
       ],
     });
-    expect(response.result.resolvedCircuit).toMatchObject({
-      format: 'comblang-resolved-entity-v4',
-      version: 1,
-      ir: { version: 4 },
-    });
-    expect(response.result.resolvedCircuit?.format).toBe('comblang-resolved-entity-v4');
-    if (response.result.resolvedCircuit?.format === 'comblang-resolved-entity-v4') {
+    expect(response.result.resolvedCircuit?.format).toBe('comblang-resolved-circuit');
+    if (response.result.resolvedCircuit?.format === 'comblang-resolved-circuit') {
       expect(response.result.resolvedCircuit.ir.entities).toHaveLength(1);
       expect(response.result.resolvedCircuit.ir.entities[0]?.configuration).toMatchObject({
         mode: 'constant',
@@ -427,15 +421,10 @@ output += exact;`,
 
     expect(response.result.compilerDiagnostics).toEqual([]);
     expect(response.result.plan).toMatchObject({
-      version: 5,
       producers: [{ kind: 'arithmetic', entityId: expect.any(String) }],
       entities: [{ configuration: { mode: 'arithmetic', operation: 'multiply' } }],
     });
-    expect(response.result.resolvedCircuit).toMatchObject({
-      format: 'comblang-resolved-entity-v5',
-      version: 1,
-      ir: { version: 5 },
-    });
+    expect(response.result.resolvedCircuit?.format).toBe('comblang-resolved-circuit');
     expect(JSON.stringify(response.result)).not.toMatch(
       /profiles|resolver|prototypeProvider|trustedEntityReplayContext/,
     );
@@ -464,7 +453,6 @@ output += exact;`,
 
     expect(response.result.compilerDiagnostics).toEqual([]);
     expect(response.result.plan).toMatchObject({
-      version: 6,
       producers: [{ kind: 'decider', entityId: expect.any(String) }],
       entities: [
         {
@@ -475,11 +463,7 @@ output += exact;`,
     expect(response.result.resolvedCircuit?.ir.entities[0]).toMatchObject({
       prototypeName: 'decider-combinator',
     });
-    expect(response.result.resolvedCircuit).toMatchObject({
-      format: 'comblang-resolved-entity-v6',
-      version: 1,
-      ir: { version: 6 },
-    });
+    expect(response.result.resolvedCircuit?.format).toBe('comblang-resolved-circuit');
     const producer = response.result.resolvedCircuit?.ir.producers[0];
     expect(producer).toMatchObject({ kind: 'decider', outputOrigins: [{ branch: 'normal' }] });
     expect(JSON.stringify(response.result)).not.toMatch(
@@ -510,14 +494,12 @@ output += exact;`,
 
     expect(response.result.compilerDiagnostics).toEqual([]);
     expect(response.result.plan).toMatchObject({
-      version: 7,
       producers: [{ kind: 'selector', entityId: expect.any(String) }],
       entities: [{ configuration: { mode: 'selector', operation: 'count' } }],
     });
     expect(response.result.resolvedCircuit).toMatchObject({
-      format: 'comblang-resolved-entity-v7',
-      version: 1,
-      ir: { version: 7, entities: [{ prototypeName: 'selector-combinator' }] },
+      format: 'comblang-resolved-circuit',
+      ir: { entities: [{ prototypeName: 'selector-combinator' }] },
     });
     expect(JSON.stringify(response.result)).not.toMatch(
       /profiles|resolver|prototypeProvider|trustedEntityReplayContext|prototypeType/,
@@ -735,7 +717,6 @@ short.at(1, 2);`,
 
     expect(first.result.compilerDiagnostics).toEqual([]);
     expect(first.result.plan).toMatchObject({
-      version: 3,
       entities: [
         {
           profile: {
@@ -762,9 +743,9 @@ short.at(1, 2);`,
       prototypeProfile: { kind: 'builtin', identity: generated.manifest.databaseIdentity },
     });
     expect(ordinary.result.compilerDiagnostics).toEqual([]);
-    expect(ordinary.result.plan).toMatchObject({ version: 2 });
-    expect(ordinary.result.plan).not.toHaveProperty('entities');
-    expect(ordinary.result.resolvedCircuit).toBeUndefined();
+    expect(ordinary.result.plan).toMatchObject({ entities: [] });
+    expect(ordinary.result.plan).not.toHaveProperty('version');
+    expect(ordinary.result.resolvedCircuit?.format).toBe('comblang-resolved-circuit');
   });
 
   test('provisions a selected provider when routing kind is omitted, including warm identity use', async () => {
@@ -785,7 +766,6 @@ short.at(1, 2);`,
     });
     expect(first.result.compilerDiagnostics).toEqual([]);
     expect(first.result.plan).toMatchObject({
-      version: 3,
       entities: [{ profile: { prototypeKey: 'entity:footprint-less' } }],
     });
 
@@ -800,7 +780,6 @@ short.at(1, 2);`,
     });
     expect(warm.result.compilerDiagnostics).toEqual([]);
     expect(warm.result.plan).toMatchObject({
-      version: 3,
       entities: [{ profile: { prototypeKey: 'entity:footprint-less' } }],
     });
   });
@@ -851,7 +830,6 @@ short.at(1, 2);`,
 
     expect(response.result.compilerDiagnostics).toEqual([]);
     expect(response.result.plan).toMatchObject({
-      version: 3,
       entities: [{ profile: reviewed.ref }],
     });
     expect(response.result.entityReplayContext).toEqual(entityReplayContextTransport(trusted));
@@ -959,7 +937,6 @@ throw new Error('source executed');`,
 
     expect(imported.result.compilerDiagnostics).toEqual([]);
     expect(imported.result.plan).toMatchObject({
-      version: 3,
       entities: [{ profile: { prototypeKey: 'entity:footprint-less' } }],
     });
 
@@ -1012,7 +989,7 @@ const lamp = Lamp('fixture-lamp');`,
 
     expect(response.result.compilerDiagnostics).toEqual([]);
     const plan = response.result.plan;
-    if (plan === undefined || plan.version !== 3) throw new Error('Expected an Entity v3 plan.');
+    if (plan === undefined) throw new Error('Expected a canonical Entity plan.');
     expect(plan.entities).toHaveLength(2);
     expect(JSON.stringify(response.result.resolvedCircuit)).not.toContain('prototypeType');
   });
@@ -1250,15 +1227,12 @@ const lamp = Lamp('fixture-lamp');`,
 
     expect(response.result.compilerDiagnostics).toEqual([]);
     expect(response.result.plan).toMatchObject({
-      version: 3,
       entities: [{ profile: syntheticZeroPortEntityProfile.ref }],
     });
     expect(response.result.resolvedCircuit).toMatchObject({
-      format: 'comblang-resolved-source-circuit',
-      version: 1,
+      format: 'comblang-resolved-circuit',
       ir: {
         format: 'comblang-ncir',
-        version: 3,
         entities: [expect.objectContaining({ profile: syntheticZeroPortEntityProfile.ref })],
       },
     });

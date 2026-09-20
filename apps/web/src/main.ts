@@ -1,15 +1,6 @@
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
 import { signal, type SignalId, type SignalType } from '@comblang/factorio';
-import type { DirectElaborationPlanV3 } from '@comblang/compiler/entity';
-import type { DirectElaborationPlanV4 } from '@comblang/compiler/entity-v4';
-import type { DirectElaborationPlanV5 } from '@comblang/compiler/entity-v5';
-import type { DirectElaborationPlanV6 } from '@comblang/compiler/entity-v6';
-import type { DirectElaborationPlanV7 } from '@comblang/compiler/entity-v7';
-import type { ResolvedEntityV4Circuit } from '@comblang/compiler/resolved-entity-v4';
-import type { ResolvedEntityV5Circuit } from '@comblang/compiler/resolved-entity-v5';
-import type { ResolvedEntityV6Circuit } from '@comblang/compiler/resolved-entity-v6';
-import type { ResolvedEntityV7Circuit } from '@comblang/compiler/resolved-entity-v7';
-import type { ResolvedSourceCircuit } from '@comblang/compiler/resolved-source-circuit';
+import type { ResolvedCircuit } from '@comblang/compiler/resolved-circuit';
 import { offsetToPosition, sourceFileId, sourceSpan, type Diagnostic } from '@comblang/shared';
 
 import { blueprintJsonForArtifact } from './blueprint-demo.js';
@@ -714,18 +705,9 @@ function renderProofPending(): void {
   resetCopyButton();
 }
 
-function renderProofError(
-  message: string,
-  compiledPlan?:
-    | DirectElaborationPlan
-    | DirectElaborationPlanV3
-    | DirectElaborationPlanV4
-    | DirectElaborationPlanV5
-    | DirectElaborationPlanV6
-    | DirectElaborationPlanV7,
-): void {
+function renderProofError(message: string, compiledPlan?: DirectElaborationPlan): void {
   pauseSimulation();
-  currentPlan = compiledPlan?.version === 2 ? compiledPlan : undefined;
+  currentPlan = compiledPlan;
   currentDemo = undefined;
   sourceSimulation = undefined;
   selectedSimulationTick = 0;
@@ -767,39 +749,15 @@ function renderProofError(
 }
 
 function renderSourceProof(
-  plan:
-    | DirectElaborationPlan
-    | DirectElaborationPlanV3
-    | DirectElaborationPlanV4
-    | DirectElaborationPlanV5
-    | DirectElaborationPlanV6
-    | DirectElaborationPlanV7,
+  plan: DirectElaborationPlan,
   foldedOperations: number,
-  resolvedCircuit?: NonNullable<CompilerWorkerParsedResponse['result']['resolvedCircuit']>,
+  resolvedCircuit?: ResolvedCircuit,
 ): void {
   pauseSimulation();
-  if (
-    (plan.version === 3 ||
-      plan.version === 4 ||
-      plan.version === 5 ||
-      plan.version === 6 ||
-      plan.version === 7) &&
-    resolvedCircuit === undefined
-  ) {
-    throw new Error(`Entity v${plan.version} source compiled without a resolved circuit.`);
-  }
   const artifact =
-    plan.version === 7
-      ? createSourceCircuitArtifact(plan, resolvedCircuit as ResolvedEntityV7Circuit)
-      : plan.version === 6
-        ? createSourceCircuitArtifact(plan, resolvedCircuit as ResolvedEntityV6Circuit)
-        : plan.version === 5
-          ? createSourceCircuitArtifact(plan, resolvedCircuit as ResolvedEntityV5Circuit)
-          : plan.version === 4
-            ? createSourceCircuitArtifact(plan, resolvedCircuit as ResolvedEntityV4Circuit)
-            : plan.version === 3
-              ? createSourceCircuitArtifact(plan, resolvedCircuit as ResolvedSourceCircuit)
-              : createSourceCircuitArtifact(plan);
+    resolvedCircuit === undefined
+      ? createSourceCircuitArtifact(plan)
+      : createSourceCircuitArtifact(plan, resolvedCircuit);
   const controller = new SourceSimulationController(artifact);
   sourceSimulation = controller;
   selectedSimulationTick = 0;
@@ -1256,7 +1214,7 @@ function handleWorkerMessage(
   } else {
     const previewPlan = parsed.plan;
     try {
-      currentPlan = previewPlan.version === 2 ? previewPlan : undefined;
+      currentPlan = previewPlan;
       renderSourceProof(previewPlan, foldedOperations, parsed.resolvedCircuit);
       scheduleTestRender();
     } catch (error) {

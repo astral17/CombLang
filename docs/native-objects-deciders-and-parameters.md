@@ -60,8 +60,8 @@ and else output lists. Compact syntax supports `IF(condition, then, else)`,
 `when(condition).then(...).else(...)`, and false-only
 `when(condition).else(...)`. The exact `Decider({ condition, outputs,
 elseOutputs })` source form is implemented for the current semantic output
-vocabulary; it requires trusted canonical Decider authority and selects the
-cumulative v6 transport. Native fixture verification remains future work.
+vocabulary; it requires trusted canonical Decider authority and uses the
+canonical Entity pipeline. Native fixture verification remains future work.
 
 The current exact slice preserves the native surface without hidden hardware:
 

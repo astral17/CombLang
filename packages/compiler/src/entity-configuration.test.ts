@@ -69,7 +69,7 @@ describe('typed Entity configuration boundary', () => {
     });
   });
 
-  test('keeps raw and opaque v3 configurations separate from typed fields', () => {
+  test('keeps raw configurations separate from typed fields', () => {
     const raw = canonicalizeEntityConfiguration(
       { mode: 'raw', payload: { recipe: 'iron-gear-wheel', enabled: false } },
       syntheticSharedTwoColorEntityProfile,
@@ -93,12 +93,12 @@ describe('typed Entity configuration boundary', () => {
       }),
     );
 
-    const opaque = canonicalizeEntityConfiguration(
-      { mode: 'typed', payload: { legacy: true } },
-      syntheticSharedTwoColorEntityProfile,
-    );
-    expect(opaque).toEqual({ mode: 'typed', payload: { legacy: true } });
-    expect(Object.isFrozen(opaque)).toBe(true);
+    expect(() =>
+      canonicalizeEntityConfiguration(
+        { mode: 'typed', payload: { legacy: true } },
+        syntheticSharedTwoColorEntityProfile,
+      ),
+    ).toThrowError(expect.objectContaining({ code: 'EC1000' }));
   });
 
   test('rejects unsafe conditions, lanes, and accessors with structured paths', () => {

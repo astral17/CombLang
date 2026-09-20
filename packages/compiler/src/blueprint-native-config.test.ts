@@ -14,12 +14,12 @@ describe('native blueprint configuration lowering', () => {
     const A = signal('virtual', 'signal-A');
     const ir: NativeCircuitIr = {
       format: 'comblang-ncir',
-      version: 2,
       networks: [
         { id: network(1), color: 'red', provenance },
         { id: network(2), color: 'green', provenance },
         { id: network(3), color: 'red', provenance },
       ],
+      entities: [],
       producers: [
         {
           id: producer(1),
@@ -54,8 +54,8 @@ describe('native blueprint configuration lowering', () => {
   test('lowers ordered legacy Constant outputs with explicit normal quality and indices', () => {
     const ir: NativeCircuitIr = {
       format: 'comblang-ncir',
-      version: 2,
       networks: [],
+      entities: [],
       producers: [
         {
           id: producer(3),
@@ -121,8 +121,8 @@ describe('native blueprint configuration lowering', () => {
     };
     const ir: NativeCircuitIr = {
       format: 'comblang-ncir',
-      version: 2,
       networks: [],
+      entities: [],
       producers: [
         {
           id: producer(1),
@@ -147,12 +147,12 @@ describe('native blueprint configuration lowering', () => {
     const A = signal('virtual', 'signal-A');
     const ir: NativeCircuitIr = {
       format: 'comblang-ncir',
-      version: 2,
       networks: [
         { id: network(1), color: 'red', provenance },
         { id: network(2), color: 'green', provenance },
         { id: network(3), color: 'red', provenance },
       ],
+      entities: [],
       producers: [
         {
           id: producer(2),
@@ -199,12 +199,12 @@ describe('native blueprint configuration lowering', () => {
     const output = signal('virtual', 'signal-output');
     const ir: NativeCircuitIr = {
       format: 'comblang-ncir',
-      version: 2,
       networks: [
         { id: network(1), color: 'red', provenance },
         { id: network(2), color: 'green', provenance },
         { id: network(3), color: 'red', provenance },
       ],
+      entities: [],
       producers: [
         {
           id: producer(4),

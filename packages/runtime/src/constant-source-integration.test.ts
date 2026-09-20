@@ -82,7 +82,7 @@ second += legacy;`,
     );
 
     expect(compilation.pipelineDiagnostics).toEqual([]);
-    if (compilation.plan?.version !== 4) throw new Error('Expected a v4 Constant plan.');
+    if (compilation.plan === undefined) throw new Error('Expected a canonical Constant plan.');
     expect(compilation.plan.entities.map(({ profile }) => profile.prototypeKey)).toEqual([
       'entity:constant-combinator',
       'entity:constant-combinator',
@@ -109,7 +109,7 @@ output += CC(1 * A);`,
       withoutBase,
     );
     expect(legacy.pipelineDiagnostics).toEqual([]);
-    expect(legacy.plan?.version).toBe(2);
+    expect(legacy.plan?.entities).toEqual([]);
     expect(exact.pipelineDiagnostics).toEqual([
       expect.objectContaining({
         code: 'RT2027',
@@ -173,15 +173,12 @@ second += legacy;`,
     );
 
     expect(compilation.pipelineDiagnostics).toEqual([]);
-    expect(compilation.plan?.version).toBe(4);
-    expect(compilation.plan?.version === 4 ? compilation.plan.entities : []).toHaveLength(2);
-    expect(compilation.plan?.version === 4 ? compilation.plan.producers : []).toHaveLength(2);
-    if (
-      compilation.plan?.version !== 4 ||
-      compilation.resolvedCircuit?.format !== 'comblang-resolved-entity-v4'
-    ) {
-      throw new Error('Expected a resolved Entity v4 source compilation.');
+    if (compilation.plan === undefined || compilation.resolvedCircuit === undefined) {
+      throw new Error('Expected a canonical resolved Constant source compilation.');
     }
+    expect(compilation.plan.entities).toHaveLength(2);
+    expect(compilation.plan.producers).toHaveLength(2);
+    expect(compilation.resolvedCircuit.format).toBe('comblang-resolved-circuit');
     expect(compilation.plan.producers.map((producer) => producer.entityId)).toEqual([
       'entity:1',
       'entity:2',
@@ -237,8 +234,8 @@ const output = new Network();
 output += CC(2 * A);`,
     });
     expect(withoutAuthority.pipelineDiagnostics).toEqual([]);
-    expect(withoutAuthority.plan?.version).toBe(2);
-    expect(withoutAuthority.resolvedCircuit).toBeUndefined();
+    expect(withoutAuthority.plan?.entities).toEqual([]);
+    expect(withoutAuthority.resolvedCircuit?.format).toBe('comblang-resolved-circuit');
 
     const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
     const provisioned = new EntityProvisioningService().provision(
@@ -262,10 +259,8 @@ output += Constant({ sections: [{ filters: [[A, 0]] }] });`,
       },
     );
     expect(recovered.pipelineDiagnostics).toEqual([]);
-    expect(recovered.plan?.version).toBe(4);
-    expect(recovered.plan?.version === 4 ? recovered.plan.entities : []).toHaveLength(1);
-    expect(recovered.plan?.version === 4 ? recovered.plan.entities[0]?.id : undefined).toBe(
-      'entity:1',
-    );
+    if (recovered.plan === undefined) throw new Error('Expected a recovered canonical plan.');
+    expect(recovered.plan.entities).toHaveLength(1);
+    expect(recovered.plan.entities[0]?.id).toBe('entity:1');
   });
 });

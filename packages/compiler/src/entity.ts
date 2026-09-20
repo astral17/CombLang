@@ -1,24 +1,23 @@
-import type { SignalId } from '@comblang/factorio';
-import type { Brand, Diagnostic, NetworkId, SourceSpan } from '@comblang/shared';
+import type { ConstantConfiguration, SignalId } from '@comblang/factorio';
+import type { Brand, NetworkId, SourceSpan } from '@comblang/shared';
 
+import type { EntityPlacement } from './ir.js';
 import type {
-  CircuitProducerNode,
-  CircuitNetworkNode,
-  NativeCircuitIr,
-  ElaborationGraph,
-  EntityPlacement,
-  ResolvedCircuitNetworkNode,
-} from './ir.js';
-import type {
-  DirectPlanCapabilityUse,
-  DirectPlanNetworkV3,
-  DirectPlanNetworkAlias,
-  DirectPlanNetworkPair,
-  DirectPlanNetworkTransfer,
-  DirectPlanProducer,
+  DirectPlanDecider,
+  DirectPlanSelector,
+  PlanArithmeticOperand,
+  PlanDeciderCondition,
 } from './direct-plan-schema.js';
+import type {
+  ArithmeticOperation,
+  LogicalArithmeticOperand,
+  LogicalArithmeticOutput,
+  LogicalDeciderCondition,
+  LogicalDeciderOutput,
+  LogicalNetworkRef,
+} from './ir.js';
 
-/** Semantic Entity transport is incompatible with the circuit-only v2 envelopes. */
+/** Semantic Entity transport has its own replay protocol and never enters circuit-only data. */
 export const entitySemanticVersion = 3 as const;
 
 export type EntityId = Brand<string, 'EntityId'>;
@@ -181,12 +180,6 @@ export interface EntityRawConfiguration {
   readonly payload: EntityRawJsonObject;
 }
 
-/** @deprecated Compatibility-only opaque v3 configuration; it has no typed capability authority. */
-export interface EntityOpaqueConfiguration {
-  readonly mode: 'typed';
-  readonly payload: EntityRawJson;
-}
-
 export interface EntityConnectorBindingProvenance {
   readonly source: SourceSpan;
   readonly instancePath: readonly string[];
@@ -238,11 +231,52 @@ export interface EntityTypedConfiguration {
   readonly condition: EntityNativeSingleCondition;
 }
 
-export type EntityConfiguration =
-  EntityRawConfiguration | EntityOpaqueConfiguration | EntityTypedConfiguration;
+export type EntityConfiguration = EntityRawConfiguration | EntityTypedConfiguration;
+
+export interface EntityConstantConfiguration {
+  readonly mode: 'constant';
+  readonly value: ConstantConfiguration;
+}
+
+export interface EntityArithmeticConfiguration {
+  readonly mode: 'arithmetic';
+  readonly left: PlanArithmeticOperand;
+  readonly operation: ArithmeticOperation;
+  readonly right: PlanArithmeticOperand;
+  readonly output: LogicalArithmeticOutput;
+}
+
+export interface EntityDeciderConfiguration {
+  readonly mode: 'decider';
+  readonly condition: PlanDeciderCondition;
+  readonly outputs: readonly DirectPlanDecider['output'][];
+  readonly elseOutputs?: readonly DirectPlanDecider['output'][];
+}
+
+export type EntitySelectorConfiguration =
+  | {
+      readonly mode: 'selector';
+      readonly operation: 'select';
+      readonly input: DirectPlanSelector['input'];
+      readonly selectMax: boolean;
+      readonly index: number | SignalId;
+    }
+  | {
+      readonly mode: 'selector';
+      readonly operation: 'count';
+      readonly input: DirectPlanSelector['input'];
+      readonly output: SignalId;
+    };
+
+export type EntityPlanConfiguration =
+  | EntityConfiguration
+  | EntityConstantConfiguration
+  | EntityArithmeticConfiguration
+  | EntityDeciderConfiguration
+  | EntitySelectorConfiguration;
 
 export interface EntityPlanRecord extends EntityRecordBase {
-  readonly configuration?: EntityConfiguration;
+  readonly configuration?: EntityPlanConfiguration;
   readonly connectorBindings: readonly EntityPlanConnectorBinding[];
 }
 
@@ -257,8 +291,43 @@ export interface EntityPhysicalTypedConfiguration {
   readonly condition: EntityNativeSingleCondition;
 }
 
+export interface EntityArithmeticPhysicalConfiguration {
+  readonly mode: 'arithmetic';
+  readonly left: LogicalArithmeticOperand;
+  readonly operation: ArithmeticOperation;
+  readonly right: LogicalArithmeticOperand;
+  readonly output: LogicalArithmeticOutput;
+}
+
+export interface EntityDeciderPhysicalConfiguration {
+  readonly mode: 'decider';
+  readonly condition: LogicalDeciderCondition;
+  readonly outputs: readonly LogicalDeciderOutput[];
+  readonly elseOutputs?: readonly LogicalDeciderOutput[];
+}
+
+export type EntitySelectorPhysicalConfiguration =
+  | {
+      readonly mode: 'selector';
+      readonly operation: 'select';
+      readonly input: LogicalNetworkRef;
+      readonly selectMax: boolean;
+      readonly index: number | SignalId;
+    }
+  | {
+      readonly mode: 'selector';
+      readonly operation: 'count';
+      readonly input: LogicalNetworkRef;
+      readonly output: SignalId;
+    };
+
 export type EntityPhysicalConfiguration =
-  EntityRawConfiguration | EntityOpaqueConfiguration | EntityPhysicalTypedConfiguration;
+  | EntityRawConfiguration
+  | EntityPhysicalTypedConfiguration
+  | EntityConstantConfiguration
+  | EntityArithmeticPhysicalConfiguration
+  | EntityDeciderPhysicalConfiguration
+  | EntitySelectorPhysicalConfiguration;
 
 export interface EntityPhysicalRecord extends EntityRecordBase {
   readonly prototypeName: string;
@@ -266,7 +335,7 @@ export interface EntityPhysicalRecord extends EntityRecordBase {
   readonly connectorBindings: readonly EntityPhysicalConnectorBinding[];
 }
 
-/** V3-only cloneable debug value; Entity references never enter the v2 envelope. */
+/** Cloneable Entity debug value; Entity references stay in the semantic plan layer. */
 export type EntityPlanDebugValue =
   | { readonly kind: 'network'; readonly network: string }
   | { readonly kind: 'producer'; readonly captureId: string }
@@ -298,37 +367,3 @@ export interface EntityNativeSingleCondition {
   readonly comparator: EntityNativeComparator;
   readonly constant: number;
 }
-
-/** Direct Plan v3 is a separate envelope; v2 remains circuit-only and unchanged. */
-export interface DirectElaborationPlanV3 {
-  readonly format: 'comblang-direct-plan';
-  readonly version: typeof entitySemanticVersion;
-  readonly context: EntityReplayContextRef;
-  readonly networks: readonly DirectPlanNetworkV3[];
-  readonly networkAliases?: readonly DirectPlanNetworkAlias[];
-  readonly networkTransfers?: readonly DirectPlanNetworkTransfer[];
-  readonly networkPairs?: readonly DirectPlanNetworkPair[];
-  readonly capabilityUses?: readonly DirectPlanCapabilityUse[];
-  readonly debugInstances?: readonly EntityPlanDebugInstance[];
-  readonly producers: readonly DirectPlanProducer[];
-  readonly entities: readonly EntityPlanRecord[];
-  readonly diagnostics?: readonly Diagnostic[];
-}
-
-/** Entity graph and NCIR versions use physical Network IDs, unlike Direct Plan names. */
-export type ElaborationGraphV3 = Omit<ElaborationGraph, 'version'> & {
-  readonly version: typeof entitySemanticVersion;
-  readonly context: EntityReplayContextRef;
-  readonly entities: readonly EntityPhysicalRecord[];
-};
-
-export type NativeCircuitIrV3 = Omit<NativeCircuitIr, 'version'> & {
-  readonly version: typeof entitySemanticVersion;
-  readonly context: EntityReplayContextRef;
-  readonly entities: readonly EntityPhysicalRecord[];
-};
-
-/** Kept as named aliases so the migration inventory can refer to every v2 reader seam. */
-export type EntityCircuitNetworkNodeV3 = CircuitNetworkNode;
-export type EntityResolvedCircuitNetworkNodeV3 = ResolvedCircuitNetworkNode;
-export type EntityCircuitProducerNodeV3 = CircuitProducerNode;
