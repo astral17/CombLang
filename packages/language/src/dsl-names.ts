@@ -18,6 +18,7 @@ export const entityFamilyDslNames = Object.freeze({
   Lamp: 'lamp',
   Roboport: 'roboport',
   Constant: 'constant-combinator',
+  Selector: 'selector-combinator',
 } as const);
 
 export type EntityFamilyDslName = keyof typeof entityFamilyDslNames;

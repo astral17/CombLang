@@ -167,6 +167,7 @@ const entityFamilyConstructionTypes = Object.freeze({
   Lamp: 'lamp',
   Roboport: 'roboport',
   Constant: 'constant-combinator',
+  Selector: 'selector-combinator',
 } as const) satisfies typeof entityFamilyDslNames;
 
 interface Invocation {

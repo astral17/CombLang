@@ -194,6 +194,28 @@ the computation-bearing Constant views. In a trusted provider context they
 share one physical constant-combinator Entity representation; the structural
 overload remains an Entity and does not gain producer operations.
 
+`Selector(prototype, configuration?)` is the structural selector-combinator
+facade. It accepts the same short name, canonical key, or exact provider record
+and checked or `{ raw }` configuration forms as `Entity`, requires actual
+provider type `selector-combinator`, and delegates to the generic Entity path:
+
+```ts
+const selector = Selector('selector-combinator', {
+  control_behavior: {
+    operation: 'select',
+    select_max: true,
+    index_constant: 0,
+  },
+}).at(4, 2);
+```
+
+The catalog validator selects only the fields for the explicit `operation`, or
+the documented `select` default when it is omitted; group-less documented
+operations accept common fields only. This is a structural checked-configuration
+surface: it creates one inert Entity and does not create a Producer, Network,
+connector, call projection, simulator device, or native-conformance claim. A
+computation-bearing `Selector({ ... })` constructor remains pending.
+
 `machine.port(connector, lane)` selects an explicit connector lane. The exact
 four-argument `machine.bind(connector, lane, network, direction)` form binds
 that lane to an existing Network, with `direction` equal to `input` or
@@ -841,7 +863,7 @@ See the [diagnostics catalog](diagnostics.md) for common codes and corrective ac
 ## Not implemented yet
 
 - blueprint import/export and FCIR
-- exact `Arithmetic`, `Decider`, `Selector`, and entity constructors
+- computation-bearing `Selector({ ... })` constructor
 - multi-file module linking and asynchronous top-level elaboration
 - testbench syntax, mocks, expectations, and waveform assertions
 - general language service and schematic editor

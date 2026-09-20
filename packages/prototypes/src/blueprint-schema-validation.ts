@@ -487,8 +487,33 @@ function descriptor(
     });
   }
 
+  const variant = schema.variant;
   return readRecord(value, path, depth, state, (_record, keys, values) => {
-    const fields = new Map(schema.fields.map((field) => [field.name, field]));
+    const selectedGroup =
+      variant === undefined
+        ? undefined
+        : variant.groups.find(
+            (group) =>
+              group.value ===
+              (typeof values[variant.discriminator] === 'string'
+                ? values[variant.discriminator]
+                : variant.default),
+          );
+    if (selectedGroup !== undefined) {
+      for (const field of selectedGroup.fields) {
+        if (!field.optional && !keys.includes(field.name)) {
+          return invalid(
+            'BSV1002',
+            `${path}.${field.name}`,
+            'required field is missing for the selected Blueprint schema variant.',
+          );
+        }
+      }
+    }
+    const fields = new Map([
+      ...schema.fields.map((field) => [field.name, field] as const),
+      ...(selectedGroup?.fields.map((field) => [field.name, field] as const) ?? []),
+    ]);
     for (const key of [...keys].sort(codeUnitCompare)) {
       if (!fields.has(key)) {
         return invalid(

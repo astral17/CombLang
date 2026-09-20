@@ -1,6 +1,6 @@
 {
   "format": "comblang-blueprint-schema-catalog",
-  "version": 1,
+  "version": 2,
   "source": {
     "snapshot": "fixtures/2.1.17",
     "applicationVersion": "2.1.17",
@@ -11,7 +11,7 @@
   "counts": {
     "entityVariants": 62,
     "controlBehaviors": 37,
-    "referencedSchemas": 113
+    "referencedSchemas": 116
   },
   "common": {
     "kind": "object",
@@ -4021,7 +4021,152 @@
             "optional": true,
             "default": "select"
           }
-        ]
+        ],
+        "variant": {
+          "discriminator": "operation",
+          "default": "select",
+          "groups": [
+            {
+              "value": "count",
+              "fields": [
+                {
+                  "name": "count_signal",
+                  "type": {
+                    "kind": "reference",
+                    "name": "SignalID"
+                  },
+                  "optional": true
+                }
+              ]
+            },
+            {
+              "value": "quality-filter",
+              "fields": [
+                {
+                  "name": "quality_filter",
+                  "type": {
+                    "kind": "reference",
+                    "name": "QualityCondition"
+                  },
+                  "optional": true,
+                  "default": null
+                }
+              ]
+            },
+            {
+              "value": "quality-transfer",
+              "fields": [
+                {
+                  "name": "quality_destination_signal",
+                  "type": {
+                    "kind": "reference",
+                    "name": "SignalID"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "quality_source_signal",
+                  "type": {
+                    "kind": "reference",
+                    "name": "SignalIDBase"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "quality_source_static",
+                  "type": {
+                    "kind": "reference",
+                    "name": "BlueprintQualityID"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "select_quality_from_signal",
+                  "type": {
+                    "kind": "scalar",
+                    "name": "boolean"
+                  },
+                  "optional": true,
+                  "default": false
+                }
+              ]
+            },
+            {
+              "value": "random",
+              "fields": [
+                {
+                  "name": "random_update_interval",
+                  "type": {
+                    "kind": "scalar",
+                    "name": "uint32"
+                  },
+                  "optional": true,
+                  "default": 0
+                }
+              ]
+            },
+            {
+              "value": "select",
+              "fields": [
+                {
+                  "name": "index_constant",
+                  "type": {
+                    "kind": "scalar",
+                    "name": "int32"
+                  },
+                  "optional": true,
+                  "default": 0
+                },
+                {
+                  "name": "index_signal",
+                  "type": {
+                    "kind": "reference",
+                    "name": "SignalID"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "select_max",
+                  "type": {
+                    "kind": "scalar",
+                    "name": "boolean"
+                  },
+                  "optional": true,
+                  "default": true
+                }
+              ]
+            },
+            {
+              "value": "time",
+              "fields": [
+                {
+                  "name": "day_length_signal",
+                  "type": {
+                    "kind": "reference",
+                    "name": "SignalID"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "day_tick_signal",
+                  "type": {
+                    "kind": "reference",
+                    "name": "SignalID"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "game_tick_signal",
+                  "type": {
+                    "kind": "reference",
+                    "name": "SignalID"
+                  },
+                  "optional": true
+                }
+              ]
+            }
+          ]
+        }
       },
       "structuralStatus": "documented",
       "implementationStatus": "unassessed-per-field",
@@ -5610,6 +5755,23 @@
             },
             "optional": true,
             "default": "whitelist"
+          }
+        ]
+      }
+    },
+    {
+      "name": "BlueprintQualityID",
+      "type": {
+        "kind": "object",
+        "fields": [
+          {
+            "name": "name",
+            "type": {
+              "kind": "scalar",
+              "name": "string"
+            },
+            "optional": true,
+            "default": "normal"
           }
         ]
       }
@@ -7982,6 +8144,39 @@
       }
     },
     {
+      "name": "QualityCondition",
+      "type": {
+        "kind": "union",
+        "options": [
+          {
+            "kind": "object",
+            "fields": [
+              {
+                "name": "comparator",
+                "type": {
+                  "kind": "reference",
+                  "name": "ComparatorString"
+                },
+                "optional": true
+              },
+              {
+                "name": "quality",
+                "type": {
+                  "kind": "scalar",
+                  "name": "string"
+                },
+                "optional": true
+              }
+            ]
+          },
+          {
+            "kind": "scalar",
+            "name": "string"
+          }
+        ]
+      }
+    },
+    {
       "name": "QualityID",
       "type": {
         "kind": "union",
@@ -8355,7 +8550,152 @@
             "optional": true,
             "default": "select"
           }
-        ]
+        ],
+        "variant": {
+          "discriminator": "operation",
+          "default": "select",
+          "groups": [
+            {
+              "value": "count",
+              "fields": [
+                {
+                  "name": "count_signal",
+                  "type": {
+                    "kind": "reference",
+                    "name": "SignalID"
+                  },
+                  "optional": true
+                }
+              ]
+            },
+            {
+              "value": "quality-filter",
+              "fields": [
+                {
+                  "name": "quality_filter",
+                  "type": {
+                    "kind": "reference",
+                    "name": "QualityCondition"
+                  },
+                  "optional": true,
+                  "default": null
+                }
+              ]
+            },
+            {
+              "value": "quality-transfer",
+              "fields": [
+                {
+                  "name": "quality_destination_signal",
+                  "type": {
+                    "kind": "reference",
+                    "name": "SignalID"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "quality_source_signal",
+                  "type": {
+                    "kind": "reference",
+                    "name": "SignalIDBase"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "quality_source_static",
+                  "type": {
+                    "kind": "reference",
+                    "name": "BlueprintQualityID"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "select_quality_from_signal",
+                  "type": {
+                    "kind": "scalar",
+                    "name": "boolean"
+                  },
+                  "optional": true,
+                  "default": false
+                }
+              ]
+            },
+            {
+              "value": "random",
+              "fields": [
+                {
+                  "name": "random_update_interval",
+                  "type": {
+                    "kind": "scalar",
+                    "name": "uint32"
+                  },
+                  "optional": true,
+                  "default": 0
+                }
+              ]
+            },
+            {
+              "value": "select",
+              "fields": [
+                {
+                  "name": "index_constant",
+                  "type": {
+                    "kind": "scalar",
+                    "name": "int32"
+                  },
+                  "optional": true,
+                  "default": 0
+                },
+                {
+                  "name": "index_signal",
+                  "type": {
+                    "kind": "reference",
+                    "name": "SignalID"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "select_max",
+                  "type": {
+                    "kind": "scalar",
+                    "name": "boolean"
+                  },
+                  "optional": true,
+                  "default": true
+                }
+              ]
+            },
+            {
+              "value": "time",
+              "fields": [
+                {
+                  "name": "day_length_signal",
+                  "type": {
+                    "kind": "reference",
+                    "name": "SignalID"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "day_tick_signal",
+                  "type": {
+                    "kind": "reference",
+                    "name": "SignalID"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "game_tick_signal",
+                  "type": {
+                    "kind": "reference",
+                    "name": "SignalID"
+                  },
+                  "optional": true
+                }
+              ]
+            }
+          ]
+        }
       }
     },
     {
@@ -8379,6 +8719,30 @@
             },
             "optional": true,
             "default": "normal"
+          },
+          {
+            "name": "type",
+            "type": {
+              "kind": "reference",
+              "name": "SignalIDType"
+            },
+            "optional": true
+          }
+        ]
+      }
+    },
+    {
+      "name": "SignalIDBase",
+      "type": {
+        "kind": "object",
+        "fields": [
+          {
+            "name": "name",
+            "type": {
+              "kind": "scalar",
+              "name": "string"
+            },
+            "optional": true
           },
           {
             "name": "type",

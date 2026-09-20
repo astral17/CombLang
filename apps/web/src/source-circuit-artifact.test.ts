@@ -160,6 +160,52 @@ describe('source circuit artifact', () => {
     expect(controller.timeline).toHaveLength(1);
   });
 
+  test('replays a structural Selector artifact with no producer or connector state', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compiled = compileSource(
+      {
+        path: 'selector-artifact.factorio.ts',
+        text: `const selector = Selector('selector-combinator', {
+  control_behavior: { operation: 'select', select_max: false, index_constant: 0 },
+}).at(4, 2);`,
+      },
+      {
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+    const plan = compiled.plan;
+    const resolvedCircuit = compiled.resolvedCircuit;
+    if (
+      plan === undefined ||
+      plan.version !== 3 ||
+      resolvedCircuit?.format !== 'comblang-resolved-source-circuit'
+    ) {
+      throw new Error('Expected a resolved Selector source artifact.');
+    }
+    const artifact = createSourceCircuitArtifact(plan, resolvedCircuit);
+    const entity = artifact.blueprint.blueprint.entities[0];
+    expect(artifact.execution.circuit.ir.entities).toHaveLength(1);
+    expect(artifact.execution.circuit.ir.producers).toEqual([]);
+    expect(artifact.blueprint.blueprint.entities).toHaveLength(1);
+    expect(entity).toMatchObject({
+      entity_number: 1,
+      name: 'selector-combinator',
+      position: { x: 4, y: 2 },
+      control_behavior: {
+        operation: 'select',
+        select_max: false,
+        index_constant: 0,
+      },
+    });
+    expect(entity).not.toHaveProperty('connections');
+    expect(entity).not.toHaveProperty('wires');
+  });
+
   test('hydrates a v4 Constant artifact without provider authority or a duplicate blueprint object', async () => {
     const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
     const provisioned = new EntityProvisioningService().provision(

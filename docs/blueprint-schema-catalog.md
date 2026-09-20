@@ -51,22 +51,31 @@ catalog-declared SignalID position. Foreign nominal handles, invalid field
 shapes, accessors, and symbol keys remain rejected without invoking caller
 coercion hooks.
 
+Table descriptors may also carry data-only variant metadata. For example,
+`SelectorCombinatorParameters` keeps common `operation` in its fields and
+records the six documented operation groups separately. Validation selects the
+explicit discriminator value or its documented default; a field from another
+group is rejected, while documented values without a group such as
+`rocket-capacity` and `stack-size` remain common-only. This records API shape
+only and does not add selector computation or native authority.
+
 ## Schema-family coverage
 
 The generated catalog characterization covers all 62 entity variants and the
-complete 113-reference closure. The following matrix records the current
+complete 116-reference closure. The following matrix records the current
 representative checked evidence without treating it as a native Factorio
 compatibility claim:
 
-| Family             | Structural catalog coverage            | Checked validation evidence                               | Raw fallback | Native evidence |
-| ------------------ | -------------------------------------- | --------------------------------------------------------- | ------------ | --------------- |
-| Logistics          | Full generated variant/reference graph | `logistic-container` request sections and filters         | Available    | Not captured    |
-| Belts              | Full generated variant/reference graph | `transport-belt` network settings and read mode           | Available    | Not captured    |
-| Displays           | Full generated variant/reference graph | `display-panel` text, icon, and nested parameters         | Available    | Not captured    |
-| Train stops        | Full generated variant/reference graph | `train-stop` station, color, limits, and control behavior | Available    | Not captured    |
-| Filters            | Full generated variant/reference graph | `inserter` filter mode, positions, and item filters       | Available    | Not captured    |
-| Recipes            | Full generated variant/reference graph | `assembling-machine` recipe and control behavior          | Available    | Not captured    |
-| Transport settings | Full generated variant/reference graph | `loader` connection type, filter mode, and filters        | Available    | Not captured    |
+| Family             | Structural catalog coverage                          | Checked validation evidence                               | Raw fallback | Native evidence |
+| ------------------ | ---------------------------------------------------- | --------------------------------------------------------- | ------------ | --------------- |
+| Logistics          | Full generated variant/reference graph               | `logistic-container` request sections and filters         | Available    | Not captured    |
+| Belts              | Full generated variant/reference graph               | `transport-belt` network settings and read mode           | Available    | Not captured    |
+| Displays           | Full generated variant/reference graph               | `display-panel` text, icon, and nested parameters         | Available    | Not captured    |
+| Train stops        | Full generated variant/reference graph               | `train-stop` station, color, limits, and control behavior | Available    | Not captured    |
+| Filters            | Full generated variant/reference graph               | `inserter` filter mode, positions, and item filters       | Available    | Not captured    |
+| Recipes            | Full generated variant/reference graph               | `assembling-machine` recipe and control behavior          | Available    | Not captured    |
+| Transport settings | Full generated variant/reference graph               | `loader` connection type, filter mode, and filters        | Available    | Not captured    |
+| Selector           | `SelectorCombinatorParameters` with six exact groups | `select`, `count`, `random`, `time`, and group rejection  | Available    | Not captured    |
 
 These representatives are table-driven tests against the generated descriptors,
 not a claim that every field is implemented. Known scalar families are checked

@@ -78,6 +78,9 @@ function characterizeDescriptorGraph(
         return;
       case 'object':
         descriptor.fields.forEach((field) => visit(field.type));
+        descriptor.variant?.groups.forEach((group) =>
+          group.fields.forEach((field) => visit(field.type)),
+        );
         return;
       case 'reference': {
         const target = references.get(descriptor.name);
@@ -279,7 +282,7 @@ describe('Blueprint Entity schema validation', () => {
     expect(blueprintSchemaCatalog.counts).toEqual({
       entityVariants: 62,
       controlBehaviors: 37,
-      referencedSchemas: 113,
+      referencedSchemas: 116,
     });
     expect(characterization).toHaveLength(blueprintSchemaCatalog.counts.entityVariants);
     expect(characterization.map(({ name }) => name)).toEqual(
@@ -469,6 +472,112 @@ describe('Blueprint Entity schema validation', () => {
       status: 'unassessed',
       path: '$.control_behavior.working_signal.quality',
     });
+  });
+
+  test('selects exact SelectorCombinator variants without flattening their fields', () => {
+    expect(
+      validateBlueprintEntityFragment(
+        {
+          control_behavior: {
+            operation: 'select',
+            select_max: false,
+            index_constant: 0,
+          },
+        },
+        { type: 'selector-combinator' },
+      ),
+    ).toEqual({ status: 'valid', structuralStatus: 'documented' });
+    expect(
+      validateBlueprintEntityFragment(
+        { control_behavior: { select_max: true, index_constant: 0 } },
+        { type: 'selector-combinator' },
+      ),
+    ).toEqual({ status: 'valid', structuralStatus: 'documented' });
+    expect(
+      validateBlueprintEntityFragment(
+        { control_behavior: { operation: 'count', count_signal: { name: 'signal-A' } } },
+        { type: 'selector-combinator' },
+      ),
+    ).toEqual({ status: 'valid', structuralStatus: 'documented' });
+    expect(
+      validateBlueprintEntityFragment(
+        { control_behavior: { operation: 'random', random_update_interval: 0 } },
+        { type: 'selector-combinator' },
+      ),
+    ).toEqual({ status: 'valid', structuralStatus: 'documented' });
+    expect(
+      validateBlueprintEntityFragment(
+        { control_behavior: { operation: 'time', day_length_signal: { name: 'signal-A' } } },
+        { type: 'selector-combinator' },
+      ),
+    ).toEqual({ status: 'valid', structuralStatus: 'documented' });
+    expect(
+      validateBlueprintEntityFragment(
+        { control_behavior: { operation: 'quality-transfer' } },
+        { type: 'selector-combinator' },
+      ),
+    ).toMatchObject({
+      status: 'invalid',
+      code: 'BSV1002',
+      path: '$.control_behavior.quality_destination_signal',
+    });
+    expect(
+      validateBlueprintEntityFragment(
+        {
+          control_behavior: {
+            operation: 'select',
+            count_signal: { name: 'signal-A' },
+          },
+        },
+        { type: 'selector-combinator' },
+      ),
+    ).toMatchObject({
+      status: 'invalid',
+      code: 'BSV1001',
+      path: '$.control_behavior.count_signal',
+    });
+    expect(
+      validateBlueprintEntityFragment(
+        { control_behavior: { operation: 'rocket-capacity', index_constant: 0 } },
+        { type: 'selector-combinator' },
+      ),
+    ).toMatchObject({
+      status: 'invalid',
+      code: 'BSV1001',
+      path: '$.control_behavior.index_constant',
+    });
+    expect(
+      validateBlueprintEntityFragment(
+        { control_behavior: { operation: 'rocket-capacity' } },
+        { type: 'selector-combinator' },
+      ),
+    ).toEqual({ status: 'valid', structuralStatus: 'documented' });
+    expect(
+      validateBlueprintEntityFragment(
+        { control_behavior: { operation: 'not-an-operation' } },
+        { type: 'selector-combinator' },
+      ),
+    ).toMatchObject({
+      status: 'invalid',
+      code: 'BSV1002',
+      path: '$.control_behavior.operation',
+    });
+  });
+
+  test('does not execute accessors while selecting a SelectorCombinator variant', () => {
+    const controlBehavior: Record<string, unknown> = {};
+    Object.defineProperty(controlBehavior, 'operation', {
+      enumerable: true,
+      get() {
+        throw new Error('getter executed');
+      },
+    });
+    expect(
+      validateBlueprintEntityFragment(
+        { control_behavior: controlBehavior },
+        { type: 'selector-combinator' },
+      ),
+    ).toMatchObject({ status: 'invalid', code: 'BSV1005', path: '$.control_behavior.operation' });
   });
 
   test('reports unknown fields, wrong scalar types, and compiler ownership with JSON paths', () => {

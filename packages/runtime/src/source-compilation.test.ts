@@ -180,6 +180,329 @@ const record = Lamp(prototypes.entity['small-lamp']);`,
     ]);
   });
 
+  test('resolves Selector as a checked structural Entity facade with detached signals', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'selector-structural-facade.factorio.ts',
+        text: `const selector = Selector('selector-combinator', {
+  control_behavior: {
+    operation: 'select',
+    select_max: false,
+    index_constant: 0,
+    index_signal: Signal('virtual', 'signal-A'),
+  },
+}).at(4, 2);`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3)
+      throw new Error('Expected a Selector Entity plan.');
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.entities[0]).toMatchObject({
+      placement: { x: 4, y: 2 },
+      configuration: {
+        mode: 'raw',
+        payload: {
+          control_behavior: {
+            operation: 'select',
+            select_max: false,
+            index_constant: 0,
+            index_signal: { type: 'virtual', name: 'signal-A' },
+          },
+        },
+      },
+    });
+    const resolved = compilation.resolvedCircuit;
+    if (resolved === undefined) throw new Error('Expected a resolved Selector circuit.');
+    const blueprint = generateEntityBlueprintJson(resolved.ir as NativeCircuitIrV3).blueprint;
+    expect(blueprint.entities).toHaveLength(1);
+    expect(blueprint.entities[0]).toMatchObject({
+      name: 'selector-combinator',
+      position: { x: 4, y: 2 },
+      control_behavior: {
+        operation: 'select',
+        select_max: false,
+        index_constant: 0,
+        index_signal: { type: 'virtual', name: 'signal-A' },
+      },
+    });
+    expect(JSON.stringify(blueprint.entities[0]).match(/"operation"/g)).toHaveLength(1);
+  });
+
+  test('accepts Selector short, canonical, and provider-owned prototype forms', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'selector-prototype-forms.factorio.ts',
+        text: `const short = Selector('selector-combinator');
+const canonical = Selector('entity:selector-combinator');
+const record = Selector(prototypes.entity['selector-combinator']);`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3) throw new Error('Expected Selector Entity plan.');
+    expect(plan.entities).toHaveLength(3);
+    expect(plan.entities.map(({ profile }) => profile.prototypeKey)).toEqual([
+      'entity:selector-combinator',
+      'entity:selector-combinator',
+      'entity:selector-combinator',
+    ]);
+  });
+
+  test('evaluates Selector arguments once in order and preserves aliases and spread', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'selector-argument-order.factorio.ts',
+        text: `let order = '';
+function selectPrototype() { order += 'p'; return 'selector-combinator'; }
+function selectConfiguration() { order += 'c'; return { control_behavior: { select_max: false, index_constant: 0 } }; }
+const direct = Selector(selectPrototype(), selectConfiguration());
+const alias = [direct];
+const spreadArgs = ['selector-combinator', { control_behavior: { operation: 'select', index_constant: 0 } }];
+const spread = Selector(...spreadArgs);
+if (order !== 'pc' || !Object.is(alias[0], direct)) throw new Error('Selector evaluation or alias changed');`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.plan?.version).toBe(3);
+    expect(compilation.plan?.version === 3 ? compilation.plan.entities : undefined).toHaveLength(2);
+  });
+
+  test.each([`Selector();`, `Selector('selector-combinator', {}, {});`])(
+    'validates public Selector constructor arity at the call span: %s',
+    async (text) => {
+      const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+      const provisioned = new EntityProvisioningService().provision(
+        prototypes,
+        conservativeEntityProvisioningPolicy,
+      );
+      const compilation = compileSourceProgram(
+        { path: 'selector-arity.factorio.ts', text },
+        {
+          prototypes,
+          trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+          entityPrototypeResolver: provisioned.entityPrototypeResolver,
+        },
+      );
+      expect(compilation.pipelineDiagnostics).toEqual([
+        expect.objectContaining({
+          code: 'RT2027',
+          message: 'Selector(prototype, configuration?) requires one or two arguments.',
+          span: { fileId: 'file:selector-arity.factorio.ts', start: 0, end: text.length - 1 },
+        }),
+      ]);
+    },
+  );
+
+  test.each([
+    {
+      name: 'wrong family',
+      source: `Selector('assembling-machine-3');`,
+      message: 'requires provider Entity type "selector-combinator"',
+    },
+    {
+      name: 'foreign provider record',
+      source: `Selector({ key: 'entity:selector-combinator', name: 'selector-combinator', type: 'selector-combinator' });`,
+      message: 'foreign or not owned by the selected host provider',
+    },
+    {
+      name: 'reserved one-argument configuration',
+      source: `Selector({ operation: 'select' });`,
+      message: 'prototype record has no canonical key',
+    },
+  ])(
+    'rejects Selector $name without widening its constructor shape',
+    async ({ source, message }) => {
+      const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+      const provisioned = new EntityProvisioningService().provision(
+        prototypes,
+        conservativeEntityProvisioningPolicy,
+      );
+      const compilation = compileSourceProgram(
+        { path: 'selector-invalid-prototype.factorio.ts', text: source },
+        {
+          prototypes,
+          trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+          entityPrototypeResolver: provisioned.entityPrototypeResolver,
+        },
+      );
+      expect(compilation.plan).toBeUndefined();
+      expect(compilation.pipelineDiagnostics).toEqual([
+        expect.objectContaining({ code: 'RT2027', message: expect.stringContaining(message) }),
+      ]);
+    },
+  );
+
+  test('rolls back caught Selector failures before allocating a valid Entity', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'selector-rollback.factorio.ts',
+        text: `let caught = 0;
+try { Selector('assembling-machine-3'); } catch { caught += 1; }
+try { Selector('selector-combinator', { control_behavior: { operation: 'select', count_signal: { name: 'signal-A' } } }); } catch { caught += 1; }
+if (caught !== 2) throw new Error('Selector failures were accepted');
+Selector('selector-combinator', { control_behavior: { operation: 'select', index_constant: 0 } });`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3)
+      throw new Error('Expected recovered Selector plan.');
+    expect(plan.entities).toHaveLength(1);
+    expect(plan.entities[0]?.id).toBe('entity:1');
+    expect(plan.networks).toEqual([]);
+    expect(plan.producers).toEqual([]);
+  });
+
+  test('keeps fallback Selector connector, callable, and output authority unavailable', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const cases = [
+      {
+        source: `Selector('selector-combinator').port('circuit', 'red');`,
+        message: 'Unknown Entity connector',
+        code: 'RT2031',
+      },
+      {
+        source: `Selector('selector-combinator')(new Network());`,
+        message: 'has no callable projection',
+        code: 'RT2027',
+      },
+      {
+        source: `const output = new Network(); output += Selector('selector-combinator');`,
+        message: 'has no callable projection',
+        code: 'RT2027',
+      },
+    ] as const;
+    for (const [index, { source, message, code }] of cases.entries()) {
+      const compilation = compileSourceProgram(
+        { path: `selector-fallback-authority-${index}.factorio.ts`, text: source },
+        {
+          prototypes,
+          trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+          entityPrototypeResolver: provisioned.entityPrototypeResolver,
+        },
+      );
+      expect(compilation.plan).toBeUndefined();
+      expect(compilation.pipelineDiagnostics).toEqual([
+        expect.objectContaining({ code, message: expect.stringContaining(message) }),
+      ]);
+    }
+  });
+
+  test('keeps generic Entity and Selector configuration parity while allocating distinct Entities', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'selector-generic-parity.factorio.ts',
+        text: `const fragment = { control_behavior: { select_max: false, index_constant: 0 } };
+const generic = Entity('selector-combinator', fragment).at(1, 2);
+const facade = Selector('selector-combinator', fragment).at(3, 4);
+const raw = Selector('selector-combinator', { raw: { control_behavior: { operation: 'unknown', select_max: false } } });`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const plan = compilation.plan;
+    if (plan === undefined || plan.version !== 3) throw new Error('Expected Selector parity plan.');
+    expect(plan.entities).toHaveLength(3);
+    expect(plan.entities[0]?.configuration).toEqual(plan.entities[1]?.configuration);
+    expect(plan.entities[0]?.id).not.toBe(plan.entities[1]?.id);
+    expect(plan.entities[0]?.configuration).toEqual({
+      mode: 'raw',
+      payload: { control_behavior: { select_max: false, index_constant: 0 } },
+    });
+    expect(plan.entities[2]?.configuration).toEqual({
+      mode: 'raw',
+      payload: { control_behavior: { operation: 'unknown', select_max: false } },
+    });
+  });
+
+  test('reports Selector cross-operation errors at the configuration argument span', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const configuration =
+      "{ control_behavior: { operation: 'select', count_signal: { name: 'signal-A' } } }";
+    const text = `Selector('selector-combinator', ${configuration});`;
+    const compilation = compileSourceProgram(
+      { path: 'selector-wrong-group.factorio.ts', text },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+    const start = text.indexOf(configuration);
+    expect(compilation.plan).toBeUndefined();
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'RT2027',
+        message: expect.stringContaining('$.control_behavior.count_signal'),
+        span: {
+          fileId: 'file:selector-wrong-group.factorio.ts',
+          start,
+          end: start + configuration.length,
+        },
+      }),
+    ]);
+  });
+
   test('evaluates Lamp arguments once in JavaScript order and allocates one Entity', async () => {
     const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
     const provisioned = new EntityProvisioningService().provision(

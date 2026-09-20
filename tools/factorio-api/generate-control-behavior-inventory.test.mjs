@@ -11,6 +11,7 @@ import {
   generateSchemaCatalog,
   serializeInventory,
   serializeSchemaCatalog,
+  sha256,
   verifyFileHash,
 } from './generate-control-behavior-inventory.mjs';
 
@@ -112,7 +113,7 @@ describe('pinned Blueprint schema catalog', () => {
     expect(catalog.counts).toEqual({
       entityVariants: 62,
       controlBehaviors: 37,
-      referencedSchemas: 113,
+      referencedSchemas: 116,
     });
     expect(catalog.variants).toHaveLength(62);
     expect(catalog.controlBehaviors).toHaveLength(37);
@@ -133,6 +134,80 @@ describe('pinned Blueprint schema catalog', () => {
       entityVariants: ['assembling-machine'],
     });
     expect(serialized).not.toMatch(/circuit_connector|connector_lanes|lane_count/);
+  });
+
+  it('preserves selector variant groups behind its common operation field', () => {
+    const selector = catalog.references.find(({ name }) => name === 'SelectorCombinatorParameters');
+    expect(selector?.type).toMatchObject({
+      kind: 'object',
+      fields: [
+        {
+          name: 'operation',
+          default: 'select',
+        },
+      ],
+      variant: {
+        discriminator: 'operation',
+        default: 'select',
+        groups: [
+          { value: 'count' },
+          { value: 'quality-filter' },
+          { value: 'quality-transfer' },
+          { value: 'random' },
+          { value: 'select' },
+          { value: 'time' },
+        ],
+      },
+    });
+    expect(selector?.type.kind === 'object' && selector.type.variant?.groups).toHaveLength(6);
+    expect(
+      selector?.type.kind === 'object' &&
+        selector.type.variant?.groups
+          .find(({ value }) => value === 'select')
+          ?.fields.map(({ name }) => name),
+    ).toEqual(['index_constant', 'index_signal', 'select_max']);
+  });
+
+  it.each([
+    [
+      'ambiguous',
+      (parameters) =>
+        parameters.push({
+          name: 'ambiguous_operation',
+          type: 'SelectorCombinatorParameterOperation',
+          optional: true,
+        }),
+    ],
+    [
+      'missing',
+      (parameters) => {
+        parameters.find(({ name }) => name === 'operation').type = 'string';
+      },
+    ],
+  ])('fails closed for a %s inferred Selector discriminator', async (_label, mutate) => {
+    const directory = await mkdtemp(join(tmpdir(), 'comblang-api-variant-inference-'));
+    temporaryDirectories.push(directory);
+    const fixtureDirectory = join(directory, 'fixture');
+    await cp(fileURLToPath(new URL('fixtures/2.1.17/', import.meta.url)), fixtureDirectory, {
+      recursive: true,
+    });
+    const runtimePath = join(fixtureDirectory, 'runtime-api.json');
+    const runtime = JSON.parse(await readFile(runtimePath, 'utf8'));
+    const selector = runtime.concepts.find(({ name }) => name === 'SelectorCombinatorParameters');
+    expect(selector?.type?.parameters).toBeInstanceOf(Array);
+    mutate(selector.type.parameters);
+    const runtimeSerialized = `${JSON.stringify(runtime, null, 2)}\n`;
+    await writeFile(runtimePath, runtimeSerialized);
+    const manifestPath = join(fixtureDirectory, 'manifest.json');
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
+    manifest.files['runtime-api.json'].sha256 = sha256(runtimeSerialized);
+    await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+    await expect(
+      generateSchemaCatalog({
+        fixtureDirectory: pathToFileURL(manifestPath),
+      }),
+    ).rejects.toThrow('exactly one unambiguous string discriminator');
   });
 
   it('covers representative variants and every reviewed wave', async () => {

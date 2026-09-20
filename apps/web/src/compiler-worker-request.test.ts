@@ -83,6 +83,13 @@ const rawSource = JSON.stringify({
       flags: ['placeable-player', 'player-creation'],
     },
   },
+  'selector-combinator': {
+    'fixture-selector': {
+      type: 'selector-combinator',
+      name: 'fixture-selector',
+      flags: ['placeable-player', 'player-creation'],
+    },
+  },
   'arithmetic-combinator': {
     'arithmetic-combinator': {
       type: 'arithmetic-combinator',
@@ -544,6 +551,34 @@ const machine = Entity('footprint-less', {
           payload: {
             player_description: 'worker fixture',
             control_behavior: { is_on: false, sections: { sections: [] } },
+          },
+        },
+      }),
+    ]);
+    expect(structuredClone(response)).toEqual(response);
+  });
+
+  test('constructs and detaches a checked Selector facade in the Worker', async () => {
+    const runtime = new CompilerWorkerRuntime();
+    const response = await runtime.handle({
+      kind: 'parse',
+      revision: 23,
+      file: {
+        path: 'worker-selector-entity.factorio.ts',
+        text: `const selector = Selector('fixture-selector', { control_behavior: { operation: 'select', select_max: false, index_constant: 0 } }).at(4, 5, 8);`,
+      },
+      prototypeProfile: { source: rawSource, factorioDumpMetadata: rawMetadata },
+    });
+
+    expect(response.result.compilerDiagnostics).toEqual([]);
+    expect(response.result.resolvedCircuit?.ir.entities).toEqual([
+      expect.objectContaining({
+        profile: expect.objectContaining({ prototypeKey: 'entity:fixture-selector' }),
+        placement: { x: 4, y: 5, direction: 8 },
+        configuration: {
+          mode: 'raw',
+          payload: {
+            control_behavior: { operation: 'select', select_max: false, index_constant: 0 },
           },
         },
       }),

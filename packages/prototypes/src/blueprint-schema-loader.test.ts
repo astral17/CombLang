@@ -15,10 +15,11 @@ function mutableCatalog(): Record<string, any> {
 
 describe('Blueprint schema catalog loader', () => {
   test('loads the pinned catalog as detached deeply frozen data', () => {
+    expect(blueprintSchemaCatalog.version).toBe(2);
     expect(blueprintSchemaCatalog.counts).toEqual({
       entityVariants: 62,
       controlBehaviors: 37,
-      referencedSchemas: 113,
+      referencedSchemas: 116,
     });
     expect(Object.isFrozen(blueprintSchemaCatalog)).toBe(true);
     expect(Object.isFrozen(blueprintSchemaCatalog.common)).toBe(true);
@@ -34,6 +35,23 @@ describe('Blueprint schema catalog loader', () => {
     );
     expect(Object.isFrozen(loaded.references[0])).toBe(true);
     expect(Object.isFrozen(loaded.references[0]?.type)).toBe(true);
+    const selector = loaded.references.find(
+      ({ name }) => name === 'SelectorCombinatorParameters',
+    )?.type;
+    expect(selector?.kind).toBe('object');
+    if (selector?.kind !== 'object' || selector.variant === undefined)
+      throw new Error('Missing selector variant metadata.');
+    expect(selector.variant.discriminator).toBe('operation');
+    expect(selector.variant.default).toBe('select');
+    expect(selector.variant.groups.map(({ value }) => value)).toEqual([
+      'count',
+      'quality-filter',
+      'quality-transfer',
+      'random',
+      'select',
+      'time',
+    ]);
+    expect(Object.isFrozen(selector.variant)).toBe(true);
   });
 
   test.each([
@@ -131,6 +149,45 @@ describe('Blueprint schema catalog loader', () => {
       },
     });
     expect(() => loadBlueprintSchemaCatalog(value)).toThrow(/accessors are not allowed/);
+  });
+
+  test.each([
+    [
+      'duplicate discriminator values',
+      (value: Record<string, any>) => {
+        const selector = value.references.find(
+          ({ name }: { name: string }) => name === 'SelectorCombinatorParameters',
+        );
+        selector.type.variant.groups.push(structuredClone(selector.type.variant.groups[0]));
+      },
+      'unique discriminator values',
+    ],
+    [
+      'duplicate group field names',
+      (value: Record<string, any>) => {
+        const selector = value.references.find(
+          ({ name }: { name: string }) => name === 'SelectorCombinatorParameters',
+        );
+        selector.type.variant.groups[0].fields.push(
+          structuredClone(selector.type.variant.groups[0].fields[0]),
+        );
+      },
+      'unique field names',
+    ],
+    [
+      'missing discriminator field',
+      (value: Record<string, any>) => {
+        const selector = value.references.find(
+          ({ name }: { name: string }) => name === 'SelectorCombinatorParameters',
+        );
+        selector.type.variant.discriminator = 'missing';
+      },
+      'must name a common field',
+    ],
+  ])('rejects %s in variant metadata', (_label, mutate, message) => {
+    const value = mutableCatalog();
+    mutate(value);
+    expect(() => loadBlueprintSchemaCatalog(value)).toThrow(message);
   });
 
   test('rejects cycles, excessive depth, node count and JSON bytes', () => {

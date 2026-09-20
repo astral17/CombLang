@@ -101,7 +101,12 @@ function hasSignalReference(
     );
   }
   if (descriptor.kind === 'object') {
-    return descriptor.fields.some((field) => hasSignalReference(field.type, schema, visited));
+    return (
+      descriptor.fields.some((field) => hasSignalReference(field.type, schema, visited)) ||
+      descriptor.variant?.groups.some((group) =>
+        group.fields.some((field) => hasSignalReference(field.type, schema, visited)),
+      ) === true
+    );
   }
   return false;
 }
@@ -282,6 +287,18 @@ function detach(
       const entries = ownDataEntries(value);
       if (entries === undefined) return unchanged(value);
       const fields = new Map(descriptor.fields.map((field) => [field.name, field.type]));
+      const variant = descriptor.variant;
+      if (variant !== undefined) {
+        const discriminator = entries.descriptors.get(variant.discriminator)?.value;
+        const selected =
+          (typeof discriminator === 'string' ? discriminator : variant.default) === undefined
+            ? undefined
+            : variant.groups.find(
+                ({ value }) =>
+                  value === (typeof discriminator === 'string' ? discriminator : variant.default),
+              );
+        selected?.fields.forEach((field) => fields.set(field.name, field.type));
+      }
       const replacements = new Map<string, unknown>();
       for (const key of entries.keys) {
         const childDescriptor = fields.get(key);

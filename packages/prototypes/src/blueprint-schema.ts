@@ -6,7 +6,7 @@
  * permission to construct or simulate a Factorio entity.
  */
 export const blueprintSchemaCatalogFormat = 'comblang-blueprint-schema-catalog' as const;
-export const blueprintSchemaCatalogVersion = 1 as const;
+export const blueprintSchemaCatalogVersion = 2 as const;
 
 export type BlueprintSchemaScalarName = 'boolean' | 'string' | 'number' | (string & {});
 
@@ -41,6 +41,7 @@ export type BlueprintSchemaDescriptor =
   | {
       readonly kind: 'object';
       readonly fields: readonly BlueprintSchemaField[];
+      readonly variant?: BlueprintSchemaVariantMetadata;
     }
   | {
       readonly kind: 'reference';
@@ -53,6 +54,17 @@ export interface BlueprintSchemaField {
   readonly optional: boolean;
   readonly default?: BlueprintSchemaDefault;
   readonly ownership?: 'user' | 'compiler';
+}
+
+export interface BlueprintSchemaVariantGroup {
+  readonly value: string;
+  readonly fields: readonly BlueprintSchemaField[];
+}
+
+export interface BlueprintSchemaVariantMetadata {
+  readonly discriminator: string;
+  readonly default?: string;
+  readonly groups: readonly BlueprintSchemaVariantGroup[];
 }
 
 export interface BlueprintSchemaNamedReference {

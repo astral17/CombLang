@@ -7,6 +7,7 @@ import {
   type BlueprintSchemaDescriptor,
   type BlueprintSchemaField,
   type BlueprintSchemaSourceIdentity,
+  type BlueprintSchemaVariantMetadata,
 } from './blueprint-schema.js';
 
 export const blueprintSchemaCatalogMaxDepth = 32;
@@ -252,14 +253,35 @@ function descriptor(
           values: descriptor(source.values, `${path}.values`, context, depth + 1),
         };
       case 'object': {
-        exactKeys(source, ['kind', 'fields'], path);
+        exactKeys(source, ['kind', 'fields', 'variant'], path);
         const fields = arrayValue(source.fields, `${path}.fields`, context).map((item, index) =>
           field(item, `${path}.fields[${index}]`, context, depth + 1),
         );
         const names = fields.map(({ name }) => name);
         if (new Set(names).size !== names.length)
           invalid('BSC1001', `${path}.fields`, 'expected unique field names.');
-        return { kind, fields };
+        const variant =
+          source.variant === undefined
+            ? undefined
+            : variantMetadata(source.variant, `${path}.variant`, context, depth + 1);
+        if (variant !== undefined) {
+          if (!names.includes(variant.discriminator)) {
+            invalid('BSC1001', `${path}.variant.discriminator`, 'must name a common field.');
+          }
+          const commonNames = new Set(names);
+          for (const group of variant.groups) {
+            for (const entry of group.fields) {
+              if (commonNames.has(entry.name)) {
+                invalid(
+                  'BSC1001',
+                  `${path}.variant.groups`,
+                  `group field ${JSON.stringify(entry.name)} collides with a common field.`,
+                );
+              }
+            }
+          }
+        }
+        return { kind, fields, ...(variant === undefined ? {} : { variant }) };
       }
       case 'reference':
         exactKeys(source, ['kind', 'name'], path);
@@ -295,6 +317,54 @@ function field(
         ? {}
         : { default: primitive(source.default, `${path}.default`) }),
       ...(ownership === undefined ? {} : { ownership }),
+    };
+  } finally {
+    context.ancestors.delete(source);
+  }
+}
+
+function variantMetadata(
+  value: unknown,
+  path: string,
+  context: ParseContext,
+  depth: number,
+): BlueprintSchemaVariantMetadata {
+  const source = objectValue(value, path, context);
+  if (context.ancestors.has(source)) invalid('BSC1003', path, 'cyclic data is not allowed.');
+  context.ancestors.add(source);
+  try {
+    exactKeys(source, ['discriminator', 'default', 'groups'], path);
+    const groups = arrayValue(source.groups, `${path}.groups`, context).map((item, index) => {
+      const groupPath = `${path}.groups[${index}]`;
+      const group = objectValue(item, groupPath, context);
+      if (context.ancestors.has(group))
+        invalid('BSC1003', groupPath, 'cyclic data is not allowed.');
+      context.ancestors.add(group);
+      try {
+        exactKeys(group, ['value', 'fields'], groupPath);
+        const fields = arrayValue(group.fields, `${groupPath}.fields`, context).map(
+          (entry, fieldIndex) =>
+            field(entry, `${groupPath}.fields[${fieldIndex}]`, context, depth + 1),
+        );
+        const names = fields.map(({ name }) => name);
+        if (new Set(names).size !== names.length) {
+          invalid('BSC1001', `${groupPath}.fields`, 'expected unique field names.');
+        }
+        return { value: stringValue(group.value, `${groupPath}.value`), fields };
+      } finally {
+        context.ancestors.delete(group);
+      }
+    });
+    const values = groups.map(({ value: groupValue }) => groupValue);
+    if (new Set(values).size !== values.length) {
+      invalid('BSC1001', `${path}.groups`, 'expected unique discriminator values.');
+    }
+    return {
+      discriminator: stringValue(source.discriminator, `${path}.discriminator`),
+      ...(source.default === undefined
+        ? {}
+        : { default: stringValue(source.default, `${path}.default`) }),
+      groups,
     };
   } finally {
     context.ancestors.delete(source);
@@ -570,7 +640,12 @@ export function loadBlueprintSchemaCatalog(
       collect(value.keys);
       collect(value.values);
     }
-    if (value.kind === 'object') value.fields.forEach((entry) => collect(entry.type));
+    if (value.kind === 'object') {
+      value.fields.forEach((entry) => collect(entry.type));
+      value.variant?.groups.forEach((group) =>
+        group.fields.forEach((entry) => collect(entry.type)),
+      );
+    }
   }
   collect(common);
   variants.forEach((variant) => variant.fields.forEach((entry) => collect(entry.type)));

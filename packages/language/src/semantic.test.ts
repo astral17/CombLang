@@ -487,6 +487,7 @@ function Entity(value: string) { return value; }
 function Lamp(value: string) { return value; }
 function Roboport(value: string) { return value; }
 function Constant(value: string) { return value; }
+function Selector(value: string) { return value; }
 function NativeCondition(signal: unknown, comparator: string, constant: number) { return signal; }
 function CC() { return 1; }
 function Decider(value: unknown) { return value; }
@@ -502,7 +503,7 @@ const prototypes = {};`,
     });
 
     const reserved = validateDslSemantics(parsed).filter(({ code }) => code === 'CL1045');
-    expect(reserved).toHaveLength(14);
+    expect(reserved).toHaveLength(15);
     expect(
       reserved.map(({ span }) =>
         span === undefined ? undefined : parsed.text.slice(span.start, span.end),
@@ -513,6 +514,7 @@ const prototypes = {};`,
       'Lamp',
       'Roboport',
       'Constant',
+      'Selector',
       'NativeCondition',
       'CC',
       'Decider',

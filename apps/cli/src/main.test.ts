@@ -580,6 +580,45 @@ const machine = Entity('assembling-machine-3', {
     });
   });
 
+  test('constructs a checked Selector facade through the selected CLI provider', async () => {
+    const database = structuredClone(syntheticPrototypeDatabase()) as {
+      entities: Array<Record<string, unknown>>;
+    };
+    database.entities.push({
+      key: 'entity:fixture-selector',
+      name: 'fixture-selector',
+      type: 'selector-combinator',
+      blueprintEligible: true,
+      circuit: {
+        read: false,
+        enableDisable: false,
+        readContents: false,
+        setFilters: false,
+        setRequests: false,
+        setRecipe: false,
+        readRecipe: false,
+        readFinishedCraft: false,
+        outputSignals: false,
+      },
+    });
+    const source = await sourceFile(
+      `const selector = Selector('fixture-selector', { control_behavior: { operation: 'select', select_max: false, index_constant: 0 } }).at(2, 3, 8);`,
+    );
+    const profile = await profileFile(JSON.stringify(database));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const exitCode = await run(['check', '--json', '--prototypes', profile, source]);
+    const report = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect({ exitCode, report }).toMatchObject({
+      exitCode: 0,
+      report: {
+        diagnostics: [],
+        producerCount: 0,
+        entityReplayContext: { source: 'provider' },
+      },
+    });
+  });
+
   test('checks exact Arithmetic through the selected CLI provider as cumulative v5', async () => {
     const database = structuredClone(syntheticPrototypeDatabase()) as {
       entities: Array<Record<string, unknown>>;

@@ -272,12 +272,12 @@ function flattenDefines(defines) {
   return result;
 }
 
-function schemaField(parameter, descriptorFor) {
+function schemaField(parameter, descriptorFor, path = parameter.name) {
   assert.equal(typeof parameter.name, 'string');
   assert.equal(typeof parameter.optional, 'boolean');
   const field = {
     name: parameter.name,
-    type: descriptorFor(parameter.type, `${parameter.name}.type`),
+    type: descriptorFor(parameter.type, `${path}.type`),
     optional: parameter.optional,
   };
   const defaultValue = defaultFromDescription(parameter.description);
@@ -289,7 +289,101 @@ function schemaDescriptorFactory(concepts, defines) {
   const activeConcepts = new Set();
   const conceptDescriptors = new Map();
 
-  function descriptorFor(value, path = '<schema>') {
+  function stringLiterals(value, active = new Set()) {
+    if (typeof value === 'string') {
+      if (concepts.has(value)) {
+        if (active.has(value)) return undefined;
+        active.add(value);
+        const result = stringLiterals(concepts.get(value).type, active);
+        active.delete(value);
+        return result;
+      }
+      if (defines.has(value)) return descriptorStringLiterals(defines.get(value));
+      return undefined;
+    }
+    if (!value || typeof value !== 'object') return undefined;
+    switch (value.complex_type) {
+      case 'literal':
+        return typeof value.value === 'string' ? new Set([value.value]) : undefined;
+      case 'type':
+        return stringLiterals(value.value, active);
+      case 'union': {
+        const result = new Set();
+        for (const option of value.options ?? []) {
+          const literals = stringLiterals(option, active);
+          if (literals === undefined) return undefined;
+          for (const literal of literals) result.add(literal);
+        }
+        return result;
+      }
+      default:
+        return undefined;
+    }
+  }
+
+  function descriptorStringLiterals(value) {
+    if (value?.kind === 'literal' && typeof value.value === 'string') {
+      return new Set([value.value]);
+    }
+    if (value?.kind === 'union') {
+      const result = new Set();
+      for (const option of value.options) {
+        const literals = descriptorStringLiterals(option);
+        if (literals === undefined) return undefined;
+        for (const literal of literals) result.add(literal);
+      }
+      return result;
+    }
+    return undefined;
+  }
+
+  function variantMetadata(value, parameters, fields, path, descriptorFor) {
+    const groups = sortedByName(value.variant_parameter_groups ?? []);
+    if (groups.length === 0) return undefined;
+    const groupNames = new Set(groups.map((group) => group.name));
+    const candidates = parameters.filter((parameter) => {
+      const literals = stringLiterals(parameter.type);
+      if (literals === undefined) return false;
+      return [...groupNames].every((groupName) => literals.has(groupName));
+    });
+    assert.equal(
+      candidates.length,
+      1,
+      `Expected exactly one unambiguous string discriminator for ${path}; received ${candidates.length}.`,
+    );
+    const discriminator = candidates[0];
+    const discriminatorField = fields.find((field) => field.name === discriminator.name);
+    assert(discriminatorField, `Missing discriminator field ${path}.${discriminator.name}.`);
+    assert(
+      discriminatorField.default === undefined || typeof discriminatorField.default === 'string',
+      `Discriminator default ${path}.${discriminator.name} must be a string or omitted.`,
+    );
+    return {
+      discriminator: discriminator.name,
+      ...(discriminatorField.default === undefined ? {} : { default: discriminatorField.default }),
+      groups: groups.map((group) => {
+        const groupFields = sortedByName(group.parameters ?? []).map((parameter) =>
+          schemaField(parameter, descriptorFor, `${path}.variant_parameter_groups.${group.name}`),
+        );
+        const groupFieldNames = new Set(groupFields.map((field) => field.name));
+        assert.equal(
+          groupFieldNames.size,
+          groupFields.length,
+          `Duplicate fields in ${path} variant group ${group.name}.`,
+        );
+        const commonNames = new Set(fields.map((field) => field.name));
+        for (const field of groupFields) {
+          assert(
+            !commonNames.has(field.name),
+            `Variant field ${path}.${group.name}.${field.name} collides with a common field.`,
+          );
+        }
+        return { value: group.name, fields: groupFields };
+      }),
+    };
+  }
+
+  function descriptorFor(value, path = '<schema>', includeVariantMetadata = true) {
     if (typeof value === 'string') {
       if (value === 'nil') return { kind: 'literal', value: null };
       if (blueprintScalarNames.has(value)) return { kind: 'scalar', name: value };
@@ -331,9 +425,15 @@ function schemaDescriptorFactory(concepts, defines) {
           parameters.length,
           `Duplicate table fields at ${path}.`,
         );
+        const fields = parameters.map((parameter) => schemaField(parameter, descriptorFor, path));
+        const variant =
+          includeVariantMetadata && value.variant_parameter_groups !== undefined
+            ? variantMetadata(value, parameters, fields, path, descriptorFor)
+            : undefined;
         return {
           kind: 'object',
-          fields: parameters.map((parameter) => schemaField(parameter, descriptorFor)),
+          fields,
+          ...(variant === undefined ? {} : { variant }),
         };
       }
       case 'tuple':
@@ -402,6 +502,11 @@ function collectSchemaReferences(value, result) {
   }
   if (value.kind === 'object')
     value.fields.forEach((field) => collectSchemaReferences(field.type, result));
+  if (value.kind === 'object' && value.variant !== undefined) {
+    value.variant.groups.forEach((group) =>
+      group.fields.forEach((field) => collectSchemaReferences(field.type, result)),
+    );
+  }
 }
 
 function assertNoCompilerOwnedFields(descriptor, path) {
@@ -444,7 +549,7 @@ export async function generateSchemaCatalog({ fixtureDirectory, review } = {}) {
   const defineDescriptors = flattenDefines(runtimeApi.defines);
   const { descriptorFor, conceptDescriptor } = schemaDescriptorFactory(concepts, defineDescriptors);
 
-  const common = descriptorFor(blueprintEntity.type, 'BlueprintEntity.type');
+  const common = descriptorFor(blueprintEntity.type, 'BlueprintEntity.type', false);
   for (const field of common.fields) {
     if (blueprintCompilerOwnedFields.has(field.name)) field.ownership = 'compiler';
   }
@@ -579,7 +684,7 @@ export async function generateSchemaCatalog({ fixtureDirectory, review } = {}) {
 
   return {
     format: 'comblang-blueprint-schema-catalog',
-    version: 1,
+    version: 2,
     source: {
       snapshot: `fixtures/${snapshotVersion}`,
       applicationVersion: runtimeApi.application_version,
