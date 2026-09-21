@@ -19,7 +19,12 @@ import {
   type SignalId,
   type SignalType,
 } from '@comblang/factorio';
-import type { Diagnostic, SourceSpan } from '@comblang/shared';
+import {
+  diagnosticCategories,
+  diagnosticSeverities,
+  type Diagnostic,
+  type SourceSpan,
+} from '@comblang/shared';
 import type { EntityId } from '@comblang/compiler/entity';
 
 export interface ValidatedDirectPlanEnvelope {
@@ -556,10 +561,32 @@ function validateDiagnostic(
     !isRecord(value) ||
     typeof value.code !== 'string' ||
     value.code.length === 0 ||
-    (value.severity !== 'error' && value.severity !== 'warning' && value.severity !== 'info') ||
+    !diagnosticSeverities.includes(value.severity as (typeof diagnosticSeverities)[number]) ||
     typeof value.message !== 'string'
   )
     return payloadFailure(path, 'invalid diagnostic.');
+  if (value.ruleId !== undefined && (typeof value.ruleId !== 'string' || value.ruleId.length === 0))
+    return payloadFailure(`${path}.ruleId`, 'invalid diagnostic rule ID.');
+  if (
+    value.category !== undefined &&
+    !diagnosticCategories.includes(value.category as (typeof diagnosticCategories)[number])
+  )
+    return payloadFailure(`${path}.category`, 'invalid diagnostic category.');
+  if (value.instancePath !== undefined && !isInstancePath(value.instancePath))
+    return payloadFailure(`${path}.instancePath`, 'invalid diagnostic instance path.');
+  if (value.instancePaths !== undefined) {
+    if (
+      !Array.isArray(value.instancePaths) ||
+      exceedsLimit(value.instancePaths) ||
+      value.instancePaths.some((instancePath) => !isInstancePath(instancePath))
+    )
+      return payloadFailure(`${path}.instancePaths`, 'invalid diagnostic instance paths.');
+  }
+  if (
+    value.occurrences !== undefined &&
+    (!Number.isSafeInteger(value.occurrences) || Number(value.occurrences) < 1)
+  )
+    return payloadFailure(`${path}.occurrences`, 'invalid diagnostic occurrence count.');
   if (value.span !== undefined && descriptorSpan({ source: value.span }, 'source') === undefined)
     return payloadFailure(`${path}.span`, 'invalid source span.');
   if (value.related !== undefined) {
@@ -842,6 +869,23 @@ function canonicalDiagnostic(value: unknown): Diagnostic {
     code: diagnostic.code as string,
     severity: diagnostic.severity as Diagnostic['severity'],
     message: diagnostic.message as string,
+    ...(diagnostic.ruleId === undefined ? {} : { ruleId: diagnostic.ruleId as string }),
+    ...(diagnostic.category === undefined
+      ? {}
+      : { category: diagnostic.category as NonNullable<Diagnostic['category']> }),
+    ...(diagnostic.instancePath === undefined
+      ? {}
+      : { instancePath: canonicalPath(diagnostic.instancePath) }),
+    ...(diagnostic.instancePaths === undefined
+      ? {}
+      : {
+          instancePaths: Object.freeze(
+            (diagnostic.instancePaths as unknown[]).map((path) => canonicalPath(path)),
+          ),
+        }),
+    ...(diagnostic.occurrences === undefined
+      ? {}
+      : { occurrences: diagnostic.occurrences as number }),
     ...(diagnostic.span === undefined ? {} : { span: canonicalSpan(diagnostic.span) }),
     ...(diagnostic.related === undefined
       ? {}

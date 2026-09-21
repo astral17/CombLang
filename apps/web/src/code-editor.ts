@@ -111,6 +111,29 @@ function dslCompletionSource(context: CompletionContext): CompletionResult | nul
   return { from: word.from, options: dslCompletions, validFor: /^[\w$]*$/ };
 }
 
+function diagnosticMessage(diagnostic: Diagnostic): string {
+  const semanticLevel =
+    diagnostic.severity === 'error' || diagnostic.severity === 'warning'
+      ? ''
+      : ` [${diagnostic.severity}]`;
+  const rule =
+    diagnostic.ruleId === undefined
+      ? ''
+      : ` ${diagnostic.ruleId}${diagnostic.category === undefined ? '' : `/${diagnostic.category}`}`;
+  const occurrences =
+    diagnostic.occurrences === undefined
+      ? ''
+      : ` (${diagnostic.occurrences} occurrence${diagnostic.occurrences === 1 ? '' : 's'})`;
+  const paths =
+    diagnostic.instancePaths ??
+    (diagnostic.instancePath === undefined ? [] : [diagnostic.instancePath]);
+  const provenance =
+    paths.length === 0
+      ? ''
+      : ` [instances: ${paths.map((path) => JSON.stringify(path)).join(', ')}]`;
+  return `${diagnostic.code}${semanticLevel}${rule}${occurrences}${provenance}: ${diagnostic.message}`;
+}
+
 export function toEditorDiagnostics(
   sourceLength: number,
   diagnostics: readonly Diagnostic[],
@@ -123,8 +146,13 @@ export function toEditorDiagnostics(
     return {
       from,
       to,
-      severity: diagnostic.severity,
-      message: `${diagnostic.code}: ${diagnostic.message}`,
+      severity:
+        diagnostic.severity === 'error'
+          ? 'error'
+          : diagnostic.severity === 'warning'
+            ? 'warning'
+            : 'info',
+      message: diagnosticMessage(diagnostic),
     };
   });
 }
@@ -211,7 +239,7 @@ export function createSourceEditor(
       setDiagnostics: (diagnostics) => {
         const errors = diagnostics.filter(({ severity }) => severity === 'error').length;
         textarea.setAttribute('aria-invalid', String(errors > 0));
-        textarea.title = diagnostics.map(({ code, message }) => `${code}: ${message}`).join('\n');
+        textarea.title = diagnostics.map(diagnosticMessage).join('\n');
       },
       destroy: () => textarea.remove(),
     };

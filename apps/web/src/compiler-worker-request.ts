@@ -15,7 +15,7 @@ import {
   PrototypeValidationError,
   type LoadedPrototypeInput,
 } from '@comblang/prototypes';
-import type { Diagnostic } from '@comblang/shared';
+import { parseDiagnosticPolicy, type Diagnostic, type DiagnosticPolicy } from '@comblang/shared';
 import type { EntityPrototypeResolver } from '@comblang/runtime/entity-registry';
 import {
   conservativeEntityProvisioningPolicy,
@@ -36,6 +36,10 @@ class BrowserPrototypeSelectionError extends Error {
 
 class BrowserPrototypeCacheMissError extends Error {
   readonly code = 'WP1002';
+}
+
+class BrowserDiagnosticPolicyError extends Error {
+  readonly code = 'WP1004';
 }
 
 /** Host-local authority supplied after the cloneable replay envelope is checked. */
@@ -63,9 +67,11 @@ function profileFailure(error: unknown): Diagnostic {
             : error instanceof BrowserPrototypeSelectionError ||
                 error instanceof BrowserPrototypeCacheMissError
               ? error.code
-              : error instanceof EntityReplayContextError
+              : error instanceof BrowserDiagnosticPolicyError
                 ? error.code
-                : 'WP1003',
+                : error instanceof EntityReplayContextError
+                  ? error.code
+                  : 'WP1003',
     severity: 'error',
     message: error instanceof Error ? error.message : 'Unable to load the prototype profile.',
   };
@@ -87,6 +93,30 @@ export class CompilerWorkerRuntime {
     observe?: (stage: CompilerWorkerProgressStage) => void,
   ): Promise<CompilerWorkerParsedResponse> {
     observe?.('receive');
+    let diagnosticPolicy: DiagnosticPolicy | undefined;
+    try {
+      diagnosticPolicy =
+        request.diagnosticPolicy === undefined
+          ? undefined
+          : parseDiagnosticPolicy(request.diagnosticPolicy);
+    } catch (error) {
+      return {
+        kind: 'parsed',
+        revision: request.revision,
+        result: compileSource(
+          request.file,
+          {},
+          [
+            profileFailure(
+              new BrowserDiagnosticPolicyError(
+                error instanceof Error ? error.message : 'Invalid diagnostic policy.',
+              ),
+            ),
+          ],
+          observe,
+        ),
+      };
+    }
     let entityReplayContext: EntityReplayContextTransport | undefined;
     let entityHostContext: CompilerWorkerEntityHostContext | undefined;
     try {
@@ -127,6 +157,7 @@ export class CompilerWorkerRuntime {
           result: compileSource(
             request.file,
             {
+              ...(diagnosticPolicy === undefined ? {} : { diagnosticPolicy }),
               ...(entityReplayContext === undefined ? {} : { entityReplayContext }),
               ...(entityHostContext === undefined
                 ? {}
@@ -247,6 +278,7 @@ export class CompilerWorkerRuntime {
           request.file,
           {
             prototypes: loaded.prototypes,
+            ...(diagnosticPolicy === undefined ? {} : { diagnosticPolicy }),
             ...(entityReplayContext === undefined ? {} : { entityReplayContext }),
             ...(entityHostContext === undefined
               ? {}

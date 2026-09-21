@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 
 import { loadPrototypeDatabaseJson, type PrototypeProvider } from '@comblang/prototypes';
+import type { DiagnosticPolicy } from '@comblang/shared';
 
 export class CliInputError extends Error {
   constructor(
@@ -19,6 +20,7 @@ export interface CompilationOptions {
   readonly prototypePath?: string;
   readonly prototypeIdentity?: string;
   readonly projectPath?: string;
+  readonly diagnosticPolicy?: DiagnosticPolicy;
 }
 
 /** Options may precede or follow files; `--` ends option parsing. */

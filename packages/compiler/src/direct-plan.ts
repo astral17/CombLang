@@ -8,7 +8,7 @@ import {
   type SignalId,
 } from '@comblang/factorio';
 import { spanForNode, type ParsedSourceFile } from '@comblang/language';
-import type { Diagnostic, SourceSpan } from '@comblang/shared';
+import { diagnosticRuleRegistry, type Diagnostic, type SourceSpan } from '@comblang/shared';
 
 import type { ArithmeticOperation, CircuitColor } from './ir.js';
 import type {
@@ -1406,11 +1406,13 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
     networkNames.add(primaryOutput);
     networks.push({ name: primaryOutput, source, instancePath });
     diagnostics.push({
-      code: 'CL2001',
-      severity: 'warning',
+      code: diagnosticRuleRegistry['producer.unused-output'].code,
+      severity: diagnosticRuleRegistry['producer.unused-output'].defaultSeverity,
       message:
         'This producer has no destination; its topology is checked, but its output is unused.',
       span: source,
+      ruleId: diagnosticRuleRegistry['producer.unused-output'].ruleId,
+      category: diagnosticRuleRegistry['producer.unused-output'].category,
     });
     lowerDirectProducer(expression, [primaryOutput], source);
   };

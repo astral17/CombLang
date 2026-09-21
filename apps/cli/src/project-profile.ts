@@ -2,12 +2,14 @@ import { readFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 import { CliInputError, type CompilationOptions } from './prototype-options.js';
+import { parseDiagnosticPolicy, type DiagnosticPolicy } from '@comblang/shared';
 
 interface ProjectProfile {
   readonly schemaVersion: 1;
   readonly source: string;
   readonly tests?: string;
   readonly prototypes: { readonly path: string; readonly identity?: string };
+  readonly diagnostics?: DiagnosticPolicy;
 }
 
 /** This v1 file is data only: no imports, executable config, or implicit parent search. */
@@ -38,9 +40,25 @@ export function parseProjectProfile(text: string, path: string): ProjectProfile 
       return invalid(`${field} must be a non-empty string without NUL.`);
     return input;
   };
-  const root = object(value, 'project', ['schemaVersion', 'source', 'tests', 'prototypes']);
+  const root = object(value, 'project', [
+    'schemaVersion',
+    'source',
+    'tests',
+    'prototypes',
+    'diagnostics',
+  ]);
   if (root.schemaVersion !== 1) invalid('Unsupported project schemaVersion; expected 1.');
   const prototypes = object(root.prototypes, 'prototypes', ['path', 'identity']);
+  let diagnostics: DiagnosticPolicy | undefined;
+  if (root.diagnostics !== undefined) {
+    try {
+      diagnostics = parseDiagnosticPolicy(root.diagnostics);
+    } catch (error) {
+      return invalid(
+        `diagnostics is invalid: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
   return {
     schemaVersion: 1,
     source: string(root.source, 'source'),
@@ -51,6 +69,7 @@ export function parseProjectProfile(text: string, path: string): ProjectProfile 
         ? {}
         : { identity: string(prototypes.identity, 'prototypes.identity') }),
     },
+    ...(diagnostics === undefined ? {} : { diagnostics }),
   };
 }
 
@@ -103,5 +122,6 @@ export async function resolveProjectOptions(
     files,
     prototypePath: resolve(base, profile.prototypes.path),
     ...(prototypeIdentity === undefined ? {} : { prototypeIdentity }),
+    ...(profile.diagnostics === undefined ? {} : { diagnosticPolicy: profile.diagnostics }),
   };
 }

@@ -47,4 +47,24 @@ describe('source preview diagnostics', () => {
     expect(result.span).toBeUndefined();
     expect(formatSourceDiagnostic(result, source)).toBe('WEB1001 error: Rendering failed.');
   });
+
+  test('shows advisory identity and grouped provenance in rendered diagnostics', () => {
+    expect(
+      formatSourceDiagnostic(
+        {
+          code: 'CL2001',
+          severity: 'warning',
+          message: 'Unused output.',
+          span,
+          ruleId: 'producer.unused-output',
+          category: 'correctness',
+          occurrences: 2,
+          instancePaths: [['loop=0'], ['loop=1']],
+        },
+        source,
+      ),
+    ).toContain(
+      'CL2001 warning at 2:1 producer.unused-output/correctness (2 occurrences) [instances: ["loop=0"], ["loop=1"]]',
+    );
+  });
 });

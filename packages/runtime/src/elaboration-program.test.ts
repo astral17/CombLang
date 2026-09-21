@@ -2964,7 +2964,13 @@ tmp[1] = ${expression};`,
       kind: 'arithmetic',
       destinations: [{ network: '$combinator:1:primary' }],
     });
-    expect(warning).toMatchObject({ severity: 'warning', span: expect.any(Object) });
+    expect(warning).toMatchObject({
+      severity: 'warning',
+      span: expect.any(Object),
+      ruleId: 'producer.unused-output',
+      category: 'correctness',
+    });
+    expect(warning).not.toHaveProperty('instancePath');
     expect(parsed.text.slice(warning!.span!.start, warning!.span!.end)).toBe(expression);
   });
 

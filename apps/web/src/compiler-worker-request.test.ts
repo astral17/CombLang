@@ -227,6 +227,36 @@ const output = Scale(input[A]);`,
     expect(stages).toEqual(['receive', 'parse', 'semantic', 'transform', 'execute', 'lower']);
   });
 
+  test('validates and applies a cloneable diagnostic policy inside the Worker', async () => {
+    const response = await handleCompilerWorkerRequest({
+      kind: 'parse',
+      revision: 120,
+      file: { path: 'policy.factorio.ts', text: 'const input = new Network(); input + 1;' },
+      diagnosticPolicy: {
+        levels: { error: true, warning: true, note: true, hint: false },
+        rules: { 'producer.unused-output': { enabled: false } },
+        maxInstanceDetails: 3,
+      },
+    });
+    expect(response.result.pipelineDiagnostics).toEqual([]);
+    expect(response.result.plan).toBeDefined();
+  });
+
+  test('rejects a malformed diagnostic policy before source execution', async () => {
+    const response = await handleCompilerWorkerRequest({
+      kind: 'parse',
+      revision: 121,
+      file: { path: 'policy.factorio.ts', text: "throw new Error('source executed');" },
+      diagnosticPolicy: { levels: { error: false } } as never,
+    });
+    expect(response.result.plan).toBeUndefined();
+    expect(response.result.compilerDiagnostics).toEqual([
+      expect.objectContaining({ code: 'WP1004', severity: 'error' }),
+    ]);
+    expect(response.result.compilerDiagnostics[0]?.message).toContain('levels.error');
+    expect(response.result.compilerDiagnostics[0]?.message).not.toContain('source executed');
+  });
+
   test('constructs the provider from cloneable JSON inside the request handler', async () => {
     const source = JSON.stringify(syntheticPrototypeDatabase());
     const { prototypes } = await loadPrototypeDatabase(syntheticPrototypeDatabase());

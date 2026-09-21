@@ -1193,16 +1193,26 @@ function handleWorkerMessage(
   const syntaxErrors = syntaxDiagnostics.filter((diagnostic) => diagnostic.severity === 'error');
   const compilerErrors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
   const warnings = diagnostics.filter((diagnostic) => diagnostic.severity === 'warning');
+  const notes = diagnostics.filter((diagnostic) => diagnostic.severity === 'note');
+  const hints = diagnostics.filter((diagnostic) => diagnostic.severity === 'hint');
+  const advisories = warnings.length + notes.length + hints.length;
+  const advisorySummary = [
+    warnings.length === 0 ? '' : `${warnings.length} warning(s)`,
+    notes.length === 0 ? '' : `${notes.length} note(s)`,
+    hints.length === 0 ? '' : `${hints.length} hint(s)`,
+  ]
+    .filter(Boolean)
+    .join(' · ');
   const valid = syntaxErrors.length === 0 && compilerErrors.length === 0;
   status.textContent =
     syntaxErrors.length > 0
       ? `${syntaxErrors.length} syntax error(s)`
       : compilerErrors.length > 0
         ? `${compilerErrors.length} compiler error(s)`
-        : warnings.length > 0
-          ? `${warnings.length} warning(s) · ${parsed.plan?.producers.length ?? 0} producers checked`
+        : advisories > 0
+          ? `${advisorySummary} · ${parsed.plan?.producers.length ?? 0} producers checked`
           : `executed JS · ${sourceFunctions} functions · ${parsed.plan?.producers.length ?? 0} producers · ${foldedOperations} folds ready`;
-  status.dataset.state = valid ? (warnings.length > 0 ? 'warning' : 'valid') : 'invalid';
+  status.dataset.state = valid ? (advisories > 0 ? 'warning' : 'valid') : 'invalid';
   if (!valid || parsed.plan === undefined) {
     const firstError = parsed.pipelineDiagnostics.find(({ severity }) => severity === 'error');
     renderProofError(
@@ -1229,11 +1239,8 @@ function handleWorkerMessage(
   }
   result.textContent =
     parsed.elaborationJavaScript ??
-    diagnostics
-      .map(
-        (diagnostic) =>
-          `${diagnostic.code} ${diagnostic.severity}${diagnostic.line === undefined ? '' : ` at ${diagnostic.line}:${diagnostic.column ?? 1}`}: ${diagnostic.message}`,
-      )
+    parsed.pipelineDiagnostics
+      .map((diagnostic) => formatSourceDiagnostic(diagnostic, sourceEditor.getValue()))
       .join('\n');
   pumpCompilerWorker();
 }

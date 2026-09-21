@@ -888,7 +888,12 @@ The current language does not require generation to be reproducible. Code may de
 - `RT1xxx` — direct-plan descriptor/schema failures
 - `RT2xxx` — runtime ownership, topology, and color failures
 
-Diagnostics use half-open source spans. A color conflict includes related Network declarations when available.
+Diagnostics use half-open source spans. Configurable advisories retain their
+rule ID/category and may include bounded dynamic instance paths or grouped
+occurrence counts; `note` and `hint` remain semantic levels even when an editor
+renders them as informational markers. A color conflict includes related
+Network declarations when available. See the [diagnostic policy contract](diagnostics.md#configurable-diagnostics)
+for project JSON overrides.
 
 See the [diagnostics catalog](diagnostics.md) for common codes and corrective actions.
 

@@ -47,4 +47,34 @@ describe('CodeMirror diagnostic adapter', () => {
       { from: 10, to: 10 },
     ]);
   });
+
+  test('maps note and hint to editor info while retaining their semantic level in text', () => {
+    expect(
+      toEditorDiagnostics(30, [
+        {
+          code: 'CL2003',
+          severity: 'note',
+          message: 'Generated copy.',
+          ruleId: 'future.generated-copy',
+          category: 'native-semantics',
+          occurrences: 2,
+        },
+        { code: 'CL2004', severity: 'hint', message: 'Prefer explicit intent.' },
+      ]),
+    ).toEqual([
+      {
+        from: 0,
+        to: 0,
+        severity: 'info',
+        message:
+          'CL2003 [note] future.generated-copy/native-semantics (2 occurrences): Generated copy.',
+      },
+      {
+        from: 0,
+        to: 0,
+        severity: 'info',
+        message: 'CL2004 [hint]: Prefer explicit intent.',
+      },
+    ]);
+  });
 });

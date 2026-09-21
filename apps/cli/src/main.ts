@@ -42,7 +42,7 @@ import {
   EntityProvisioningService,
 } from '@comblang/runtime/entity-provisioning';
 import { compileParsedSourceProgram } from '@comblang/runtime/source-compilation';
-import { offsetToPosition, type Diagnostic } from '@comblang/shared';
+import { offsetToPosition, type Diagnostic, type DiagnosticPolicy } from '@comblang/shared';
 import { resolveProjectOptions } from './project-profile.js';
 
 import {
@@ -75,6 +75,7 @@ export interface CliCompilationEnvironment {
   readonly prototypes?: PrototypeProvider;
   readonly entityReplayContext?: EntityReplayContextTransport;
   readonly trustedEntityReplayContext?: TrustedEntityReplayContext;
+  readonly diagnosticPolicy?: DiagnosticPolicy;
 }
 
 function provisionCliEnvironment(
@@ -155,17 +156,33 @@ function formatDiagnostic(
   diagnostic: Diagnostic,
   files: ReadonlyMap<string, LoadedSource>,
 ): string {
+  const rule =
+    diagnostic.ruleId === undefined
+      ? ''
+      : ` ${diagnostic.ruleId}${diagnostic.category === undefined ? '' : `/${diagnostic.category}`}`;
+  const occurrences =
+    diagnostic.occurrences === undefined
+      ? ''
+      : ` (${diagnostic.occurrences} occurrence${diagnostic.occurrences === 1 ? '' : 's'})`;
+  const paths =
+    diagnostic.instancePaths ??
+    (diagnostic.instancePath === undefined ? [] : [diagnostic.instancePath]);
+  const provenance =
+    paths.length === 0
+      ? ''
+      : ` [instances: ${paths.map((path) => JSON.stringify(path)).join(', ')}]`;
+  const label = `${diagnostic.severity} ${diagnostic.code}${rule}${occurrences}${provenance}: ${diagnostic.message}`;
   if (diagnostic.span === undefined) {
-    return `${diagnostic.severity} ${diagnostic.code}: ${diagnostic.message}`;
+    return label;
   }
 
   const source = files.get(diagnostic.span.fileId);
   if (source === undefined) {
-    return `${diagnostic.severity} ${diagnostic.code}: ${diagnostic.message}`;
+    return label;
   }
 
   const position = offsetToPosition(source.text, diagnostic.span.start);
-  return `${source.path}:${position.line + 1}:${position.column + 1} - ${diagnostic.severity} ${diagnostic.code}: ${diagnostic.message}`;
+  return `${source.path}:${position.line + 1}:${position.column + 1} - ${label}`;
 }
 
 function projectOnlyDiagnostics(project: ReturnType<typeof parseProject>): readonly Diagnostic[] {
@@ -585,7 +602,12 @@ export async function run(
       );
     }
     const prototypes = await selectPrototypeProvider(options, environment.prototypes);
-    const selected = provisionCliEnvironment(environment, prototypes);
+    const selected = provisionCliEnvironment(
+      options.diagnosticPolicy === undefined
+        ? environment
+        : { ...environment, diagnosticPolicy: options.diagnosticPolicy },
+      prototypes,
+    );
     if (!json && prototypes !== undefined) {
       console.log(
         `Prototype environment: ${prototypes.identity} (Factorio ${prototypes.environment.factorioVersion}).`,

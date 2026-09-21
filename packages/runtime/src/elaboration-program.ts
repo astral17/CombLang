@@ -47,7 +47,13 @@ import {
   type EntityPrototype,
   type PrototypeProvider,
 } from '@comblang/prototypes';
-import type { Diagnostic, NetworkId, SourceFileId, SourceSpan } from '@comblang/shared';
+import {
+  diagnosticRuleRegistry,
+  type Diagnostic,
+  type NetworkId,
+  type SourceFileId,
+  type SourceSpan,
+} from '@comblang/shared';
 
 import {
   ElaborationExecutionError,
@@ -2471,10 +2477,15 @@ class ElaborationRecorder {
       }
       if (state.outputUsed) continue;
       this.#diagnostics.push({
-        code: 'CL2001',
-        severity: 'warning',
+        code: diagnosticRuleRegistry['producer.unused-output'].code,
+        severity: diagnosticRuleRegistry['producer.unused-output'].defaultSeverity,
         message: 'This combinator output is never read or connected.',
         span: state.descriptor.source,
+        ruleId: diagnosticRuleRegistry['producer.unused-output'].ruleId,
+        category: diagnosticRuleRegistry['producer.unused-output'].category,
+        ...(state.descriptor.instancePath.length === 0
+          ? {}
+          : { instancePath: state.descriptor.instancePath }),
       });
     }
   }
@@ -2622,10 +2633,13 @@ class ElaborationRecorder {
     if (this.#implicitBorrowWarnings.has(key)) return;
     this.#implicitBorrowWarnings.add(key);
     this.#diagnostics.push({
-      code: 'CL2002',
-      severity: 'warning',
+      code: diagnosticRuleRegistry['function.unrestricted-network-parameter'].code,
+      severity: diagnosticRuleRegistry['function.unrestricted-network-parameter'].defaultSeverity,
       message: `Parameter ${parameter} uses an unrestricted Network reference. Use Readonly<Network> for read-only access, Ref<Network> for mutable borrowing, or Move<Network> for ownership transfer.`,
       span: this.#span(declarationSpan),
+      ruleId: diagnosticRuleRegistry['function.unrestricted-network-parameter'].ruleId,
+      category: diagnosticRuleRegistry['function.unrestricted-network-parameter'].category,
+      instancePath: this.#path(),
     });
   }
 

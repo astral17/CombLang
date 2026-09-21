@@ -508,8 +508,14 @@ IF(a > 0, d);`,
 
     const result = compileDirectPlan(file);
     expect(result.diagnostics).toContainEqual(
-      expect.objectContaining({ code: 'CL2001', severity: 'warning' }),
+      expect.objectContaining({
+        code: 'CL2001',
+        severity: 'warning',
+        ruleId: 'producer.unused-output',
+        category: 'correctness',
+      }),
     );
+    expect(result.diagnostics[0]).not.toHaveProperty('instancePath');
     expect(result.plan?.producers).toMatchObject([
       { kind: 'decider', destinations: [{ network: '$output:1' }] },
     ]);

@@ -14,6 +14,7 @@ import {
   type SourceCompilationStage,
 } from './source-compilation.js';
 import { parseFile } from '@comblang/language';
+import { parseDiagnosticPolicy } from '@comblang/shared';
 import type { EntityPrototypeResolver } from './entity-registry.js';
 import type { EntityPrototype } from '@comblang/prototypes';
 
@@ -162,6 +163,70 @@ output += CC(2 * A);`,
       expect.objectContaining({ code: 'CL2001', severity: 'warning' }),
     ]);
     expect(compilation.plan?.format).toBe('comblang-direct-plan');
+  });
+
+  test('applies advisory policy at the final artifact boundary without skipping execution', () => {
+    const source = {
+      path: 'diagnostic-policy.factorio.ts',
+      text: 'const input = new Network(); input + 1;',
+    };
+    const hidden = compileSourceProgram(source, {
+      diagnosticPolicy: parseDiagnosticPolicy({
+        rules: { 'producer.unused-output': { enabled: false } },
+      }),
+    });
+    expect(hidden.pipelineDiagnostics).toEqual([]);
+    expect(hidden.compilerDiagnostics).toEqual([]);
+    expect(hidden.plan).toBeDefined();
+    expect(hidden.execution).toBeDefined();
+
+    const promoted = compileSourceProgram(source, {
+      diagnosticPolicy: parseDiagnosticPolicy({
+        rules: { 'producer.unused-output': { severity: 'error' } },
+      }),
+    });
+    expect(promoted.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'CL2001',
+        severity: 'error',
+        ruleId: 'producer.unused-output',
+      }),
+    ]);
+    expect(promoted.compilerDiagnostics).toEqual(promoted.pipelineDiagnostics);
+  });
+
+  test('validates direct-call diagnostic policy before executing source', () => {
+    expect(() =>
+      compileSourceProgram(
+        {
+          path: 'invalid-policy.factorio.ts',
+          text: 'throw new Error("source must not execute");',
+        },
+        { diagnosticPolicy: { levels: { error: false } } as never },
+      ),
+    ).toThrow('levels.error: error diagnostics must remain visible.');
+  });
+
+  test('groups repeated executed advisories only when the rule opts in', () => {
+    const compilation = compileSourceProgram(
+      {
+        path: 'diagnostic-grouping.factorio.ts',
+        text: `const input = new Network();
+for (let i = 0; i < 3; i++) { input + 1; }`,
+      },
+      {
+        diagnosticPolicy: parseDiagnosticPolicy({
+          rules: { 'producer.unused-output': { group: true } },
+        }),
+      },
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'CL2001',
+        occurrences: 3,
+        instancePaths: [['for i=0'], ['for i=1'], ['for i=2']],
+      }),
+    ]);
   });
 
   test('keeps the host-local execution out of the cloneable canonical artifact', () => {

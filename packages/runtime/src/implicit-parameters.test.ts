@@ -27,6 +27,20 @@ const output = Pipeline(input);`);
     session.expectSignal(output, A).toBe(11);
     expect(plan.producers).toHaveLength(3);
     expect(plan.diagnostics?.map(({ code }) => code)).toEqual(['CL2002', 'CL2002']);
+    expect(plan.diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'CL2002',
+        ruleId: 'function.unrestricted-network-parameter',
+        category: 'ownership',
+        instancePath: ['function Pipeline'],
+      }),
+      expect.objectContaining({
+        code: 'CL2002',
+        ruleId: 'function.unrestricted-network-parameter',
+        category: 'ownership',
+        instancePath: ['function Pipeline', 'function Double'],
+      }),
+    ]);
   });
 
   test.each([

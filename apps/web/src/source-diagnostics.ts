@@ -23,5 +23,20 @@ export function formatSourceDiagnostic(diagnostic: Diagnostic, source: string): 
   const position =
     diagnostic.span === undefined ? undefined : offsetToPosition(source, diagnostic.span.start);
   const location = position === undefined ? '' : ` at ${position.line + 1}:${position.column + 1}`;
-  return `${diagnostic.code} ${diagnostic.severity}${location}: ${diagnostic.message}`;
+  const rule =
+    diagnostic.ruleId === undefined
+      ? ''
+      : ` ${diagnostic.ruleId}${diagnostic.category === undefined ? '' : `/${diagnostic.category}`}`;
+  const occurrences =
+    diagnostic.occurrences === undefined
+      ? ''
+      : ` (${diagnostic.occurrences} occurrence${diagnostic.occurrences === 1 ? '' : 's'})`;
+  const paths =
+    diagnostic.instancePaths ??
+    (diagnostic.instancePath === undefined ? [] : [diagnostic.instancePath]);
+  const provenance =
+    paths.length === 0
+      ? ''
+      : ` [instances: ${paths.map((path) => JSON.stringify(path)).join(', ')}]`;
+  return `${diagnostic.code} ${diagnostic.severity}${location}${rule}${occurrences}${provenance}: ${diagnostic.message}`;
 }

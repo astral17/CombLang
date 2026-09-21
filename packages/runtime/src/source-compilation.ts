@@ -18,7 +18,12 @@ import {
   type SourceFileSnapshot,
 } from '@comblang/language';
 import type { PrototypeProvider } from '@comblang/prototypes';
-import type { Diagnostic } from '@comblang/shared';
+import {
+  parseDiagnosticPolicy,
+  resolveDiagnostics,
+  type Diagnostic,
+  type DiagnosticPolicy,
+} from '@comblang/shared';
 
 import type { ExecutedDirectPlan } from './direct-plan.js';
 import { tryElaborateDirectPlan as tryCanonicalDirectPlan } from './direct-plan.js';
@@ -29,6 +34,8 @@ import type { ResolvedCircuit } from '@comblang/compiler/resolved-circuit';
 import { canonicalDirectPlan, canonicalizeCompilationArtifacts } from './canonical-circuit.js';
 
 export interface SourceCompilationEnvironment {
+  /** Normalized project policy applied only to the final returned diagnostics. */
+  readonly diagnosticPolicy?: DiagnosticPolicy;
   readonly prototypes?: PrototypeProvider;
   /** Identity-only, cloneable replay context; host providers and Entity handles stay local. */
   readonly entityReplayContext?: EntityReplayContextTransport;
@@ -113,6 +120,9 @@ function compileParsedSource(
   preflightDiagnostics: readonly Diagnostic[],
   observe?: SourceCompilationObserver,
 ): LocalSourceCompilation {
+  // Public JavaScript callers are not made trustworthy by the TypeScript type.
+  // Validate before semantic analysis or source execution, just like CLI/Worker ingress.
+  const diagnosticPolicy = parseDiagnosticPolicy(environment.diagnosticPolicy);
   const entityReplayContext = replayTransport(environment);
   let plan: DirectElaborationPlan | undefined;
   let execution: ExecutedDirectPlan | undefined;
@@ -163,8 +173,8 @@ function compileParsedSource(
     diagnostics: parsed.diagnostics,
     topLevel: summarizeTopLevel(parsed),
     semantics: classifyDslSemantics(parsed),
-    pipelineDiagnostics,
-    compilerDiagnostics,
+    pipelineDiagnostics: resolveDiagnostics(pipelineDiagnostics, diagnosticPolicy),
+    compilerDiagnostics: resolveDiagnostics(compilerDiagnostics, diagnosticPolicy),
     executionMode: 'executed-javascript',
     ...(environment.prototypes === undefined
       ? {}

@@ -39,6 +39,9 @@ describe('CLI project profile', () => {
     { ...profile, source: '' },
     { ...profile, tests: 42 },
     { ...profile, unexpected: true },
+    { ...profile, diagnostics: { levels: { error: false } } },
+    { ...profile, diagnostics: { rules: { 'Producer.Unused': { enabled: false } } } },
+    { ...profile, diagnostics: { maxInstanceDetails: 101 } },
     { ...profile, prototypes: { path: 'data.json', identitiy: 'typo' } },
     { ...profile, prototypes: { path: '\0' } },
     { ...profile, prototypes: { path: 'data.json', identity: '' } },
@@ -75,6 +78,26 @@ describe('CLI project profile', () => {
       'test',
     );
     expect(override.files).toEqual(['elsewhere.ts', 'tests.js']);
+  });
+
+  test('normalizes the optional diagnostic policy without searching for another config', async () => {
+    const path = await projectFile({
+      ...profile,
+      diagnostics: {
+        levels: { hint: true },
+        rules: { 'producer.unused-output': { enabled: false, group: true } },
+        maxInstanceDetails: 5,
+      },
+    });
+    const options = await resolveProjectOptions(
+      parseCompilationOptions(['--project', path]),
+      'check',
+    );
+    expect(options.diagnosticPolicy).toEqual({
+      levels: { error: true, warning: true, note: true, hint: true },
+      rules: { 'producer.unused-output': { enabled: false, group: true } },
+      maxInstanceDetails: 5,
+    });
   });
 
   test('keeps an existing pin and permits an additional pin only for an unpinned project', async () => {
@@ -128,6 +151,47 @@ describe('CLI project profile', () => {
     expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
       diagnostics: [{ code: 'CL2001', severity: 'warning' }],
       tests: { passed: 1, failed: 0 },
+    });
+  });
+
+  test('applies project diagnostic policy end to end for check', async () => {
+    const path = await projectFile({
+      ...profile,
+      diagnostics: { rules: { 'producer.unused-output': { enabled: false } } },
+    });
+    await mkdir(join(dirname(path), 'source'));
+    await mkdir(join(dirname(path), 'data'));
+    await writeFile(
+      join(dirname(path), 'source/main.factorio.ts'),
+      'const input = new Network(); input + 1;',
+    );
+    await writeFile(
+      join(dirname(path), 'data/profile.json'),
+      JSON.stringify(syntheticPrototypeDatabase()),
+    );
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', '--project', path])).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({ diagnostics: [] });
+
+    await writeFile(
+      path,
+      JSON.stringify({
+        ...profile,
+        diagnostics: { rules: { 'producer.unused-output': { severity: 'error' } } },
+      }),
+    );
+    log.mockClear();
+    expect(await run(['check', '--json', '--project', path])).toBe(1);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      diagnostics: [
+        {
+          code: 'CL2001',
+          severity: 'error',
+          ruleId: 'producer.unused-output',
+          category: 'correctness',
+        },
+      ],
     });
   });
 

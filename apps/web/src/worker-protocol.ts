@@ -6,6 +6,7 @@ import type {
   PrototypeDatabaseCapabilities,
   PrototypeEnvironment,
 } from '@comblang/prototypes';
+import type { DiagnosticPolicy } from '@comblang/shared';
 
 export interface BrowserPrototypeProfileSource {
   /** Normalized or raw Factorio Prototype JSON. It is parsed only inside the Worker. */
@@ -33,6 +34,7 @@ export interface CompilerWorkerRequest {
   readonly kind: 'parse';
   readonly revision: number;
   readonly file: { readonly path: string; readonly text: string };
+  readonly diagnosticPolicy?: DiagnosticPolicy;
   readonly prototypeProfile?: BrowserPrototypeProfile;
   readonly entityReplayContext?: EntityReplayContextTransport;
 }
