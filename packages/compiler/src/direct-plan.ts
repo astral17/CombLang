@@ -56,6 +56,9 @@ interface LoweringContext {
   readonly instancePath: readonly string[];
 }
 
+const maximumIfConditionComparisons = 64;
+const maximumIfBooleanGroups = 16;
+
 function concreteCircuitConstant(value: number): number | undefined {
   try {
     return circuitConstant(value);
@@ -761,6 +764,44 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
           conditionCount += 1;
           return signalComparison;
         }
+        const wildcardSignalComparison =
+          left.kind === 'network' && right.kind === 'signal'
+            ? {
+                kind: 'compare-wildcard-signal' as const,
+                left: {
+                  refKind: 'single' as const,
+                  network: left.network,
+                  wildcard: 'each' as const,
+                },
+                comparator: negated ? invertComparator(comparison) : comparison,
+                right: {
+                  refKind: 'single' as const,
+                  network: right.network,
+                  signal: right.signal,
+                },
+              }
+            : left.kind === 'signal' && right.kind === 'network'
+              ? {
+                  kind: 'compare-wildcard-signal' as const,
+                  left: {
+                    refKind: 'single' as const,
+                    network: right.network,
+                    wildcard: 'each' as const,
+                  },
+                  comparator: negated
+                    ? invertComparator(reverseComparator(comparison))
+                    : reverseComparator(comparison),
+                  right: {
+                    refKind: 'single' as const,
+                    network: left.network,
+                    signal: left.signal,
+                  },
+                }
+              : undefined;
+        if (wildcardSignalComparison !== undefined) {
+          conditionCount += 1;
+          return wildcardSignalComparison;
+        }
         const normalized =
           (left.kind === 'network' || left.kind === 'signal') && right.kind === 'constant'
             ? {
@@ -881,17 +922,18 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
         });
         return undefined;
       }
-      if (conditionCount > 64 || groupCount > 16) {
+      if (conditionCount > maximumIfConditionComparisons || groupCount > maximumIfBooleanGroups) {
         diagnostics.push({
           code: 'CL1015',
           severity: 'error',
-          message: `IF condition expansion exceeds the current limit of 64 comparisons and 16 boolean groups.`,
+          message: `IF condition expansion exceeds the current limit of ${maximumIfConditionComparisons} comparisons and ${maximumIfBooleanGroups} boolean groups.`,
           span: spanForNode(file, conditionExpression),
         });
         return undefined;
       }
       const conditionUsesEach = (value: PlanDeciderCondition): boolean =>
         value.kind === 'compare-each' ||
+        (value.kind === 'compare-wildcard-signal' && value.left.wildcard === 'each') ||
         ((value.kind === 'and' || value.kind === 'or') && value.conditions.some(conditionUsesEach));
       if (
         !conditionUsesEach(condition) &&

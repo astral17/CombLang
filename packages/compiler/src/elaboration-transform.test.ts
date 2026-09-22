@@ -158,6 +158,7 @@ for (let i = 0; i < 10; i++) {
               : undefined,
       ),
       constant: vi.fn(() => ({ producer: 'constant' })),
+      constantCall: vi.fn(() => ({ producer: 'constant' })),
       bind: vi.fn((value, name) =>
         typeof value === 'object' && value?.producer !== undefined ? { network: name } : value,
       ),
@@ -187,7 +188,7 @@ for (let i = 0; i < 10; i++) {
     // this fixture proves that iteration is performed by JavaScript, not AST unrolling.
     Function(program.runtimeParameter, `"use strict";\n${program.code}`)(dsl);
 
-    expect(dsl.constant).toHaveBeenCalledTimes(1);
+    expect(dsl.constantCall).toHaveBeenCalledTimes(1);
     expect(dsl.compare).toHaveBeenCalledTimes(21);
     expect(dsl.deciderBranches).toHaveBeenCalledTimes(10);
     expect(dsl.attach).toHaveBeenCalledTimes(10);

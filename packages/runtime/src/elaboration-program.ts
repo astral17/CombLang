@@ -1,7 +1,7 @@
 import {
   circuitConstant,
+  canonicalizeConstantConfiguration,
   constantConfigurationFromOutputs,
-  constantConfigurationToSparseBus,
   formatSignalRef,
   parseSignalRef,
   sameSignal,
@@ -63,7 +63,7 @@ import {
 import { ElaborationColorConstraints } from './elaboration-color-constraints.js';
 import { ElaborationProvenanceFormatter } from './elaboration-provenance.js';
 import { CombinatorRegistry, type CombinatorRegistrySnapshot } from './combinator-registry.js';
-import { normalizeSignalValueSources } from './constant-signal-values.js';
+import { normalizeSignalValueSources, SignalValueSourceError } from './constant-signal-values.js';
 import {
   ConstantConfigurationSourceError,
   normalizeConstantConfigurationSource,
@@ -89,6 +89,7 @@ import {
   type RuntimeObjectValue,
   type SelectedRuntimeState,
   type SelectedValue,
+  type SectionValue,
   type SignalHandle,
   type SignalValue,
   type WildcardCountValue,
@@ -140,15 +141,7 @@ interface RawSpan {
 interface CallArgument {
   readonly value: unknown;
   readonly source: RawSpan;
-  readonly fieldSources?: Readonly<{
-    readonly input?: RawSpan;
-    readonly operation?: RawSpan;
-    readonly selectMax?: RawSpan;
-    readonly index?: RawSpan;
-    readonly output?: RawSpan;
-    readonly outputs?: RawSpan;
-    readonly elseOutputs?: RawSpan;
-  }>;
+  readonly fieldSources?: Readonly<Record<string, RawSpan>>;
 }
 
 type PlanDeciderOutput = Extract<DirectPlanProducer, { kind: 'decider' }>['output'];
@@ -174,7 +167,10 @@ function conditionUsesEach(condition: PlanDeciderCondition): boolean {
   if (condition.kind === 'and' || condition.kind === 'or') {
     return condition.conditions.some(conditionUsesEach);
   }
-  return condition.kind === 'compare-each';
+  return (
+    condition.kind === 'compare-each' ||
+    (condition.kind === 'compare-wildcard-signal' && condition.left.wildcard === 'each')
+  );
 }
 
 const entityFamilyConstructionTypes = Object.freeze({
@@ -389,6 +385,7 @@ class ElaborationRecorder {
   readonly #functionCallCounts = new Map<string, number>();
   readonly #debugInstanceCounts = new Map<string, number>();
   readonly #anonymousLoopCounts = new Map<string, number>();
+  readonly #loopValueCounts = new Map<string, number>();
   readonly #provenanceFormatter = new ElaborationProvenanceFormatter();
   readonly #instancePath: string[] = [];
   readonly #ownershipFrames: (FunctionOwnershipFrame | undefined)[] = [];
@@ -426,6 +423,7 @@ class ElaborationRecorder {
     networkFacet: (value) => this.#networkFacet(value),
     readableNetworkFacet: (value, source) => this.#readableNetworkFacet(value, source),
     isPair: (value): value is PairValue => this.#isPair(value),
+    isSection: (value): value is SectionValue => this.#isSection(value),
     isWildcardToken: (value): value is WildcardTokenValue => this.#isWildcardToken(value),
     recordDslCall: () => this.#recordDslCall(),
     assertReadable: (value, source) => this.#assertReadableValue(value, source),
@@ -592,13 +590,24 @@ class ElaborationRecorder {
       }
       this.#functionCalls.set(frame, { name, ...(matches ? { invocation } : {}) });
     },
-    enterLoop: (name: string, value: unknown, _rawSpan: RawSpan): void => {
+    enterLoop: (name: string, value: unknown, rawSpan: RawSpan): void => {
       if (value === undefined) {
         const occurrence = (this.#anonymousLoopCounts.get(name) ?? 0) + 1;
         this.#anonymousLoopCounts.set(name, occurrence);
         this.#instancePath.push(`${name} #${occurrence}`);
       } else {
-        this.#instancePath.push(`for ${name}=${this.#provenanceFormatter.format(value)}`);
+        const formatted = this.#provenanceFormatter.format(value);
+        const key = JSON.stringify({
+          parent: this.#instancePath,
+          name,
+          source: this.#span(rawSpan),
+          value: formatted,
+        });
+        const occurrence = (this.#loopValueCounts.get(key) ?? 0) + 1;
+        this.#loopValueCounts.set(key, occurrence);
+        this.#instancePath.push(
+          `for ${name}=${formatted}${occurrence === 1 ? '' : `#${occurrence}`}`,
+        );
       }
       this.#ownershipFrames.push(undefined);
     },
@@ -772,6 +781,11 @@ class ElaborationRecorder {
         );
       });
     },
+    constantCall: (arguments_: readonly CallArgument[], rawSpan: RawSpan): CombinatorValue =>
+      this.#withTopologyTransaction(rawSpan, () => {
+        this.#recordDslCall();
+        return this.#createConstantFromCallArguments(arguments_, rawSpan);
+      }),
     constantOverload: (
       arguments_: readonly CallArgument[],
       rawSpan: RawSpan,
@@ -832,8 +846,12 @@ class ElaborationRecorder {
           }
           throw error;
         }
-        const outputs = constantConfigurationToSparseBus(configuration).toJSON();
-        return this.#createConstantProducer(configuration, rawSpan, outputs, true);
+        return this.#createConstantProducer(configuration, rawSpan, undefined, true);
+      }),
+    sectionOverload: (arguments_: readonly CallArgument[], rawSpan: RawSpan): SectionValue =>
+      this.#withTopologyTransaction(rawSpan, () => {
+        this.#recordDslCall();
+        return this.#createSectionValue(arguments_, rawSpan);
       }),
     arithmeticOverload: (arguments_: readonly CallArgument[], rawSpan: RawSpan): CombinatorValue =>
       this.#withTopologyTransaction(rawSpan, () => {
@@ -3667,6 +3685,10 @@ class ElaborationRecorder {
     return this.#hasRuntimeKind(value, 'signal-value');
   }
 
+  #isSection(value: unknown): value is SectionValue {
+    return this.#hasRuntimeKind(value, 'section');
+  }
+
   #isSignal(value: unknown): value is SignalHandle {
     return this.#runtimeValues.hasSignal(value);
   }
@@ -3799,6 +3821,193 @@ class ElaborationRecorder {
       );
     }
     return { left, operation: operation as ArithmeticOperation, right, output };
+  }
+
+  #createSectionValue(arguments_: readonly CallArgument[], rawSpan: RawSpan): SectionValue {
+    if (!Array.isArray(arguments_)) {
+      throw new ElaborationExecutionError(
+        'Section(...) arguments must be an evaluated argument list.',
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+
+    let active = true;
+    let group: string | undefined;
+    let filterArguments = arguments_;
+    const first = arguments_[0];
+    const firstIsPlainDataRecord =
+      first !== undefined &&
+      isPlainDataRecord(first.value) &&
+      !this.#isCircuitDslValue(first.value);
+    const firstKeys = firstIsPlainDataRecord ? Reflect.ownKeys(first!.value) : [];
+    const firstIsFilterMap =
+      first !== undefined &&
+      firstIsPlainDataRecord &&
+      firstKeys.length > 0 &&
+      firstKeys.every((key) => {
+        if (typeof key !== 'string') return false;
+        try {
+          parseSignalRef(key);
+          return typeof (first.value as Record<string, unknown>)[key] === 'number';
+        } catch {
+          return false;
+        }
+      });
+    const options =
+      first !== undefined &&
+      firstIsPlainDataRecord &&
+      (firstKeys.length === 0 ||
+        firstKeys.some((key) => key === 'active' || key === 'group') ||
+        !firstIsFilterMap);
+
+    if (options) {
+      const value = first!.value as Record<string, unknown>;
+      for (const key of Reflect.ownKeys(value)) {
+        if (typeof key !== 'string' || (key !== 'active' && key !== 'group')) {
+          throw new ElaborationExecutionError(
+            'Section options accept only the active and group fields.',
+            this.#span(first!.fieldSources?.[typeof key === 'string' ? key : ''] ?? first!.source),
+            'RT2027',
+          );
+        }
+      }
+      if (Object.hasOwn(value, 'active')) {
+        if (typeof value.active !== 'boolean') {
+          throw new ElaborationExecutionError(
+            'Section option active must be a boolean.',
+            this.#span(first!.fieldSources?.active ?? first!.source),
+            'RT2027',
+          );
+        }
+        active = value.active;
+      }
+      if (Object.hasOwn(value, 'group')) {
+        if (typeof value.group !== 'string') {
+          throw new ElaborationExecutionError(
+            'Section option group must be a string.',
+            this.#span(first!.fieldSources?.group ?? first!.source),
+            'RT2027',
+          );
+        }
+        group = value.group;
+      }
+      filterArguments = arguments_.slice(1);
+    }
+
+    let filters;
+    try {
+      filters = normalizeSignalValueSources(
+        filterArguments.map((argument) => argument.value),
+        {
+          isSignal: (value): value is SignalHandle => this.#isSignal(value),
+          isSignalValue: (value): value is SignalValue => this.#isSignalValue(value),
+        },
+        '$.filters',
+      );
+    } catch (error) {
+      if (error instanceof SignalValueSourceError) {
+        const match = /^\$\.filters\[(\d+)\]/.exec(error.path);
+        const argument = match === null ? undefined : filterArguments[Number(match[1])];
+        throw new ElaborationExecutionError(
+          error.message,
+          this.#span(argument?.source ?? rawSpan),
+          'RT2027',
+          undefined,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
+
+    let section;
+    try {
+      section = canonicalizeConstantConfiguration(
+        {
+          isOn: true,
+          sections: [
+            {
+              active,
+              ...(group === undefined ? {} : { group }),
+              multiplier: 1,
+              filters: filters.map(({ signal, value }) => ({
+                signal: this.#signalSnapshot(signal),
+                value,
+              })),
+            },
+          ],
+        },
+        undefined,
+        '$.section',
+      ).sections[0]!;
+    } catch (error) {
+      throw new ElaborationExecutionError(
+        error instanceof Error ? error.message : 'Invalid Section configuration.',
+        this.#span(rawSpan),
+        'RT2027',
+        undefined,
+        { cause: error },
+      );
+    }
+    return this.#runtimeValues.brandSection(
+      Object.freeze({ kind: 'section', section, scaled: false, source: this.#span(rawSpan) }),
+    );
+  }
+
+  #createConstantFromCallArguments(
+    arguments_: readonly CallArgument[],
+    rawSpan: RawSpan,
+  ): CombinatorValue {
+    if (!Array.isArray(arguments_)) {
+      throw new ElaborationExecutionError(
+        'CC(...) arguments must be an evaluated argument list.',
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+    const sectionLike = arguments_.map(
+      ({ value }) =>
+        value !== null &&
+        (typeof value === 'object' || typeof value === 'function') &&
+        (value as { kind?: unknown }).kind === 'section',
+    );
+    const sections = arguments_.map(({ value }) => (this.#isSection(value) ? value : undefined));
+    if (sectionLike.some(Boolean)) {
+      if (sections.some((section) => section === undefined)) {
+        const invalidIndex = sections.findIndex((section) => section === undefined);
+        throw new ElaborationExecutionError(
+          'CC(...) section form accepts only nominal Section values from this execution session.',
+          this.#span(arguments_[invalidIndex === -1 ? 0 : invalidIndex]!.source),
+          'RT2027',
+        );
+      }
+      const configuration = canonicalizeConstantConfiguration(
+        {
+          isOn: true,
+          sections: sections.map((section) => section!.section),
+        },
+        undefined,
+        '$.configuration',
+      );
+      return this.#createConstantProducer(configuration, rawSpan, undefined, true);
+    }
+
+    const outputs = normalizeSignalValueSources(
+      arguments_.map(({ value }) => value),
+      {
+        isSignal: (value): value is SignalHandle => this.#isSignal(value),
+        isSignalValue: (value): value is SignalValue => this.#isSignalValue(value),
+      },
+    );
+    const configuration = constantConfigurationFromOutputs(
+      outputs.map(({ signal, value }) => ({ signal: this.#signalSnapshot(signal), value })),
+    );
+    return this.#createConstantProducer(
+      configuration,
+      rawSpan,
+      outputs.map(({ signal, value }) => ({ signal, value })),
+      false,
+    );
   }
 
   #normalizeSelectorConfigurationSource(
@@ -4298,7 +4507,7 @@ class ElaborationRecorder {
   #createConstantProducer(
     configuration: import('@comblang/factorio').ConstantConfiguration,
     rawSpan: RawSpan,
-    outputs: readonly { readonly signal: SignalId; readonly value: number }[],
+    outputs: readonly { readonly signal: SignalId; readonly value: number }[] | undefined,
     exact: boolean,
   ): CombinatorValue {
     const profile = this.#resolveCanonicalConstantProfile(rawSpan);
@@ -4316,11 +4525,14 @@ class ElaborationRecorder {
     const producer = this.#createCombinator(
       {
         kind: 'constant',
-        outputs: outputs.map(({ signal, value }) => ({
-          signal: this.#signalSnapshot(signal),
-          value,
-        })),
-        ...(profile === undefined ? {} : { configuration }),
+        ...(exact
+          ? { configuration }
+          : {
+              outputs: (outputs ?? []).map(({ signal, value }) => ({
+                signal: this.#signalSnapshot(signal),
+                value,
+              })),
+            }),
         source: this.#span(rawSpan),
         instancePath: this.#path(),
       },
@@ -5519,6 +5731,7 @@ class ElaborationRecorder {
       this.#isSelected(value) ||
       this.#isDestination(value) ||
       this.#isSignalValue(value) ||
+      this.#isSection(value) ||
       this.#isWildcardToken(value) ||
       this.#isWildcardCount(value) ||
       this.#isCondition(value) ||

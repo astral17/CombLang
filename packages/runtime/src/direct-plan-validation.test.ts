@@ -5,6 +5,77 @@ import { validateDirectPlanEnvelope } from './direct-plan-validation.js';
 const span = { fileId: 'schema.factorio.ts', start: 0, end: 1 };
 
 describe('direct plan envelope validation', () => {
+  test('accepts exact Constant configuration without inventing legacy outputs', () => {
+    const plan = {
+      format: 'comblang-direct-plan',
+      networks: [{ name: 'output', source: span, instancePath: [] }],
+      producers: [
+        {
+          kind: 'constant',
+          configuration: {
+            isOn: true,
+            sections: [
+              {
+                active: true,
+                multiplier: 1.5,
+                filters: [{ signal: { type: 'virtual', name: 'signal-A' }, value: 2 }],
+              },
+            ],
+          },
+          destinations: [{ network: 'output', source: span, instancePath: [] }],
+          source: span,
+          instancePath: [],
+        },
+      ],
+    };
+
+    const result = validateDirectPlanEnvelope(plan);
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.value?.plan.producers[0]).toMatchObject({
+      kind: 'constant',
+      configuration: {
+        sections: [{ multiplier: 1.5, filters: [{ value: 2 }] }],
+      },
+    });
+    expect(result.value?.plan.producers[0]).not.toHaveProperty('outputs');
+  });
+
+  test('reads a legacy exact Constant record with an output cache but canonicalizes configuration as authoritative', () => {
+    const plan = {
+      format: 'comblang-direct-plan',
+      networks: [{ name: 'output', source: span, instancePath: [] }],
+      producers: [
+        {
+          kind: 'constant',
+          outputs: [{ signal: { type: 'virtual', name: 'signal-A' }, value: 999 }],
+          configuration: {
+            isOn: true,
+            sections: [
+              {
+                active: true,
+                multiplier: 1.5,
+                filters: [{ signal: { type: 'virtual', name: 'signal-A' }, value: 2 }],
+              },
+            ],
+          },
+          destinations: [{ network: 'output', source: span, instancePath: [] }],
+          source: span,
+          instancePath: [],
+        },
+      ],
+    };
+
+    const result = validateDirectPlanEnvelope(plan);
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.value?.plan.producers[0]).toMatchObject({
+      kind: 'constant',
+      configuration: { sections: [{ multiplier: 1.5, filters: [{ value: 2 }] }] },
+    });
+    expect(result.value?.plan.producers[0]).not.toHaveProperty('outputs');
+  });
+
   test('accepts a minimal canonical transport without allocating a circuit', () => {
     const plan = {
       format: 'comblang-direct-plan',
@@ -554,6 +625,110 @@ describe('direct plan envelope validation', () => {
       {
         code: 'RT1001',
         message: expect.stringContaining('condition nesting exceeds'),
+      },
+    ]);
+  });
+
+  test('accepts the nested-condition limit and rejects the next level with its source span', () => {
+    let conditionAtLimit: Record<string, unknown> = {
+      kind: 'compare-each',
+      comparator: '>',
+      constant: 0,
+      refKind: 'single',
+      network: 'input',
+    };
+    for (let depth = 0; depth < 128; depth += 1) {
+      conditionAtLimit = {
+        kind: 'and',
+        conditions: [
+          {
+            kind: 'compare-each',
+            comparator: '>',
+            constant: 0,
+            refKind: 'single',
+            network: 'input',
+          },
+          conditionAtLimit,
+        ],
+      };
+    }
+    const makePlan = (condition: unknown) => ({
+      format: 'comblang-direct-plan',
+      networks: [
+        { name: 'input', source: span, instancePath: [] },
+        { name: 'output', source: span, instancePath: [] },
+      ],
+      producers: [
+        {
+          kind: 'decider',
+          condition,
+          output: { kind: 'each', refKind: 'single', network: 'input' },
+          destinations: [{ network: 'output', source: span, instancePath: [] }],
+          source: span,
+          instancePath: [],
+        },
+      ],
+    });
+
+    expect(validateDirectPlanEnvelope(makePlan(conditionAtLimit)).diagnostics).toEqual([]);
+    const beyondLimit = structuredClone(conditionAtLimit) as Record<string, unknown>;
+    beyondLimit.conditions = [
+      {
+        kind: 'compare-each',
+        comparator: '>',
+        constant: 0,
+        refKind: 'single',
+        network: 'input',
+      },
+      beyondLimit,
+    ];
+    const result = validateDirectPlanEnvelope(makePlan(beyondLimit));
+    expect(result.value).toBeUndefined();
+    expect(result.diagnostics).toMatchObject([
+      {
+        code: 'RT1001',
+        span,
+        message: expect.stringContaining('condition nesting exceeds the 128 level limit'),
+      },
+    ]);
+  });
+
+  test('rejects the first Decider output array beyond the bounded collection budget', () => {
+    const row = { kind: 'each-constant', value: 1 };
+    const outputs = Array.from({ length: 100_000 }, () => row);
+    const makePlan = (rows: readonly unknown[]) => ({
+      format: 'comblang-direct-plan',
+      networks: [
+        { name: 'input', source: span, instancePath: [] },
+        { name: 'output', source: span, instancePath: [] },
+      ],
+      producers: [
+        {
+          kind: 'decider',
+          condition: {
+            kind: 'compare-each',
+            comparator: '>',
+            constant: 0,
+            refKind: 'single',
+            network: 'input',
+          },
+          output: row,
+          outputs: rows,
+          destinations: [{ network: 'output', source: span, instancePath: [] }],
+          source: span,
+          instancePath: [],
+        },
+      ],
+    });
+
+    expect(validateDirectPlanEnvelope(makePlan(outputs)).diagnostics).toEqual([]);
+    const result = validateDirectPlanEnvelope(makePlan([...outputs, row]));
+    expect(result.value).toBeUndefined();
+    expect(result.diagnostics).toMatchObject([
+      {
+        code: 'RT1001',
+        span,
+        message: expect.stringContaining('expected a bounded output array'),
       },
     ]);
   });

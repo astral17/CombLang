@@ -275,6 +275,8 @@ output += CC(1 * A, [A, 2], [[B, 3]], new Map([[A, 4]]), { [B]: 5 });`,
     const producer = compilation.execution?.circuit.graph.producers[0];
     expect(producer).toMatchObject({ kind: 'constant' });
     if (producer?.kind !== 'constant') throw new Error('Expected one Constant producer.');
+    if (producer.config.configuration !== undefined)
+      throw new Error('Expected legacy CC output rows, not exact configuration.');
     expect(producer.config.outputs.map(({ signal, value }) => [signal.name, value])).toEqual([
       ['signal-A', 1],
       ['signal-A', 2],

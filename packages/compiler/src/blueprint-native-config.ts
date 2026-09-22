@@ -167,27 +167,26 @@ function arithmeticEntity(
 }
 
 function constantEntity(configuration: ConstantConfiguration): NativeCombinatorEntityConfig {
-  const section = configuration.sections[0];
-  if (section === undefined)
-    throw new Error('A legacy Constant configuration requires one section.');
   return {
     name: 'constant-combinator',
     control_behavior: {
+      is_on: configuration.isOn,
       sections: {
-        sections: [
-          {
-            index: 1,
-            filters: section.filters.map((output, index) => ({
-              index: index + 1,
-              ...signalJson(output.signal),
-              // BlueprintLogisticFilter uses an omitted quality to mean "any",
-              // unlike SignalID where omission defaults to normal.
-              quality: output.signal.quality ?? 'normal',
-              comparator: '=',
-              count: output.value,
-            })),
-          },
-        ],
+        sections: configuration.sections.map((section, sectionIndex) => ({
+          index: sectionIndex + 1,
+          active: section.active,
+          multiplier: section.multiplier,
+          ...(section.group === undefined ? {} : { group: section.group }),
+          filters: section.filters.map((output, index) => ({
+            index: index + 1,
+            ...signalJson(output.signal),
+            // BlueprintLogisticFilter uses an omitted quality to mean "any",
+            // unlike SignalID where omission defaults to normal.
+            quality: output.signal.quality ?? 'normal',
+            comparator: '=',
+            count: output.value,
+          })),
+        })),
       },
     },
   };
@@ -273,7 +272,10 @@ export function lowerNativeBlueprintConfig(
       producer.kind === 'arithmetic'
         ? arithmeticEntity(producer, selection)
         : producer.kind === 'constant'
-          ? constantEntity(constantConfigurationFromOutputs(producer.config.outputs))
+          ? constantEntity(
+              producer.config.configuration ??
+                constantConfigurationFromOutputs(producer.config.outputs),
+            )
           : producer.kind === 'decider'
             ? deciderEntity(producer, selection, maxDeciderConditionRows)
             : selectorEntity(producer);

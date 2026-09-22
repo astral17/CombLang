@@ -54,6 +54,14 @@ export type PlanDeciderCondition =
       readonly right: PlanNetworkRef & { readonly signal: SignalId };
     }
   | {
+      readonly kind: 'compare-wildcard-signal';
+      readonly left: PlanNetworkRef & {
+        readonly wildcard: 'each' | 'anything' | 'everything';
+      };
+      readonly comparator: PlanComparator;
+      readonly right: PlanNetworkRef & { readonly signal: SignalId };
+    }
+  | {
       readonly kind: 'and';
       readonly conditions: readonly PlanDeciderCondition[];
     }
@@ -167,20 +175,31 @@ export interface DeciderOutputOrigin {
   readonly syntaxIntent: DeciderOutputSyntaxIntent;
 }
 
-export interface DirectPlanConstant {
+interface DirectPlanConstantBase {
   readonly kind: 'constant';
   readonly entityId?: EntityId;
   /** Explicit source Producer binding retained for debug queries. */
   readonly bindingName?: string;
   readonly debugCaptureIds?: readonly string[];
-  readonly outputs: readonly { readonly signal: SignalId; readonly value: number }[];
-  /** Exact canonical Constant configuration retained for linked Entity equivalence. */
-  readonly configuration?: ConstantConfiguration;
   readonly destinations: readonly PlanAttachment[];
   readonly source: SourceSpan;
   readonly instancePath: readonly string[];
   readonly placement?: PlanEntityPlacement;
 }
+
+/** Legacy CC transport: its ordered output rows are the authoritative data. */
+export interface DirectPlanLegacyConstant extends DirectPlanConstantBase {
+  readonly outputs: readonly { readonly signal: SignalId; readonly value: number }[];
+  readonly configuration?: never;
+}
+
+/** Exact Constant transport: the semantic configuration is authoritative. */
+export interface DirectPlanExactConstant extends DirectPlanConstantBase {
+  readonly configuration: ConstantConfiguration;
+  readonly outputs?: never;
+}
+
+export type DirectPlanConstant = DirectPlanLegacyConstant | DirectPlanExactConstant;
 
 interface DirectPlanSelectorBase {
   readonly kind: 'selector';

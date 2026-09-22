@@ -483,6 +483,7 @@ for (let i = 0; i < arr.length; i++) output += arr[i] * 2;`,
     const parsed = parseFile({
       path: 'reserved-builtins.ts',
       text: `function Signal(value: string) { return value; }
+function Section(value: string) { return value; }
 function Entity(value: string) { return value; }
 function Lamp(value: string) { return value; }
 function Roboport(value: string) { return value; }
@@ -503,13 +504,14 @@ const prototypes = {};`,
     });
 
     const reserved = validateDslSemantics(parsed).filter(({ code }) => code === 'CL1045');
-    expect(reserved).toHaveLength(15);
+    expect(reserved).toHaveLength(16);
     expect(
       reserved.map(({ span }) =>
         span === undefined ? undefined : parsed.text.slice(span.start, span.end),
       ),
     ).toEqual([
       'Signal',
+      'Section',
       'Entity',
       'Lamp',
       'Roboport',

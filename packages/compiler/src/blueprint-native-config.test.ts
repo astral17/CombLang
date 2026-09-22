@@ -76,10 +76,13 @@ describe('native blueprint configuration lowering', () => {
     expect(lowerNativeBlueprintConfig(ir, 1024).combinators[0]?.entity).toEqual({
       name: 'constant-combinator',
       control_behavior: {
+        is_on: true,
         sections: {
           sections: [
             {
               index: 1,
+              active: true,
+              multiplier: 1,
               filters: [
                 {
                   index: 1,

@@ -2,7 +2,7 @@
 
 CombLang is an early browser-only implementation of a TypeScript-shaped structural HDL for Factorio 2.1 circuit networks. It has no backend or project-owned Factorio component. The checked-in design and implementation notes live in [`docs/architecture.md`](docs/architecture.md).
 
-The current repository implements the completed Phase 0–6 foundation, from the parser and Factorio semantics kernel through executed TypeScript-shaped source, ownership, testbench/prototype environments, and persistent schema-configured Entity handles:
+The current repository implements the completed Phase 0–7 foundation, from the parser and Factorio semantics kernel through executed TypeScript-shaped source, ownership, testbench/prototype environments, persistent schema-configured Entity handles, and exact generated combinator configurations:
 
 - one parser API shared by Node and the browser;
 - stable source file IDs and half-open source spans;
@@ -30,16 +30,7 @@ The current repository implements the completed Phase 0–6 foundation, from the
 - [x] Phase 4 — ownership, multi-network syntax, eager Combinator identity/output lanes, semantic/runtime boundary hardening, session values, and complete CLI/browser/EG/NCIR acceptance coverage.
 - [x] Phase 5 — deterministic testbench, external-world adapters, traces and interactive timelines; browser-first prototype environments with reproducible `factorio.exe --dump-data` normalization, bundled and custom modpack profiles, identity-bound provenance, persistence, integrity checks, and offline lifecycle.
 - [x] Phase 6 — persistent physical Entity identity, provider-authorized generic and modded construction, explicit connector binding and placement, profile-free replay transport, bounded raw and schema-checked Blueprint configuration, structural family facades, and separately tracked structural/implementation/native evidence.
-- [ ] Phase 7 — exact-constructor and native-config stress: Selector computation, LUTs, and large generated configurations.
-  - [x] Canonical computation-bearing Entity foundation: exact Constant projection, one physical linked Entity, profile-free replay, blueprint/simulator adapters, and boundary tests.
-  - [x] Add public `Constant({ isOn, sections })` source syntax and unify the Entity facade and `CC(...)` over one physical constant device representation. The supported first slice keeps ordinary omitted Signal quality equal to `normal`; any-quality filters, section groups, and non-unit multipliers remain outside the executable surface.
-  - [x] Add exact `Arithmetic({ left, operation, right, output })` and linked Constant/Arithmetic transport. The trusted arithmetic base profile, one-device placement ownership, profile-free hydration, and native preview remain separate from native Factorio conformance.
-  - [x] Validate the currently implemented `Each`/`Everything` output compatibility against the final post-execution Decider descriptor, including dynamically generated rows and conditions.
-  - [x] Add exact `Decider({ condition, outputs, elseOutputs })` and linked Constant/Arithmetic/Decider transport. Exact rows preserve order, duplicates, branch identity, and bounded source provenance; trusted preview/simulation remains separate from native Factorio conformance.
-  - [x] Add the structural `Selector(prototype, configuration?)` Entity facade and preserve Selector operation groups in the checked Blueprint schema catalog; the structural path remains separate from computation.
-  - [x] Add exact `Selector({ input, operation, ... })` with deterministic `select`/`count`, linked Entity transport, profile-free hydration, simulator/testbench, CLI/Worker/browser artifacts, and native-shaped Blueprint preview. This is implementation/model evidence, not native Factorio conformance; other exact Selector operations remain unsupported.
-  - [x] Preserve per-output source span, dynamic instance path, ordinal, and implicit/explicit/exact syntax intent through the final generated Decider descriptor for the current IF/when/exact slice; extend authoritative post-execution validation as the exact surface grows.
-  - [x] Add the configurable diagnostic foundation: four semantic levels, stable rule IDs/categories, per-rule visibility/severity/grouping, and bounded provenance details for current CL2001/CL2002 advisories.
+- [x] Phase 7 — exact Constant/Arithmetic/Decider and deterministic Selector computation; linked physical Entity transport; ergonomic Constant sections; generated one-device condition/output configurations; bounded provenance, replay, blueprint, CLI/Worker, and model acceptance with native-evidence limits kept explicit.
 - [ ] Phase 8 — parameter-ready configuration IR, placement-time `BlueprintFormula`, dependent blueprint parameters, FCIR, and the Factorio 2.1 codec with fixture-backed semantic round trips.
   - [x] Preserve per-operand/per-output red-green selection and nested AND/OR semantics in the early blueprint preview; cover truth tables and executed source export, with bounded condition expansion. Native round-trip fixtures remain pending.
   - [ ] Preserve associated source `//` comments as optional combinator descriptions through IR/export; define ambiguous comment attachment and explicit-description precedence, provide an export opt-out, and verify native round trips.
@@ -59,7 +50,7 @@ Later phases cover reviewed prototype capabilities, typed Factorio objects, exac
 - [Getting started](docs/getting-started.md) — install, validate, build, and run the browser workbench.
 - [Current language reference](docs/language-reference.md) — the exact implemented syntax, diagnostics, and known gaps.
 - [Phase 4 ownership design](docs/ownership-and-multi-network.md) — completed affine ownership, borrows, consuming transfer, read-only `pair`, and its acceptance matrix.
-- [Native objects, Deciders, and parameters](docs/native-objects-deciders-and-parameters.md) — planned Phase 6–8 semantic domains and conformance requirements.
+- [Native objects, Deciders, and parameters](docs/native-objects-deciders-and-parameters.md) — native-object contracts, semantic domains, and conformance requirements.
 - [Prototype environment](docs/prototype-environment.md) — the Phase 5.5 normalized static-data provider, asset loading, and environment-identity boundary.
 - [Circuit graph metrics](docs/circuit-graph-metrics.md) — resolved NCIR dependencies, DAG depth, feedback SCCs, and unknown-latency propagation.
 - [Pinned Factorio API inputs](tools/factorio-api/README.md) — versioned local schemas, hashes, license, reviewed ControlBehavior coverage, and offline regeneration.

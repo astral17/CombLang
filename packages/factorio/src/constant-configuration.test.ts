@@ -123,6 +123,58 @@ describe('Constant configuration semantic core', () => {
     ).toThrowError(expect.objectContaining({ code: 'FC1002' }));
   });
 
+  it('accepts exact section/filter node and depth budgets but rejects the next node', () => {
+    const configuration = {
+      sections: [{ filters: [{ signal: A, value: 1 }] }],
+    };
+
+    expect(() =>
+      canonicalizeConstantConfiguration(configuration, {
+        ...constantConfigurationLimits,
+        maxNodes: 6,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      canonicalizeConstantConfiguration(configuration, {
+        ...constantConfigurationLimits,
+        maxNodes: 5,
+      }),
+    ).toThrowError(
+      expect.objectContaining({ code: 'FC1002', path: '$.sections[0].filters[0].signal' }),
+    );
+
+    expect(() =>
+      canonicalizeConstantConfiguration(configuration, {
+        ...constantConfigurationLimits,
+        maxDepth: 5,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      canonicalizeConstantConfiguration(configuration, {
+        ...constantConfigurationLimits,
+        maxDepth: 4,
+      }),
+    ).toThrowError(
+      expect.objectContaining({ code: 'FC1002', path: '$.sections[0].filters[0].signal' }),
+    );
+  });
+
+  it('accepts the exact serialized byte budget but rejects one byte less', () => {
+    const input = { sections: [{ filters: [{ signal: A, value: 1 }] }] };
+    const canonical = canonicalizeConstantConfiguration(input);
+    const bytes = new TextEncoder().encode(JSON.stringify(canonical)).byteLength;
+
+    expect(() =>
+      canonicalizeConstantConfiguration(input, { ...constantConfigurationLimits, maxBytes: bytes }),
+    ).not.toThrow();
+    expect(() =>
+      canonicalizeConstantConfiguration(input, {
+        ...constantConfigurationLimits,
+        maxBytes: bytes - 1,
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'FC1002', path: '$' }));
+  });
+
   it('adapts legacy CC outputs without sorting, deduplicating, or retaining caller mutation', () => {
     const outputs: { signal: typeof A; value: number }[] = [
       { signal: A, value: 2_147_483_647 },

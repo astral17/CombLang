@@ -186,6 +186,55 @@ function exactSelectorHostContext() {
 }
 
 describe('browser compiler Worker prototype profile', () => {
+  test('compiles the generated lookup fixture through the Worker boundary', async () => {
+    const response = await handleCompilerWorkerRequest({
+      kind: 'parse',
+      revision: 10,
+      file: {
+        path: 'worker-generated-lookup.factorio.ts',
+        text: `const KEY = Signal('virtual', 'signal-key');
+const VALUE = Signal('virtual', 'signal-value');
+const source = new Network();
+function Lookup(input: Readonly<Network>): Network {
+  const keys = [10, 20, 30];
+  let member = input[KEY] === keys[0];
+  for (const key of keys.slice(1)) member = member || input[KEY] === key;
+  return IF(member, [100 * VALUE, 103 * VALUE]);
+}
+const result = Lookup(source);`,
+      },
+    });
+
+    expect(response.result.pipelineDiagnostics).toEqual([]);
+    expect(response.result.plan?.producers.filter(({ kind }) => kind === 'decider')).toHaveLength(
+      1,
+    );
+    expect(response.result.resolvedCircuit?.ir.producers).toHaveLength(1);
+    expect(response.result.resolvedCircuit?.ir.producers[0]).toMatchObject({
+      kind: 'decider',
+      config: {
+        outputs: [
+          {
+            signal: {
+              kind: 'signal',
+              signal: { type: 'virtual', name: 'signal-value' },
+            },
+            value: 100,
+          },
+          {
+            signal: {
+              kind: 'signal',
+              signal: { type: 'virtual', name: 'signal-value' },
+            },
+            value: 103,
+          },
+        ],
+      },
+    });
+    expect(response.result).not.toHaveProperty('execution');
+    expect(structuredClone(response)).toEqual(response);
+  });
+
   test('compiles NetworkSignal source through the Worker request boundary', async () => {
     const response = await handleCompilerWorkerRequest({
       kind: 'parse',
@@ -402,7 +451,7 @@ const output = Scale(input[A]);`,
       file: {
         path: 'worker-exact-constant.factorio.ts',
         text: `const A = Signal('virtual', 'signal-A');
-const exact = Constant({ isOn: false, sections: [{ active: true, filters: [[A, 0]] }] }).at(4, 5);
+ const exact = Constant({ isOn: false, sections: [{ active: true, group: 'backup', multiplier: 1.5, filters: [[A, 5]] }] }).at(4, 5);
 const output = new Network();
 output += exact;`,
       },
@@ -415,7 +464,12 @@ output += exact;`,
         {
           configuration: {
             mode: 'constant',
-            value: { isOn: false },
+            value: {
+              isOn: false,
+              sections: [
+                { active: true, group: 'backup', multiplier: 1.5, filters: [{ value: 5 }] },
+              ],
+            },
           },
         },
       ],
@@ -425,6 +479,12 @@ output += exact;`,
       expect(response.result.resolvedCircuit.ir.entities).toHaveLength(1);
       expect(response.result.resolvedCircuit.ir.entities[0]?.configuration).toMatchObject({
         mode: 'constant',
+        value: {
+          sections: [{ active: true, group: 'backup', multiplier: 1.5, filters: [{ value: 5 }] }],
+        },
+      });
+      expect(response.result.resolvedCircuit.ir.producers[0]).toMatchObject({
+        config: { configuration: { sections: [{ group: 'backup', multiplier: 1.5 }] } },
       });
     }
     expect(JSON.stringify(response.result)).not.toMatch(

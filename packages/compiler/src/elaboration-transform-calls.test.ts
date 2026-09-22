@@ -61,7 +61,7 @@ describe('elaboration call/member transform', () => {
     expect(code).toContain('__dsl.entityFamilyFromPrototype("Roboport", [{ value: value, source:');
     expect(code).toContain('__dsl.selectorOverload([{ value: value, source:');
     expect(code).toContain('__dsl.constantOverload([...__dsl.spreadCallArguments(rest');
-    expect(code).toContain('__dsl.constant(value');
+    expect(code).toContain('__dsl.constantCall([{ value: value, source:');
     expect(code).toContain('__dsl.deciderBranches(test, [{ value: yes, source:');
     expect(code).toContain('__dsl.invoke(fn, [{ value: first, source:');
     expect(code).toContain('...__dsl.spreadCallArguments(rest');
@@ -75,6 +75,15 @@ describe('elaboration call/member transform', () => {
     expect(code).toContain('__dsl.arithmeticOverload([{ value: {');
     expect(code).toContain("operation: 'multiply'");
     expect(code).toContain('source: { start:');
+  });
+
+  test('routes nominal Section through the runtime overload boundary', () => {
+    const code = transformCalls(`Section({ active: false, group: "backup" }, 1 * A);`);
+
+    expect(code).toContain('__dsl.sectionOverload([{ value: {');
+    expect(code).toContain('fieldSources: {');
+    expect(code).toContain('active: { start:');
+    expect(code).toContain('group: { start:');
   });
 
   test('routes exact Selector through the runtime overload boundary', () => {

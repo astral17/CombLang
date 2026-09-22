@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'vitest';
 import { signal } from '@comblang/factorio';
 import { loadPrototypeDatabase, type EntityPrototype } from '@comblang/prototypes';
+import { validateBlueprintEntityFragment } from '@comblang/prototypes';
+import { generateBlueprintJson } from '@comblang/compiler/blueprint-json';
 import type { EntityProfile } from '@comblang/compiler/entity';
 import { createTrustedEntityReplayContext } from '@comblang/compiler/entity-replay-context';
 import { syntheticZeroPortEntityProfile } from '@comblang/compiler/entity-fixtures';
@@ -12,6 +14,7 @@ import {
 } from './entity-provisioning.js';
 import { compileSourceProgram } from './source-compilation.js';
 import type { EntityPrototypeResolver } from './entity-registry.js';
+import { hydrateResolvedCircuit } from './resolved-circuit.js';
 
 function constantProfile(prototypeKey: string, profileId: string): EntityProfile {
   return {
@@ -158,7 +161,7 @@ output += CC(1 * A);`,
       {
         path: 'exact-constant.factorio.ts',
         text: `const A = Signal('virtual', 'signal-A');
-const exact = Constant({ isOn: true, sections: [{ active: true, filters: [[A, 2], [A, 0]] }] }).at(4, 5, 8);
+const exact = Constant({ isOn: true, sections: [{ active: true, multiplier: 1.5, filters: [[A, 2], [A, 0]] }] }).at(4, 5, 8);
 const output = new Network();
 output += exact;
 const legacy = CC(3 * A).at(8, 9);
@@ -183,6 +186,15 @@ second += legacy;`,
       'entity:1',
       'entity:2',
     ]);
+    expect(compilation.plan.producers[0]).toMatchObject({
+      kind: 'constant',
+      configuration: { sections: [{ multiplier: 1.5 }] },
+    });
+    expect(compilation.plan.producers[0]).not.toHaveProperty('outputs');
+    expect(compilation.plan.producers[1]).toMatchObject({
+      kind: 'constant',
+      outputs: [{ value: 3 }],
+    });
     expect(compilation.plan.entities.map((entity) => entity.configuration)).toEqual([
       {
         mode: 'constant',
@@ -191,7 +203,7 @@ second += legacy;`,
           sections: [
             {
               active: true,
-              multiplier: 1,
+              multiplier: 1.5,
               filters: [
                 { signal: signal('virtual', 'signal-A'), value: 2 },
                 { signal: signal('virtual', 'signal-A'), value: 0 },
@@ -217,13 +229,117 @@ second += legacy;`,
     expect(compilation.resolvedCircuit.ir.entities).toHaveLength(2);
     expect(compilation.resolvedCircuit.ir.producers[0]).toMatchObject({
       entityId: 'entity:1',
-      config: { outputs: [{ signal: signal('virtual', 'signal-A'), value: 2 }] },
+      config: {
+        configuration: {
+          isOn: true,
+          sections: [
+            {
+              active: true,
+              multiplier: 1.5,
+              filters: [
+                { signal: signal('virtual', 'signal-A'), value: 2 },
+                { signal: signal('virtual', 'signal-A'), value: 0 },
+              ],
+            },
+          ],
+        },
+      },
     });
     expect(compilation.resolvedCircuit.ir.entities[0]?.placement).toEqual({
       x: 4,
       y: 5,
       direction: 8,
     });
+  });
+
+  test('assembles nominal Sections into one exact Constant without an output cache', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'section-constant.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const first = 0.5 * Section(1 * A, 2 * B);
+const second = 3 * Section({ active: false, group: 'backup' }, 4 * A);
+const sections = [first, second];
+const output = new Network();
+output += CC(...sections);`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    if (compilation.plan === undefined || compilation.resolvedCircuit === undefined) {
+      throw new Error('Expected an exact Section Constant compilation.');
+    }
+    expect(compilation.plan.producers).toHaveLength(1);
+    expect(compilation.plan.producers[0]).toMatchObject({
+      kind: 'constant',
+      configuration: {
+        isOn: true,
+        sections: [
+          {
+            active: true,
+            multiplier: 0.5,
+            filters: [
+              { signal: signal('virtual', 'signal-A'), value: 1 },
+              { signal: signal('virtual', 'signal-B'), value: 2 },
+            ],
+          },
+          {
+            active: false,
+            group: 'backup',
+            multiplier: 3,
+            filters: [{ signal: signal('virtual', 'signal-A'), value: 4 }],
+          },
+        ],
+      },
+    });
+    expect(compilation.plan.producers[0]).not.toHaveProperty('outputs');
+    expect(compilation.plan.entities).toHaveLength(1);
+    expect(compilation.resolvedCircuit.ir.producers[0]).toMatchObject({
+      config: { configuration: { sections: [{ multiplier: 0.5 }, { multiplier: 3 }] } },
+    });
+    const hydrated = hydrateResolvedCircuit(compilation.resolvedCircuit);
+    expect(hydrated.ir.producers[0]).toMatchObject({
+      config: {
+        configuration: { sections: [{ multiplier: 0.5 }, { group: 'backup', multiplier: 3 }] },
+      },
+    });
+    const execution = compilation.execution;
+    if (execution === undefined) throw new Error('Expected executable Constant IR.');
+    expect(() => execution.circuit.createSimulation().step()).toThrowError(
+      expect.objectContaining({ code: 'FC1003', reasons: ['non-unit-multiplier', 'group'] }),
+    );
+    const session = execution.createTestSession();
+    session.tick();
+    expect(session.readValue(execution.network('output'))).toEqual({
+      kind: 'unknown',
+      origins: [
+        {
+          id: 'unmodeled:producer:1:constant-configuration',
+          description:
+            'Unmodeled Constant configuration for producer:1: non-unit-multiplier, group.',
+          path: [],
+        },
+      ],
+    });
+    const blueprintEntity = generateBlueprintJson(compilation.resolvedCircuit.ir).blueprint
+      .entities[0];
+    expect(
+      validateBlueprintEntityFragment(
+        { control_behavior: blueprintEntity?.control_behavior },
+        { type: 'constant-combinator' },
+      ),
+    ).toEqual({ status: 'valid', structuralStatus: 'documented' });
   });
 
   test('keeps legacy CC profile-free and rolls back failed exact allocation', async () => {
@@ -246,8 +362,8 @@ output += CC(2 * A);`,
       {
         path: 'exact-constant-rollback.factorio.ts',
         text: `let caught = 0;
-try { Constant({ sections: [{ multiplier: 2 }] }); } catch { caught += 1; }
-if (caught !== 1) throw new Error('unsupported exact Constant was accepted');
+try { Constant({ sections: [{ multiplier: Infinity }] }); } catch { caught += 1; }
+if (caught !== 1) throw new Error('invalid exact Constant was accepted');
 const A = Signal('virtual', 'signal-A');
 const output = new Network();
 output += Constant({ sections: [{ filters: [[A, 0]] }] });`,

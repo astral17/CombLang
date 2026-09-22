@@ -75,13 +75,30 @@ describe('exact Constant source configuration', () => {
         return value;
       })(),
     ],
-    ['group', { sections: [{ group: 'unsupported' }] }],
-    ['multiplier', { sections: [{ multiplier: 2 }] }],
   ])('reports %s without mutating the caller', (_name, value) => {
     const before = structuredClone(value);
     expect(() => normalizeConstantConfigurationSource(value, context)).toThrow(
       ConstantConfigurationSourceError,
     );
     expect(value).toEqual(before);
+  });
+
+  test('retains valid structural fields outside the evaluator subset', () => {
+    expect(
+      normalizeConstantConfigurationSource(
+        { sections: [{ group: 'backup', multiplier: 1.5, filters: [[A, 2]] }] },
+        context,
+      ),
+    ).toEqual({
+      isOn: true,
+      sections: [
+        {
+          active: true,
+          group: 'backup',
+          multiplier: 1.5,
+          filters: [{ signal: A, value: 2 }],
+        },
+      ],
+    });
   });
 });

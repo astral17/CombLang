@@ -1,7 +1,8 @@
-import { SparseBus, signal } from '@comblang/factorio';
+import { canonicalizeConstantConfiguration, SparseBus, signal } from '@comblang/factorio';
 import type { DeviceId, NetworkId } from '@comblang/shared';
 import { describe, expect, it } from 'vitest';
 
+import { ConstantValueCombinatorDevice } from './combinator-device.js';
 import { TestSession } from './test-session.js';
 import { ValueSimulationKernel } from './value-kernel.js';
 import { unknownBus } from './bus-value.js';
@@ -89,6 +90,34 @@ describe('TestSession external drives', () => {
     expect(() => session.read(input)).toThrow(
       'Network is Unknown at tick 0: unmodeled object output.',
     );
+  });
+
+  it('exposes unsupported Constant configuration Unknowns through a test session', () => {
+    const kernel = new ValueSimulationKernel();
+    kernel.addDevice(
+      new ConstantValueCombinatorDevice({
+        id: 'device:session-unsupported-constant' as DeviceId,
+        outputNetworks: [output],
+        configuration: canonicalizeConstantConfiguration({
+          sections: [
+            { group: 'backup', multiplier: 1.5, filters: [{ signal: signalA, value: 5 }] },
+          ],
+        }),
+      }),
+    );
+    const session = new TestSession(kernel);
+
+    session.tick();
+    expect(session.readValue(output)).toMatchObject({
+      kind: 'unknown',
+      origins: [
+        {
+          id: 'unmodeled:device:session-unsupported-constant:constant-configuration',
+          description: expect.stringContaining('non-unit-multiplier, group'),
+          path: [],
+        },
+      ],
+    });
   });
 
   it('asserts signal values, exact buses, containment, support, and emptiness', () => {

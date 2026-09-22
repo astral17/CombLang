@@ -27,6 +27,22 @@ describe('runtime value registry', () => {
     expect(first.hasSignal({ type: 'virtual', name: 'signal-A' })).toBe(false);
   });
 
+  test('brands Section values nominally within one elaboration session', () => {
+    const first = new RuntimeValueRegistry();
+    const second = new RuntimeValueRegistry();
+    const section = first.brandSection({
+      kind: 'section',
+      section: { active: true, multiplier: 1, filters: [] },
+      scaled: false,
+      source: { fileId: 'section.factorio.ts' as never, start: 0, end: 7 },
+    });
+
+    expect(Object.isFrozen(section)).toBe(true);
+    expect(first.hasKind(section, 'section')).toBe(true);
+    expect(second.hasKind(section, 'section')).toBe(false);
+    expect(first.hasKind({ kind: 'section' }, 'section')).toBe(false);
+  });
+
   test('keeps a Signal function-valued symbol descriptor on the branded identity', () => {
     const registry = new RuntimeValueRegistry();
     const primitive = (hint: string) => (hint === 'string' ? 'virtual/signal-A' : '');

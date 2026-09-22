@@ -25,6 +25,7 @@ export type EntityFamilyDslName = keyof typeof entityFamilyDslNames;
 
 export const freeDslFunctionNames = Object.freeze([
   'Signal',
+  'Section',
   'Entity',
   ...Object.keys(entityFamilyDslNames),
   'NativeCondition',

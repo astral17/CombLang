@@ -108,8 +108,10 @@ function payloadFailure(path: string, message: string, span?: SourceSpan) {
   return failure('RT1001', `${path}: ${message}`, span);
 }
 
+const maximumPlanCollectionLength = 100_000;
+
 function exceedsLimit(value: readonly unknown[]): boolean {
-  return value.length > 100_000;
+  return value.length > maximumPlanCollectionLength;
 }
 
 const signalTypes = new Set([
@@ -270,6 +272,23 @@ function validateDeciderCondition(
     }
     return undefined;
   }
+  if (value.kind === 'compare-wildcard-signal') {
+    if (!isRecord(value.left))
+      return payloadFailure(`${path}.left`, 'expected a wildcard operand.', span);
+    if (
+      value.left.wildcard !== 'each' &&
+      value.left.wildcard !== 'anything' &&
+      value.left.wildcard !== 'everything'
+    )
+      return payloadFailure(`${path}.left.wildcard`, 'unknown Decider wildcard.', span);
+    const invalidLeft = validateNetworkRef(value.left, `${path}.left`, declarations, span);
+    if (invalidLeft !== undefined) return invalidLeft;
+    if (!isRecord(value.right))
+      return payloadFailure(`${path}.right`, 'expected a signal operand.', span);
+    if (!isSignalId(value.right.signal))
+      return payloadFailure(`${path}.right.signal`, 'expected a valid SignalID.', span);
+    return validateNetworkRef(value.right, `${path}.right`, declarations, span);
+  }
   if (
     value.kind !== 'compare-each' &&
     value.kind !== 'compare-signal' &&
@@ -354,17 +373,32 @@ function validateConstantProducer(
   path: string,
   span: SourceSpan,
 ): DirectPlanEnvelopeValidationResult | undefined {
-  if (!Array.isArray(producer.outputs) || exceedsLimit(producer.outputs))
-    return payloadFailure(`${path}.outputs`, 'expected a bounded constant output array.', span);
-  for (const [index, output] of producer.outputs.entries()) {
-    const outputPath = `${path}.outputs[${index}]`;
-    if (!isRecord(output)) return payloadFailure(outputPath, 'expected a constant output.', span);
-    if (!isSignalId(output.signal))
-      return payloadFailure(`${outputPath}.signal`, 'expected a valid SignalID.', span);
-    if (!isCircuitValue(output.value))
-      return payloadFailure(`${outputPath}.value`, 'expected a signed int32 circuit value.', span);
+  const hasOutputs = producer.outputs !== undefined;
+  const hasConfiguration = producer.configuration !== undefined;
+  if (!hasOutputs && !hasConfiguration) {
+    return payloadFailure(
+      `${path}.outputs`,
+      'expected a bounded constant output array, an exact configuration, or a legacy exact record containing both.',
+      span,
+    );
   }
-  if (producer.configuration !== undefined) {
+  if (hasOutputs) {
+    if (!Array.isArray(producer.outputs) || exceedsLimit(producer.outputs))
+      return payloadFailure(`${path}.outputs`, 'expected a bounded constant output array.', span);
+    for (const [index, output] of producer.outputs.entries()) {
+      const outputPath = `${path}.outputs[${index}]`;
+      if (!isRecord(output)) return payloadFailure(outputPath, 'expected a constant output.', span);
+      if (!isSignalId(output.signal))
+        return payloadFailure(`${outputPath}.signal`, 'expected a valid SignalID.', span);
+      if (!isCircuitValue(output.value))
+        return payloadFailure(
+          `${outputPath}.value`,
+          'expected a signed int32 circuit value.',
+          span,
+        );
+    }
+  }
+  if (hasConfiguration) {
     try {
       canonicalizeConstantConfiguration(producer.configuration, undefined, `${path}.configuration`);
     } catch (error) {
@@ -681,6 +715,22 @@ function canonicalCondition(value: unknown): PlanDeciderCondition {
       right: side(condition.right),
     });
   }
+  if (condition.kind === 'compare-wildcard-signal') {
+    const left = condition.left as Record<string, unknown>;
+    const right = condition.right as Record<string, unknown>;
+    return Object.freeze({
+      kind: 'compare-wildcard-signal',
+      left: Object.freeze({
+        wildcard: left.wildcard as 'each' | 'anything' | 'everything',
+        ...canonicalNetworkRef(left),
+      }),
+      comparator: condition.comparator as '>' | '<' | '=' | '>=' | '<=' | '!=',
+      right: Object.freeze({
+        signal: canonicalSignal(right.signal),
+        ...canonicalNetworkRef(right),
+      }),
+    });
+  }
   return Object.freeze({
     kind: condition.kind as 'compare-each' | 'compare-signal' | 'compare-wildcard',
     ...(condition.kind === 'compare-signal'
@@ -771,7 +821,17 @@ function canonicalProducer(value: unknown): DirectPlanProducer {
       kind: 'constant',
       ...common,
       ...(producer.configuration === undefined
-        ? {}
+        ? {
+            outputs: Object.freeze(
+              (producer.outputs as unknown[]).map((output) => {
+                const record = output as Record<string, unknown>;
+                return Object.freeze({
+                  signal: canonicalSignal(record.signal),
+                  value: record.value as number,
+                });
+              }),
+            ),
+          }
         : {
             configuration: canonicalizeConstantConfiguration(
               producer.configuration,
@@ -779,15 +839,6 @@ function canonicalProducer(value: unknown): DirectPlanProducer {
               '$.producers[].configuration',
             ),
           }),
-      outputs: Object.freeze(
-        (producer.outputs as unknown[]).map((output) => {
-          const record = output as Record<string, unknown>;
-          return Object.freeze({
-            signal: canonicalSignal(record.signal),
-            value: record.value as number,
-          });
-        }),
-      ),
     }) as DirectPlanProducer;
   if (producer.kind === 'selector') {
     const input = canonicalNetworkRef(producer.input as Record<string, unknown>);

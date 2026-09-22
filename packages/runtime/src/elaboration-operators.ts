@@ -15,6 +15,7 @@ import type {
   NetworkValue,
   PairValue,
   RuntimeObjectValue,
+  SectionValue,
   SelectedValue,
   WildcardName,
   WildcardTokenValue,
@@ -32,6 +33,7 @@ export interface ElaborationOperatorDispatchContext<Source> {
   networkFacet(value: unknown): NetworkValue | undefined;
   readableNetworkFacet(value: unknown, source: Source): NetworkValue | undefined;
   isPair(value: unknown): value is PairValue;
+  isSection(value: unknown): value is SectionValue;
   isWildcardToken(value: unknown): value is WildcardTokenValue;
   recordDslCall(): void;
   assertReadable(value: unknown, source: Source): void;
@@ -185,6 +187,10 @@ function dispatchComparison<Source>(
   if (!context.isCircuitDslValue(left) && !context.isCircuitDslValue(right)) {
     return evaluateJavaScriptComparison(operator, left, right);
   }
+  if (context.isSection(left) || context.isSection(right)) {
+    context.recordDslCall();
+    throw new Error('Section values cannot be compared.');
+  }
   if (
     (operator === '==' || operator === '===' || operator === '!=' || operator === '!==') &&
     (left === null || left === undefined) !== (right === null || right === undefined)
@@ -197,18 +203,60 @@ function dispatchComparison<Source>(
   if (context.isSelected(left) && context.isSelected(right)) {
     const leftSelection = context.selectedSelection(left);
     const rightSelection = context.selectedSelection(right);
-    if (!context.isSignalId(leftSelection) || !context.isSignalId(rightSelection)) {
-      throw new Error('Signal-to-signal comparison requires concrete Signal selections.');
+    if (context.isSignalId(leftSelection) && context.isSignalId(rightSelection)) {
+      return context.brand({
+        kind: 'condition',
+        condition: {
+          kind: 'compare-signals',
+          left: { ...context.planNetworkRef(left), signal: leftSelection },
+          comparator,
+          right: { ...context.planNetworkRef(right), signal: rightSelection },
+        },
+      });
     }
-    return context.brand({
-      kind: 'condition',
-      condition: {
-        kind: 'compare-signals',
-        left: { ...context.planNetworkRef(left), signal: leftSelection },
-        comparator,
-        right: { ...context.planNetworkRef(right), signal: rightSelection },
-      },
-    });
+    const wildcard = !context.isSignalId(leftSelection)
+      ? {
+          value: left,
+          selection: leftSelection,
+          concrete: right,
+          signal: rightSelection,
+          comparator,
+        }
+      : !context.isSignalId(rightSelection)
+        ? {
+            value: right,
+            selection: rightSelection,
+            concrete: left,
+            signal: leftSelection,
+            comparator: reverseComparators[comparator],
+          }
+        : undefined;
+    if (
+      wildcard !== undefined &&
+      context.isSignalId(wildcard.signal) &&
+      (wildcard.selection === 'each' ||
+        wildcard.selection === 'anything' ||
+        wildcard.selection === 'everything')
+    ) {
+      return context.brand({
+        kind: 'condition',
+        condition: {
+          kind: 'compare-wildcard-signal',
+          left: {
+            ...context.planNetworkRef(wildcard.value),
+            wildcard: wildcard.selection,
+          },
+          comparator: wildcard.comparator,
+          right: {
+            ...context.planNetworkRef(wildcard.concrete),
+            signal: wildcard.signal,
+          },
+        },
+      });
+    }
+    throw new Error(
+      'A wildcard-to-signal comparison requires one wildcard and one concrete Signal selection.',
+    );
   }
   const selected = context.isSelected(left) ? left : context.isSelected(right) ? right : undefined;
   const selectedConstant =
@@ -275,6 +323,27 @@ function dispatchBinary<Source>(
 ): unknown {
   if (!context.isCircuitDslValue(left) && !context.isCircuitDslValue(right)) {
     return evaluateJavaScriptBinary(operator, left, right);
+  }
+  if (context.isSection(left) || context.isSection(right)) {
+    context.recordDslCall();
+    if (operator !== '*' || typeof left !== 'number' || !context.isSection(right)) {
+      throw new Error('Only finite number * Section is supported for Section values.');
+    }
+    if (!Number.isFinite(left)) {
+      throw new Error('Section multipliers must be finite numbers.');
+    }
+    if (right.scaled) {
+      throw new Error('A Section value cannot be scaled more than once.');
+    }
+    const metadata = context.producerMetadata(source);
+    return context.brand(
+      Object.freeze({
+        kind: 'section',
+        section: Object.freeze({ ...right.section, multiplier: left }),
+        scaled: true,
+        source: metadata.source,
+      }),
+    );
   }
   context.recordDslCall();
   context.assertReadable(left, source);

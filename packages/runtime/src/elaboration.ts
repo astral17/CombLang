@@ -229,9 +229,15 @@ export type RuntimeSelectorConfig =
       readonly output: SignalId;
     };
 
-export interface RuntimeConstantConfig {
-  readonly outputs: readonly { readonly signal: SignalId; readonly value: number }[];
-}
+export type RuntimeConstantConfig =
+  | {
+      readonly outputs: readonly { readonly signal: SignalId; readonly value: number }[];
+      readonly configuration?: never;
+    }
+  | {
+      readonly configuration: import('@comblang/factorio').ConstantConfiguration;
+      readonly outputs?: never;
+    };
 
 export interface SimulationInitialValue {
   readonly network: NetworkHandle;
@@ -500,12 +506,16 @@ export class DslRuntime {
 
   constant(config: RuntimeConstantConfig, options: RuntimeProducerOptions = {}): ProducerHandle {
     const id = this.#producerIds.allocate() as unknown as ProducerId;
+    const constantConfig =
+      config.configuration === undefined
+        ? {
+            outputs: Object.freeze(config.outputs.map((output) => Object.freeze({ ...output }))),
+          }
+        : { configuration: config.configuration };
     const node: CircuitProducerNode = Object.freeze({
       id,
       kind: 'constant',
-      config: Object.freeze({
-        outputs: Object.freeze(config.outputs.map((output) => Object.freeze({ ...output }))),
-      }),
+      config: Object.freeze(constantConfig),
       destinations: Object.freeze([]),
       provenance: makeProvenance(options),
       ...(options.placement === undefined ? {} : { placement: options.placement }),

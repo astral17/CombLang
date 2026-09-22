@@ -79,6 +79,27 @@ describe('decider combinator semantics', () => {
     expect(result.get(out)).toBe(-1);
   });
 
+  it('does not exclude a concrete right operand from Each candidates', () => {
+    const input = new SparseBus([
+      [a, 10],
+      [b, 5],
+    ]);
+    const result = evaluateDecider(
+      {
+        condition: {
+          kind: 'compare',
+          left: { kind: 'wildcard', value: 'each' },
+          comparator: '>=',
+          right: { kind: 'signal', signal: a },
+        },
+        outputs: [{ mode: 'copy', signal: { kind: 'wildcard', value: 'each' } }],
+      },
+      singleWireInput(input),
+    );
+    expect(result.get(a)).toBe(10);
+    expect(result.get(b)).toBe(0);
+  });
+
   it('copies passing Each signals and routes failing signals through else outputs', () => {
     const result = evaluateDecider(
       {

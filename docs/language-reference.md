@@ -271,8 +271,8 @@ output endpoint, so the inline form creates one physical Entity and no hidden
 Producer, Network, or tick. Identical repeat bindings are idempotent; conflicts,
 stale handles, profiles without a call projection, and invalid destinations are
 source-aware errors. Ordinary objects and structural lookalikes keep normal
-JavaScript call behavior. Reviewed native import and exact Constant section
-semantics remain outside the current language surface.
+JavaScript call behavior. Native import/export conformance remains separate
+from the implemented structural and simulator contracts.
 
 The browser Worker request transports only replay identity metadata. Source
 Entity authority is available only when a host adapter resolves the detached
@@ -446,7 +446,17 @@ An explicit ergonomic spelling such as the provisional `input.into(A)` remains
 unimplemented until Factorio conformance tests settle non-Each and red/green
 pair behavior; raw `input[A]` remains legal.
 
-Conditions support finite safe-integer constants on either side; each is canonicalized to signed int32 when it enters the circuit configuration. They also support explicit signal-to-signal comparisons, `&&`, `||`, parentheses, and `!`. Boolean normalization does not allocate extra combinators.
+Conditions support finite safe-integer constants on either side; each is canonicalized to signed int32 when it enters the circuit configuration. They also support concrete signal-to-signal and wildcard-to-concrete-signal comparisons, `&&`, `||`, parentheses, and `!`:
+
+```ts
+const direct = when(a[EACH] >= b[THRESHOLD]).then(a);
+
+function Gate(input: Readonly<Network>, threshold: NetworkSignal): DeciderCombinator {
+  return when(input[EACH] >= threshold).then(input);
+}
+```
+
+A `NetworkSignal` parameter is the same concrete selection operand as its source `b[THRESHOLD]`; the function boundary adds a scoped readonly borrow, not a different circuit value kind. With `Anything` or `Everything` on the left, the concrete Signal used on the right is excluded from the quantifier candidate set. `Each` does not perform that exclusion and compares every candidate, including a candidate with the same Signal identity as the right operand. Boolean normalization does not allocate extra combinators.
 
 Constant-count Each output is a decider output specification, not multiplication hardware:
 
@@ -549,12 +559,33 @@ identity. Each exact Constant creates one Constant producer and, with trusted
 canonical base `entity:constant-combinator` Entity authority, one linked physical
 constant-combinator Entity. Other same-type modded prototypes do not make this
 selection ambiguous.
-Section `group` and non-unit `multiplier` values are rejected as explicit
-unsupported diagnostics until their native semantics are evidenced. `CC`
-continues to accept its existing raw signal-value forms and is linked through
-the same supported configuration boundary when that authority is present;
-without it, `CC` retains its legacy v2 producer-only path. `CC.section(...)`
-and any-quality filter syntax are not executable syntax.
+
+`Section(...)` is the ergonomic data-only fragment for assembling several exact
+Constant sections through `CC`:
+
+```ts
+const first = 0.5 * Section(1 * A, 2 * B);
+const second = 3 * Section({ active: false, group: 'backup' }, 4 * C);
+const constants = CC(first, second);
+```
+
+A bare Section defaults to `active: true`, no `group`, and multiplier `1`.
+Only a finite number on the left of `*` scales a Section; the floating-point
+multiplier is preserved without integer conversion. Section options are plain
+data and accept only `active` and `group`. A `CC` call uses either raw filter
+arguments or nominal Sections, never a mixture; source order becomes the
+one-based native section index. Section fragments alone create no topology.
+
+Section `group` and non-unit `multiplier` values are retained through the direct
+plan, canonical circuit, and Blueprint JSON. The current sparse-bus simulator
+supports active, unit, ungrouped sections and reports `FC1003` for unsupported
+configurations; the Known/Unknown value simulator returns a deterministic
+Unknown origin for those configurations. These simulator rules are an explicit
+model boundary: native Factorio multiplier/group semantics and import/export
+conformance still require evidence. `CC` raw signal-value forms retain their
+profile-free fallback, while Section-based exact CC requires the trusted base
+Constant profile. The former dotted section-helper spelling is not executable
+syntax.
 
 The exact arithmetic-combinator form is `Arithmetic({ left, operation, right,
 output })`. It is a semantic configuration, not raw Blueprint JSON:
@@ -840,7 +871,7 @@ The semantic pass reports only violations it can prove without executing the pro
 
 DSL method arguments may be spread from executed arrays/iterables, for example `combinator.at(...coordinates).to(...destinations)` or `destination.take(...sources)`. These calls retain the usual constraints (two or three placement arguments, one or two output Networks with an optional Signal, exactly one source for `take`); argument count is checked after expansion. Computed method names use the same runtime dispatch as dot access. An ordinary JavaScript method with the same name retains its own argument convention and is looked up once before arguments are evaluated.
 
-Free DSL identifiers are reserved in v1 and cannot be shadowed by user bindings. This includes constructors/functions and every documented wildcard alias. `CL1045` points at the conflicting declaration. Object property and method names are unaffected: `object.Each`, `{ All() {} }`, `object.to(...)`, and `object.then(...)` retain ordinary JavaScript meaning. A `.then(...)` or `.else(...)` call is statically a Decider combinator mutation only when its chain is rooted at the reserved `when(...)` builder; uncertain receivers are checked from their executed values.
+Free DSL identifiers are reserved and cannot be shadowed by user bindings. This includes constructors/functions such as `Signal`, `Section`, `Network`, `CC`, `Constant`, and `Selector`, plus every documented wildcard alias. `CL1045` points at the conflicting declaration. Object property and method names are unaffected: `object.Each`, `{ All() {} }`, `object.to(...)`, and `object.then(...)` retain ordinary JavaScript meaning. A `.then(...)` or `.else(...)` call is statically a Decider combinator mutation only when its chain is rooted at the reserved `when(...)` builder; uncertain receivers are checked from their executed values.
 
 Ordinary functions, `if` branches, arrays, objects, and all JavaScript loop families execute during elaboration. For example, a regular `for` loop can generate compact `IF` attachments:
 

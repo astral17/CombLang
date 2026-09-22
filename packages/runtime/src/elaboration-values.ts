@@ -6,7 +6,7 @@ import type {
 } from '@comblang/compiler/direct-plan-schema';
 import type { EntityNativeSingleCondition } from '@comblang/compiler/entity';
 import type { EntityValue } from './entity-registry.js';
-import type { SignalId } from '@comblang/factorio';
+import type { ConstantConfigurationSection, SignalId } from '@comblang/factorio';
 import type { SourceSpan } from '@comblang/shared';
 
 export type RuntimeNetworkCapability = 'owned' | 'readonly' | 'ref' | 'move';
@@ -63,6 +63,15 @@ export interface SignalValue {
   readonly kind: 'signal-value';
   readonly signal: SignalId;
   readonly value: number;
+}
+
+/** Session-nominal Constant configuration fragment; it is not a Producer or Network. */
+export interface SectionValue {
+  readonly kind: 'section';
+  readonly section: ConstantConfigurationSection;
+  /** Tracks syntax-level scaling even when the multiplier remains exactly one. */
+  readonly scaled: boolean;
+  readonly source: SourceSpan;
 }
 
 /** Source-visible Signal identity registered by one executed elaboration session. */
@@ -173,6 +182,7 @@ export type DslValue =
   | SelectedValue
   | DestinationValue
   | SignalValue
+  | SectionValue
   | WildcardTokenValue
   | WildcardCountValue
   | ConditionValue
@@ -212,6 +222,11 @@ export class RuntimeValueRegistry {
   brandSignal<T extends SignalHandle>(value: T): T {
     this.#signals.add(value);
     return value;
+  }
+
+  brandSection<T extends SectionValue>(value: T): T {
+    this.#kinds.set(value, 'section');
+    return Object.freeze(value);
   }
 
   hasSignal(value: unknown): value is SignalHandle {

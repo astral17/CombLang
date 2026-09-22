@@ -368,6 +368,66 @@ const output = new Network();
     );
   });
 
+  test('retains branch, ordinal, span, and nested loop provenance for generated exact rows', () => {
+    const source = `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+function Build(input) {
+  const output = new Network();
+  for (const amount of [1, 1, 2]) {
+    const gate: DeciderCombinator = Decider({
+      condition: input[A] > 0,
+      outputs: [amount * A, amount * A],
+      elseOutputs: [input[A], input[A]],
+    });
+    output += gate;
+  }
+  return output;
+}
+const output = Build(input);`;
+    const plan = exactPlan(source);
+    const producers = plan.producers.filter((candidate) => candidate.kind === 'decider');
+    expect(producers).toHaveLength(3);
+    expect(producers.map((producer) => producer.instancePath.at(-1))).toEqual([
+      'for amount=1',
+      'for amount=1#2',
+      'for amount=2',
+    ]);
+    for (const [index, producer] of producers.entries()) {
+      expect(producer.outputs).toHaveLength(2);
+      expect(producer.elseOutputs).toHaveLength(2);
+      expect(producer.outputOrigins?.map((origin) => origin.branch)).toEqual(['normal', 'normal']);
+      expect(producer.outputOrigins?.map((origin) => origin.ordinal)).toEqual([0, 1]);
+      expect(producer.outputOrigins?.map((origin) => origin.instancePath.at(-1))).toEqual([
+        `for amount=${[1, 1, 2][index]}${index === 1 ? '#2' : ''}`,
+        `for amount=${[1, 1, 2][index]}${index === 1 ? '#2' : ''}`,
+      ]);
+      expect(
+        producer.outputOrigins?.every((origin) =>
+          source.slice(origin.source.start, origin.source.end).includes('amount * A'),
+        ),
+      ).toBe(true);
+      expect(producer.elseOutputOrigins?.map((origin) => origin.branch)).toEqual(['else', 'else']);
+      expect(producer.elseOutputOrigins?.map((origin) => origin.ordinal)).toEqual([0, 1]);
+      expect(
+        producer.elseOutputOrigins?.every((origin) =>
+          source.slice(origin.source.start, origin.source.end).includes('input[A]'),
+        ),
+      ).toBe(true);
+    }
+
+    const resolved = tryElaborateDirectPlan(plan, exactEnvironment().context);
+    expect(resolved.diagnostics).toEqual([]);
+    const resolvedProducers = resolved.execution?.circuit.ir.producers.filter(
+      (candidate) => candidate.kind === 'decider',
+    );
+    expect(resolvedProducers?.map((producer) => producer.outputOrigins)).toEqual(
+      producers.map((producer) => producer.outputOrigins),
+    );
+    expect(resolvedProducers?.map((producer) => producer.elseOutputOrigins)).toEqual(
+      producers.map((producer) => producer.elseOutputOrigins),
+    );
+  });
+
   test('allows an empty normal branch when the false branch carries rows', () => {
     const source = `const A = Signal('virtual', 'signal-A');
 const input = new Network();

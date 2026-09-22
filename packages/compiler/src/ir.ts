@@ -60,14 +60,22 @@ export interface ArithmeticProducerConfig {
   readonly output: LogicalArithmeticOutput;
 }
 
-export interface ConstantProducerConfig {
+/** Legacy CC transport: its ordered output rows are the authoritative data. */
+export interface LegacyConstantProducerConfig {
   readonly outputs: readonly {
     readonly signal: ConcreteConfigSignal;
     readonly value: ConcreteConfigNumber;
   }[];
-  /** Exact canonical Constant configuration retained for linked Entity equivalence. */
-  readonly configuration?: ConstantConfiguration;
+  readonly configuration?: never;
 }
+
+/** Exact Constant transport: the semantic configuration is authoritative. */
+export interface ExactConstantProducerConfig {
+  readonly configuration: ConstantConfiguration;
+  readonly outputs?: never;
+}
+
+export type ConstantProducerConfig = LegacyConstantProducerConfig | ExactConstantProducerConfig;
 
 export type SelectorIndex = ConcreteConfigNumber | ConcreteConfigSignal;
 

@@ -2434,6 +2434,78 @@ const output: Network = when(BuildCondition(input)).then(...outputRows);`,
     ).toBe(28);
   });
 
+  test('treats a NetworkSignal parameter exactly like its concrete source selection in wildcard comparisons', () => {
+    const parsed = parseFile({
+      path: 'wildcard-network-signal-comparison.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const B = Signal("virtual", "signal-B");
+const left = CC(10 * A, 5 * B);
+const right = CC(7 * A);
+const direct: Network = when(left[EACH] > right[A]).then(left);
+function Compare(input: Readonly<Network>, threshold: NetworkSignal): DeciderCombinator {
+  return when(input[EACH] > threshold).then(input);
+}
+const indirect: Network = Compare(left, right[A]);`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const conditions = plan.producers.flatMap((producer) =>
+      producer.kind === 'decider' ? [producer.condition] : [],
+    );
+    expect(conditions).toHaveLength(2);
+    expect(conditions[0]).toEqual(conditions[1]);
+    expect(conditions[0]).toMatchObject({
+      kind: 'compare-wildcard-signal',
+      left: { wildcard: 'each' },
+      comparator: '>',
+      right: { signal: signal('virtual', 'signal-A') },
+    });
+
+    const execution = elaborateDirectPlan(plan);
+    const lowered = execution.circuit.ir.producers.flatMap((producer) =>
+      producer.kind === 'decider' ? [producer.config.condition] : [],
+    );
+    expect(lowered).toHaveLength(2);
+    expect(lowered[0]).toEqual(lowered[1]);
+    expect(lowered[0]).toMatchObject({
+      kind: 'compare',
+      left: { kind: 'wildcard', value: 'each' },
+      comparator: '>',
+      right: { kind: 'signal', signal: signal('virtual', 'signal-A') },
+    });
+  });
+
+  test('preserves Anything right-signal candidate exclusion through executed source', () => {
+    const parsed = parseFile({
+      path: 'anything-signal-comparison.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const B = Signal("virtual", "signal-B");
+const OUT = Signal("virtual", "signal-O");
+const input = CC(10 * A, 5 * B);
+const threshold = CC(10 * A);
+const output: Network = when(Anything(input) >= threshold[A])
+  .then(1 * OUT)
+  .else(-1 * OUT);`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    expect(plan.producers.find(({ kind }) => kind === 'decider')).toMatchObject({
+      condition: {
+        kind: 'compare-wildcard-signal',
+        left: { wildcard: 'anything' },
+        comparator: '>=',
+        right: { signal: signal('virtual', 'signal-A') },
+      },
+    });
+
+    const execution = elaborateDirectPlan(plan);
+    const simulation = execution.circuit.createSimulation();
+    simulation.step();
+    expect(
+      simulation.step().read(execution.network('output').id).get(signal('virtual', 'signal-O')),
+    ).toBe(-1);
+  });
+
   test.each([
     {
       name: 'Each output without an Each condition',
@@ -3501,16 +3573,17 @@ const comb = when(input > 0).then(input, input).else(input);`,
     expect(Object.prototype.hasOwnProperty.call(producer, 'elseOutputOrigins')).toBe(false);
   });
 
-  test('points wildcard output rebinding at the offending decider row', () => {
+  test('points a generated wildcard output rebinding at the offending decider row', () => {
     const row = 'Everything(input)';
-    const creation = `IF(input > 0, input, ${row})`;
-    const attachment = `${creation}.to(output, A)`;
+    const attachment = `IF(input > threshold, input, ${row}).to(output, A)`;
     const parsed = parseFile({
       path: 'decider-row-origin-diagnostic.factorio.ts',
       text: `const A = Signal('virtual', 'signal-A');
 const input = new Network();
 const output = new Network();
-${attachment};`,
+for (const threshold of [1, 2]) {
+  ${attachment};
+}`,
     });
 
     try {
@@ -3521,6 +3594,7 @@ ${attachment};`,
       const failure = error as ElaborationExecutionError;
       expect(failure.code).toBe('RT2023');
       expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(row);
+      expect(failure.related).toHaveLength(1);
       expect(failure.related).toContainEqual(
         expect.objectContaining({ message: 'Physical combinator was created here.' }),
       );
@@ -3702,6 +3776,146 @@ const output = ${call};`,
     }
   });
 
+  test('creates a nominal Section without topology or an unused-producer warning', () => {
+    const parsed = parseFile({
+      path: 'standalone-section.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const section = Section({ active: false, group: "backup" }, [A, 1], new Map([[A, 2]]));`,
+    });
+
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.networks).toEqual([]);
+    expect(plan.producers).toEqual([]);
+    expect(plan.diagnostics).toEqual([]);
+  });
+
+  test('rejects unknown Section options at the option property span', () => {
+    const parsed = parseFile({
+      path: 'unknown-section-option.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const section = Section({ typo: true }, 1 * A);`,
+    });
+
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected unknown Section options to fail.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ElaborationExecutionError);
+      const failure = error as ElaborationExecutionError;
+      expect(failure.message).toContain('active and group');
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe('typo: true');
+    }
+  });
+
+  test('scales Section without creating an arithmetic producer', () => {
+    const parsed = parseFile({
+      path: 'scaled-section.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const section = 0.5 * Section(1 * A);`,
+    });
+
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+
+    expect(plan.networks).toEqual([]);
+    expect(plan.producers).toEqual([]);
+    expect(plan.diagnostics).toEqual([]);
+  });
+
+  test.each([
+    {
+      name: 'reverse scaling',
+      expression: 'const bad = Section(1 * A) * 2;',
+      message: 'finite number * Section',
+    },
+    {
+      name: 'non-finite scaling',
+      expression: 'const bad = Infinity * Section(1 * A);',
+      message: 'finite numbers',
+    },
+    {
+      name: 'comparison',
+      expression: 'const bad = Section(1 * A) === Section(1 * A);',
+      message: 'cannot be compared',
+    },
+    {
+      name: 'repeated scaling',
+      expression: 'const once = 0.5 * Section(1 * A);\nconst bad = 2 * once;',
+      message: 'more than once',
+    },
+  ])('rejects Section $name at its source expression', ({ expression, message }) => {
+    const parsed = parseFile({
+      path: `invalid-section-${message}.factorio.ts`,
+      text: `const A = Signal("virtual", "signal-A");\n${expression}`,
+    });
+
+    try {
+      executeElaborationProgram(transformElaborationModule(parsed));
+      expect.fail('Expected Section operation to fail.');
+    } catch (error) {
+      expect(error).toBeInstanceOf(ElaborationExecutionError);
+      const failure = error as ElaborationExecutionError;
+      expect(failure.message).toContain(message);
+      expect(parsed.text.slice(failure.span.start, failure.span.end)).toContain(
+        expression.split('\n').at(-1)!.replace('const bad = ', '').replace(/;$/, ''),
+      );
+    }
+  });
+
+  test('rejects mixed and forged CC sections at the offending argument and rolls back', () => {
+    const parsed = parseFile({
+      path: 'invalid-constant-sections.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const section = Section(1 * A);
+const forged = { kind: "section" };
+let caught = 0;
+try { CC(section, 2 * A); } catch (error) {
+  caught += 1;
+  if (!String(error).includes("nominal Section")) throw error;
+}
+try { CC(forged); } catch (error) {
+  caught += 1;
+  if (!String(error).includes("nominal Section")) throw error;
+}
+if (caught !== 2) throw new Error("Section failure was not transactional");
+let output: Network = new Network();
+output += CC(3 * A);`,
+    });
+
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    expect(plan.producers).toMatchObject([
+      {
+        kind: 'constant',
+        outputs: [{ value: 3 }],
+        destinations: [{ network: '$combinator:1:primary' }],
+      },
+    ]);
+    expect(plan.producers).toHaveLength(1);
+    expect(plan.networkTransfers).toContainEqual(
+      expect.objectContaining({ destination: 'output', source: '$combinator:1:primary' }),
+    );
+    expect(plan.diagnostics).toEqual([]);
+  });
+
+  test('requires a trusted base Constant profile for exact Section CC form', () => {
+    const parsed = parseFile({
+      path: 'section-constant-without-profile.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const section = Section(1 * A);
+CC(section);`,
+    });
+
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+      expect.objectContaining({
+        code: 'RT2027',
+        message: expect.stringContaining('requires a trusted base'),
+      }),
+    );
+  });
+
   test('retains empty constant combinators from literal and generated calls', () => {
     const parsed = parseFile({
       path: 'empty-constant.factorio.ts',
@@ -3718,7 +3932,10 @@ CC();`,
     expect(plan.producers).toHaveLength(4);
     expect(
       plan.producers.every(
-        (producer) => producer.kind === 'constant' && producer.outputs.length === 0,
+        (producer) =>
+          producer.kind === 'constant' &&
+          producer.configuration === undefined &&
+          producer.outputs.length === 0,
       ),
     ).toBe(true);
     expect(plan.diagnostics).toEqual(

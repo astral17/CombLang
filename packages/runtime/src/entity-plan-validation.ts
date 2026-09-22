@@ -538,6 +538,21 @@ function planConditionShape(value: unknown, path: string, depth = 0): void {
     }
     return;
   }
+  if (record.kind === 'compare-wildcard-signal') {
+    exactKeys(record, ['kind', 'left', 'comparator', 'right'], path);
+    const leftPath = `${path}.left`;
+    const left = dataRecord(record.left, leftPath);
+    exactKeys(left, ['wildcard', 'refKind', 'network', 'networks'], leftPath);
+    if (!['each', 'anything', 'everything'].includes(left.wildcard as string))
+      invalid('RT3003', `${leftPath}.wildcard`, 'unknown Decider wildcard.');
+    planNetworkRefShape(left, leftPath, ['wildcard']);
+    const rightPath = `${path}.right`;
+    const right = dataRecord(record.right, rightPath);
+    exactKeys(right, ['signal', 'refKind', 'network', 'networks'], rightPath);
+    planSignalShape(right.signal, `${rightPath}.signal`);
+    planNetworkRefShape(right, rightPath, ['signal']);
+    return;
+  }
   invalid('RT3003', `${path}.kind`, 'unknown Decider condition tag.');
 }
 

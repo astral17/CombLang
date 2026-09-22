@@ -979,6 +979,30 @@ const output: Network = Window(input);`,
     });
   });
 
+  test('legacy compileDirectPlan rejects the first IF predicate beyond its expansion budget', () => {
+    const condition = Array.from({ length: 18 }, (_, index) => `input > ${index}`).join(' || ');
+    const file = parseFile({
+      path: 'condition-expansion-limit.factorio.ts',
+      text: `function Gate(input: Readonly<Network>): Network {
+  return IF(${condition}, input);
+}
+const input = new Network<R>();
+const output: Network = Gate(input);`,
+    });
+
+    const result = compileDirectPlan(file);
+    expect(result.plan).toBeUndefined();
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: 'CL1015',
+        severity: 'error',
+        span: expect.objectContaining({ fileId: file.id }),
+        message:
+          'IF condition expansion exceeds the current limit of 64 comparisons and 16 boolean groups.',
+      }),
+    );
+  });
+
   test('normalizes negated IF predicates with comparison inversion and De Morgan', () => {
     const file = parseFile({
       path: 'negated-window.factorio.ts',

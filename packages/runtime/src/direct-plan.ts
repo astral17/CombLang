@@ -298,6 +298,22 @@ function lowerCondition(
       },
     };
   }
+  if (condition.kind === 'compare-wildcard-signal') {
+    return {
+      kind: 'compare',
+      left: {
+        kind: 'wildcard',
+        value: condition.left.wildcard,
+        ...lowerNetworkRef(condition.left, networks, source),
+      },
+      comparator: condition.comparator,
+      right: {
+        kind: 'signal',
+        signal: condition.right.signal,
+        ...lowerNetworkRef(condition.right, networks, source),
+      },
+    };
+  }
   if (condition.kind === 'compare-wildcard') {
     return {
       kind: 'compare',
@@ -535,7 +551,9 @@ function executeDirectPlan(
           )
         : descriptor.kind === 'constant'
           ? runtime.constant(
-              { outputs: descriptor.outputs } satisfies RuntimeConstantConfig,
+              descriptor.configuration === undefined
+                ? { outputs: descriptor.outputs }
+                : { configuration: descriptor.configuration },
               provenance,
             )
           : descriptor.kind === 'decider'
@@ -773,6 +791,21 @@ function physicalDeciderConfiguration(
       return {
         kind: 'compare',
         left: { kind: 'signal', signal: value.left.signal, ...physicalNetworkRef(value.left, ids) },
+        comparator: value.comparator,
+        right: {
+          kind: 'signal',
+          signal: value.right.signal,
+          ...physicalNetworkRef(value.right, ids),
+        },
+      };
+    if (value.kind === 'compare-wildcard-signal')
+      return {
+        kind: 'compare',
+        left: {
+          kind: 'wildcard',
+          value: value.left.wildcard,
+          ...physicalNetworkRef(value.left, ids),
+        },
         comparator: value.comparator,
         right: {
           kind: 'signal',

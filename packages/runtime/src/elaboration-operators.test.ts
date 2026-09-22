@@ -11,6 +11,7 @@ import {
   type CombinatorDescriptor,
   type DslValue,
   type NetworkValue,
+  type SectionValue,
 } from './elaboration-values.js';
 
 function dispatchFixture() {
@@ -44,6 +45,7 @@ function dispatchFixture() {
       registry.hasKind(value, 'selected') ||
       registry.hasKind(value, 'destinations') ||
       registry.hasKind(value, 'signal-value') ||
+      registry.hasKind(value, 'section') ||
       registry.hasKind(value, 'wildcard-token') ||
       registry.hasKind(value, 'wildcard-count') ||
       registry.hasKind(value, 'condition') ||
@@ -57,6 +59,7 @@ function dispatchFixture() {
     networkFacet: (value) => (registry.hasKind(value, 'network') ? value : undefined),
     readableNetworkFacet: (value) => (registry.hasKind(value, 'network') ? value : undefined),
     isPair: (value) => registry.hasKind(value, 'pair'),
+    isSection: (value) => registry.hasKind(value, 'section'),
     isWildcardToken: (value) => registry.hasKind(value, 'wildcard-token'),
     recordDslCall: () => {
       calls += 1;
@@ -197,5 +200,36 @@ describe('elaboration operator policy', () => {
         operators.dispatchBinary('*', value, fixture.signal, 0, fixture.context),
       ).toThrow(/safe integers/);
     }
+  });
+
+  test('scales a Section only through a finite left-handed multiplier', () => {
+    const fixture = dispatchFixture();
+    const section = fixture.context.brand({
+      kind: 'section',
+      section: { active: true, multiplier: 1, filters: [] },
+      scaled: false,
+      source: { fileId: 'operator-policy.factorio.ts' as never, start: 0, end: 1 },
+    }) as SectionValue;
+
+    const scaled = operators.dispatchBinary('*', 0.5, section, 0, fixture.context);
+    expect(scaled).toMatchObject({ kind: 'section', section: { multiplier: 0.5 } });
+    expect(fixture.descriptor()).toBeUndefined();
+    expect(() => operators.dispatchBinary('*', section, 2, 0, fixture.context)).toThrow(
+      /finite number \* Section/,
+    );
+    expect(() =>
+      operators.dispatchBinary('*', Number.POSITIVE_INFINITY, section, 0, fixture.context),
+    ).toThrow(/finite numbers/);
+    expect(() => operators.dispatchComparison('===', section, section, 0, fixture.context)).toThrow(
+      /cannot be compared/,
+    );
+
+    expect(() => operators.dispatchBinary('*', 2, scaled, 0, fixture.context)).toThrow(
+      /more than once/,
+    );
+    const scaledByOne = operators.dispatchBinary('*', 1, section, 0, fixture.context);
+    expect(() => operators.dispatchBinary('*', 2, scaledByOne, 0, fixture.context)).toThrow(
+      /more than once/,
+    );
   });
 });

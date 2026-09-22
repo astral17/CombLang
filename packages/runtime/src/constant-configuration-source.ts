@@ -1,8 +1,4 @@
-import {
-  canonicalizeConstantConfiguration,
-  classifyConstantConfigurationSupport,
-  type ConstantConfiguration,
-} from '@comblang/factorio';
+import { canonicalizeConstantConfiguration, type ConstantConfiguration } from '@comblang/factorio';
 
 import {
   normalizeSignalValueSources,
@@ -138,10 +134,6 @@ export function normalizeConstantConfigurationSource(
       throw new ConstantConfigurationSourceError(String(error.path), String(error.detail));
     }
     throw error;
-  }
-  const support = classifyConstantConfigurationSupport(configuration);
-  if (support.status === 'unsupported') {
-    fail(path, `unsupported Constant configuration: ${support.reasons.join(', ')}.`);
   }
   return configuration;
 }

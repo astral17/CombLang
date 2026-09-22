@@ -215,6 +215,8 @@ function constantEntityControlBehavior(
       sections: configuration.sections.map((section, sectionIndex) => ({
         index: sectionIndex + 1,
         active: section.active,
+        multiplier: section.multiplier,
+        ...(section.group === undefined ? {} : { group: section.group }),
         filters: section.filters.map((filter, filterIndex) => ({
           index: filterIndex + 1,
           ...signalJson(filter.signal),

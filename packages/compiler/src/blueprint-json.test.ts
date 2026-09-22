@@ -322,6 +322,49 @@ describe('Factorio blueprint JSON generator', () => {
     expect(JSON.parse(JSON.stringify(generated))).toEqual(generated);
   });
 
+  test('emits exact Constant section multiplier and group fields', () => {
+    const A = signal('virtual', 'signal-A');
+    const ir: NativeCircuitIr = {
+      format: 'comblang-ncir',
+      networks: [{ id: network(1), name: 'constants', color: 'red', provenance }],
+      entities: [],
+      producers: [
+        {
+          id: producer(1),
+          kind: 'constant',
+          config: {
+            configuration: {
+              isOn: true,
+              sections: [
+                {
+                  active: false,
+                  group: 'backup',
+                  multiplier: 1.5,
+                  filters: [{ signal: A, value: 2 }],
+                },
+              ],
+            },
+          },
+          destinations: [network(1)],
+          provenance,
+        },
+      ],
+    };
+
+    const section = (
+      generateBlueprintJson(ir).blueprint.entities[0]!.control_behavior as {
+        sections: { sections: Record<string, unknown>[] };
+      }
+    ).sections.sections[0]!;
+    expect(section).toMatchObject({
+      index: 1,
+      active: false,
+      group: 'backup',
+      multiplier: 1.5,
+      filters: [{ index: 1, name: 'signal-A', type: 'virtual', quality: 'normal', count: 2 }],
+    });
+  });
+
   test('omits the default item SignalID type in blueprint fields', () => {
     const IRON = signal('item', 'iron-plate');
     const ir: NativeCircuitIr = {

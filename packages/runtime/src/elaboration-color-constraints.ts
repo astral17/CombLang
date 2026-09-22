@@ -29,7 +29,10 @@ function combinatorInputNames(combinator: CombinatorDescriptor): readonly string
   const addCondition = (condition: PlanDeciderCondition): void => {
     if (condition.kind === 'and' || condition.kind === 'or') {
       for (const child of condition.conditions) addCondition(child);
-    } else if (condition.kind === 'compare-signals') {
+    } else if (
+      condition.kind === 'compare-signals' ||
+      condition.kind === 'compare-wildcard-signal'
+    ) {
       addRef(condition.left);
       addRef(condition.right);
     } else {

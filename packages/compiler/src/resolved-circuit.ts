@@ -943,28 +943,36 @@ function producer(
   if (record.kind === 'constant') {
     const config = dataRecord(record.config, `${path}.config`);
     exactKeys(config, ['outputs', 'configuration'], `${path}.config`);
-    const outputs = dataArray(config.outputs, `${path}.config.outputs`).map((entry, index) => {
-      const output = dataRecord(entry, `${path}.config.outputs[${index}]`);
-      exactKeys(output, ['signal', 'value'], `${path}.config.outputs[${index}]`);
-      return Object.freeze({
-        signal: signal(output.signal, `${path}.config.outputs[${index}].signal`),
-        value: int32(output.value, `${path}.config.outputs[${index}].value`),
-      });
-    });
+    if (config.outputs === undefined && config.configuration === undefined) {
+      invalid(
+        `${path}.config`,
+        'Constant config must contain outputs, configuration, or a legacy exact record containing both.',
+      );
+    }
+    const outputs =
+      config.outputs === undefined
+        ? undefined
+        : dataArray(config.outputs, `${path}.config.outputs`).map((entry, index) => {
+            const output = dataRecord(entry, `${path}.config.outputs[${index}]`);
+            exactKeys(output, ['signal', 'value'], `${path}.config.outputs[${index}]`);
+            return Object.freeze({
+              signal: signal(output.signal, `${path}.config.outputs[${index}].signal`),
+              value: int32(output.value, `${path}.config.outputs[${index}].value`),
+            });
+          });
     return {
       ...common,
       kind: 'constant',
       config: {
-        outputs: Object.freeze(outputs),
-        ...(config.configuration === undefined
-          ? {}
-          : {
+        ...(config.configuration !== undefined
+          ? {
               configuration: canonicalizeConstantConfiguration(
                 config.configuration,
                 undefined,
                 `${path}.config.configuration`,
               ),
-            }),
+            }
+          : { outputs: Object.freeze(outputs!) }),
       },
     };
   }

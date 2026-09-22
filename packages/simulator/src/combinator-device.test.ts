@@ -1,4 +1,10 @@
-import { constantConfigurationFromOutputs, signal, SparseBus } from '@comblang/factorio';
+import {
+  canonicalizeConstantConfiguration,
+  constantConfigurationFromOutputs,
+  signal,
+  SparseBus,
+  UnsupportedConstantConfigurationError,
+} from '@comblang/factorio';
 import type { DeviceId, NetworkId } from '@comblang/shared';
 import { describe, expect, it } from 'vitest';
 
@@ -91,6 +97,30 @@ describe('combinator simulation devices', () => {
     expect(kernel.step().read(fanout).get(a)).toBe(5);
   });
 
+  it('rejects unsupported Constant sections in the sparse-bus kernel', () => {
+    const kernel = new SimulationKernel();
+    kernel.addDevice(
+      new ConstantCombinatorDevice({
+        id: 'device:unsupported-constant' as DeviceId,
+        outputNetworks: [output],
+        configuration: canonicalizeConstantConfiguration({
+          sections: [{ group: 'backup', multiplier: 1.5, filters: [{ signal: a, value: 5 }] }],
+        }),
+      }),
+    );
+
+    expect(() => kernel.step()).toThrowError(UnsupportedConstantConfigurationError);
+    try {
+      kernel.step();
+      expect.fail('Expected sparse-bus Constant evaluation to reject the configuration.');
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: 'FC1003',
+        reasons: ['non-unit-multiplier', 'group'],
+      });
+    }
+  });
+
   it('evaluates a Selector from T and exposes its selected row at T+1', () => {
     const kernel = new SimulationKernel();
     kernel.setInitialNetwork(
@@ -133,6 +163,31 @@ describe('combinator simulation devices', () => {
     const value = kernel.step().read(output);
     expect(value.kind).toBe('known');
     if (value.kind === 'known') expect(value.bus.get(a)).toBe(3);
+  });
+
+  it('returns stable Unknown provenance for unsupported Constant sections', () => {
+    const kernel = new ValueSimulationKernel();
+    kernel.addDevice(
+      new ConstantValueCombinatorDevice({
+        id: 'device:value-unsupported-constant' as DeviceId,
+        outputNetworks: [output],
+        configuration: canonicalizeConstantConfiguration({
+          sections: [{ group: 'backup', multiplier: 1.5, filters: [{ signal: a, value: 5 }] }],
+        }),
+      }),
+    );
+
+    expect(kernel.step().read(output)).toEqual({
+      kind: 'unknown',
+      origins: [
+        {
+          id: 'unmodeled:device:value-unsupported-constant:constant-configuration',
+          description:
+            'Unmodeled Constant configuration for device:value-unsupported-constant: non-unit-multiplier, group.',
+          path: [],
+        },
+      ],
+    });
   });
 
   it('propagates Unknown through an arithmetic combinator', () => {

@@ -1,5 +1,6 @@
 import {
   constantConfigurationToSparseBus,
+  classifyConstantConfigurationSupport,
   canonicalizeConstantConfiguration,
   readsGreen,
   readsRed,
@@ -19,7 +20,13 @@ import {
   type DeciderCondition,
 } from './decider.js';
 import type { NetworkOutput, SimulationReader, SynchronousDevice } from './kernel.js';
-import { aggregateBusValues, knownBus, throughDevice, type BusValue } from './bus-value.js';
+import {
+  aggregateBusValues,
+  knownBus,
+  throughDevice,
+  unknownBus,
+  type BusValue,
+} from './bus-value.js';
 import type {
   ValueNetworkOutput,
   ValueSimulationReader,
@@ -362,9 +369,16 @@ export class ConstantValueCombinatorDevice implements ValueSynchronousDevice {
   }
 
   evaluate(_snapshot: ValueSimulationReader): readonly ValueNetworkOutput[] {
-    return valueBroadcast(
-      knownBus(constantConfigurationToSparseBus(this.#config.configuration)),
-      this.#config.outputNetworks,
-    );
+    const support = classifyConstantConfigurationSupport(this.#config.configuration);
+    const value =
+      support.status === 'supported'
+        ? knownBus(constantConfigurationToSparseBus(this.#config.configuration))
+        : unknownBus([
+            {
+              id: `unmodeled:${this.id}:constant-configuration`,
+              description: `Unmodeled Constant configuration for ${this.id}: ${support.reasons.join(', ')}.`,
+            },
+          ]);
+    return valueBroadcast(value, this.#config.outputNetworks);
   }
 }

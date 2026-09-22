@@ -47,9 +47,14 @@ export function transformCallOrElementNode(
       if (!ts.isPropertyAssignment(property)) return [];
       const name = property.name;
       const key = ts.isIdentifier(name) || ts.isStringLiteral(name) ? name.text : undefined;
-      return key !== undefined && fields.includes(key)
-        ? [factory.createPropertyAssignment(key, context.spanLiteral(property.initializer))]
-        : [];
+      return key === undefined
+        ? []
+        : [
+            factory.createPropertyAssignment(
+              key,
+              context.spanLiteral(fields.includes(key) ? property.initializer : property),
+            ),
+          ];
     });
     return entries.length === 0 ? undefined : factory.createObjectLiteralExpression(entries);
   };
@@ -157,6 +162,18 @@ export function transformCallOrElementNode(
     if (node.expression.text === 'Constant') {
       return context.dslCall('constantOverload', [
         callArguments(node.arguments),
+        context.spanLiteral(node),
+      ]);
+    }
+    if (node.expression.text === 'CC') {
+      return context.dslCall('constantCall', [
+        callArguments(node.arguments),
+        context.spanLiteral(node),
+      ]);
+    }
+    if (node.expression.text === 'Section') {
+      return context.dslCall('sectionOverload', [
+        callArguments(node.arguments, ['active', 'group']),
         context.spanLiteral(node),
       ]);
     }

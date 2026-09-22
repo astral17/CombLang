@@ -240,7 +240,8 @@ function firstConditionNetwork(condition: PlanDeciderCondition): string | undefi
   ) {
     return networkRefNames(condition)[0];
   }
-  if (condition.kind === 'compare-signals') return networkRefNames(condition.left)[0];
+  if (condition.kind === 'compare-signals' || condition.kind === 'compare-wildcard-signal')
+    return networkRefNames(condition.left)[0];
   for (const child of condition.conditions) {
     const network = firstConditionNetwork(child);
     if (network !== undefined) return network;

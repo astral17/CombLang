@@ -143,6 +143,27 @@ const output = Scale(input[A]);`;
     });
   });
 
+  test('checks the generated lookup fixture through the CLI pipeline', async () => {
+    const text = `const KEY = Signal('virtual', 'signal-key');
+const VALUE = Signal('virtual', 'signal-value');
+const source = new Network();
+function Lookup(input: Readonly<Network>): Network {
+  const keys = [10, 20, 30];
+  let member = input[KEY] === keys[0];
+  for (const key of keys.slice(1)) member = member || input[KEY] === key;
+  return IF(member, [100 * VALUE, 103 * VALUE]);
+}
+const result = Lookup(source);`;
+    const path = await sourceFile(text);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    expect(await run(['check', '--json', path])).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      diagnostics: [],
+      producerCount: 1,
+    });
+  });
+
   test('threads the cloneable v3 context through programmatic CLI compilation', async () => {
     const path = await sourceFile('const output = new Network();');
     const trusted = createTrustedEntityReplayContext({

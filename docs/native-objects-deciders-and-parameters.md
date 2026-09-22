@@ -1,12 +1,18 @@
 # Native objects, Deciders, and blueprint parameters
 
-This document records accepted post-Phase-3 design constraints for Phases 6–8.
-Most candidate native-object spellings remain provisional, but the exact
-`Constant({ isOn, sections })` slice described below is implemented and backed
-by executable tests. Captured Factorio 2.1 blueprint fixtures are still
-required before claiming native import/export conformance.
+This document describes the implemented native-object contracts and the
+remaining evidence boundaries. Most candidate native-object spellings remain
+provisional, while the exact `Constant({ isOn, sections })` and ergonomic
+`Section` slices described below are implemented and backed by executable
+tests. Captured Factorio 2.1 blueprint fixtures are still required before
+claiming native import/export conformance.
 
-Phase 4 fixed the declaration rule before these objects are implemented: a typed-object constructor returns a separately branded Entity handle and inferred declarations preserve that identity. It must not be encoded as a Combinator merely because it exposes circuit ports. A `Network` context may project exactly one schema-declared default circuit view without creating hardware; otherwise source selects an explicit port. See [Combinator and Entity value policy](producer-materialization-policy.md) for the current value categories and rationale.
+Typed-object constructors return separately branded Entity handles, and inferred
+declarations preserve that identity. An object is not encoded as a Combinator
+merely because it exposes circuit ports. A `Network` context may project one
+schema-declared default circuit view without creating hardware; otherwise source
+selects an explicit port. See [Combinator and Entity value policy](producer-materialization-policy.md)
+for the current value categories and rationale.
 
 ## Three semantic times
 
@@ -27,7 +33,9 @@ TypedDescriptor
 Invalid
 ```
 
-The IDE should eventually expose the chosen domain, physical object count, and latency in hovers. This is Phase 11 presentation over semantic facts, not editor-owned inference.
+The IDE should eventually expose the chosen domain, physical object count, and
+latency in hovers. This is a presentation layer over semantic facts, not
+editor-owned inference.
 
 ## Native object conditions
 
@@ -51,7 +59,9 @@ Inserter({
 
 The user can construct the additional combinator explicitly and feed its result to the entity. Likewise, when several object features share one physical circuit connector, they read the same red/green aggregate input; the compiler must not invent feature-specific ports.
 
-Object schemas should leave room for separate circuit and logistic conditions where Factorio supports them. Exact constructors and schema-derived field capabilities belong to Phase 6 and Phase 7.
+Object schemas should leave room for separate circuit and logistic conditions
+where Factorio supports them. Exact constructors and schema-derived field
+capabilities remain explicit contracts rather than inferred convenience.
 
 ## Native Decider completeness
 
@@ -105,13 +115,14 @@ JavaScript. Consequently native validity and any clarity detection must run on
 the final Decider descriptor after execution; an AST-only check cannot be
 authoritative. The current finalizer already rejects an `Each` output without
 an `Each` condition and an `Everything` output with an `Each` condition, even
-when their rows or conditions were generated dynamically. A future output-row
-descriptor must retain source span, dynamic
-instance path, ordinal, and syntax intent (`implicit-concrete-copy`, explicit
-ergonomic form, or exact/native). Duplicate rows retain distinct descriptors.
-Exact constructors may suppress stylistic advice, but never native correctness
-validation. The exact normalizer rejects malformed records and containers
-atomically before topology or Entity allocation.
+when their rows or conditions were generated dynamically. The implemented
+output-row descriptor retains source span, dynamic instance path, ordinal, and
+syntax intent (`implicit-concrete-copy`, explicit ergonomic form, or
+exact/native). Duplicate rows retain distinct descriptors. Exact constructors
+may suppress stylistic advice, but never native correctness validation. The
+exact normalizer rejects malformed records and containers atomically before
+topology or Entity allocation; the row metadata remains available through the
+canonical plan and resolved transport.
 
 An implicit concrete copy in Each-mode is legal, so any readability diagnostic
 must be a configurable note/hint rather than an unconditional warning. Its
@@ -129,16 +140,23 @@ Permanent self-initializing topology is preferred over temporary combinators tha
 
 The current `CC(5 * A, 7 * B)` form denotes one physical constant combinator with one default section. Factorio 2.1 sections additionally carry an ordered index, optional group, floating-point multiplier, and active state; the whole combinator has a separate `is_on` state.
 
-The planned ergonomic extension is:
+The ergonomic Section form is:
 
 ```ts
-const constants: ConstantCombinator = CC(
-  CC.section({ multiplier: 2 }, 5 * A, 7 * B),
-  CC.section({ group: 'backup', active: false }, 1 * C),
-);
+const first = 0.5 * Section(1 * A, 2 * B);
+const second = 3 * Section({ group: 'backup', active: false }, 1 * C);
+const constants = CC(first, second);
 ```
 
-Raw filters remain the one-section shorthand. A call uses either only raw filters or only `CC.section(...)` values; mixing the two forms is rejected instead of guessing which section owns a filter. Section indices come from source order. Multiplication outside the constructor, such as `2 * CC(...)`, is not section configuration because it would read as circuit arithmetic.
+`Section(...filters)` defaults to active with multiplier `1` and no group.
+`Section(options, ...filters)` accepts only the data properties `active` and
+`group`. Only `finiteNumber * Section(...)` sets the section multiplier;
+`Section(...) * number` is not supported. Raw filters remain the one-section
+shorthand. A `CC` call uses either only raw filters or only nominal Sections;
+mixing the two forms is rejected instead of guessing which section owns a
+filter. Section indices come from source order, and a standalone Section
+creates no topology. The former dotted section-helper spelling is not
+executable syntax.
 
 The implemented exact form keeps native configuration visible:
 
@@ -154,12 +172,17 @@ const constants = Constant({
 });
 ```
 
-The first executable slice accepts unit `multiplier` only. `group` and
-non-unit `multiplier` are source-aware unsupported diagnostics until their
-Factorio semantics are locked with exported blueprints and reviewed
-compatibility fixtures. Supported convenience and exact forms create one
-physical constant-combinator Entity when trusted authority is available and no
-extra topology or tick; legacy `CC` remains usable without that authority.
+The implementation retains `active`, `group`, duplicate rows, and non-unit
+`multiplier` through the direct plan, canonical circuit, and Blueprint JSON.
+The sparse-bus simulator evaluates only active, unit, ungrouped sections and
+throws its typed unsupported-configuration error for the rest. The
+Known/Unknown value simulator returns a deterministic Unknown origin for those
+configurations rather than inventing rounding or group behavior. This is an
+implementation boundary, not native Factorio conformance: native multiplier
+and group semantics still require exported-blueprint evidence and compatibility
+fixtures. Supported convenience and exact forms create one physical
+constant-combinator Entity when trusted authority is available and no extra
+topology or tick; raw legacy `CC` remains usable without that authority.
 
 ## Blueprint parameter values
 
@@ -180,7 +203,11 @@ ConfigNumber = int32 | BlueprintNumberParameter | BlueprintNumericExpr
 ConfigRecipe = RecipeId | BlueprintRecipeParameter
 ```
 
-The concrete side of this boundary is already explicit in NCIR as `ConcreteConfigSignal`, `ConcreteConfigNumber`, and `ConcreteConfigCondition`. Decider outputs are likewise split into `mode: "copy"` and `mode: "constant"` rows. Phase 8 extends the configuration layer above these concrete categories; it does not make the simulator bus symbolic.
+The concrete side of this boundary is already explicit in NCIR as
+`ConcreteConfigSignal`, `ConcreteConfigNumber`, and `ConcreteConfigCondition`.
+Decider outputs are likewise split into `mode: "copy"` and `mode: "constant"`
+rows. A future parameter layer can extend these concrete categories without
+making the simulator bus symbolic.
 
 The exact types may live in a parameterized configuration layer before FCIR. NCIR simulation continues to use concrete `SignalId -> int32` buses. Tests instantiate parameters from supplied values or defaults before normal elaboration and simulation; a missing required value is a test/configuration error.
 
@@ -192,7 +219,8 @@ Formula expressions should be stored as an AST, not an opaque string. The final 
 
 ## Conformance boundary
 
-The serializer is not considered correct from prose documentation alone. Phase 8 needs small checked-in exported-blueprint fixtures covering at least:
+The serializer is not considered correct from prose documentation alone. It
+needs small checked-in exported-blueprint fixtures covering at least:
 
 - signal and numeric parameters;
 - reuse of one parameter in several fields;
@@ -204,15 +232,8 @@ The serializer is not considered correct from prose documentation alone. Phase 8
 
 The workflow is `Factorio export -> decoded normalized JSON -> golden fixture -> codec -> round-trip test`. Until those fixtures exist, exact native field names and serialization shapes remain open.
 
-## Phase mapping
+## Cross-cutting invariants
 
-- Phase 4 settles Network/Producer ownership, `take`, `pair`, and the separation between `const`/`let` rebinding and topology capability.
-- Phase 5 testbenches remain concrete; Phase 8 later adds parameter instantiation before those tests enter the existing simulator.
-- Phase 6 introduces typed objects, shared connector inputs, and native object conditions.
-- Phase 7 advances exact implementation/model slices such as linked Selector
-  `select`/`count`, while native combinator/object configuration and
-  feedback/duplicate-output conformance remain fixture-gated work.
-- Phase 8 introduces parameter-ready configuration IR, `BlueprintFormula`, dependent parameters, FCIR, and the fixture-backed Factorio codec.
-- Phase 11 presents operator-domain facts in language services and finishes composition-safe mobile editing tools.
-
-Across all phases, no convenience syntax may hide a physical entity, change tick latency, clone a reused Producer, deduplicate native output rows, or turn placement-time parameters into runtime signals.
+No convenience syntax may hide a physical Entity, change tick latency, clone a
+reused Producer, deduplicate native output rows, or turn placement-time
+parameters into runtime signals.
