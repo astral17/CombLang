@@ -1,8 +1,4 @@
-import {
-  constantConfigurationFromOutputs,
-  type ConstantConfiguration,
-  type SignalId,
-} from '@comblang/factorio';
+import { constantConfigurationFromOutputs } from '@comblang/factorio';
 import type { NetworkId, SourceSpan } from '@comblang/shared';
 
 import type {
@@ -17,6 +13,11 @@ import type {
   Quantifier,
 } from './ir.js';
 import { nativeDeciderConditionGroups } from './native-decider-conditions.js';
+import {
+  comparatorJson,
+  constantEntityControlBehavior,
+  signalJson,
+} from './native-blueprint-fields.js';
 import { producerInputNetworkIds } from './producer-network-references.js';
 
 export class BlueprintJsonError extends Error {
@@ -49,14 +50,6 @@ export interface LoweredNativeBlueprintConfig {
 
 type NetworkSelection = (reference: LogicalNetworkRef) => { red: boolean; green: boolean };
 
-function signalJson(signal: SignalId): Record<string, string> {
-  return {
-    ...(signal.type === 'item' ? {} : { type: signal.type }),
-    name: signal.name,
-    ...(signal.quality === undefined ? {} : { quality: signal.quality }),
-  };
-}
-
 function wildcardSignal(value: Quantifier): Record<string, string> {
   return { type: 'virtual', name: `signal-${value}` };
 }
@@ -76,16 +69,6 @@ function arithmeticOperationJson(operation: ArithmeticOperation): string {
     'bit-xor': 'XOR',
   };
   return operations[operation];
-}
-
-function comparatorJson(comparator: '>' | '<' | '=' | '>=' | '<=' | '!='): string {
-  return comparator === '>='
-    ? '≥'
-    : comparator === '<='
-      ? '≤'
-      : comparator === '!='
-        ? '≠'
-        : comparator;
 }
 
 function scalarFields(
@@ -161,32 +144,6 @@ function arithmeticEntity(
           producer.config.output.kind === 'signal'
             ? signalJson(producer.config.output.signal)
             : wildcardSignal('each'),
-      },
-    },
-  };
-}
-
-function constantEntity(configuration: ConstantConfiguration): NativeCombinatorEntityConfig {
-  return {
-    name: 'constant-combinator',
-    control_behavior: {
-      is_on: configuration.isOn,
-      sections: {
-        sections: configuration.sections.map((section, sectionIndex) => ({
-          index: sectionIndex + 1,
-          active: section.active,
-          multiplier: section.multiplier,
-          ...(section.group === undefined ? {} : { group: section.group }),
-          filters: section.filters.map((output, index) => ({
-            index: index + 1,
-            ...signalJson(output.signal),
-            // BlueprintLogisticFilter uses an omitted quality to mean "any",
-            // unlike SignalID where omission defaults to normal.
-            quality: output.signal.quality ?? 'normal',
-            comparator: '=',
-            count: output.value,
-          })),
-        })),
       },
     },
   };
@@ -272,10 +229,13 @@ export function lowerNativeBlueprintConfig(
       producer.kind === 'arithmetic'
         ? arithmeticEntity(producer, selection)
         : producer.kind === 'constant'
-          ? constantEntity(
-              producer.config.configuration ??
-                constantConfigurationFromOutputs(producer.config.outputs),
-            )
+          ? {
+              name: 'constant-combinator' as const,
+              control_behavior: constantEntityControlBehavior(
+                producer.config.configuration ??
+                  constantConfigurationFromOutputs(producer.config.outputs),
+              ),
+            }
           : producer.kind === 'decider'
             ? deciderEntity(producer, selection, maxDeciderConditionRows)
             : selectorEntity(producer);

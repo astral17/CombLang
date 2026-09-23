@@ -1,14 +1,21 @@
 import { signal } from '@comblang/factorio';
-import type { NetworkId, ProducerId } from '@comblang/shared';
+import type { NetworkId, ProducerId, SourceFileId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
 import { BlueprintJsonError, generateBlueprintJson } from './blueprint-json.js';
+import { syntheticZeroPortEntityProfile } from './entity-fixtures.js';
+import type { EntityPhysicalRecord } from './entity.js';
 import type { LogicalDeciderCondition, NativeCircuitIr } from './ir.js';
 
 const network = (value: number) => `network:${value}` as NetworkId;
 const producer = (value: number) => `producer:${value}` as ProducerId;
 
 const provenance = { instancePath: [], expansionStack: [] };
+const entitySource = {
+  fileId: 'file:blueprint-json.test.ts' as SourceFileId,
+  start: 17,
+  end: 39,
+};
 const testNetworks: NativeCircuitIr['networks'] = [
   { id: network(1), color: 'red', provenance },
   { id: network(2), color: 'green', provenance },
@@ -20,6 +27,31 @@ const compare = (name: string): LogicalDeciderCondition => ({
   comparator: '>',
   right: { kind: 'constant', value: 0 },
 });
+function physicalEntity(
+  ordinal: number,
+  configuration?: EntityPhysicalRecord['configuration'],
+  placement?: EntityPhysicalRecord['placement'],
+  prototypeName = 'synthetic-zero-port',
+): EntityPhysicalRecord {
+  return {
+    id: `entity:${ordinal}` as EntityPhysicalRecord['id'],
+    ordinal,
+    profile: {
+      ...syntheticZeroPortEntityProfile.ref,
+      prototypeKey: `entity:${prototypeName}`,
+    },
+    prototypeName,
+    provenance: {
+      source: entitySource,
+      instancePath: [],
+      expansionStack: [],
+      creationRevision: 1,
+    },
+    connectorBindings: [],
+    ...(configuration === undefined ? {} : { configuration }),
+    ...(placement === undefined ? {} : { placement }),
+  };
+}
 const deciderIr = (condition: LogicalDeciderCondition): NativeCircuitIr => ({
   format: 'comblang-ncir',
   networks: testNetworks,
@@ -249,6 +281,53 @@ describe('Factorio blueprint JSON generator', () => {
     }
   });
 
+  test('preserves ordered duplicate Decider condition rows across OR groups', () => {
+    const condition: LogicalDeciderCondition = {
+      kind: 'or',
+      conditions: [
+        { kind: 'and', conditions: [compare('A'), compare('B')] },
+        { kind: 'and', conditions: [compare('A'), compare('B')] },
+      ],
+    };
+    const entity = generateBlueprintJson(deciderIr(condition)).blueprint.entities[0]!;
+    const rows = (
+      entity.control_behavior as {
+        decider_conditions: { conditions: Record<string, unknown>[] };
+      }
+    ).decider_conditions.conditions;
+
+    expect(rows).toEqual([
+      {
+        first_signal: { type: 'virtual', name: 'A' },
+        first_signal_networks: { red: true, green: false },
+        comparator: '>',
+        constant: 0,
+        compare_type: 'and',
+      },
+      {
+        first_signal: { type: 'virtual', name: 'B' },
+        first_signal_networks: { red: true, green: false },
+        comparator: '>',
+        constant: 0,
+        compare_type: 'and',
+      },
+      {
+        first_signal: { type: 'virtual', name: 'A' },
+        first_signal_networks: { red: true, green: false },
+        comparator: '>',
+        constant: 0,
+        compare_type: 'or',
+      },
+      {
+        first_signal: { type: 'virtual', name: 'B' },
+        first_signal_networks: { red: true, green: false },
+        comparator: '>',
+        constant: 0,
+        compare_type: 'and',
+      },
+    ]);
+  });
+
   test('emits entities, control behavior, placement, and circuit wires', () => {
     const A = signal('virtual', 'signal-A');
     const ir: NativeCircuitIr = {
@@ -340,7 +419,10 @@ describe('Factorio blueprint JSON generator', () => {
                   active: false,
                   group: 'backup',
                   multiplier: 1.5,
-                  filters: [{ signal: A, value: 2 }],
+                  filters: [
+                    { signal: A, value: 2 },
+                    { signal: signal('item', 'iron-plate', 'uncommon'), value: 7 },
+                  ],
                 },
               ],
             },
@@ -356,13 +438,110 @@ describe('Factorio blueprint JSON generator', () => {
         sections: { sections: Record<string, unknown>[] };
       }
     ).sections.sections[0]!;
-    expect(section).toMatchObject({
+    expect(section).toEqual({
       index: 1,
       active: false,
       group: 'backup',
       multiplier: 1.5,
-      filters: [{ index: 1, name: 'signal-A', type: 'virtual', quality: 'normal', count: 2 }],
+      filters: [
+        {
+          index: 1,
+          name: 'signal-A',
+          type: 'virtual',
+          quality: 'normal',
+          comparator: '=',
+          count: 2,
+        },
+        {
+          index: 2,
+          name: 'iron-plate',
+          quality: 'uncommon',
+          comparator: '=',
+          count: 7,
+        },
+      ],
     });
+  });
+
+  test('pins linked and unlinked physical Entity JSON and raw extension fields', () => {
+    const linkedId = 'entity:10' as EntityPhysicalRecord['id'];
+    const constantConfiguration = {
+      isOn: true,
+      sections: [
+        {
+          active: false,
+          group: 'fixture',
+          multiplier: 1.5,
+          filters: [{ signal: signal('item', 'iron-plate', 'uncommon'), value: 7 }],
+        },
+      ],
+    };
+    const linked = physicalEntity(
+      10,
+      { mode: 'constant', value: constantConfiguration },
+      { x: 12.5, y: -4, direction: 8 },
+      'constant-combinator',
+    );
+    expect(linked.id).toBe(linkedId);
+    const linkedIr: NativeCircuitIr = {
+      format: 'comblang-ncir',
+      networks: [],
+      entities: [linked],
+      producers: [
+        {
+          id: producer(1),
+          kind: 'constant',
+          entityId: linked.id,
+          config: { configuration: constantConfiguration },
+          destinations: [],
+          provenance,
+        },
+      ],
+    };
+    const linkedJson = generateBlueprintJson(linkedIr).blueprint.entities[0];
+    expect(JSON.stringify(linkedJson)).toBe(
+      '{"entity_number":1,"name":"constant-combinator","control_behavior":{"is_on":true,"sections":{"sections":[{"index":1,"active":false,"multiplier":1.5,"group":"fixture","filters":[{"index":1,"name":"iron-plate","quality":"uncommon","comparator":"=","count":7}]}]}},"position":{"x":12.5,"y":-4},"direction":8}',
+    );
+
+    const unlinked = physicalEntity(
+      1,
+      {
+        mode: 'raw',
+        payload: {
+          recipe: 'iron-gear-wheel',
+          future_native_extension: { revision: 3, flags: [true, null, 'opaque'] },
+        },
+      },
+      { x: 7.5, y: -2, direction: 8 },
+    );
+    const unlinkedJson = generateBlueprintJson({
+      format: 'comblang-ncir',
+      networks: [],
+      entities: [unlinked],
+      producers: [],
+    }).blueprint.entities[0];
+    expect(JSON.stringify(unlinkedJson)).toBe(
+      '{"recipe":"iron-gear-wheel","future_native_extension":{"revision":3,"flags":[true,null,"opaque"]},"entity_number":1,"name":"synthetic-zero-port","position":{"x":7.5,"y":-2},"direction":8}',
+    );
+
+    const invalidRaw = physicalEntity(2, {
+      mode: 'raw',
+      payload: { entity_number: 99 },
+    });
+    expect(() =>
+      generateBlueprintJson({
+        format: 'comblang-ncir',
+        networks: [],
+        entities: [invalidRaw],
+        producers: [],
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'BP1001',
+        span: entitySource,
+        message: expect.stringContaining('$.configuration.payload.entity_number'),
+      }),
+    );
   });
 
   test('omits the default item SignalID type in blueprint fields', () => {
