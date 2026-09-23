@@ -44,6 +44,7 @@ import {
 import { compileParsedSourceProgram } from '@comblang/runtime/source-compilation';
 import { offsetToPosition, type Diagnostic, type DiagnosticPolicy } from '@comblang/shared';
 import { resolveProjectOptions } from './project-profile.js';
+import { runBlueprintCommand } from './blueprint-command.js';
 
 import {
   CliInputError,
@@ -63,6 +64,8 @@ Usage:
   factorio-dsl prototypes asset verify <database.json> <manifest.json>
   factorio-dsl prototypes supplement [--json] <database.json> <circuit.json> <output.json>
   factorio-dsl prototypes evidence [--json] <database.json> <evidence.json>
+  factorio-dsl blueprint decode [--json] [--input-file <exchange.txt> | <exchange-string>] [--output <document.json>]
+  factorio-dsl blueprint encode [--json] [--output <exchange.txt>] <document.json>
 
 Checks circuits, executes browser/Node-neutral JavaScript test files, and processes prototype dumps, circuit supplements, or evidence manifests.`;
 
@@ -556,6 +559,7 @@ export async function run(
     console.log(usage);
     return 0;
   }
+  if (command === 'blueprint') return runBlueprintCommand(rest);
   if (command !== 'check' && command !== 'test' && command !== 'prototypes') {
     console.error(`Unknown command: ${command}\n\n${usage}`);
     return 2;

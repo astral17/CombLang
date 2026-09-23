@@ -1,0 +1,17 @@
+{
+  "name": "@comblang/blueprint",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./classification": "./src/classification.ts",
+    "./compression": "./src/compression.ts",
+    "./document": "./src/document.ts",
+    "./errors": "./src/errors.ts",
+    "./exchange": "./src/exchange.ts",
+    "./exchange-codec": "./src/exchange-codec.ts",
+    "./limits": "./src/limits.ts",
+    "./web-compression": "./src/web-compression.ts"
+  }
+}

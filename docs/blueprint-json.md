@@ -12,6 +12,10 @@ const json = generateBlueprintJson(elaboratedCircuit.ir, { label: 'My circuit' }
 The generator emits ordinary JSON. It does not prepend the exchange-string
 version byte, compress, or base64-encode the result.
 
+The separate bounded, lossless exchange codec is documented in
+[`blueprint-exchange-codec.md`](blueprint-exchange-codec.md). Its round trips and
+self-generated fixtures are not native Factorio conformance evidence.
+
 ## Mapping
 
 - arithmetic, decider, constant, and selector producers map to their native

@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "fixtures": [
+    {
+      "id": "self-generated-minimal-blueprint",
+      "origin": "self-generated",
+      "factorioVersion": null,
+      "environment": "Node.js v24.18.0 Web CompressionStream('deflate')",
+      "path": "self-generated/minimal-blueprint.txt",
+      "encodedExchangeSha256": "08432c09ddb3d1cfd6f224d0e16fe2c7d6978d65e5877189d27d96454bdc9498",
+      "decodedJsonSha256": "586b119ad07e249abfb9152d8673febcf97d52f9e555ce3dfb9b824005facdd9",
+      "reviewStatus": "internal-only-not-native-evidence"
+    },
+    {
+      "id": "user-supplied-factorio-2.1.10-plain-circuit",
+      "origin": "factorio-export",
+      "factorioVersion": "2.1.10",
+      "environment": "User-supplied exchange string; vanilla/mod state not independently verified",
+      "path": "factorio-2.1.10/plain-circuit.txt",
+      "encodedExchangeSha256": "deedd76ca4875203397a7b9a2a6ffff57a52e0bb56c56995039642030e9215c9",
+      "decodedJsonSha256": "7bfc14ae63a1c7c8f9cff78d2a2b235cf7f46aa29000baf05acd672ea9b4cb9d",
+      "reviewStatus": "codec-framing-reviewed",
+      "expectedSemanticHeader": {
+        "item": "blueprint",
+        "label": "имя чертежа",
+        "version": 562954249043971,
+        "hasEntities": true,
+        "hasWires": true
+      }
+    }
+  ],
+  "externalEvidence": {
+    "status": "codec-framing-reviewed",
+    "origin": "factorio-export",
+    "factorioVersion": "2.1.10",
+    "environment": "user-reported Factorio export; installed mods not independently verified",
+    "receivedPath": "factorio-2.1.10/plain-circuit.txt",
+    "note": "This independent export verifies exchange framing and lossless document round trips. It does not establish Factorio acceptance of re-encoded strings or behavior of specific devices. Newer parameter and formula fields need separate exports from the game version that provides them."
+  }
+}
