@@ -1,18 +1,45 @@
 import { signal, type SignalId } from '@comblang/factorio';
+import type { SourceFileId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
 import {
-  assertConstantParameterFromSession,
-  createConstantParameterSession,
-} from './constant-parameters.js';
+  assertBlueprintParameterFromSession,
+  createBlueprintParameterSession,
+} from './blueprint-parameters.js';
 import {
   createConstantConfigurationTemplate,
   inspectConstantConfigurationTemplate,
 } from './constant-configuration-template.js';
-
 describe('symbolic Constant configuration templates', () => {
+  test('blueprint-wide parameter handles remain scoped when used by Constant', () => {
+    const owner = createBlueprintParameterSession();
+    const foreign = createBlueprintParameterSession();
+    const localCount = owner.number('count', {
+      source: { fileId: 'local' as SourceFileId, start: 1, end: 4 },
+    });
+    const foreignCount = foreign.number('count', {
+      source: { fileId: 'foreign' as SourceFileId, start: 5, end: 9 },
+    });
+
+    const template = createConstantConfigurationTemplate(owner, {
+      sections: [{ filters: [{ signal: signal('virtual', 'signal-A'), value: localCount }] }],
+    });
+    expect(template.sections[0]?.filters[0]?.value).toBe(localCount);
+    expect(() =>
+      createConstantConfigurationTemplate(owner, {
+        sections: [{ filters: [{ signal: signal('virtual', 'signal-A'), value: foreignCount }] }],
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1001',
+        path: '$.sections[0].filters[0].value',
+        span: { fileId: 'foreign' as SourceFileId, start: 5, end: 9 },
+      }),
+    );
+  });
+
   test('preserves concrete values and nominal references in ordered slots', () => {
-    const session = createConstantParameterSession();
+    const session = createBlueprintParameterSession();
     const count = session.number('count', { defaultValue: 0 });
     const target = session.signal('target', {
       defaultValue: signal('item', 'iron-plate', 'uncommon'),
@@ -55,8 +82,8 @@ describe('symbolic Constant configuration templates', () => {
       filters: [{ value: 2 }],
     });
     expect(template.sections[1]?.filters[0]?.signal).toBe(target);
-    expect(assertConstantParameterFromSession(session, count, '$.count').kind).toBe('number');
-    expect(assertConstantParameterFromSession(session, target, '$.target').kind).toBe('signal');
+    expect(assertBlueprintParameterFromSession(session, count, '$.count').kind).toBe('number');
+    expect(assertBlueprintParameterFromSession(session, target, '$.target').kind).toBe('signal');
     expect(inspectConstantConfigurationTemplate(template, '$.template').session).toBe(session);
     expect(Object.isFrozen(template)).toBe(true);
     expect(Object.isFrozen(template.sections)).toBe(true);
@@ -65,8 +92,8 @@ describe('symbolic Constant configuration templates', () => {
   });
 
   test('rejects wrong-kind, foreign, and non-slot parameter references', () => {
-    const session = createConstantParameterSession();
-    const other = createConstantParameterSession();
+    const session = createBlueprintParameterSession();
+    const other = createBlueprintParameterSession();
     const count = session.number('count');
     const target = session.signal('target');
     const foreign = other.number('foreign');
@@ -101,7 +128,7 @@ describe('symbolic Constant configuration templates', () => {
   });
 
   test('rejects accessors without evaluation and enforces the Constant input budget', () => {
-    const session = createConstantParameterSession();
+    const session = createBlueprintParameterSession();
     let getterCalls = 0;
     const section = { active: true, multiplier: 1 };
     Object.defineProperty(section, 'filters', {
@@ -126,7 +153,7 @@ describe('symbolic Constant configuration templates', () => {
   });
 
   test('rejects cyclic, sparse, and unknown data while leaving original inputs untouched', () => {
-    const session = createConstantParameterSession();
+    const session = createBlueprintParameterSession();
     const cyclic: unknown[] = [];
     cyclic.push(cyclic);
     expect(() => createConstantConfigurationTemplate(session, { sections: cyclic })).toThrowError(

@@ -7,14 +7,14 @@ import type { NetworkId, ProducerId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
 import { generateBlueprintJson } from './blueprint-json.js';
-import { createConstantParameterSession } from './constant-parameters.js';
+import { createBlueprintParameterSession } from './blueprint-parameters.js';
 import { bindConstantConfigurationTemplate } from './constant-configuration-binding.js';
 import { createConstantConfigurationTemplate } from './constant-configuration-template.js';
 import type { ConstantProducerConfig, NativeCircuitIr } from './ir.js';
 
 describe('bound Constant configuration concrete replay/export integration', () => {
   test('reused handles resolve before NCIR, simulation, and canonical blueprint export', () => {
-    const session = createConstantParameterSession();
+    const session = createBlueprintParameterSession();
     const sharedCount = session.number('shared count', { defaultValue: 8 });
     const defaultCount = session.number('default count', { defaultValue: 3 });
     const target = session.signal('target', {

@@ -3,21 +3,21 @@ import type { SourceFileId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
 import {
-  assertConstantParameterFromSession,
-  ConstantParameterError,
-  createConstantParameterSession,
-  inspectConstantParameterHandle,
-} from './constant-parameters.js';
+  assertBlueprintParameterFromSession,
+  BlueprintParameterError,
+  createBlueprintParameterSession,
+  inspectBlueprintParameterHandle,
+} from './blueprint-parameters.js';
 
 const source = {
-  fileId: 'file:constant-parameters.test.ts' as SourceFileId,
+  fileId: 'file:blueprint-parameters.test.ts' as SourceFileId,
   start: 8,
   end: 21,
 };
 
-describe('nominal Constant parameter declarations', () => {
+describe('nominal blueprint parameter declarations', () => {
   test('uses registration identity rather than display labels', () => {
-    const session = createConstantParameterSession();
+    const session = createBlueprintParameterSession();
     const first = session.number('items', { defaultValue: 0 });
     const second = session.number('items', { defaultValue: 3 });
 
@@ -25,23 +25,23 @@ describe('nominal Constant parameter declarations', () => {
     expect(first.label).toBe(second.label);
     expect(first.defaultValue).toBe(0);
     expect(second.defaultValue).toBe(3);
-    expect(assertConstantParameterFromSession(session, first, '$.first')).toMatchObject({
+    expect(assertBlueprintParameterFromSession(session, first, '$.first')).toMatchObject({
       kind: 'number',
       label: 'items',
       defaultValue: 0,
     });
-    expect(assertConstantParameterFromSession(session, second, '$.second')).not.toBe(
-      inspectConstantParameterHandle(first, '$.first'),
+    expect(assertBlueprintParameterFromSession(session, second, '$.second')).not.toBe(
+      inspectBlueprintParameterHandle(first, '$.first'),
     );
   });
 
   test('creates immutable declarations and copies optional source spans', () => {
-    const session = createConstantParameterSession();
+    const session = createBlueprintParameterSession();
     const parameter = session.signal('target', {
       defaultValue: signal('item', 'iron-plate', 'uncommon'),
       source,
     });
-    const registration = inspectConstantParameterHandle(parameter, '$.parameter');
+    const registration = inspectBlueprintParameterHandle(parameter, '$.parameter');
 
     expect(Object.isFrozen(session)).toBe(true);
     expect(Object.isFrozen(parameter)).toBe(true);
@@ -53,7 +53,7 @@ describe('nominal Constant parameter declarations', () => {
   });
 
   test('validates number and signal defaults with typed paths and source spans', () => {
-    const session = createConstantParameterSession();
+    const session = createBlueprintParameterSession();
     expect(() => session.number('bad number', { defaultValue: Number.NaN, source })).toThrowError(
       expect.objectContaining({
         code: 'CP1000',
@@ -79,19 +79,19 @@ describe('nominal Constant parameter declarations', () => {
   });
 
   test('rejects cross-session and forged handles despite matching visible fields', () => {
-    const owner = createConstantParameterSession();
-    const other = createConstantParameterSession();
+    const owner = createBlueprintParameterSession();
+    const other = createBlueprintParameterSession();
     const parameter = owner.number('count');
     const forged = Object.freeze({ kind: 'number', label: 'count' });
 
-    expect(() => assertConstantParameterFromSession(other, parameter, '$.parameter')).toThrowError(
+    expect(() => assertBlueprintParameterFromSession(other, parameter, '$.parameter')).toThrowError(
       expect.objectContaining({
         code: 'CP1001',
         path: '$.parameter',
         message: expect.stringContaining('different parameter session'),
       }),
     );
-    expect(() => inspectConstantParameterHandle(forged, '$.parameter')).toThrowError(
+    expect(() => inspectBlueprintParameterHandle(forged, '$.parameter')).toThrowError(
       expect.objectContaining({
         code: 'CP1001',
         path: '$.parameter',
@@ -99,17 +99,17 @@ describe('nominal Constant parameter declarations', () => {
       }),
     );
     expect(() =>
-      assertConstantParameterFromSession({} as never, parameter, '$.session'),
+      assertBlueprintParameterFromSession({} as never, parameter, '$.session'),
     ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.session' }));
   });
 
   test('keeps default validation errors in the parameter error family', () => {
-    const session = createConstantParameterSession();
+    const session = createBlueprintParameterSession();
     try {
       session.number('infinite', { defaultValue: Number.POSITIVE_INFINITY });
       throw new Error('expected declaration failure');
     } catch (error) {
-      expect(error).toBeInstanceOf(ConstantParameterError);
+      expect(error).toBeInstanceOf(BlueprintParameterError);
     }
   });
 });

@@ -1,62 +1,63 @@
 import { canonicalizeConstantConfiguration, type SignalId } from '@comblang/factorio';
 import type { SourceFileId, SourceSpan } from '@comblang/shared';
 
-const parameterBrand: unique symbol = Symbol('constant-parameter');
-const sessionBrand: unique symbol = Symbol('constant-parameter-session');
+const parameterBrand: unique symbol = Symbol('blueprint-parameter');
+const sessionBrand: unique symbol = Symbol('blueprint-parameter-session');
 
-export type ConstantParameterKind = 'number' | 'signal';
+export type BlueprintParameterKind = 'number' | 'signal';
 
-interface ConstantParameterHandleBase<K extends ConstantParameterKind> {
+interface BlueprintParameterHandleBase<K extends BlueprintParameterKind> {
   readonly [parameterBrand]: K;
   readonly kind: K;
   readonly label: string;
   readonly source?: SourceSpan;
 }
 
-export interface NumberParameterHandle extends ConstantParameterHandleBase<'number'> {
+export interface BlueprintNumberParameterHandle extends BlueprintParameterHandleBase<'number'> {
   readonly defaultValue?: number;
 }
 
-export interface SignalParameterHandle extends ConstantParameterHandleBase<'signal'> {
+export interface BlueprintSignalParameterHandle extends BlueprintParameterHandleBase<'signal'> {
   readonly defaultValue?: SignalId;
 }
 
-export type ConstantParameterHandle = NumberParameterHandle | SignalParameterHandle;
+export type BlueprintParameterHandle =
+  BlueprintNumberParameterHandle | BlueprintSignalParameterHandle;
 
-export interface ConstantParameterDeclarationOptions<T> {
+export interface BlueprintParameterDeclarationOptions<T> {
   readonly defaultValue?: T;
   readonly source?: SourceSpan;
 }
 
-export interface ConstantParameterSession {
+export interface BlueprintParameterSession {
   readonly [sessionBrand]: true;
   number(
     label: string,
-    options?: ConstantParameterDeclarationOptions<number>,
-  ): NumberParameterHandle;
+    options?: BlueprintParameterDeclarationOptions<number>,
+  ): BlueprintNumberParameterHandle;
   signal(
     label: string,
-    options?: ConstantParameterDeclarationOptions<SignalId>,
-  ): SignalParameterHandle;
+    options?: BlueprintParameterDeclarationOptions<SignalId>,
+  ): BlueprintSignalParameterHandle;
 }
 
-export interface ConstantParameterRegistration {
-  readonly kind: ConstantParameterKind;
+export interface BlueprintParameterRegistration {
+  readonly kind: BlueprintParameterKind;
   readonly label: string;
   readonly defaultValue?: number | SignalId;
   readonly source?: SourceSpan;
 }
 
-export type ConstantParameterErrorCode = 'CP1000' | 'CP1001' | 'CP1002';
+export type BlueprintParameterErrorCode = 'CP1000' | 'CP1001' | 'CP1002';
 
-export class ConstantParameterError extends Error {
-  readonly code: ConstantParameterErrorCode;
+export class BlueprintParameterError extends Error {
+  readonly code: BlueprintParameterErrorCode;
   readonly path: string;
   readonly span: SourceSpan | undefined;
 
-  constructor(code: ConstantParameterErrorCode, path: string, message: string, span?: SourceSpan) {
+  constructor(code: BlueprintParameterErrorCode, path: string, message: string, span?: SourceSpan) {
     super(`${path}: ${message}`);
-    this.name = 'ConstantParameterError';
+    this.name = 'BlueprintParameterError';
     this.code = code;
     this.path = path;
     this.span = span;
@@ -69,19 +70,19 @@ interface SessionAuthority {
 
 interface RegisteredParameter {
   readonly authority: SessionAuthority;
-  readonly declaration: ConstantParameterRegistration;
+  readonly declaration: BlueprintParameterRegistration;
 }
 
 const sessionAuthorities = new WeakMap<object, SessionAuthority>();
 const parameterRegistrations = new WeakMap<object, RegisteredParameter>();
 
 function fail(
-  code: ConstantParameterErrorCode,
+  code: BlueprintParameterErrorCode,
   path: string,
   message: string,
   span?: SourceSpan,
 ): never {
-  throw new ConstantParameterError(code, path, message, span);
+  throw new BlueprintParameterError(code, path, message, span);
 }
 
 function isObject(value: unknown): value is object {
@@ -151,36 +152,36 @@ function assertLabel(label: unknown): asserts label is string {
   }
 }
 
-function registerParameter<K extends ConstantParameterKind>(
+function registerParameter<K extends BlueprintParameterKind>(
   authority: SessionAuthority,
   kind: K,
   label: string,
   defaultValue: number | SignalId | undefined,
   source: SourceSpan | undefined,
-): ConstantParameterHandleBase<K> & { readonly defaultValue?: number | SignalId } {
+): BlueprintParameterHandleBase<K> & { readonly defaultValue?: number | SignalId } {
   const declaration = Object.freeze({
     kind,
     label,
     ...(defaultValue === undefined ? {} : { defaultValue }),
     ...(source === undefined ? {} : { source }),
-  }) as ConstantParameterRegistration;
+  }) as BlueprintParameterRegistration;
   const handle = Object.freeze({
     [parameterBrand]: kind,
     kind,
     label,
     ...(defaultValue === undefined ? {} : { defaultValue }),
     ...(source === undefined ? {} : { source }),
-  }) as ConstantParameterHandleBase<K> & { readonly defaultValue?: number | SignalId };
+  }) as BlueprintParameterHandleBase<K> & { readonly defaultValue?: number | SignalId };
   parameterRegistrations.set(handle, { authority, declaration });
   return handle;
 }
 
 /** Creates a nominal parameter scope; labels are descriptive, never identities. */
-export function createConstantParameterSession(): ConstantParameterSession {
+export function createBlueprintParameterSession(): BlueprintParameterSession {
   const authority: SessionAuthority = Object.freeze({ identity: Object.freeze({}) });
   const session = Object.freeze({
     [sessionBrand]: true as const,
-    number: (label: string, options: ConstantParameterDeclarationOptions<number> = {}) => {
+    number: (label: string, options: BlueprintParameterDeclarationOptions<number> = {}) => {
       assertLabel(label);
       const source = canonicalSourceSpan(options.source);
       if (options.defaultValue !== undefined && !Number.isFinite(options.defaultValue)) {
@@ -192,9 +193,9 @@ export function createConstantParameterSession(): ConstantParameterSession {
         label,
         options.defaultValue,
         source,
-      ) as NumberParameterHandle;
+      ) as BlueprintNumberParameterHandle;
     },
-    signal: (label: string, options: ConstantParameterDeclarationOptions<SignalId> = {}) => {
+    signal: (label: string, options: BlueprintParameterDeclarationOptions<SignalId> = {}) => {
       assertLabel(label);
       const source = canonicalSourceSpan(options.source);
       const defaultValue =
@@ -207,18 +208,18 @@ export function createConstantParameterSession(): ConstantParameterSession {
         label,
         defaultValue,
         source,
-      ) as SignalParameterHandle;
+      ) as BlueprintSignalParameterHandle;
     },
-  }) as ConstantParameterSession;
+  }) as BlueprintParameterSession;
   sessionAuthorities.set(session, authority);
   return session;
 }
 
 /** Returns declaration metadata only for the exact frozen handle registered by a session. */
-export function inspectConstantParameterHandle(
+export function inspectBlueprintParameterHandle(
   value: unknown,
   path: string,
-): ConstantParameterRegistration {
+): BlueprintParameterRegistration {
   if (!isObject(value)) fail('CP1001', path, 'value is not a registered parameter handle.');
   const registration = parameterRegistrations.get(value);
   if (registration === undefined) {
@@ -228,14 +229,14 @@ export function inspectConstantParameterHandle(
 }
 
 /** Non-throwing registry lookup for template normalization of concrete data vs handles. */
-export function findConstantParameterHandle(
+export function findBlueprintParameterHandle(
   value: unknown,
-): ConstantParameterRegistration | undefined {
+): BlueprintParameterRegistration | undefined {
   if (!isObject(value)) return undefined;
   return parameterRegistrations.get(value)?.declaration;
 }
 
-export function assertConstantParameterSession(
+export function assertBlueprintParameterSession(
   session: unknown,
   path: string,
 ): asserts session is object {
@@ -245,12 +246,12 @@ export function assertConstantParameterSession(
 }
 
 /** Verifies both declaration authenticity and ownership by the supplied session. */
-export function assertConstantParameterFromSession(
+export function assertBlueprintParameterFromSession(
   session: unknown,
   parameter: unknown,
   path: string,
-): ConstantParameterRegistration {
-  assertConstantParameterSession(session, '$.session');
+): BlueprintParameterRegistration {
+  assertBlueprintParameterSession(session, '$.session');
   const registration = isObject(parameter) ? parameterRegistrations.get(parameter) : undefined;
   if (registration === undefined) {
     fail('CP1001', path, 'value is not a registered parameter handle.');

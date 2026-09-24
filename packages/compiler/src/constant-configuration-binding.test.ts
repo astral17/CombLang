@@ -2,18 +2,16 @@ import { signal } from '@comblang/factorio';
 import type { SourceFileId, SourceSpan } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
-import { createConstantParameterSession } from './constant-parameters.js';
-import {
-  bindConstantConfigurationTemplate,
-  type ConstantParameterBinding,
-} from './constant-configuration-binding.js';
+import { createBlueprintParameterSession } from './blueprint-parameters.js';
+import { bindConstantConfigurationTemplate } from './constant-configuration-binding.js';
+import type { BlueprintParameterBinding } from './blueprint-parameter-validation.js';
 import { createConstantConfigurationTemplate } from './constant-configuration-template.js';
 
 const source: SourceSpan = { fileId: 'binding-test' as SourceFileId, start: 4, end: 11 };
 
 describe('binding symbolic Constant configuration templates', () => {
   test('resolves defaults and overrides by handle into a fresh canonical configuration', () => {
-    const session = createConstantParameterSession();
+    const session = createBlueprintParameterSession();
     const count = session.number('count', { defaultValue: 2, source });
     const target = session.signal('target', {
       defaultValue: signal('item', 'iron-plate', 'uncommon'),
@@ -68,7 +66,7 @@ describe('binding symbolic Constant configuration templates', () => {
   });
 
   test('reports missing and invalid values at the slot with the declaration span', () => {
-    const session = createConstantParameterSession();
+    const session = createBlueprintParameterSession();
     const count = session.number('count', { source });
     const template = createConstantConfigurationTemplate(session, {
       sections: [{ filters: [{ signal: signal('virtual', 'signal-A'), value: count }] }],
@@ -103,8 +101,8 @@ describe('binding symbolic Constant configuration templates', () => {
   });
 
   test('rejects duplicate, unused, foreign, and wrong-kind bindings', () => {
-    const session = createConstantParameterSession();
-    const other = createConstantParameterSession();
+    const session = createBlueprintParameterSession();
+    const other = createBlueprintParameterSession();
     const count = session.number('count', { defaultValue: 1 });
     const unused = session.number('unused', { defaultValue: 3 });
     const foreign = other.number('foreign', { defaultValue: 1 });
@@ -133,7 +131,7 @@ describe('binding symbolic Constant configuration templates', () => {
   });
 
   test('validates malformed Signal IDs at their slot and keeps earlier results untouched', () => {
-    const session = createConstantParameterSession();
+    const session = createBlueprintParameterSession();
     const count = session.number('count', { defaultValue: 5 });
     const target = session.signal('target', { source });
     const template = createConstantConfigurationTemplate(session, {
@@ -159,7 +157,7 @@ describe('binding symbolic Constant configuration templates', () => {
   });
 
   test('binding records are bounded data-only records and accessors are not invoked', () => {
-    const session = createConstantParameterSession();
+    const session = createBlueprintParameterSession();
     const count = session.number('count', { defaultValue: 1 });
     const template = createConstantConfigurationTemplate(session, {
       sections: [{ filters: [{ signal: signal('virtual', 'signal-A'), value: count }] }],
@@ -175,13 +173,13 @@ describe('binding symbolic Constant configuration templates', () => {
     });
 
     expect(() =>
-      bindConstantConfigurationTemplate(template, [entry as unknown as ConstantParameterBinding]),
+      bindConstantConfigurationTemplate(template, [entry as unknown as BlueprintParameterBinding]),
     ).toThrowError(expect.objectContaining({ code: 'CP1000', path: '$.bindings[0].value' }));
     expect(getterCalls).toBe(0);
     expect(() =>
       bindConstantConfigurationTemplate(
         template,
-        new Array(1) as unknown as readonly ConstantParameterBinding[],
+        new Array(1) as unknown as readonly BlueprintParameterBinding[],
       ),
     ).toThrowError(expect.objectContaining({ code: 'CP1000', path: '$.bindings[0]' }));
   });

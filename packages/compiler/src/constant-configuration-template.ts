@@ -8,19 +8,29 @@ import {
 } from '@comblang/factorio';
 
 import {
-  assertConstantParameterFromSession,
-  assertConstantParameterSession,
-  ConstantParameterError,
-  findConstantParameterHandle,
-  type ConstantParameterSession,
-  type NumberParameterHandle,
-  type SignalParameterHandle,
-} from './constant-parameters.js';
+  assertBlueprintParameterSession,
+  BlueprintParameterError,
+  findBlueprintParameterHandle,
+  type BlueprintParameterSession,
+  type BlueprintNumberParameterHandle,
+  type BlueprintSignalParameterHandle,
+} from './blueprint-parameters.js';
+import {
+  assertBlueprintParameterExactKeys,
+  createBlueprintParameterDataBudget,
+  isBlueprintParameterShaped,
+  lookupBlueprintParameterSlot,
+  openBlueprintParameterArray,
+  openBlueprintParameterRecord,
+  type BlueprintParameterDataBudget,
+  type OpenBlueprintParameterArray,
+  type OpenBlueprintParameterRecord,
+} from './blueprint-parameter-validation.js';
 
 const templateBrand: unique symbol = Symbol('constant-configuration-template');
 
-export type ConstantTemplateNumberSlot = number | NumberParameterHandle;
-export type ConstantTemplateSignalSlot = SignalId | SignalParameterHandle;
+export type ConstantTemplateNumberSlot = number | BlueprintNumberParameterHandle;
+export type ConstantTemplateSignalSlot = SignalId | BlueprintSignalParameterHandle;
 
 export interface ConstantConfigurationTemplateFilter {
   readonly signal: ConstantTemplateSignalSlot;
@@ -41,164 +51,39 @@ export interface ConstantConfigurationTemplate {
 }
 
 export interface ConstantConfigurationTemplateRegistration {
-  readonly session: ConstantParameterSession;
+  readonly session: BlueprintParameterSession;
 }
 
-interface TemplateBudget {
-  readonly active: WeakSet<object>;
-  nodes: number;
+interface TemplateBudget extends BlueprintParameterDataBudget {
   parameterBytes: number;
 }
 
-interface OpenRecord {
-  readonly value: Record<string, unknown>;
-  readonly release: () => void;
-}
-
-interface OpenArray {
-  readonly value: readonly unknown[];
-  readonly release: () => void;
-}
-
 interface FilterSlots {
-  readonly signal?: SignalParameterHandle;
-  readonly value?: NumberParameterHandle;
+  readonly signal?: BlueprintSignalParameterHandle;
+  readonly value?: BlueprintNumberParameterHandle;
 }
 
 interface SectionSlots {
-  readonly multiplier?: NumberParameterHandle;
+  readonly multiplier?: BlueprintNumberParameterHandle;
   readonly filters: readonly FilterSlots[];
 }
 
 const templateRegistrations = new WeakMap<object, ConstantConfigurationTemplateRegistration>();
 
 function fail(path: string, message: string, span?: import('@comblang/shared').SourceSpan): never {
-  throw new ConstantParameterError('CP1000', path, message, span);
-}
-
-function enterContainer(
-  value: object,
-  path: string,
-  depth: number,
-  budget: TemplateBudget,
-): () => void {
-  if (depth > constantConfigurationLimits.maxDepth) {
-    fail(path, `template exceeds the depth limit of ${constantConfigurationLimits.maxDepth}.`);
-  }
-  budget.nodes += 1;
-  if (budget.nodes > constantConfigurationLimits.maxNodes) {
-    fail(path, `template exceeds the node limit of ${constantConfigurationLimits.maxNodes}.`);
-  }
-  if (budget.active.has(value)) fail(path, 'cyclic template data is not supported.');
-  budget.active.add(value);
-  return () => budget.active.delete(value);
-}
-
-function openRecord(
-  value: unknown,
-  path: string,
-  depth: number,
-  budget: TemplateBudget,
-): OpenRecord {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-    fail(path, 'expected a plain data record.');
-  }
-  const release = enterContainer(value, path, depth, budget);
-  try {
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) {
-      fail(path, 'expected a plain object or null-prototype record.');
-    }
-    const record = Object.create(null) as Record<string, unknown>;
-    for (const key of Reflect.ownKeys(value)) {
-      if (typeof key !== 'string') fail(path, 'symbol keys are not supported.');
-      const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
-      if (!('value' in descriptor)) fail(`${path}.${key}`, 'accessors are not supported.');
-      if (!descriptor.enumerable)
-        fail(`${path}.${key}`, 'non-enumerable fields are not supported.');
-      record[key] = descriptor.value;
-    }
-    return { value: record, release };
-  } catch (error) {
-    release();
-    throw error;
-  }
-}
-
-function openArray(value: unknown, path: string, depth: number, budget: TemplateBudget): OpenArray {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
-    fail(path, 'expected a plain array.');
-  }
-  if (value.length > constantConfigurationLimits.maxNodes - budget.nodes) {
-    fail(path, `template exceeds the node limit of ${constantConfigurationLimits.maxNodes}.`);
-  }
-  const release = enterContainer(value, path, depth, budget);
-  try {
-    const values: unknown[] = [];
-    for (const key of Reflect.ownKeys(value)) {
-      if (typeof key !== 'string') fail(path, 'symbol keys are not supported.');
-      if (key === 'length') continue;
-      if (!/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= value.length) {
-        fail(`${path}.${key}`, 'unknown array field.');
-      }
-      const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
-      if (!('value' in descriptor)) fail(`${path}[${key}]`, 'accessors are not supported.');
-      if (!descriptor.enumerable)
-        fail(`${path}[${key}]`, 'non-enumerable values are not supported.');
-    }
-    for (let index = 0; index < value.length; index += 1) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-      if (descriptor === undefined) fail(`${path}[${index}]`, 'array holes are not supported.');
-      if (!('value' in descriptor)) fail(`${path}[${index}]`, 'accessors are not supported.');
-      values.push(descriptor.value);
-    }
-    return { value: values, release };
-  } catch (error) {
-    release();
-    throw error;
-  }
-}
-
-function exactKeys(record: Record<string, unknown>, keys: readonly string[], path: string): void {
-  const allowed = new Set(keys);
-  for (const key of Object.keys(record)) {
-    if (!allowed.has(key)) fail(`${path}.${key}`, 'unknown Constant template field.');
-  }
-}
-
-function parameterShaped(value: unknown): boolean {
-  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return false;
-  const descriptor = Object.getOwnPropertyDescriptor(value, 'kind');
-  return (
-    descriptor !== undefined &&
-    'value' in descriptor &&
-    (descriptor.value === 'number' || descriptor.value === 'signal')
-  );
+  throw new BlueprintParameterError('CP1000', path, message, span);
 }
 
 function accountParameter(
   value: unknown,
   kind: 'number' | 'signal',
-  session: ConstantParameterSession,
+  session: BlueprintParameterSession,
   path: string,
   budget: TemplateBudget,
-): NumberParameterHandle | SignalParameterHandle | undefined {
-  const registration = findConstantParameterHandle(value);
-  if (registration === undefined) {
-    if (parameterShaped(value)) {
-      throw new ConstantParameterError('CP1001', path, 'unregistered parameter-like object.');
-    }
-    return undefined;
-  }
-  const owned = assertConstantParameterFromSession(session, value, path);
-  if (owned.kind !== kind) {
-    throw new ConstantParameterError(
-      'CP1001',
-      path,
-      `expected a ${kind} parameter, received ${owned.kind}.`,
-      owned.source,
-    );
-  }
+): BlueprintNumberParameterHandle | BlueprintSignalParameterHandle | undefined {
+  const slot = lookupBlueprintParameterSlot(value, kind, session, path);
+  if (slot === undefined) return undefined;
+  const owned = slot.registration;
   const descriptorBytes = new TextEncoder().encode(
     JSON.stringify({
       kind: owned.kind,
@@ -214,21 +99,21 @@ function accountParameter(
       owned.source,
     );
   }
-  return value as NumberParameterHandle | SignalParameterHandle;
+  return slot.handle as BlueprintNumberParameterHandle | BlueprintSignalParameterHandle;
 }
 
 function rejectParameterOutsideSlot(value: unknown, path: string): void {
-  const registration = findConstantParameterHandle(value);
+  const registration = findBlueprintParameterHandle(value);
   if (registration !== undefined) {
-    throw new ConstantParameterError(
+    throw new BlueprintParameterError(
       'CP1001',
       path,
       'parameter references are allowed only in signal, filter count, and multiplier slots.',
       registration.source,
     );
   }
-  if (parameterShaped(value)) {
-    throw new ConstantParameterError('CP1001', path, 'unregistered parameter-like object.');
+  if (isBlueprintParameterShaped(value)) {
+    throw new BlueprintParameterError('CP1001', path, 'unregistered parameter-like object.');
   }
 }
 
@@ -253,16 +138,21 @@ function freezeTemplate<T>(value: T): T {
 
 /** Creates a bounded immutable symbolic Constant template without widening concrete config types. */
 export function createConstantConfigurationTemplate(
-  session: ConstantParameterSession,
+  session: BlueprintParameterSession,
   value: unknown,
 ): ConstantConfigurationTemplate {
-  assertConstantParameterSession(session, '$.session');
-  const budget: TemplateBudget = { active: new WeakSet(), nodes: 0, parameterBytes: 0 };
-  const root = openRecord(value, '$', 0, budget);
+  assertBlueprintParameterSession(session, '$.session');
+  const budget: TemplateBudget = { ...createBlueprintParameterDataBudget(), parameterBytes: 0 };
+  const root = openBlueprintParameterRecord(value, '$', 0, budget);
   let normalized: ConstantConfiguration;
   let slots: readonly SectionSlots[];
   try {
-    exactKeys(root.value, ['isOn', 'sections'], '$');
+    assertBlueprintParameterExactKeys(
+      root.value,
+      ['isOn', 'sections'],
+      '$',
+      'unknown Constant template field.',
+    );
     const prepared: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
     if (Object.hasOwn(root.value, 'isOn')) {
       rejectParameterOutsideSlot(root.value.isOn, '$.isOn');
@@ -271,15 +161,30 @@ export function createConstantConfigurationTemplate(
 
     const sectionsPath = '$.sections';
     const rawSections = Object.hasOwn(root.value, 'sections') ? root.value.sections : [];
-    const sections = openArray(rawSections, sectionsPath, 1, budget);
+    const sections: OpenBlueprintParameterArray = openBlueprintParameterArray(
+      rawSections,
+      sectionsPath,
+      1,
+      budget,
+    );
     try {
       const preparedSections: Record<string, unknown>[] = [];
       const sectionSlots: SectionSlots[] = [];
       sections.value.forEach((rawSection, sectionIndex) => {
         const sectionPath = `${sectionsPath}[${sectionIndex}]`;
-        const section = openRecord(rawSection, sectionPath, 2, budget);
+        const section: OpenBlueprintParameterRecord = openBlueprintParameterRecord(
+          rawSection,
+          sectionPath,
+          2,
+          budget,
+        );
         try {
-          exactKeys(section.value, ['active', 'group', 'multiplier', 'filters'], sectionPath);
+          assertBlueprintParameterExactKeys(
+            section.value,
+            ['active', 'group', 'multiplier', 'filters'],
+            sectionPath,
+            'unknown Constant template field.',
+          );
           const preparedSection: Record<string, unknown> = Object.create(null) as Record<
             string,
             unknown
@@ -290,7 +195,7 @@ export function createConstantConfigurationTemplate(
               preparedSection[key] = section.value[key];
             }
           }
-          let multiplier: NumberParameterHandle | undefined;
+          let multiplier: BlueprintNumberParameterHandle | undefined;
           if (Object.hasOwn(section.value, 'multiplier')) {
             const rawMultiplier = section.value.multiplier;
             const reference = accountParameter(
@@ -301,7 +206,7 @@ export function createConstantConfigurationTemplate(
               budget,
             );
             if (reference !== undefined) {
-              multiplier = reference as NumberParameterHandle;
+              multiplier = reference as BlueprintNumberParameterHandle;
               preparedSection.multiplier = 1;
             } else {
               preparedSection.multiplier = rawMultiplier;
@@ -310,20 +215,25 @@ export function createConstantConfigurationTemplate(
 
           const filtersPath = `${sectionPath}.filters`;
           const rawFilters = Object.hasOwn(section.value, 'filters') ? section.value.filters : [];
-          const filters = openArray(rawFilters, filtersPath, 3, budget);
+          const filters = openBlueprintParameterArray(rawFilters, filtersPath, 3, budget);
           try {
             const preparedFilters: Record<string, unknown>[] = [];
             const filterSlots: FilterSlots[] = [];
             filters.value.forEach((rawFilter, filterIndex) => {
               const filterPath = `${filtersPath}[${filterIndex}]`;
-              const filter = openRecord(rawFilter, filterPath, 4, budget);
+              const filter = openBlueprintParameterRecord(rawFilter, filterPath, 4, budget);
               try {
-                exactKeys(filter.value, ['signal', 'value'], filterPath);
+                assertBlueprintParameterExactKeys(
+                  filter.value,
+                  ['signal', 'value'],
+                  filterPath,
+                  'unknown Constant template field.',
+                );
                 const preparedFilter: Record<string, unknown> = Object.create(null) as Record<
                   string,
                   unknown
                 >;
-                let signalReference: SignalParameterHandle | undefined;
+                let signalReference: BlueprintSignalParameterHandle | undefined;
                 if (Object.hasOwn(filter.value, 'signal')) {
                   const rawSignal = filter.value.signal;
                   const reference = accountParameter(
@@ -334,13 +244,13 @@ export function createConstantConfigurationTemplate(
                     budget,
                   );
                   if (reference !== undefined) {
-                    signalReference = reference as SignalParameterHandle;
+                    signalReference = reference as BlueprintSignalParameterHandle;
                     preparedFilter.signal = signal('virtual', 'signal-template-placeholder');
                   } else {
                     preparedFilter.signal = rawSignal;
                   }
                 }
-                let valueReference: NumberParameterHandle | undefined;
+                let valueReference: BlueprintNumberParameterHandle | undefined;
                 if (Object.hasOwn(filter.value, 'value')) {
                   const rawValue = filter.value.value;
                   const reference = accountParameter(
@@ -351,7 +261,7 @@ export function createConstantConfigurationTemplate(
                     budget,
                   );
                   if (reference !== undefined) {
-                    valueReference = reference as NumberParameterHandle;
+                    valueReference = reference as BlueprintNumberParameterHandle;
                     preparedFilter.value = 0;
                   } else {
                     preparedFilter.value = rawValue;
@@ -422,7 +332,7 @@ export function inspectConstantConfigurationTemplate(
   path: string,
 ): ConstantConfigurationTemplateRegistration {
   if (value === null || (typeof value !== 'object' && typeof value !== 'function')) {
-    throw new ConstantParameterError(
+    throw new BlueprintParameterError(
       'CP1002',
       path,
       'value is not a registered Constant template.',
@@ -430,7 +340,7 @@ export function inspectConstantConfigurationTemplate(
   }
   const registration = templateRegistrations.get(value);
   if (registration === undefined) {
-    throw new ConstantParameterError(
+    throw new BlueprintParameterError(
       'CP1002',
       path,
       'value is not a registered Constant template.',
