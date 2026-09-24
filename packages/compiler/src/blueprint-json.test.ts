@@ -1,4 +1,4 @@
-import { signal } from '@comblang/factorio';
+import { canonicalizeConstantConfiguration, signal } from '@comblang/factorio';
 import type { NetworkId, ProducerId, SourceFileId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
@@ -461,6 +461,67 @@ describe('Factorio blueprint JSON generator', () => {
         },
       ],
     });
+  });
+
+  test('exports a canonical concrete Constant configuration without changing it', () => {
+    const configuration = canonicalizeConstantConfiguration({
+      isOn: false,
+      sections: [
+        {
+          active: false,
+          group: 'backup',
+          multiplier: 1.5,
+          filters: [{ signal: signal('item', 'iron-plate', 'uncommon'), value: 2_147_483_649 }],
+        },
+      ],
+    });
+    const before = JSON.stringify(configuration);
+    const ir: NativeCircuitIr = {
+      format: 'comblang-ncir',
+      networks: [],
+      entities: [],
+      producers: [
+        {
+          id: producer(1),
+          kind: 'constant',
+          config: { configuration },
+          destinations: [],
+          provenance,
+        },
+      ],
+    };
+
+    expect(configuration.sections[0]?.filters[0]?.value).toBe(-2_147_483_647);
+    expect(generateBlueprintJson(ir).blueprint.entities[0]).toEqual({
+      entity_number: 1,
+      name: 'constant-combinator',
+      control_behavior: {
+        is_on: false,
+        sections: {
+          sections: [
+            {
+              index: 1,
+              active: false,
+              multiplier: 1.5,
+              group: 'backup',
+              filters: [
+                {
+                  index: 1,
+                  name: 'iron-plate',
+                  quality: 'uncommon',
+                  comparator: '=',
+                  count: -2_147_483_647,
+                },
+              ],
+            },
+          ],
+        },
+      },
+      position: { x: 0.5, y: 0.5 },
+      direction: 4,
+    });
+    expect(JSON.stringify(configuration)).toBe(before);
+    expect(Object.isFrozen(configuration)).toBe(true);
   });
 
   test('pins linked and unlinked physical Entity JSON and raw extension fields', () => {
