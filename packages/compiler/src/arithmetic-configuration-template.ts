@@ -16,6 +16,7 @@ import {
   assertBlueprintParameterSession,
   BlueprintParameterError,
   findBlueprintParameterHandle,
+  type BlueprintParameterHandle,
   type BlueprintNumberParameterHandle,
   type BlueprintParameterSession,
   type BlueprintSignalParameterHandle,
@@ -52,6 +53,7 @@ interface ArithmeticConfigurationTemplateData {
 
 export interface ArithmeticConfigurationTemplateRegistration {
   readonly session: BlueprintParameterSession;
+  readonly usedParameters: readonly BlueprintParameterHandle[];
 }
 
 interface ArithmeticTemplateBudget extends BlueprintParameterDataBudget {
@@ -171,6 +173,7 @@ function numberSlot(
   const slot = lookupBlueprintParameterSlot(value, 'number', session, path);
   if (slot !== undefined) {
     addParameterBudget(budget, slot.registration, path);
+    budget.usedParameters.add(slot.handle);
     return slot.handle as BlueprintNumberParameterHandle;
   }
   return int32(assertBlueprintParameterNumberValue(value, path, 'safe-integer'));
@@ -185,6 +188,7 @@ function signalSlot(
   const slot = lookupBlueprintParameterSlot(value, 'signal', session, path);
   if (slot !== undefined) {
     addParameterBudget(budget, slot.registration, path);
+    budget.usedParameters.add(slot.handle);
     return slot.handle as BlueprintSignalParameterHandle;
   }
   return canonicalizeBlueprintParameterSignal(value, path);
@@ -325,7 +329,10 @@ export function createArithmeticConfigurationTemplate(
     [arithmeticTemplateBrand]: true as const,
     ...skeleton,
   });
-  arithmeticTemplateRegistrations.set(template, Object.freeze({ session }));
+  arithmeticTemplateRegistrations.set(
+    template,
+    Object.freeze({ session, usedParameters: Object.freeze([...budget.usedParameters]) }),
+  );
   return template;
 }
 

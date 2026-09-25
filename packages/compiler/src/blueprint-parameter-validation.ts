@@ -20,6 +20,7 @@ import {
 
 export interface BlueprintParameterDataBudget {
   readonly active: WeakSet<object>;
+  readonly usedParameters: Set<BlueprintParameterHandle>;
   nodes: number;
 }
 
@@ -52,7 +53,7 @@ export interface BlueprintParameterBinding {
 export type BlueprintNumberDomain = 'finite' | 'safe-integer';
 
 export function createBlueprintParameterDataBudget(): BlueprintParameterDataBudget {
-  return { active: new WeakSet(), nodes: 0 };
+  return { active: new WeakSet(), usedParameters: new Set(), nodes: 0 };
 }
 
 function fail(code: 'CP1000' | 'CP1001', path: string, message: string, span?: SourceSpan): never {

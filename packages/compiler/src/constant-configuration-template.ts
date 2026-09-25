@@ -11,6 +11,7 @@ import {
   assertBlueprintParameterSession,
   BlueprintParameterError,
   findBlueprintParameterHandle,
+  type BlueprintParameterHandle,
   type BlueprintParameterSession,
   type BlueprintNumberParameterHandle,
   type BlueprintSignalParameterHandle,
@@ -52,6 +53,7 @@ export interface ConstantConfigurationTemplate {
 
 export interface ConstantConfigurationTemplateRegistration {
   readonly session: BlueprintParameterSession;
+  readonly usedParameters: readonly BlueprintParameterHandle[];
 }
 
 interface TemplateBudget extends BlueprintParameterDataBudget {
@@ -83,6 +85,7 @@ function accountParameter(
 ): BlueprintNumberParameterHandle | BlueprintSignalParameterHandle | undefined {
   const slot = lookupBlueprintParameterSlot(value, kind, session, path);
   if (slot === undefined) return undefined;
+  budget.usedParameters.add(slot.handle);
   const owned = slot.registration;
   const descriptorBytes = new TextEncoder().encode(
     JSON.stringify({
@@ -322,7 +325,10 @@ export function createConstantConfigurationTemplate(
       };
     }),
   });
-  templateRegistrations.set(template, Object.freeze({ session }));
+  templateRegistrations.set(
+    template,
+    Object.freeze({ session, usedParameters: Object.freeze([...budget.usedParameters]) }),
+  );
   return template;
 }
 

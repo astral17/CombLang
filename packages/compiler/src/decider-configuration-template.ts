@@ -17,6 +17,7 @@ import {
   assertBlueprintParameterSession,
   BlueprintParameterError,
   findBlueprintParameterHandle,
+  type BlueprintParameterHandle,
   type BlueprintNumberParameterHandle,
   type BlueprintParameterSession,
   type BlueprintSignalParameterHandle,
@@ -71,6 +72,7 @@ export interface DeciderConfigurationTemplate {
 
 export interface DeciderConfigurationTemplateRegistration {
   readonly session: BlueprintParameterSession;
+  readonly usedParameters: readonly BlueprintParameterHandle[];
 }
 
 interface DeciderTemplateBudget extends BlueprintParameterDataBudget {
@@ -221,6 +223,7 @@ function numberSlot(
   const slot = lookupBlueprintParameterSlot(value, 'number', session, path);
   if (slot !== undefined) {
     accountParameter(budget, slot.registration, path);
+    budget.usedParameters.add(slot.handle);
     return slot.handle as BlueprintNumberParameterHandle;
   }
   return int32(assertBlueprintParameterNumberValue(value, path, 'safe-integer'));
@@ -235,6 +238,7 @@ function signalSlot(
   const slot = lookupBlueprintParameterSlot(value, 'signal', session, path);
   if (slot !== undefined) {
     accountParameter(budget, slot.registration, path);
+    budget.usedParameters.add(slot.handle);
     return slot.handle as BlueprintSignalParameterHandle;
   }
   return canonicalizeBlueprintParameterSignal(value, path);
@@ -550,7 +554,10 @@ export function createDeciderConfigurationTemplate(
     fail('$', `template exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`);
   }
   const template = freezeDeep({ [deciderTemplateBrand]: true as const, ...skeleton });
-  templateRegistrations.set(template, Object.freeze({ session }));
+  templateRegistrations.set(
+    template,
+    Object.freeze({ session, usedParameters: Object.freeze([...budget.usedParameters]) }),
+  );
   return template;
 }
 
