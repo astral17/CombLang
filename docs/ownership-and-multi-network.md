@@ -1,8 +1,8 @@
-# Phase 4: ownership and multi-network design
+# Ownership and multi-network contract
 
-This document defines the intended semantic boundary for Phase 4. `destination.take(source)`, function-scoped `Readonly`/`Ref` borrows, explicit `Move<Network>` call/return transfer and slot replacement, ordinary shared-identity aliases, and immutable `pair(a, b)` input views are frozen and implemented. Other syntax below remains design material unless the [current language reference](language-reference.md) says otherwise.
+`destination.take(source)`, function-scoped `Readonly`/`Ref` borrows, explicit `Move<Network>` call/return transfer and slot replacement, ordinary shared-identity aliases, and immutable `pair(a, b)` input views are implemented and tested. This document records their current contract; the [language reference](language-reference.md) remains the user-facing guide to supported syntax.
 
-Phase 4 makes physical circuit topology explicit in the type and runtime models. A `Network` is an affine handle to one logical wire network: it may be read many times and referenced by ordinary JavaScript aliases, but those aliases share one ownership token rather than cloning ownership. Consuming that token invalidates every stale view. The phase also adds an immutable view over the two wire colors without turning that view into another writable network.
+Physical circuit topology is explicit in the type and runtime models. A `Network` is an affine handle to one logical wire network: it may be read many times and referenced by ordinary JavaScript aliases, but those aliases share one ownership token rather than cloning ownership. Consuming that token invalidates every stale view. `pair(a, b)` adds an immutable view over the two wire colors without turning that view into another writable network.
 
 ## Goals
 
@@ -14,7 +14,7 @@ Phase 4 makes physical circuit topology explicit in the type and runtime models.
 - report a static error only when invalidity is certain, and defer value-dependent cases to the elaboration runtime;
 - preserve source and dynamic-instance provenance in every ownership diagnostic.
 
-Phase 4 does not add multi-file modules, a hardened security sandbox, Factorio object constructors, physical wire routing, or the final blueprint codec.
+This ownership contract does not define multi-file linking, a fully hardened security sandbox, physical wire routing, or native Factorio behavior. Entity construction and the bounded blueprint exchange codec are separate implemented surfaces with their own contracts.
 
 The compiler permits producer attachment through both `const` and `let` Network bindings. This is now intentional: `const` prevents JavaScript rebinding, while topology writability comes from the Network capability. Use `let` only when the binding itself must be replaced, for example after a consuming function returns a fresh ownership generation.
 
@@ -139,7 +139,7 @@ const values = [a];
 
 Executed Network values are frozen nominal handles. Mutable ownership and borrow state is stored in a session-local `WeakMap`, not as an `ownership` or `borrow` property on the source-visible object. Consequently reflection cannot replace the owner, generation snapshot, capability, or borrow lifecycle, and copying visible fields cannot forge a valid handle. Plans and diagnostics still retain the same Network names and declaration provenance.
 
-Arrays and objects remain supported. They may own Networks, and reading `arr[i]` or `record.output` may borrow the contained handle for circuit expressions and producer attachment. Phase 4 must preserve that identity through dynamic indexing:
+Arrays and objects remain supported. They may own Networks, and reading `arr[i]` or `record.output` may borrow the contained handle for circuit expressions and producer attachment. Dynamic indexing preserves the contained handle identity:
 
 ```ts
 const output = new Network();
@@ -259,7 +259,7 @@ Runtime enforcement must use the same diagnostic result path as other elaboratio
 8. Expose identical results through `factorio-dsl check` and the browser workbench. Implemented: CLI JSON and the browser plan retain executed `capabilityUses`, `networkTransfers`, and `networkPairs`; the validated direct-plan execution result retains capability audit metadata beside EG/NCIR.
 9. Document stable diagnostics and move accepted syntax into the current language reference.
 
-Phase 4 is complete when each capability transition and `pair` form has semantic, transformed-runtime, EG/NCIR, CLI, and end-to-end tests; uncertain static cases are proven by runtime tests; and no candidate syntax is described as implemented before those tests pass.
+The implementation evidence below covers capability transitions and `pair` across semantic checks, transformed runtime, EG/NCIR, CLI, and end-to-end tests. Value-dependent cases are established by runtime tests; candidate syntax is not part of the current contract until implemented and tested.
 
 The completion audit is checked at these boundaries:
 
@@ -272,9 +272,11 @@ The completion audit is checked at these boundaries:
 | User-facing pipelines           | `apps/cli/src/main.test.ts` and `apps/web/src/compile-source.test.ts` verify successful descriptor serialization plus structured source-aware failures.                                                     |
 | Cross-layer dispatch contract   | `packages/runtime/src/language-contract.test.ts` proves ordinary JavaScript names remain native while DSL handles reach one physical plan.                                                                  |
 
-This matrix closes Phase 4. Future Entity handles and object ports build on it in Phase 6 rather than reopening Network ownership semantics.
+This matrix records the implemented Network ownership contract. Entity identity and any Entity-to-Network projections are separate profile-owned capabilities; they do not change Network ownership semantics.
 
-## Open decisions
+## Deferred design questions
+
+These questions are not additional supported syntax or guarantees:
 
 - whether producer handles need capabilities beyond the implemented `Producer`, `DeciderCombinator`, `ArithmeticCombinator`, and `ConstantCombinator` annotations;
 - whether `pair` is restricted to exactly two Networks permanently or later generalized under another name;

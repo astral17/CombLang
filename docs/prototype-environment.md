@@ -12,7 +12,7 @@ simulator and must not be a process-global mutable singleton.
 
 ## Package boundary
 
-Phase 5.5 provides `packages/prototypes` with these responsibilities:
+`packages/prototypes` provides these responsibilities:
 
 - versioned normalized schema and structural validation;
 - environment metadata and a deterministic content identity;
@@ -21,14 +21,16 @@ Phase 5.5 provides `packages/prototypes` with these responsibilities:
 - small contract fixtures and a deterministic generated-asset boundary with a
   provenance manifest.
 
-The implemented foundation now also includes an offline static-dump normalizer,
+The implemented foundation also includes an offline static-dump normalizer,
 an identity-bound generated asset plus provenance manifest, and explicit CLI
 database selection with optional identity pins. Versioned CLI project profiles,
-browser-local file selection and identity-keyed IndexedDB persistence are
+browser-local file selection, and identity-keyed IndexedDB persistence are
 implemented. The checked-in Space Age structural asset is available for explicit
 loading and offline integrity checks, and the browser uses it as a lazy first-run
-profile. Runtime-only capability fields remain unknown and belong to later Phase
-6/7 feature slices; they are not a Phase 5.5 release prerequisite.
+profile. The normalized provider does not infer runtime circuit behavior from
+prototype geometry. Host-side Entity provisioning is separate: its conservative
+fallback records unknown connector structure, while any connector, read,
+computation, or callable capability must come from an explicit trusted profile.
 
 The raw normalizer is transitional, not a live game snapshot. See [Prototype truth
 sources and audit follow-up](prototype-truth-sources.md) for the static-source split,
@@ -129,8 +131,9 @@ A separate offline CombLang converter selects and normalizes the small v1 schema
 without loading raw prototype JSON in the compiler. This is static data resolution,
 not a live game or runtime `LuaPrototypes` view. The former runtime-wide exporter was
 removed after it produced no required structural facts beyond final `data.raw`.
-Runtime-only capability fields remain unknown; later feature slices may add an
-identity-bound reviewed source without changing this provider boundary.
+The normalized static provider does not assert runtime-only circuit behavior.
+Host-bound Entity profiles and identity-bound evidence are separate from this
+provider boundary and do not change the static database identity.
 
 The checked-in Base + Space Age profile is ready immediately: the browser loads its
 integrity-checked generated pair lazily on first run. For a custom modpack, the user
@@ -396,9 +399,9 @@ still separate from successful structural validation.
 The raw entity records expose connector geometry and wire distance, but not the
 normalized behavior-level flags in `EntityCircuitCapabilities`. The converter
 therefore emits entities and crafting data while setting
-`entityCircuitCapabilities: false`; those runtime-only fields remain unknown. A
-later Phase 6/7 feature slice may define an accepted static or reviewed source for
-them. The converter never infers them merely from the presence of a connector.
+`entityCircuitCapabilities: false`; those fields remain unknown unless an
+explicit identity-bound supplement supplies assertions. Neither the converter
+nor a visible connector infers them.
 
 The pinned Factorio 2.1.17 API descriptions document the available prototype
 shapes, but they do not turn runtime-only behavior into static facts. The removed
@@ -482,9 +485,9 @@ are untouched. Validation happens before the CLI opens the output for writing.
 
 The identity check prevents accidental cross-database mixing; it does not certify
 the truth of manually supplied assertions. Runtime-only capability fields remain
-unknown when the static database does not contain them. A later feature slice may
-add an identity-bound reviewed source, but the shipped browser never requires a
-live game connection or a user-collected runtime artifact.
+unknown when the static database does not contain them. Identity-bound supplements
+can carry explicit assertions, but the shipped browser never requires a live game
+connection or a user-collected runtime artifact.
 
 ### Identity-bound evidence manifests
 
@@ -603,8 +606,8 @@ prefixed `comblang-prototypes-v1-sha256:`. It includes schema and generator
 versions, Factorio version, sorted expansions/mods, startup-settings identity,
 capability coverage, normalized prototypes, and indexes. Informational
 `generatedAt` provenance is deliberately excluded. This is a cache/project
-identity boundary, not yet the optional reproducible-build policy from Phase
-11; a future schema version may select a different explicitly tagged algorithm.
+identity boundary, not a reproducible-build policy. A future schema version may
+select a different explicitly tagged algorithm.
 
 Canonical string ordering is locale-free UTF-16 code-unit order. The September 4
 collation fix can change identities even for unchanged JSON when its ordering
@@ -715,13 +718,13 @@ report `CLI1005`; all loading/selection errors stop before source/test execution
 The checked-in [prototype-stack project](../examples/prototype-stack/comblang.json)
 provides a fully pinned synthetic example without downloads.
 
-## Phase boundary
+## Current package and evidence boundaries
 
-Phase 5 testbench work does not depend on prototype data. The schema, provider,
-identity, validator, JSON boundary, and synthetic fixtures now establish the
-core Phase 5.5 seam. The explicit runtime, browser-library, and CLI-library
-injection seam and persisted CLI/browser profile loading are now established.
-Dump/conformance fixtures and the built-in vanilla/Space Age snapshot remain before Phase 6
-typed objects introduce entity- and recipe-specific configuration. Phase 8 then
-extends concrete configuration values with blueprint parameters without
-changing the provider boundary.
+The schema, provider, identity, validator, JSON boundary, normalized static
+dump, built-in asset, and runtime/browser/CLI loading seams are implemented.
+The simulator consumes lowered devices and does not depend on prototype data.
+Provider records establish static identity and structural facts; profile-backed
+Entity connectors, configuration, callable behavior, and computation remain
+separate host authority. Blueprint parameters bind concrete configuration above
+the provider boundary. None of these layers alone establishes native Factorio
+behavior.

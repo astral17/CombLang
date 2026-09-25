@@ -1,8 +1,8 @@
 # Testbench
 
-Phase 5 introduces a browser/Node-neutral `TestSession` around an already
-elaborated circuit. Creating or using a test session does not execute the source
-program again and does not change EG/NCIR topology.
+The browser/Node-neutral `TestSession` operates on an already elaborated circuit.
+Creating or using a test session does not execute the source program again and
+does not change EG/NCIR topology.
 
 The testbench provides persistent external drives, one-boundary pulses,
 clearing, clock advancement, and snapshot reads:
@@ -42,7 +42,7 @@ circuit. A handle from another runtime is rejected instead of being matched by
 its textual ID. `read()` returns a copy, so test code cannot mutate a committed
 snapshot.
 
-## Executable files and phase boundaries
+## Executable files
 
 A runnable testbench consists of two files:
 
@@ -54,7 +54,7 @@ The current test file is **not** passed through the DSL operator transform.
 Use `session.expectSignal(output, A)`, not `output[A]` JavaScript indexing;
 use `[[A, 5]]` for drive/mock values, not source-only `5 * A`. Imports,
 TypeScript annotations, and asynchronous tests are not supported by this
-temporary function-body execution surface. Top-level test-file code runs once
+current synchronous test-callback surface. Top-level test-file code runs once
 to register callbacks; each callback receives a fresh circuit/session.
 
 Compilation executes the source JavaScript once to produce a direct plan. The
@@ -87,12 +87,12 @@ Factorio conformance evidence: uncertain native semantics still need versioned
 game exports/fixtures. A host-bound source Entity can appear in the same
 generic object adapter and test-session debug surface, but that adapter remains
 topology-only: it is not a typed entity, inventory, logistics, or native device
-simulation. Those state models and facades remain later Phase 6 work.
-See [Phase 5 acceptance](phase-5-acceptance.md) for commands, complete examples,
-coverage and the completed MVP boundary.
+simulation. The adapter does not provide generic inventory, logistics,
+research, or native-device simulation. See [testbench acceptance](testbench-acceptance.md)
+for commands, complete examples, coverage, and the tested simulator boundary.
 
-The exact `Selector({ input, operation, ... })` source path is an Entity v7
-extension of this same testbench boundary. A linked `select` or `count` device
+The exact `Selector({ input, operation, ... })` source path uses the same
+testbench boundary. A linked `select` or `count` device
 can be driven and inspected through `execution.createTestSession()` after
 hydration, including pair input and the one-boundary `T+1` response. Its
 deterministic ordering, count, dynamic-index, and empty/out-of-range behavior
@@ -368,7 +368,7 @@ details. The complete matcher contract is documented with the
 
 ## Generic object adapters
 
-At tick zero, `adaptObject(adapter, instance)` registers a future typed object's
+At tick zero, `adaptObject(adapter, instance)` registers an object's
 stable identity and named connector mapping without changing EG/NCIR. A
 connector declares the Networks aggregated for input and the Networks receiving
 its output contribution. `readObjectInput(handle, connector)` returns the
@@ -388,7 +388,7 @@ function can return a connector-specific sparse bus, Known/Unknown value, or
 mode. Custom policies run and are copied once at registration, so tick-dependent
 external behavior remains a reactive model. See
 [generic object test adapters](object-test-adapters.md) for the complete
-contract and Phase 6 boundary.
+contract and its separation from profile-backed Entity behavior.
 
 Persistent manual output is available through
 `mock(object, connector?).output(values)`. Omitting the connector requires an
@@ -470,9 +470,9 @@ worker is a thin availability wrapper, while
 runner under Node. Consequently CLI JSON and browser messages preserve the same
 failure kind, code, details, candidates, source position, and trace schema.
 
-This is an execution surface for the Phase 5 functionality, not the final test
-language syntax. The runner, `TestSession`, assertions, and result model do not
-depend on the callback spelling, so a later test compiler can replace it. The
+This is the current execution surface for test callbacks. The runner,
+`TestSession`, assertions, and result model do not depend on the callback
+spelling. The
 worker is an availability boundary, not yet the deferred hardened module
 sandbox.
 

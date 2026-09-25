@@ -29,12 +29,12 @@ is useful as a structural component-depth indicator, but it is explicitly not a
 settle time or a bound on repeated circulation through the loop. Feedback SCCs
 are always reported separately.
 
-Arithmetic, Decider, and Constant combinators currently have a declared latency
-of one committed simulator tick. The default resolver enumerates those supported
-kinds rather than assigning one tick to every future entity. A caller may supply
-a different resolver; `undefined` marks an unmodelled latency and propagates to
-the global depth while remaining distinct from feedback. Invalid negative or
-non-integer latencies are rejected.
+Arithmetic, Decider, Constant, and Selector combinators currently have a declared
+latency of one committed simulator tick. The default resolver enumerates those
+supported kinds rather than assigning a latency to every Entity or externally
+modeled device. A caller may supply a different resolver; `undefined` marks an
+unmodelled latency and propagates to the global depth while remaining distinct
+from feedback. Invalid negative or non-integer latencies are rejected.
 
 The browser proof displays graph depth, feedback SCC count, and whether all device
 latencies are known as separate values. Its default short preview may use depth

@@ -56,7 +56,7 @@ microtasks. A replaced physical declaration stays inspectable as an internal
 ownership aliases remain marked moved and cannot be used as test targets.
 Readonly returns can still be external test targets, just like physical declarations.
 
-Entity v3 executions add a parallel physical-object collection to every exact
+Entity executions add a parallel physical-object collection to every exact
 scope. `scope.entity(index | id)` addresses the scope-local one-based Entity
 ordinal or physical `EntityId`; `scope.entityByGlobalOrdinal(ordinal)` addresses
 the lowered physical ordinal within that scope, and `scope.entityList()` returns

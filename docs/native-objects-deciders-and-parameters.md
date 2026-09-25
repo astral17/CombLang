@@ -88,7 +88,7 @@ single output value or recursively nested plain arrays and records per branch.
 Flattening is ordered and preserves duplicates. An empty normal branch is
 valid only when the else branch has rows; an empty else branch is canonicalized
 away. A row carries branch, dense ordinal, source
-boundary, dynamic instance path, and syntax intent through v6 plan/EG/NCIR/
+boundary, dynamic instance path, and syntax intent through canonical plan/EG/NCIR/
 resolved/debug transport. Nested JavaScript mutations before the final
 container is supplied do not receive invented provenance.
 

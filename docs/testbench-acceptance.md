@@ -1,8 +1,8 @@
-# Phase 5 acceptance
+# Testbench acceptance
 
-Phase 5's MVP testbench acceptance is complete, including caller-binding queries
-for existing Networks returned by functions. The runnable examples and layered
-checks below define this boundary; they do not claim native Factorio conformance.
+The testbench acceptance includes caller-binding queries for existing Networks
+returned by functions. The runnable examples and layered checks below define
+this boundary; they do not claim native Factorio conformance.
 
 ## Run without a browser or downloads
 
@@ -113,8 +113,9 @@ non-moved root bindings, so the returned Network appears as `output`, not only `
 See [debug-index.md](debug-index.md) for the exact alias snapshot contract and
 limits on reflecting arbitrary JavaScript containers or uninitialized variables.
 
-## Later-phase work
+## Limits
 
-The callback spelling remains provisional by design. Hardened sandboxing,
-native Factorio conformance, richer object state, and the final schematic UI
-are later-phase work, not implicit promises made by these examples.
+The callback spelling remains provisional by design. A capability-secure
+sandbox, native Factorio conformance, generic research/device state, and
+schematic editing are not provided by the testbench and are not implicit
+promises made by these examples.

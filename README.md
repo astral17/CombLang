@@ -1,6 +1,6 @@
 # CombLang
 
-CombLang is an early browser-only implementation of a TypeScript-shaped structural HDL for Factorio 2.1 circuit networks. It has no backend or project-owned Factorio component. The checked-in design and implementation notes live in [`docs/architecture.md`](docs/architecture.md).
+CombLang is a browser-first TypeScript-shaped circuit DSL for Factorio 2.1, with shared compiler/runtime support for the CLI and browser Worker. It has no backend or project-owned Factorio component. The checked-in architecture and implementation notes live in [`docs/architecture.md`](docs/architecture.md).
 
 The current repository implements the completed Phase 0–7 foundation, from the parser and Factorio semantics kernel through executed TypeScript-shaped source, ownership, testbench/prototype environments, persistent schema-configured Entity handles, and exact generated combinator configurations:
 
@@ -31,7 +31,7 @@ The current repository implements the completed Phase 0–7 foundation, from the
 - [x] Phase 5 — deterministic testbench, external-world adapters, traces and interactive timelines; browser-first prototype environments with reproducible `factorio.exe --dump-data` normalization, bundled and custom modpack profiles, identity-bound provenance, persistence, integrity checks, and offline lifecycle.
 - [x] Phase 6 — persistent physical Entity identity, provider-authorized generic and modded construction, explicit connector binding and placement, profile-free replay transport, bounded raw and schema-checked Blueprint configuration, structural family facades, and separately tracked structural/implementation/native evidence.
 - [x] Phase 7 — exact Constant/Arithmetic/Decider and deterministic Selector computation; linked physical Entity transport; ergonomic Constant sections; generated one-device condition/output configurations; bounded provenance, replay, blueprint, CLI/Worker, and model acceptance with native-evidence limits kept explicit.
-- [ ] Phase 8 — parameter-ready configuration IR, placement-time `BlueprintFormula`, dependent blueprint parameters, FCIR, and the Factorio 2.1 codec with fixture-backed semantic round trips.
+- [ ] Phase 8 — symbolic blueprint parameters and formulas, shared FCIR/native export projection, dependent configuration binding, fixture-backed parameter/formula evidence, and browser integration. The bounded lossless exchange codec is implemented; native semantic round trips remain evidence-gated.
   - [x] Preserve per-operand/per-output red-green selection and nested AND/OR semantics in the early blueprint preview; cover truth tables and executed source export, with bounded condition expansion. Native round-trip fixtures remain pending.
   - [ ] Preserve associated source `//` comments as optional combinator descriptions through IR/export; define ambiguous comment attachment and explicit-description precedence, provide an export opt-out, and verify native round trips.
 - [ ] Phase 9 — interactive schematic UI with provenance cross-selection, grouping, layout, inspection, and timing views.
@@ -43,24 +43,24 @@ The current repository implements the completed Phase 0–7 foundation, from the
   - [ ] Decide whether the provisional `input.into(A)` spelling is valid only in final Each-mode after conformance evidence; keep it Decider-output-specific and leave raw `input[A]` legal.
   - [ ] Enable `decider.each-concrete-copy` as a note/hint only after its legal native behavior, explicit-intent spelling, and fixture evidence are complete.
 
-Later phases cover reviewed prototype capabilities, typed Factorio objects, exact constructors, the verified blueprint codec and exchange strings, schematic editing, physical placement, multi-file language services, reproducible builds, and a hardened sandbox.
+Remaining work covers additional reviewed prototype capabilities, fixture-backed native parameter/formula semantics, interactive schematic editing and safe write-back, physical placement validation, multi-file language services, reproducible builds, and a fully hardened sandbox.
 
 ## Documentation
 
 - [Getting started](docs/getting-started.md) — install, validate, build, and run the browser workbench.
 - [Current language reference](docs/language-reference.md) — the exact implemented syntax, diagnostics, and known gaps.
-- [Phase 4 ownership design](docs/ownership-and-multi-network.md) — completed affine ownership, borrows, consuming transfer, read-only `pair`, and its acceptance matrix.
+- [Ownership and multi-network contract](docs/ownership-and-multi-network.md) — affine ownership, borrows, consuming transfer, read-only `pair`, and its acceptance matrix.
 - [Native objects, Deciders, and parameters](docs/native-objects-deciders-and-parameters.md) — native-object contracts, semantic domains, and conformance requirements.
-- [Prototype environment](docs/prototype-environment.md) — the Phase 5.5 normalized static-data provider, asset loading, and environment-identity boundary.
+- [Prototype environment](docs/prototype-environment.md) — normalized static data, asset loading, and the environment-identity boundary.
 - [Circuit graph metrics](docs/circuit-graph-metrics.md) — resolved NCIR dependencies, DAG depth, feedback SCCs, and unknown-latency propagation.
 - [Pinned Factorio API inputs](tools/factorio-api/README.md) — versioned local schemas, hashes, license, reviewed ControlBehavior coverage, and offline regeneration.
-- [Prototype truth sources and audit follow-up](docs/prototype-truth-sources.md) — static-data authority, identity migration, and the remaining runtime-only capability boundary.
+- [Prototype evidence and data boundaries](docs/prototype-truth-sources.md) — static-data authority, identity migration, and the boundary between profiles and runtime evidence.
 - [Runtime debug index](docs/debug-index.md) — exact lexical scopes, physical Network/Producer mappings, deterministic queries, and current ambiguity boundary.
-- [Source-linked schematic editing](docs/source-linked-schematic.md) — planned comment descriptions, diagram-to-source navigation, and safe `.at` write-back.
+- [Source-linked schematic editing](docs/source-linked-schematic.md) — current source provenance and the limits of schematic navigation and source write-back.
 - [Executable testbench](docs/testbench.md) — the current JavaScript test API, clock, assertions, traces, and browser/CLI behavior.
-- [Phase 5 acceptance](docs/phase-5-acceptance.md) — runnable MemoCell/object examples, layered coverage, and the completed MVP boundary.
+- [Testbench acceptance](docs/testbench-acceptance.md) — runnable MemoCell/object examples, layered coverage, and the tested simulator boundary.
 - [Generic object test adapters](docs/object-test-adapters.md) — stable object identity, connector snapshots, default output injection, and the mock/model policy boundary.
-- [Combinator and Entity value policy](docs/producer-materialization-policy.md) — eager combinator output lanes, Network narrowing, and future typed-object identity.
+- [Combinator and Entity value policy](docs/producer-materialization-policy.md) — eager combinator output lanes, Network narrowing, and profile-backed Entity identity.
 - [Entity pipeline](docs/entity-pipeline.md) — canonical profiles, replay authority, configuration, linked computation, resolved transport, hydration, and native-evidence limits.
 - [Diagnostics](docs/diagnostics.md) — compiler/runtime code families and the most common actionable errors.
 - [Blueprint JSON preview](docs/blueprint-json.md) — generated structure, wiring model, and current limitations.

@@ -1,7 +1,7 @@
 # Generic object test adapters
 
-Phase 5 defines a simulator-level boundary for testing future typed Factorio
-objects without introducing those Phase 6 classes early. A
+The simulator provides a generic boundary for testing host-provided object
+instances without inferring their Factorio behavior. A
 `CircuitObjectAdapter<Instance, ConnectorName>` maps one object instance onto:
 
 - a stable adapter ID and stable per-adapter instance ID;
@@ -187,21 +187,22 @@ Networks. Both use the shared sparse/delta `comblang-trace` document and retain
 Known/Unknown transitions. Output is known empty at `T0` and first reflects the
 fallback, mock, or model after the first successful boundary.
 
-## Phase boundary
+## Evidence boundary
 
 The synthetic adapter tests prove stable identity, multi-Network input
 snapshots, copied default output, manual/model replacement and clear, scheduled
 changes, immutable transactional model state, multi-output single evaluation,
 self-contamination, instance/class/global resolution, strict Unknown and zero
 policies, ordinary aggregation, Unknown provenance, foreign-handle rejection,
-tick-zero registration, and isolated object input/output traces. Phase 6 typed
-objects can implement the same mapping with real connector schemas without
-changing the adapter or trace contracts.
+tick-zero registration, and isolated object input/output traces. A trusted
+physical Entity profile may supply connector bindings to this adapter; that
+mapping is separate from synthetic test evidence and does not prove native
+connector behavior or device simulation.
 
-## Physical Entity v3 bridge
+## Physical Entity bridge
 
-The current Entity v3 execution uses this generic boundary without adding a
-typed facade. One `ExecutedEntityDirectPlan` physical record maps to one
+The current physical Entity execution uses this generic boundary. One
+`ExecutedEntityDirectPlan` physical record maps to one
 session-local adapter instance. Its connector descriptors are derived only from
 the trusted, lowered physical bindings: lanes are grouped by physical connector,
 input/output Network IDs are deduplicated in stable order, and unbound or

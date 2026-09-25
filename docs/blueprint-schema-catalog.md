@@ -74,16 +74,17 @@ complete 116-reference closure. The following matrix records the current
 representative checked evidence without treating it as a native Factorio
 compatibility claim:
 
-| Family             | Structural catalog coverage                          | Checked validation evidence                               | Raw fallback | Native evidence |
-| ------------------ | ---------------------------------------------------- | --------------------------------------------------------- | ------------ | --------------- |
-| Logistics          | Full generated variant/reference graph               | `logistic-container` request sections and filters         | Available    | Not captured    |
-| Belts              | Full generated variant/reference graph               | `transport-belt` network settings and read mode           | Available    | Not captured    |
-| Displays           | Full generated variant/reference graph               | `display-panel` text, icon, and nested parameters         | Available    | Not captured    |
-| Train stops        | Full generated variant/reference graph               | `train-stop` station, color, limits, and control behavior | Available    | Not captured    |
-| Filters            | Full generated variant/reference graph               | `inserter` filter mode, positions, and item filters       | Available    | Not captured    |
-| Recipes            | Full generated variant/reference graph               | `assembling-machine` recipe and control behavior          | Available    | Not captured    |
-| Transport settings | Full generated variant/reference graph               | `loader` connection type, filter mode, and filters        | Available    | Not captured    |
-| Selector           | `SelectorCombinatorParameters` with six exact groups | `select`, `count`, `random`, `time`, and group rejection  | Available    | Not captured    |
+| Family             | Structural catalog coverage                                           | Checked validation evidence                                                         | Raw fallback | Native evidence |
+| ------------------ | --------------------------------------------------------------------- | ----------------------------------------------------------------------------------- | ------------ | --------------- |
+| Logistics          | Full generated variant/reference graph                                | `logistic-container` request sections and filters                                   | Available    | Not captured    |
+| Belts              | Full generated variant/reference graph                                | `transport-belt` network settings and read mode                                     | Available    | Not captured    |
+| Displays           | Full generated variant/reference graph                                | `display-panel` text, icon, and nested parameters                                   | Available    | Not captured    |
+| Train stops        | Full generated variant/reference graph                                | `train-stop` station, color, limits, and control behavior                           | Available    | Not captured    |
+| Filters            | Full generated variant/reference graph                                | `inserter` filter mode, positions, and item filters                                 | Available    | Not captured    |
+| Recipes            | Full generated variant/reference graph                                | `assembling-machine` recipe and control behavior                                    | Available    | Not captured    |
+| Transport settings | Full generated variant/reference graph                                | `loader` connection type, filter mode, and filters                                  | Available    | Not captured    |
+| Labs               | `lab` and `LabBlueprintControlBehavior` reference `ResearchCondition` | `read_contents` and `technology_level_signal` SignalID through source `Entity(...)` | Available    | Not captured    |
+| Selector           | `SelectorCombinatorParameters` with six exact groups                  | `select`, `count`, `random`, `time`, and group rejection                            | Available    | Not captured    |
 
 These representatives are table-driven tests against the generated descriptors,
 not a claim that every field is implemented. Known scalar families are checked
@@ -91,6 +92,15 @@ by the structural validator; unfamiliar scalar descriptors are reported as
 `unassessed` and require the explicit `{ raw: ... }` form. `raw` preserves a
 bounded caller payload, but it does not add schema, simulation, or native
 authority.
+
+For `entity:lab`, the pinned provider establishes blueprint eligibility and the
+documented schema accepts a checked `control_behavior` fragment containing
+`read_contents` and `technology_level_signal`. Its conservative fallback profile
+still has unknown connector structure, no connectors or features, no default-read
+projection, and no callable projection. This is structural JSON evidence only:
+the Lab control-behavior catalog marks implementation `unassessed-per-field`
+and native evidence `not-captured-by-catalog`. CombLang does not infer Lab
+connectors, evaluate research, or claim native Factorio behavior.
 
 ## Regeneration
 

@@ -1,10 +1,11 @@
 # Source-linked schematic editing
 
-Status: future design requirements, not implemented UI or language syntax.
-Comment export belongs to the metadata/blueprint work in Phase 8; schematic
-navigation and source edits belong to Phase 9, with physical placement constraints
-in Phase 10. The current debug index already connects physical producers to source
-spans, instance paths, and resolved placement, but is not yet a source-edit plan.
+CombLang's debug index connects physical producers to source spans, dynamic
+instance paths, and resolved placement. This provenance supports inspection; it
+is not a general schematic-to-source editing plan. Automatic comment export,
+rendered-schematic navigation, and drag-to-source write-back are not implemented.
+The constraints below describe the safety boundary any such editor would need;
+they do not describe current UI behavior.
 
 ## Shared provenance
 

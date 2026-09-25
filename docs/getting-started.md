@@ -1,6 +1,6 @@
 # Getting started
 
-CombLang currently implements the source compiler, ownership/multi-network runtime and Phase 5 MVP testbench of a TypeScript-shaped structural HDL for Factorio 2.1 circuit networks. Phase 5.5 adds explicit prototype environments. The browser workbench can parse, lower, color, simulate, and generate an early uncompressed blueprint JSON preview for the supported source subset locally. Exchange-string encoding and the verified Phase 8 blueprint codec are not implemented yet.
+CombLang is a browser-first TypeScript-shaped DSL for Factorio 2.1 circuit networks. Its current pipeline executes source, validates ownership/topology and wire colors, lowers supported circuits to canonical physical IR, and can simulate them and generate readable Blueprint JSON. The repository also provides explicit prototype environments, profile-backed Entity construction, a simulator testbench, and a bounded lossless blueprint exchange codec. Checked schema shape, generated JSON, and simulator results do not by themselves establish native Factorio acceptance or behavior.
 
 The executable examples include [`examples/scale/main.factorio.ts`](../examples/scale/main.factorio.ts) for ordinary composition, [`examples/take/main.factorio.ts`](../examples/take/main.factorio.ts) for zero-tick network union, [`examples/borrow/main.factorio.ts`](../examples/borrow/main.factorio.ts) for non-owning function capabilities, [`examples/move/main.factorio.ts`](../examples/move/main.factorio.ts) for explicit ownership transfer across a call, [`examples/move-slots/main.factorio.ts`](../examples/move-slots/main.factorio.ts) for replacing moved variable/array/object owners, and [`examples/pair/main.factorio.ts`](../examples/pair/main.factorio.ts) for reading both circuit-wire colors through one immutable input view.
 
@@ -73,8 +73,7 @@ npm run cli -- check fixtures/language/scale.ts
 
 The CLI `check` command validates TypeScript syntax, runs the non-executing DSL semantic pass, executes compile-time elaboration, and validates the resulting circuit topology and color constraints. Use `--json` for structured diagnostics, the generated producer count, and `capabilityUses`: the executed `Readonly`/`Ref`/`Move` function-boundary audit descriptors with their Network, parameter, optional color requirement, source span, and dynamic instance path. The browser result exposes the same descriptors on `result.plan.capabilityUses`; it also retains `networkPairs` and `networkTransfers`.
 
-The temporary Phase 5 test syntax is also available without starting the web
-workbench:
+The CLI testbench is also available without starting the web workbench:
 
 ```sh
 npm run cli -- test --json main.factorio.ts circuit.test.js
@@ -91,7 +90,7 @@ The browser workbench adds the live simulation proof and blueprint preview, but
 is not required for compiler/runtime validation or test execution.
 
 Runnable three-test examples are provided for a
-[feedback MemoCell and a synthetic external object](phase-5-acceptance.md).
+[feedback MemoCell and a synthetic external object](testbench-acceptance.md).
 They need no external game data or backend service.
 
 The browser has a bundled Base + Space Age profile. It loads that profile lazily on

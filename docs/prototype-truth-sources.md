@@ -1,9 +1,9 @@
-# Prototype truth sources and September audit follow-up
+# Prototype evidence and data boundaries
 
-Status: reviewed static data is the structural input; runtime-only behavior remains
-unknown. This records the triage of the September 4 master audit and additional
-design notes against the current implementation, not an assertion that every
-recommendation has been implemented.
+Reviewed static data is the structural input. It does not prove runtime circuit
+behavior. Host-bound Entity profiles can separately authorize specific compiler
+or simulator capabilities; synthetic fixtures and checked Blueprint structure
+remain distinct from independently verified native behavior.
 
 ## Three different kinds of evidence
 
@@ -11,7 +11,7 @@ recommendation has been implemented.
 | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | Raw data-stage dump          | Official `factorio.exe --dump-data` output: finalized modded `data.raw`, typed recipe rows, structural prototype fields, and diagnostics from the reviewed static-input pipeline | Runtime-only circuit behavior or environment identity without metadata |
 | Pinned API metadata          | Versioned local Factorio API descriptions used to validate the static normalizer and its supported shapes                                                                        | A live game connection or complete capability profile                  |
-| Reviewed capability evidence | Explicit, identity-bound evidence accepted for a later feature slice                                                                                                             | Untested features or another mod/version/settings combination          |
+| Reviewed capability evidence | Explicit assertions bound to an exact provider identity and accepted only by the corresponding host policy                                                                       | Untested features or another mod/version/settings combination          |
 
 The compiler receives a normalized immutable provider, not a raw dump or a live
 game connection. The shared input loader can now accept normalized v1 JSON or a
@@ -89,20 +89,19 @@ In particular:
   unions without serializing duplicate role/kind fields. These boundaries have
   explicit regression coverage at the correct source boundary.
 - Circuit connector geometry is not proof of behavior-level capabilities. Keep the
-  existing identity-bound supplement and evidence-manifest checks; runtime-only
-  capability fields remain unknown until a later Phase 6/7 feature slice defines an
-  accepted static or reviewed source.
+  identity-bound supplement and evidence-manifest checks; fields absent from the
+  static database remain unknown unless an explicit identity-bound assertion is
+  supplied. A fallback Entity profile does not infer connectors from geometry.
 - Duplicate ingredients and numeric limits need their own validation pass after
   the role/source split. Duplicate **products** may be intentional and must remain.
 
-Boundary for the bundled first-run database: checked-in reproducible static data,
-explicit metadata for the selected environment, identity-bound provenance, and
-integrity verification. For custom profiles, the same boundary accepts either the
-official raw dump plus explicit metadata or its normalized v1 result. This structural
-boundary is complete. Per-Entity behavior
-and capability verification is deliberately deferred to the Phase 6/7 feature
-slices; no game execution or user-collected artifact is required by the shipped
-browser product.
+Boundary for the bundled first-run database: checked-in static data, explicit
+metadata for the selected environment, identity-bound provenance, and integrity
+verification. For custom profiles, the same boundary accepts either the official
+raw dump plus explicit metadata or its normalized v1 result. Entity profiles may
+provide separately authorized capabilities, but structural provider data alone
+does not verify per-Entity behavior. The shipped browser does not require a live
+game connection or user-collected runtime artifact.
 
 The deterministic asset generator/check now provides the release seam for those
 inputs, and the confirmed Space Age profile is checked in under
@@ -110,7 +109,7 @@ inputs, and the confirmed Space Age profile is checked in under
 normalized output bytes, schema versions, and database identity; it does not turn
 structural extraction into runtime behavior evidence or supply missing environment
 provenance. The browser uses this structural asset as its first-run profile, and
-its integrity check is part of the completed Phase 5.5 boundary. No generic runtime
+its integrity check is part of the shipped provider boundary. No generic runtime
 capture format is retained.
 
 ## Implemented audit corrections
@@ -150,14 +149,15 @@ also records the explicit raw-flag proof used for blueprint eligibility. Older
 valid schema-v1 JSON retains its recorded generator label when loaded; the loader
 does not rewrite it to the current raw converter identity.
 
-## Additional design notes: planned, not current syntax
+## Entity implementation and evidence boundary
 
-Phase 6 should start with one persistent `Entity(prototype, config)` identity and
-a generic modded fallback, then typed facades over that shared implementation.
-Placement, inspection, mocks, and circuit connections refer to the same physical
-handle. Keep native configuration, circuit conditions, and future logistic
-conditions separate. Explicit named connectors are required where the default
-would be ambiguous. This does not imply simulating the entire game.
+Source `Entity(prototype, configuration?)` uses persistent profile-backed
+identity and a conservative fallback for eligible provider records. Placement,
+inspection, mocks, and declared circuit connections refer to that physical
+Entity. Checked Blueprint fields are validated separately from profile-owned
+connectors, computation, callable projections, and native behavior. Explicit
+named connectors are required where a trusted profile's topology is ambiguous.
+This does not imply simulating the entire game.
 
 The following language/runtime work is tracked separately from prototype data:
 
@@ -186,5 +186,5 @@ The following language/runtime work is tracked separately from prototype data:
   and `settle` non-convergence do not poison the session.
 
 These items do not require replacing the ownership state machine. Full module
-sandbox hardening and optional reproducible-build policy remain low-priority
-Phase 11 work.
+sandbox hardening and an optional reproducible-build policy remain unimplemented
+and are separate from prototype evidence.

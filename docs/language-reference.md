@@ -1,8 +1,8 @@
 # Current language reference
 
-This document describes the implemented source compiler, ownership/multi-network runtime, and prototype-provider access. The Phase 5 testbench has its own reference; Phase 5.5 static prototype profiles are complete, while runtime-only capability fields remain unknown for later feature slices. The language is intentionally narrower than its eventual scope.
+This document describes the current source compiler, ownership/multi-network runtime, Entity configuration, and prototype-provider access. The simulator testbench has its own reference. Entity authority remains profile-specific: structural configuration can be schema-checked without implying connector, callable, computation, or native-game behavior. The language intentionally supports a bounded subset of TypeScript-shaped source.
 
-Phase 3 elaborates one self-contained source file synchronously. Static or dynamic imports, exports, `import.meta`, `async` functions/arrows/methods, `await`, and `for await…of` report `CL1036` before execution. The executable envelope independently blocks async syntax if semantic preflight is bypassed, so a delayed microtask cannot mutate an already finalized circuit plan. Multi-file linking belongs to a later compiler phase. This boundary is separate from the fully hardened sandbox deferred to Phase 11.
+Each compilation elaborates one self-contained source file synchronously. Static or dynamic imports, exports, `import.meta`, `async` functions/arrows/methods, `await`, and `for await…of` report `CL1036` before execution. The executable envelope independently blocks async syntax if semantic preflight is bypassed, so a delayed microtask cannot mutate an already finalized circuit plan. Multi-file linking is unsupported. This language boundary is separate from the fully hardened sandbox, which is also not implemented.
 
 ## Signals
 
@@ -500,7 +500,7 @@ and provider-backed ergonomic `IF`/`when` share one physical linked Decider
 Entity and use the canonical linked Entity path when any linked Decider is present.
 The producer retains topology and output-row provenance; the Entity owns native
 configuration and placement. Without trusted authority, ergonomic `IF`/`when`
-retain profile-free v2 behavior, while exact `Decider` fails because its exact
+retain profile-free behavior, while exact `Decider` fails because its exact
 Entity contract cannot be established. The canonical path reuses the current
 simulation and readable Blueprint preview and is not Factorio import/export
 conformance evidence. See [Entity pipeline](entity-pipeline.md).
@@ -765,7 +765,7 @@ const placed = (input + 1).at(10.5, -2, 8);
 output += IF(input > 0, input).at(12.5, -2);
 ```
 
-`.at(...)` may run before or after either output lane is connected because the physical handle remains alive. Coordinates must be finite numbers. Direction may be a numeric compile-time constant or a TypeScript enum member and must resolve to an integer from `0` through `15`; omitted direction currently defaults to `4`. Unplaced combinators use the deterministic preview row. Physical collision, reach, and relay validation are not part of the Phase 3 preview.
+`.at(...)` may run before or after either output lane is connected because the physical handle remains alive. Coordinates must be finite numbers. Direction may be a numeric compile-time constant or a TypeScript enum member and must resolve to an integer from `0` through `15`; omitted direction currently defaults to `4`. Unplaced combinators use the deterministic preview row. Physical collision, reach, and relay validation are not part of this preview.
 
 ## Functions
 
@@ -928,11 +928,11 @@ for project JSON overrides.
 
 See the [diagnostics catalog](diagnostics.md) for common codes and corrective actions.
 
-## Not implemented yet
+## Current limits
 
-- blueprint import/export and FCIR
-- multi-file module linking and asynchronous top-level elaboration
-- testbench syntax, mocks, expectations, and waveform assertions
-- general language service and schematic editor
+- Multi-file module linking and asynchronous top-level elaboration are unsupported.
+- A fully capability-secure sandbox for arbitrary shared source is not implemented; compile only source you authored or explicitly trust.
+- General language-service features and source-editing schematic write-back are not provided.
+- Blueprint exchange is bounded and lossless, but decoding does not reconstruct CombLang source or certify native Factorio behavior.
 
-Implemented ownership and `pair` semantics, acceptance criteria, and the few remaining Phase 4 decisions are tracked in the [Phase 4 design](ownership-and-multi-network.md). Candidate syntax in that design is not part of this current reference until implemented and tested.
+Implemented ownership and `pair` behavior, its executable evidence, and explicitly deferred design questions are described in the [ownership and multi-network contract](ownership-and-multi-network.md). Candidate syntax there is not part of this reference unless it is identified as implemented and tested.

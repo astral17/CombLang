@@ -1,17 +1,17 @@
 # Combinator and Entity value policy
 
-This document records the Phase 4 migration from transient producers to physical combinator values. The filename is retained so older links keep working; the previous declaration-materialization policy is superseded.
+This document records the current value and materialization policy for physical combinators and Entities. Producers are materialized during executed elaboration; values are not inferred from declaration context.
 
 ## Decision
 
 Arithmetic expressions, `CC`, `IF`, and `when` create physical combinators immediately. A public `Combinator` is also readable as a `Network`: its Network facet is its primary output connection. An explicit `Network` annotation narrows the visible API but neither creates a network nor clones or erases the combinator.
 
-| Executed initializer              | Inferred declaration                  | Explicit context                                                                                                            |
-| --------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| arithmetic, `IF`, `when`, or `CC` | the precise physical combinator value | `Network` exposes the same value's primary Network facet; `Combinator` or a concrete combinator type retains the handle API |
-| existing `Network`                | the same logical network              | compatible Network contexts preserve its identity                                                                           |
-| future typed object constructor   | a persistent Entity handle            | a schema may expose explicit circuit ports; Entity identity is never inferred from a Network                                |
-| ordinary JavaScript value         | the executed value                    | validation occurs only at a DSL boundary                                                                                    |
+| Executed initializer                | Inferred declaration                  | Explicit context                                                                                                            |
+| ----------------------------------- | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
+| arithmetic, `IF`, `when`, or `CC`   | the precise physical combinator value | `Network` exposes the same value's primary Network facet; `Combinator` or a concrete combinator type retains the handle API |
+| existing `Network`                  | the same logical network              | compatible Network contexts preserve its identity                                                                           |
+| `Entity(prototype, configuration?)` | a persistent Entity handle            | provider eligibility and a trusted profile govern construction; Entity identity is never inferred from a Network            |
+| ordinary JavaScript value           | the executed value                    | validation occurs only at a DSL boundary                                                                                    |
 
 `Producer` remains a deprecated compatibility spelling for `Combinator`. New APIs, documentation, and diagnostics use `Combinator`.
 
@@ -72,9 +72,11 @@ Either branch may be configured first. Repeated calls append rows to the
 selected branch rather than creating another combinator; the final linked
 Entity configuration is derived from that one descriptor when the plan seals.
 
-## Future Entity values
+## Entity values and capability boundary
 
-Phase 6 typed objects must use a separately branded `EntityValue`. An Entity has persistent physical identity for placement, inspection, mocks, and circuit ports; it must not inherit from `Network` merely because it can read or emit signals. Any Entity-to-Network view is an explicit, schema-owned port projection and creates no extra entity, combinator, or tick.
+An Entity is a separately branded `EntityValue` with persistent physical identity; it is not a `Network` merely because a profile can expose circuit ports. Construction requires a provider-owned blueprint-eligible prototype and a trusted profile. A checked configuration fragment is validated against the pinned Blueprint schema and lowered as structural JSON; that validation does not infer connectors or grant computation, callable, or native-game authority.
+
+Connector bindings, default reads, computation, and callable projections are independent profile capabilities. A conservative fallback keeps connector structure unknown and exposes no connectors, feature, default-read projection, or callable projection. A typed simulation or callable behavior is available only when an explicit trusted profile supplies the corresponding capability.
 
 ## Implementation ownership
 

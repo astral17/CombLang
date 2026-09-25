@@ -6,4 +6,4 @@ The browser runs generated JavaScript in a terminable Worker and enforces a wall
 
 Current safe-use assumption: users compile code they authored or explicitly trust. Opening and automatically executing arbitrary shared projects is outside the present security contract.
 
-Before public shared-project execution, the project must revisit global capabilities, networking and storage access, module loading, resource limits, data exfiltration, and host-specific behavior. The fully hardened module sandbox remains Phase 11 work; the optional reproducible-build policy is a separate concern and does not by itself make execution secure.
+Before public shared-project execution, the project must revisit global capabilities, networking and storage access, module loading, resource limits, data exfiltration, and host-specific behavior. A fully hardened module sandbox is not implemented; the optional reproducible-build policy is a separate concern and does not by itself make execution secure.
