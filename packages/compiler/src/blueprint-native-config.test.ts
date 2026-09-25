@@ -232,6 +232,18 @@ describe('native blueprint configuration lowering', () => {
             output,
           },
         },
+        {
+          id: producer(6),
+          kind: 'selector',
+          provenance,
+          destinations: [network(3)],
+          config: {
+            operation: 'select',
+            input: { refKind: 'pair', networks: [network(2), network(1)] },
+            selectMax: true,
+            index: 7,
+          },
+        },
       ],
     };
 
@@ -240,6 +252,7 @@ describe('native blueprint configuration lowering', () => {
     expect(lowered.combinators.map(({ inputNetworks }) => inputNetworks)).toEqual([
       [network(1), network(2)],
       [network(1)],
+      [network(2), network(1)],
     ]);
     expect(lowered.combinators.map(({ entity }) => entity)).toEqual([
       {
@@ -255,6 +268,14 @@ describe('native blueprint configuration lowering', () => {
         control_behavior: {
           operation: 'count',
           count_signal: { type: 'virtual', name: 'signal-output' },
+        },
+      },
+      {
+        name: 'selector-combinator',
+        control_behavior: {
+          operation: 'select',
+          select_max: true,
+          index_constant: 7,
         },
       },
     ]);
