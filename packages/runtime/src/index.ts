@@ -11,7 +11,12 @@ export * from './entity-provisioning.js';
 export * from './entity-plan-validation.js';
 export * from './constant-signal-values.js';
 export * from './constant-configuration-source.js';
-export * from './elaboration-program.js';
+export {
+  ElaborationExecutionError,
+  ElaborationOperationLimitError,
+  executeElaborationProgram,
+} from './elaboration-program.js';
+export type { ElaborationExecutionOptions } from './elaboration-program.js';
 export * from './elaboration.js';
 export * from './resolved-circuit.js';
 export * from './execution-diagnostic.js';

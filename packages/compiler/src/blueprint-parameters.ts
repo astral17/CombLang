@@ -66,6 +66,7 @@ export class BlueprintParameterError extends Error {
 
 interface SessionAuthority {
   readonly identity: object;
+  sealed: boolean;
 }
 
 interface RegisteredParameter {
@@ -159,26 +160,38 @@ function registerParameter<K extends BlueprintParameterKind>(
   defaultValue: number | SignalId | undefined,
   source: SourceSpan | undefined,
 ): BlueprintParameterHandleBase<K> & { readonly defaultValue?: number | SignalId } {
+  if (authority.sealed) {
+    fail('CP1001', '$.session', 'parameter session is sealed and cannot accept declarations.');
+  }
   const declaration = Object.freeze({
     kind,
     label,
     ...(defaultValue === undefined ? {} : { defaultValue }),
     ...(source === undefined ? {} : { source }),
   }) as BlueprintParameterRegistration;
-  const handle = Object.freeze({
+  const handle = {
     [parameterBrand]: kind,
     kind,
     label,
     ...(defaultValue === undefined ? {} : { defaultValue }),
     ...(source === undefined ? {} : { source }),
-  }) as BlueprintParameterHandleBase<K> & { readonly defaultValue?: number | SignalId };
+  } as BlueprintParameterHandleBase<K> & { readonly defaultValue?: number | SignalId };
+  Object.defineProperty(handle, Symbol.toPrimitive, {
+    enumerable: false,
+    value: () => {
+      throw new TypeError(
+        'Blueprint parameter handles are symbolic configuration slots and cannot be coerced to JavaScript primitives.',
+      );
+    },
+  });
+  Object.freeze(handle);
   parameterRegistrations.set(handle, { authority, declaration });
   return handle;
 }
 
 /** Creates a nominal parameter scope; labels are descriptive, never identities. */
 export function createBlueprintParameterSession(): BlueprintParameterSession {
-  const authority: SessionAuthority = Object.freeze({ identity: Object.freeze({}) });
+  const authority: SessionAuthority = { identity: Object.freeze({}), sealed: false };
   const session = Object.freeze({
     [sessionBrand]: true as const,
     number: (label: string, options: BlueprintParameterDeclarationOptions<number> = {}) => {
@@ -213,6 +226,12 @@ export function createBlueprintParameterSession(): BlueprintParameterSession {
   }) as BlueprintParameterSession;
   sessionAuthorities.set(session, authority);
   return session;
+}
+
+/** Closes a host-owned session after its execution capture is complete. */
+export function sealBlueprintParameterSession(session: unknown, path: string): void {
+  assertBlueprintParameterSession(session, path);
+  sessionAuthorities.get(session)!.sealed = true;
 }
 
 /** Returns declaration metadata only for the exact frozen handle registered by a session. */

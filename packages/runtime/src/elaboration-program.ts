@@ -132,6 +132,11 @@ import {
   BlueprintEntitySignalConversionError,
   detachBlueprintEntitySignalHandles,
 } from './entity-blueprint-fragment.js';
+import {
+  BlueprintParameterCapture,
+  type CapturedBlueprintParameter,
+} from './blueprint-parameter-capture.js';
+import type { BlueprintParameterSession } from '../../compiler/src/blueprint-parameters.js';
 
 interface RawSpan {
   readonly start: number;
@@ -403,6 +408,7 @@ class ElaborationRecorder {
   readonly #entityContext: TrustedEntityReplayContext | undefined;
   readonly #entityPrototypeResolver: EntityPrototypeResolver | undefined;
   readonly #entityRegistry: EntityRegistry | undefined;
+  readonly #parameterCapture: BlueprintParameterCapture | undefined;
   readonly #entityAuthorities = new WeakMap<object, EntityAuthorityView>();
   readonly #entityAuthorityList: EntityAuthorityView[] = [];
   readonly #linkedProducerByIdentity = new WeakMap<object, LinkedProducerAssociation>();
@@ -440,12 +446,14 @@ class ElaborationRecorder {
     prototypes: PrototypeProvider | undefined,
     entityContext: TrustedEntityReplayContext | undefined,
     entityPrototypeResolver: EntityPrototypeResolver | undefined,
+    parameterCapture: BlueprintParameterCapture | undefined,
   ) {
     this.#fileId = fileId;
     this.#dslCallBudget = dslCallBudget;
     this.#prototypes = prototypes;
     this.#entityContext = entityContext;
     this.#entityPrototypeResolver = entityPrototypeResolver;
+    this.#parameterCapture = parameterCapture;
     this.#entityRegistry =
       entityContext === undefined || entityPrototypeResolver === undefined
         ? undefined
@@ -2193,15 +2201,46 @@ class ElaborationRecorder {
         entities: Object.freeze([...canonicalEntities]),
       };
       this.#status = 'sealed';
+      this.#parameterCapture?.seal();
       return plan;
     } catch (error) {
+      this.#parameterCapture?.seal();
       this.#poison(error);
       throw this.#firstFailure;
     }
   }
 
   executionApi(): typeof this.api {
-    const wrapped = Object.entries(this.api).map(([name, operation]) => [
+    const executionOperations: Record<string, unknown> = { ...this.api };
+    if (this.#parameterCapture !== undefined) {
+      executionOperations.declareBlueprintNumberParameter = (...args: unknown[]) => {
+        if (args.length !== 4 || !isRawSpan(args[3])) {
+          throw new Error(
+            'Internal number parameter declarations require label, default, metadata, and source span.',
+          );
+        }
+        this.#recordDslCall();
+        return this.#parameterCapture!.number(args[0], args[1], args[2], this.#span(args[3]));
+      };
+      executionOperations.declareBlueprintSignalParameter = (...args: unknown[]) => {
+        if (args.length !== 4 || !isRawSpan(args[3])) {
+          throw new Error(
+            'Internal Signal parameter declarations require label, default, metadata, and source span.',
+          );
+        }
+        this.#recordDslCall();
+        if (!this.#isSignal(args[1])) {
+          throw new Error('Signal defaults must come from Signal(...) in this execution session.');
+        }
+        return this.#parameterCapture!.signal(
+          args[0],
+          this.#signalSnapshot(args[1]),
+          args[2],
+          this.#span(args[3]),
+        );
+      };
+    }
+    const wrapped = Object.entries(executionOperations).map(([name, operation]) => [
       name,
       (...args: unknown[]) => {
         const frame: ExecutionApiFrame = { dslDomain: false };
@@ -2262,6 +2301,7 @@ class ElaborationRecorder {
 
   closeAfterExecution(): void {
     if (this.#status === 'active') this.#status = 'sealed';
+    this.#parameterCapture?.seal();
   }
 
   #poison(error: unknown): void {
@@ -5819,6 +5859,7 @@ class ElaborationRecorder {
 function executeElaborationProgramInternal(
   program: ElaborationJavaScript,
   options: ElaborationExecutionOptions = {},
+  parameterCapture?: BlueprintParameterCapture,
 ): DirectElaborationPlan {
   if (program.format !== 'comblang-elaboration-js') {
     throw new Error('Unsupported elaboration JavaScript format.');
@@ -5842,6 +5883,7 @@ function executeElaborationProgramInternal(
       (options.prototypes === undefined
         ? undefined
         : entityPrototypeResolverFromProvider(options.prototypes)),
+    parameterCapture,
   );
   try {
     Function(program.runtimeParameter, `"use strict";\n${program.code}`)(recorder.executionApi());
@@ -5858,4 +5900,30 @@ export function executeElaborationProgram(
   options: ElaborationExecutionOptions = {},
 ): DirectElaborationPlan {
   return executeElaborationProgramInternal(program, options);
+}
+
+/** Host-local test/preparation seam; deliberately omitted from the runtime package barrel. */
+export interface ExecutedElaborationWithBlueprintParameters {
+  readonly plan: DirectElaborationPlan;
+  readonly session: BlueprintParameterSession;
+  readonly parameters: readonly CapturedBlueprintParameter[];
+}
+
+/** Executes once and returns parameter capture beside, never inside, the concrete plan. */
+export function executeElaborationProgramWithParameters(
+  program: ElaborationJavaScript,
+  options: ElaborationExecutionOptions = {},
+): ExecutedElaborationWithBlueprintParameters {
+  const capture = new BlueprintParameterCapture();
+  try {
+    const plan = executeElaborationProgramInternal(program, options, capture);
+    return Object.freeze({
+      plan,
+      session: capture.session,
+      parameters: capture.declarations(),
+    });
+  } catch (error) {
+    capture.seal();
+    throw error;
+  }
 }
