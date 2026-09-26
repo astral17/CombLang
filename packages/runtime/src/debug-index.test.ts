@@ -427,4 +427,42 @@ const dut = t.instantiate(AddAttached, input);`,
     expect(plan.producers[0]?.debugCaptureIds).toHaveLength(1);
     expect(plan.diagnostics).not.toContainEqual(expect.objectContaining({ code: 'CL2001' }));
   });
+
+  it('maps repeated source Producer captures to distinct physical IDs through the executed debug index', () => {
+    const parsed = parseFile({
+      path: 'captured-repeated-producers.factorio.ts',
+      text: `function Add(input: Readonly<Network>): ArithmeticCombinator {
+  return input + 1;
+}
+const input = new Network();
+for (let i = 0; i < 2; i++) {
+  const dut = t.instantiate(Add, input);
+}`,
+    });
+    const plan = executeElaborationProgram(
+      transformElaborationModule(parsed, { testContextName: 't' }),
+    );
+    const execution = elaborateDirectPlan(plan);
+    const captured = plan.producers.flatMap((descriptor) =>
+      (descriptor.debugCaptureIds ?? []).map((captureId) => {
+        const matches = execution.debug.scopes
+          .flatMap((scope) => scope.producers)
+          .filter((entry) => entry.descriptor.debugCaptureIds?.includes(captureId));
+        expect(matches).toHaveLength(1);
+        return { captureId, entry: matches[0]! };
+      }),
+    );
+
+    expect(captured).toHaveLength(2);
+    expect(new Set(captured.map(({ captureId }) => captureId)).size).toBe(2);
+    expect(new Set(captured.map(({ entry }) => entry.id)).size).toBe(2);
+    for (const { entry } of captured) {
+      expect(execution.circuit.ir.producers.some(({ id }) => id === entry.id)).toBe(true);
+    }
+    expect(captured[1]!.entry.source).toEqual(captured[0]!.entry.source);
+    expect(new Set(captured.map(({ entry }) => JSON.stringify(entry.instancePath))).size).toBe(2);
+    expect(
+      execution.instances.map(({ value }) => (value as { readonly id: string }).id).sort(),
+    ).toEqual(captured.map(({ entry }) => entry.id).sort());
+  });
 });
