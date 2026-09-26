@@ -22,7 +22,7 @@
     "./elaboration-transform": "./src/elaboration-transform.ts",
     "./ir": "./src/ir.ts",
     "./producer-network-references": "./src/producer-network-references.ts",
-    "./resolved-circuit": "./src/resolved-circuit.ts"
+    "./resolved-circuit": "./src/resolved-circuit-public.ts"
   },
   "dependencies": {
     "@comblang/factorio": "0.0.0",

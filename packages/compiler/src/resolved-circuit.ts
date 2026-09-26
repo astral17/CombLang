@@ -1331,6 +1331,11 @@ function ir(value: unknown): NativeCircuitIr {
   return parsed;
 }
 
+/** Internal compiler entrypoint for the canonical bounded concrete-NCIR parser. */
+export function parseNativeCircuitIr(value: unknown): NativeCircuitIr {
+  return deepFreeze(ir(value));
+}
+
 /** Parses, clones, validates, and deeply freezes one resolved physical circuit. */
 export function parseResolvedCircuit(value: unknown): ResolvedCircuit {
   const record = dataRecord(value, '$');

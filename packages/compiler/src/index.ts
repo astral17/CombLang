@@ -14,4 +14,4 @@ export * from './entity-raw.js';
 export * from './immutable.js';
 export * from './ir.js';
 export * from './producer-network-references.js';
-export * from './resolved-circuit.js';
+export * from './resolved-circuit-public.js';
