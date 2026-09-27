@@ -37,6 +37,7 @@ import type {
   DirectPlanProducer,
   DirectPlanSelector,
   PlanEntityPlacement,
+  PlanNetworkRef,
   PlanArithmeticOperand,
   PlanDeciderCondition,
 } from '@comblang/compiler/direct-plan-schema';
@@ -145,11 +146,20 @@ import {
   type ConstantConfigurationTemplate,
 } from '../../compiler/src/constant-configuration-template.js';
 import {
+  createDeciderConfigurationTemplate,
+  type DeciderConfigurationTemplate,
+  type DeciderTemplateCondition,
+  type DeciderTemplateOutput,
+} from '../../compiler/src/decider-configuration-template.js';
+import {
   findBlueprintParameterHandle,
   type BlueprintNumberParameterHandle,
   type BlueprintParameterSession,
 } from '../../compiler/src/blueprint-parameters.js';
-import { lookupBlueprintParameterSlot } from '../../compiler/src/blueprint-parameter-validation.js';
+import {
+  isBlueprintParameterShaped,
+  lookupBlueprintParameterSlot,
+} from '../../compiler/src/blueprint-parameter-validation.js';
 
 interface RawSpan {
   readonly start: number;
@@ -174,6 +184,12 @@ interface CapturedConstantConfigurationTemplate {
   readonly source: SourceSpan;
 }
 
+interface CapturedDeciderConfigurationTemplate {
+  readonly captureId: string;
+  readonly template: DeciderConfigurationTemplate;
+  readonly source: SourceSpan;
+}
+
 type PlanDeciderOutput = Extract<DirectPlanProducer, { kind: 'decider' }>['output'];
 
 type ExactArithmeticConfiguration = Omit<
@@ -195,6 +211,14 @@ interface NormalizedArithmeticConfiguration {
         readonly right?: BlueprintNumberParameterHandle;
       }
     | undefined;
+}
+
+interface NormalizedDeciderConfiguration {
+  readonly condition: PlanDeciderCondition;
+  readonly conditionTemplate: DeciderTemplateCondition;
+  readonly hasNumberParameter: boolean;
+  readonly outputs: readonly DeciderOutputCandidate[];
+  readonly elseOutputs?: readonly DeciderOutputCandidate[];
 }
 
 type NormalizedSelectorConfiguration =
@@ -291,6 +315,7 @@ interface TopologySnapshot {
   readonly combinators: CombinatorRegistrySnapshot;
   readonly arithmeticTemplatesLength: number;
   readonly constantTemplatesLength: number;
+  readonly deciderTemplatesLength: number;
   readonly debugInstancesLength: number;
   readonly debugInstanceCounts: ReadonlyMap<string, number>;
   readonly ownership: readonly NetworkOwnershipSnapshot[];
@@ -423,6 +448,8 @@ class ElaborationRecorder {
   readonly #combinators = new CombinatorRegistry();
   readonly #arithmeticTemplates: CapturedArithmeticConfigurationTemplate[] = [];
   readonly #constantTemplates: CapturedConstantConfigurationTemplate[] = [];
+  readonly #deciderTemplates: CapturedDeciderConfigurationTemplate[] = [];
+  readonly #deciderParameterSlots = new WeakMap<object, BlueprintNumberParameterHandle>();
   readonly #combinatorByOutput = new Map<NetworkOwnershipState, CombinatorValue>();
   readonly #runtimeValues = new RuntimeValueRegistry();
   readonly #deciderMemberAliases = new WeakMap<
@@ -1027,6 +1054,10 @@ class ElaborationRecorder {
           },
           rawSpan,
         );
+        if (configuration.hasNumberParameter) {
+          const { captureId } = this.#combinators.capture(producer);
+          this.#captureDeciderTemplate(producer, captureId, configuration);
+        }
         // #createCombinator records the exact Decider association after the
         // descriptor is complete; exact and ergonomic forms share one link.
         return producer;
@@ -1634,7 +1665,59 @@ class ElaborationRecorder {
       return Object.fromEntries(entries);
     },
     compare: (operator: string, left: unknown, right: unknown, rawSpan: RawSpan): unknown => {
-      return operators.dispatchComparison(operator, left, right, rawSpan, this.#operatorContext);
+      let normalizedRight = right;
+      let parameter: BlueprintNumberParameterHandle | undefined;
+      const rightIsParameter =
+        findBlueprintParameterHandle(right) !== undefined || isBlueprintParameterShaped(right);
+      const leftIsParameter =
+        findBlueprintParameterHandle(left) !== undefined || isBlueprintParameterShaped(left);
+      if (this.#parameterCapture !== undefined && (rightIsParameter || leftIsParameter)) {
+        try {
+          if (!rightIsParameter || leftIsParameter || !this.#isCircuitDslValue(left)) {
+            throw new Error(
+              'A source number parameter is supported only as the direct right constant of an exact Decider condition.',
+            );
+          }
+          const slot = lookupBlueprintParameterSlot(
+            right,
+            'number',
+            this.#parameterCapture.session,
+            '$.condition.right',
+          );
+          if (slot === undefined) throw new Error('Expected a registered number parameter.');
+          if (typeof slot.registration.defaultValue !== 'number') {
+            throw new Error('Decider right-constant number parameters require a finite default.');
+          }
+          normalizedRight = circuitConstant(slot.registration.defaultValue);
+          parameter = slot.handle as BlueprintNumberParameterHandle;
+        } catch (error) {
+          throw new ElaborationExecutionError(
+            error instanceof Error ? error.message : 'Invalid Decider number parameter slot.',
+            this.#span(rawSpan),
+            'RT2027',
+            undefined,
+            { cause: error },
+          );
+        }
+      }
+      const result = operators.dispatchComparison(
+        operator,
+        left,
+        normalizedRight,
+        rawSpan,
+        this.#operatorContext,
+      );
+      if (parameter !== undefined) {
+        if (!this.#isCondition(result)) {
+          throw new ElaborationExecutionError(
+            'A source number parameter must be used in a circuit Condition.',
+            this.#span(rawSpan),
+            'RT2027',
+          );
+        }
+        this.#deciderParameterSlots.set(result.condition as object, parameter);
+      }
+      return result;
     },
     controlTest: (value: unknown, rawSpan: RawSpan): unknown => {
       this.#rejectParameterControlValue(value, rawSpan);
@@ -1659,6 +1742,7 @@ class ElaborationRecorder {
       return this.#withTopologyTransaction(rawSpan, () => {
         this.#recordDslCall();
         if (!this.#isCondition(condition)) throw new Error('IF/when requires a circuit condition.');
+        this.#assertNoSourceParameterizedCondition(condition.condition, rawSpan);
         if (outputValues.length === 0) {
           throw new Error('IF/when requires at least one output specification.');
         }
@@ -1687,6 +1771,7 @@ class ElaborationRecorder {
         this.#recordDslCall();
         if (!this.#isCondition(condition))
           throw new Error('when(...) requires a circuit condition.');
+        this.#assertNoSourceParameterizedCondition(condition.condition, rawSpan);
         return this.#createCombinator(
           {
             kind: 'decider',
@@ -1737,6 +1822,7 @@ class ElaborationRecorder {
       return this.#withTopologyTransaction(actualRawSpan, () => {
         this.#recordDslCall();
         if (!this.#isCondition(condition)) throw new Error('IF/when requires a circuit condition.');
+        this.#assertNoSourceParameterizedCondition(condition.condition, actualRawSpan);
         if (
           branchArguments !== undefined &&
           (branchArguments.length < 1 || branchArguments.length > 2)
@@ -1807,6 +1893,7 @@ class ElaborationRecorder {
     not: (value: unknown, rawSpan: RawSpan): unknown => {
       this.#rejectParameterControlValue(value, rawSpan);
       if (!this.#isCondition(value)) return !value;
+      this.#assertNoSourceParameterizedCondition(value.condition, rawSpan);
       this.#recordDslCall();
       return this.#runtimeValue({
         kind: 'condition',
@@ -2310,6 +2397,10 @@ class ElaborationRecorder {
 
   constantTemplates(): readonly CapturedConstantConfigurationTemplate[] {
     return Object.freeze([...this.#constantTemplates]);
+  }
+
+  deciderTemplates(): readonly CapturedDeciderConfigurationTemplate[] {
+    return Object.freeze([...this.#deciderTemplates]);
   }
 
   executionApi(): typeof this.api {
@@ -3421,6 +3512,7 @@ class ElaborationRecorder {
       combinators: this.#combinators.snapshot(),
       arithmeticTemplatesLength: this.#arithmeticTemplates.length,
       constantTemplatesLength: this.#constantTemplates.length,
+      deciderTemplatesLength: this.#deciderTemplates.length,
       debugInstancesLength: this.#debugInstances.length,
       debugInstanceCounts: new Map(this.#debugInstanceCounts),
       ownership: [...ownership.values()],
@@ -3452,6 +3544,7 @@ class ElaborationRecorder {
     this.#combinators.restore(snapshot.combinators);
     this.#arithmeticTemplates.length = snapshot.arithmeticTemplatesLength;
     this.#constantTemplates.length = snapshot.constantTemplatesLength;
+    this.#deciderTemplates.length = snapshot.deciderTemplatesLength;
     this.#debugInstances.length = snapshot.debugInstancesLength;
     this.#debugInstanceCounts.clear();
     for (const [key, count] of snapshot.debugInstanceCounts)
@@ -4381,15 +4474,148 @@ class ElaborationRecorder {
     return { operation, input, output: this.#signalSnapshot(value.output) };
   }
 
+  #deciderConditionTemplate(condition: PlanDeciderCondition): {
+    readonly value: DeciderTemplateCondition;
+    readonly hasNumberParameter: boolean;
+  } {
+    const networkReference = (value: PlanNetworkRef) =>
+      value.refKind === 'single'
+        ? { refKind: 'single' as const, network: value.network as NetworkId }
+        : {
+            refKind: 'pair' as const,
+            networks: [value.networks[0] as NetworkId, value.networks[1] as NetworkId] as const,
+          };
+    if (condition.kind === 'and' || condition.kind === 'or') {
+      const children = condition.conditions.map((child) => this.#deciderConditionTemplate(child));
+      return {
+        value: { kind: condition.kind, conditions: children.map(({ value }) => value) },
+        hasNumberParameter: children.some(({ hasNumberParameter }) => hasNumberParameter),
+      };
+    }
+    if (condition.kind === 'compare-signals') {
+      return {
+        value: {
+          kind: 'compare',
+          left: {
+            kind: 'signal',
+            signal: this.#signalSnapshot(condition.left.signal),
+            ...networkReference(condition.left),
+          },
+          comparator: condition.comparator,
+          right: {
+            kind: 'signal',
+            signal: this.#signalSnapshot(condition.right.signal),
+            ...networkReference(condition.right),
+          },
+        },
+        hasNumberParameter: false,
+      };
+    }
+    if (condition.kind === 'compare-wildcard-signal') {
+      return {
+        value: {
+          kind: 'compare',
+          left: {
+            kind: 'wildcard',
+            value: condition.left.wildcard,
+            ...networkReference(condition.left),
+          },
+          comparator: condition.comparator,
+          right: {
+            kind: 'signal',
+            signal: this.#signalSnapshot(condition.right.signal),
+            ...networkReference(condition.right),
+          },
+        },
+        hasNumberParameter: false,
+      };
+    }
+    const slot = this.#deciderParameterSlots.get(condition as object);
+    const left =
+      condition.kind === 'compare-each'
+        ? { kind: 'wildcard' as const, value: 'each' as const, ...networkReference(condition) }
+        : condition.kind === 'compare-signal'
+          ? {
+              kind: 'signal' as const,
+              signal: this.#signalSnapshot(condition.signal),
+              ...networkReference(condition),
+            }
+          : {
+              kind: 'wildcard' as const,
+              value: condition.wildcard,
+              ...networkReference(condition),
+            };
+    return {
+      value: {
+        kind: 'compare',
+        left,
+        comparator: condition.comparator,
+        right: {
+          kind: 'constant',
+          value: slot ?? condition.constant,
+        },
+      },
+      hasNumberParameter: slot !== undefined,
+    };
+  }
+
+  #deciderTemplateOutput(output: PlanDeciderOutput): DeciderTemplateOutput {
+    const input =
+      'refKind' in output
+        ? output.refKind === 'single'
+          ? { refKind: 'single' as const, network: output.network as NetworkId }
+          : {
+              refKind: 'pair' as const,
+              networks: [output.networks[0] as NetworkId, output.networks[1] as NetworkId] as const,
+            }
+        : undefined;
+    const signal =
+      output.kind === 'signal' || output.kind === 'signal-constant'
+        ? { kind: 'signal' as const, signal: this.#signalSnapshot(output.signal) }
+        : {
+            kind: 'wildcard' as const,
+            value:
+              output.kind === 'each' || output.kind === 'each-constant'
+                ? ('each' as const)
+                : output.wildcard,
+          };
+    if (output.kind === 'signal-constant' || output.kind === 'each-constant') {
+      return { mode: 'constant', signal, value: output.value };
+    }
+    return { mode: 'copy', signal, ...(input === undefined ? {} : { input }) };
+  }
+
+  #captureDeciderTemplate(
+    value: CombinatorValue,
+    captureId: string,
+    configuration: NormalizedDeciderConfiguration,
+  ): void {
+    if (this.#parameterCapture === undefined) return;
+    const descriptor = this.#combinators.stateFor(value).descriptor;
+    if (descriptor.kind !== 'decider') {
+      throw new Error('Decider parameter slots were associated with a non-Decider producer.');
+    }
+    const template = createDeciderConfigurationTemplate(this.#parameterCapture.session, {
+      condition: configuration.conditionTemplate,
+      outputs: configuration.outputs.map(({ output }) => this.#deciderTemplateOutput(output)),
+      ...(configuration.elseOutputs === undefined
+        ? {}
+        : {
+            elseOutputs: configuration.elseOutputs.map(({ output }) =>
+              this.#deciderTemplateOutput(output),
+            ),
+          }),
+    });
+    this.#deciderTemplates.push(
+      Object.freeze({ captureId, template, source: Object.freeze({ ...descriptor.source }) }),
+    );
+  }
+
   #normalizeDeciderConfigurationSource(
     value: unknown,
     source: RawSpan,
     fieldSources?: CallArgument['fieldSources'],
-  ): {
-    readonly condition: PlanDeciderCondition;
-    readonly outputs: readonly DeciderOutputCandidate[];
-    readonly elseOutputs?: readonly DeciderOutputCandidate[];
-  } {
+  ): NormalizedDeciderConfiguration {
     if (!isPlainDataRecord(value)) {
       throw new ElaborationExecutionError(
         'Decider configuration must be a plain data record.',
@@ -4420,6 +4646,7 @@ class ElaborationRecorder {
         'RT2027',
       );
     }
+    const conditionTemplate = this.#deciderConditionTemplate(conditionValue.condition);
     const normal =
       Object.prototype.hasOwnProperty.call(value, 'outputs') && value.outputs !== undefined
         ? this.#deciderConfigurationRows(value.outputs, fieldSources?.outputs ?? source, 'outputs')
@@ -4441,6 +4668,8 @@ class ElaborationRecorder {
     }
     return {
       condition: conditionValue.condition,
+      conditionTemplate: conditionTemplate.value,
+      hasNumberParameter: conditionTemplate.hasNumberParameter,
       outputs: normal,
       ...(alternate.length === 0 ? {} : { elseOutputs: alternate }),
     };
@@ -5731,6 +5960,20 @@ class ElaborationRecorder {
     return this.#hasRuntimeKind(value, 'condition');
   }
 
+  #assertNoSourceParameterizedCondition(condition: PlanDeciderCondition, rawSpan: RawSpan): void {
+    const containsParameter = (value: PlanDeciderCondition): boolean =>
+      value.kind === 'and' || value.kind === 'or'
+        ? value.conditions.some(containsParameter)
+        : this.#deciderParameterSlots.has(value as object);
+    if (containsParameter(condition)) {
+      throw new ElaborationExecutionError(
+        'Source number parameters are supported only in exact Decider configuration conditions, not mutable branches, IF/when, or negated conditions.',
+        this.#span(rawSpan),
+        'RT2027',
+      );
+    }
+  }
+
   #runtimeValue<T extends RuntimeObjectValue>(value: T): T {
     return this.#runtimeValues.brand(value);
   }
@@ -5771,6 +6014,7 @@ class ElaborationRecorder {
         [{ message: 'Physical combinator was created here.', span: state.descriptor.source }],
       );
     }
+    this.#assertNoSourceParameterizedCondition(state.descriptor.condition, rawSpan);
     if (appended.length === 0) {
       throw new Error(`.${branch}(output, ...) requires at least one output specification.`);
     }
@@ -6088,6 +6332,7 @@ function executeElaborationProgramInternal(
   readonly plan: DirectElaborationPlan;
   readonly arithmeticTemplates: readonly CapturedArithmeticConfigurationTemplate[];
   readonly constantTemplates: readonly CapturedConstantConfigurationTemplate[];
+  readonly deciderTemplates: readonly CapturedDeciderConfigurationTemplate[];
 } {
   if (program.format !== 'comblang-elaboration-js') {
     throw new Error('Unsupported elaboration JavaScript format.');
@@ -6124,6 +6369,7 @@ function executeElaborationProgramInternal(
     plan,
     arithmeticTemplates: recorder.arithmeticTemplates(),
     constantTemplates: recorder.constantTemplates(),
+    deciderTemplates: recorder.deciderTemplates(),
   });
 }
 
@@ -6142,6 +6388,7 @@ export interface ExecutedElaborationWithBlueprintParameters {
   readonly parameters: readonly CapturedBlueprintParameter[];
   readonly arithmeticTemplates: readonly CapturedArithmeticConfigurationTemplate[];
   readonly constantTemplates: readonly CapturedConstantConfigurationTemplate[];
+  readonly deciderTemplates: readonly CapturedDeciderConfigurationTemplate[];
 }
 
 /** Executes once and returns parameter capture beside, never inside, the concrete plan. */

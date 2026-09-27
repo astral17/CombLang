@@ -18,6 +18,14 @@ import {
   inspectConstantConfigurationTemplate,
   type ConstantConfigurationTemplate,
 } from '../../compiler/src/constant-configuration-template.js';
+import {
+  createDeciderConfigurationTemplate,
+  inspectDeciderConfigurationTemplate,
+  type DeciderConfigurationTemplate,
+  type DeciderTemplateCondition,
+  type DeciderTemplateOutput,
+} from '../../compiler/src/decider-configuration-template.js';
+import type { LogicalNetworkRef } from '../../compiler/src/ir.js';
 import { replaceBlueprintConfigurationSetInNativeCircuitIr } from '../../compiler/src/blueprint-configuration-binding.js';
 import { BlueprintParameterError } from '../../compiler/src/blueprint-parameters.js';
 import {
@@ -407,6 +415,115 @@ function resolveCapturedOperand(
   return fail('CP1000', `${path}.refKind`, 'expected a single or pair Network reference.', source);
 }
 
+function resolveCapturedNetworkReference(
+  reference: LogicalNetworkRef,
+  sourcePlan: ExecutedElaborationWithBlueprintParameters['plan'],
+  execution: ExecutedDirectPlan,
+  path: string,
+  source: SourceSpan,
+): LogicalNetworkRef {
+  if (reference.refKind === 'single') {
+    return {
+      refKind: 'single',
+      network: resolveCapturedNetwork(
+        sourcePlan,
+        execution,
+        reference.network,
+        `${path}.network`,
+        source,
+      ),
+    };
+  }
+  return {
+    refKind: 'pair',
+    networks: Object.freeze([
+      resolveCapturedNetwork(
+        sourcePlan,
+        execution,
+        reference.networks[0],
+        `${path}.networks[0]`,
+        source,
+      ),
+      resolveCapturedNetwork(
+        sourcePlan,
+        execution,
+        reference.networks[1],
+        `${path}.networks[1]`,
+        source,
+      ),
+    ]) as readonly [NetworkId, NetworkId],
+  };
+}
+
+function resolveCapturedDeciderCondition(
+  condition: DeciderTemplateCondition,
+  sourcePlan: ExecutedElaborationWithBlueprintParameters['plan'],
+  execution: ExecutedDirectPlan,
+  path: string,
+  source: SourceSpan,
+): DeciderTemplateCondition {
+  if (condition.kind === 'and' || condition.kind === 'or') {
+    return {
+      kind: condition.kind,
+      conditions: condition.conditions.map((child, index) =>
+        resolveCapturedDeciderCondition(
+          child,
+          sourcePlan,
+          execution,
+          `${path}.conditions[${index}]`,
+          source,
+        ),
+      ),
+    };
+  }
+  const leftReference = resolveCapturedNetworkReference(
+    condition.left,
+    sourcePlan,
+    execution,
+    `${path}.left`,
+    source,
+  );
+  const left =
+    condition.left.kind === 'signal'
+      ? { kind: 'signal' as const, signal: condition.left.signal, ...leftReference }
+      : { kind: 'wildcard' as const, value: condition.left.value, ...leftReference };
+  const right =
+    condition.right.kind === 'constant'
+      ? condition.right
+      : {
+          kind: 'signal' as const,
+          signal: condition.right.signal,
+          ...resolveCapturedNetworkReference(
+            condition.right,
+            sourcePlan,
+            execution,
+            `${path}.right`,
+            source,
+          ),
+        };
+  return { kind: 'compare', left, comparator: condition.comparator, right };
+}
+
+function resolveCapturedDeciderOutput(
+  output: DeciderTemplateOutput,
+  sourcePlan: ExecutedElaborationWithBlueprintParameters['plan'],
+  execution: ExecutedDirectPlan,
+  path: string,
+  source: SourceSpan,
+): DeciderTemplateOutput {
+  if (output.input === undefined) return output;
+  return {
+    ...output,
+    input: resolveCapturedNetworkReference(
+      output.input,
+      sourcePlan,
+      execution,
+      `${path}.input`,
+      source,
+    ),
+  };
+}
+
 /** Converts source-captured templates to one atomic, execution-paired NCIR replacement. */
 export function bindCapturedSourceConfigurationTemplates(
   source: ExecutedElaborationWithBlueprintParameters,
@@ -416,7 +533,8 @@ export function bindCapturedSourceConfigurationTemplates(
   if (
     !isDataRecord(source) ||
     !Array.isArray(source.arithmeticTemplates) ||
-    !Array.isArray(source.constantTemplates)
+    !Array.isArray(source.constantTemplates) ||
+    !Array.isArray(source.deciderTemplates)
   ) {
     fail(
       'CP1000',
@@ -637,6 +755,116 @@ export function bindCapturedSourceConfigurationTemplates(
     captures.push({
       index: planProducer.index,
       entry: { key: captureId, kind: 'constant', template: resolvedTemplate },
+      capture: { key: captureId, captureId: captureReference },
+      producerId: debugEntry.id,
+    });
+  });
+
+  source.deciderTemplates.forEach((candidate, index) => {
+    const path = `$.deciderTemplates[${index}]`;
+    if (
+      !isDataRecord(candidate) ||
+      !hasExactDataKeys(candidate, ['captureId', 'template', 'source'])
+    ) {
+      fail('CP1000', path, 'malformed captured Decider template.');
+    }
+    const captureId = candidate.captureId;
+    if (typeof captureId !== 'string' || captureId.length === 0 || captureId.length > 128) {
+      fail('CP1000', `${path}.captureId`, 'expected a non-empty bounded Producer capture ID.');
+    }
+    if (seenCaptures.has(captureId)) {
+      fail(
+        'CP1001',
+        `${path}.captureId`,
+        'configuration capture IDs must be unique.',
+        candidate.source as SourceSpan,
+      );
+    }
+    seenCaptures.add(captureId);
+
+    const planProducer = planProducerByCapture.get(captureId);
+    if (
+      planProducer === undefined ||
+      planProducer.index < 0 ||
+      planProducer.descriptor.kind !== 'decider'
+    ) {
+      fail(
+        'CP1001',
+        `${path}.captureId`,
+        'capture must identify exactly one source Decider Producer.',
+        candidate.source as SourceSpan,
+      );
+    }
+    const debugEntries = producerCapturesFor(execution, captureId);
+    if (
+      debugEntries.length !== 1 ||
+      debugEntries[0]!.producerKind !== 'decider' ||
+      stableData(debugEntries[0]!.descriptor) !== stableData(planProducer.descriptor)
+    ) {
+      fail(
+        'CP1001',
+        `${path}.captureId`,
+        'capture does not identify exactly one matching physical Decider Producer.',
+        candidate.source as SourceSpan,
+      );
+    }
+    const debugEntry = debugEntries[0]!;
+    if (!sameSourceSpan(candidate.source, planProducer.descriptor.source)) {
+      fail(
+        'CP1001',
+        `${path}.source`,
+        'captured provenance does not match its source Decider Producer.',
+        planProducer.descriptor.source,
+      );
+    }
+    const registration = inspectDeciderConfigurationTemplate(
+      candidate.template,
+      `${path}.template`,
+    );
+    if (registration.session !== source.session) {
+      fail(
+        'CP1001',
+        `${path}.template`,
+        'captured template belongs to a different parameter session.',
+        candidate.source as SourceSpan,
+      );
+    }
+    const template = candidate.template as DeciderConfigurationTemplate;
+    const resolvedTemplate = createDeciderConfigurationTemplate(source.session, {
+      condition: resolveCapturedDeciderCondition(
+        template.condition,
+        source.plan,
+        execution,
+        `${path}.template.condition`,
+        candidate.source as SourceSpan,
+      ),
+      outputs: template.outputs.map((output, outputIndex) =>
+        resolveCapturedDeciderOutput(
+          output,
+          source.plan,
+          execution,
+          `${path}.template.outputs[${outputIndex}]`,
+          candidate.source as SourceSpan,
+        ),
+      ),
+      ...(template.elseOutputs === undefined
+        ? {}
+        : {
+            elseOutputs: template.elseOutputs.map((output, outputIndex) =>
+              resolveCapturedDeciderOutput(
+                output,
+                source.plan,
+                execution,
+                `${path}.template.elseOutputs[${outputIndex}]`,
+                candidate.source as SourceSpan,
+              ),
+            ),
+          }),
+    });
+    const captureReference = createExecutedProducerCaptureReference(execution, captureId);
+    captures.push({
+      index: planProducer.index,
+      entry: { key: captureId, kind: 'decider', template: resolvedTemplate },
       capture: { key: captureId, captureId: captureReference },
       producerId: debugEntry.id,
     });

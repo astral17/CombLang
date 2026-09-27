@@ -6,15 +6,21 @@ import {
 } from '@comblang/compiler';
 import type { EntityProfile } from '@comblang/compiler/entity';
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
-import { signal } from '@comblang/factorio';
+import { signal, SparseBus } from '@comblang/factorio';
 import type { EntityPrototype } from '@comblang/prototypes';
 import { parseFile, validateDslSemantics } from '@comblang/language';
 import { sourceFileId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 import { compileSourceProgram } from './source-compilation.js';
-import { executeElaborationProgram } from './elaboration-program.js';
+import {
+  executeElaborationProgram,
+  executeElaborationProgramWithParameters,
+} from './elaboration-program.js';
+import { bindCapturedSourceConfigurationTemplates } from './executed-blueprint-configuration-binding.js';
+import { createSimulationFromNativeCircuitIr } from './elaboration.js';
 import { tryElaborateDirectPlan } from './direct-plan.js';
 import { createDebugDocument } from './debug-document.js';
+import { createBlueprintParameterSession } from '../../compiler/src/blueprint-parameters.js';
 
 const sourceFile = sourceFileId('canonical-decider-source-coverage.ts');
 
@@ -99,7 +105,400 @@ function exactPlan(text = exactSource): DirectElaborationPlan {
   return plan;
 }
 
+function exactParameterizedExecution(
+  text: string,
+  options: {
+    readonly signalParameter?: boolean;
+    readonly includeMixed?: boolean;
+    readonly missingDefault?: boolean;
+    readonly testContextName?: string;
+    readonly environment?: ReturnType<typeof exactEnvironment>;
+  } = {},
+) {
+  const parsed = parseFile({ path: sourceFile, text });
+  expect(validateDslSemantics(parsed)).toEqual([]);
+  const transformed = transformElaborationModule(
+    parsed,
+    options.testContextName === undefined ? {} : { testContextName: options.testContextName },
+  );
+  const declaration = options.signalParameter
+    ? `const amount = ${transformed.runtimeParameter}.declareBlueprintSignalParameter('amount', ${transformed.runtimeParameter}.signal('virtual', 'signal-A', { start: 0, end: 1 }), undefined, { start: 0, end: 1 });`
+    : `const amount = ${transformed.runtimeParameter}.declareBlueprintNumberParameter('amount', ${options.missingDefault ? 'undefined' : '5'}, undefined, { start: 0, end: 1 });`;
+  return executeElaborationProgramWithParameters(
+    { ...transformed, code: `${declaration}\n${transformed.code}` },
+    options.environment ?? exactEnvironment(options.includeMixed ?? false),
+  );
+}
+
 describe('executed canonical Decider source contract', () => {
+  test('captures a direct number threshold without putting its handle in the concrete plan', () => {
+    const source = `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const exact: DeciderCombinator = Decider({ condition: input[A] > amount, outputs: [input[A]] });
+const output = new Network();
+output += exact;`;
+    const parsed = parseFile({ path: sourceFile, text: source });
+    const callStart = source.indexOf('Decider(');
+    const callEnd = source.indexOf(';', callStart);
+    const execution = exactParameterizedExecution(source);
+
+    expect(execution.plan.producers).toHaveLength(1);
+    expect(execution.plan.producers[0]).toMatchObject({
+      kind: 'decider',
+      condition: {
+        kind: 'compare-signal',
+        signal: { type: 'virtual', name: 'signal-A' },
+        comparator: '>',
+        constant: 5,
+      },
+      entityId: execution.plan.entities[0]?.id,
+    });
+    expect(execution.plan.producers[0]?.debugCaptureIds).toEqual(['producer:1']);
+    expect(execution.plan.entities[0]?.configuration).toMatchObject({
+      mode: 'decider',
+      condition: { kind: 'compare-signal', constant: 5 },
+    });
+    expect(JSON.stringify(execution.plan)).not.toContain('amount');
+    const workerTransfer = structuredClone(execution.plan);
+    expect(workerTransfer).toEqual(execution.plan);
+    expect(workerTransfer).not.toHaveProperty('session');
+    expect(workerTransfer).not.toHaveProperty('parameters');
+    expect(workerTransfer).not.toHaveProperty('deciderTemplates');
+    expect(JSON.stringify(workerTransfer)).not.toContain('deciderTemplates');
+    expect(execution.parameters).toHaveLength(1);
+    expect(execution).toMatchObject({
+      deciderTemplates: [
+        {
+          captureId: execution.plan.producers[0]?.debugCaptureIds?.[0],
+          source: { fileId: parsed.id, start: callStart, end: callEnd },
+          template: {
+            condition: {
+              kind: 'compare',
+              comparator: '>',
+              right: { kind: 'constant', value: execution.parameters[0]?.handle },
+            },
+          },
+        },
+      ],
+    });
+  });
+
+  test('rejects a Signal parameter in the direct numeric threshold slot at the Decider use', () => {
+    const source = `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const exact = Decider({ condition: input[A] > amount, outputs: [input[A]] });`;
+    const parsed = parseFile({ path: sourceFile, text: source });
+    const useStart = source.indexOf('input[A] > amount');
+    const useEnd = useStart + 'input[A] > amount'.length;
+
+    expect(() => exactParameterizedExecution(source, { signalParameter: true })).toThrowError(
+      expect.objectContaining({
+        code: 'RT2027',
+        span: { fileId: parsed.id, start: useStart, end: useEnd },
+      }),
+    );
+  });
+
+  test('rejects missing defaults, reversed slots, forged handles, and foreign handles', () => {
+    const source = `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const exact = Decider({ condition: input[A] > amount, outputs: [input[A]] });`;
+    const parsed = parseFile({ path: sourceFile, text: source });
+    expect(() => exactParameterizedExecution(source, { missingDefault: true })).toThrowError(
+      expect.objectContaining({
+        code: 'EX1001',
+        span: { fileId: parsed.id, start: 0, end: 1 },
+        message: expect.stringContaining('number declarations require a finite positional default'),
+      }),
+    );
+
+    const reversed = source.replace('input[A] > amount', 'amount < input[A]');
+    expect(() => exactParameterizedExecution(reversed)).toThrowError(
+      expect.objectContaining({ code: 'RT2027' }),
+    );
+
+    const foreignKey = Symbol.for('comblang.test.foreign-decider-number');
+    const forgedKey = Symbol.for('comblang.test.forged-decider-number');
+    const globalRecord = globalThis as Record<PropertyKey, unknown>;
+    const previous = new Map<PropertyKey, { readonly had: boolean; readonly value: unknown }>([
+      [
+        foreignKey,
+        { had: Object.hasOwn(globalRecord, foreignKey), value: globalRecord[foreignKey] },
+      ],
+      [forgedKey, { had: Object.hasOwn(globalRecord, forgedKey), value: globalRecord[forgedKey] }],
+    ]);
+    globalRecord[foreignKey] = createBlueprintParameterSession().number('foreign', {
+      defaultValue: 5,
+    });
+    globalRecord[forgedKey] = { kind: 'number', label: 'forged', defaultValue: 5 };
+    try {
+      for (const [symbolKey, message] of [
+        ['comblang.test.foreign-decider-number', 'different parameter session'],
+        ['comblang.test.forged-decider-number', 'unregistered parameter-like object'],
+      ] as const) {
+        const invalid = source.replace(
+          'input[A] > amount',
+          `input[A] > globalThis[Symbol.for('${symbolKey}')]`,
+        );
+        expect(() => exactParameterizedExecution(invalid)).toThrowError(
+          expect.objectContaining({
+            code: 'RT2027',
+            message: expect.stringContaining(message),
+          }),
+        );
+      }
+    } finally {
+      for (const [key, value] of previous) {
+        if (value.had) globalRecord[key] = value.value;
+        else delete globalRecord[key];
+      }
+    }
+  });
+
+  test('preserves nested AND/OR condition order around a direct parameter threshold', () => {
+    const source = `const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const input = new Network();
+const exact = Decider({ condition: (input[A] > amount) && (input[B] <= 2 || input[A] != 0), outputs: [input[A]] });`;
+    const execution = exactParameterizedExecution(source);
+    expect(execution.plan.producers[0]).toMatchObject({
+      kind: 'decider',
+      condition: {
+        kind: 'and',
+        conditions: [
+          { kind: 'compare-signal', comparator: '>', constant: 5 },
+          {
+            kind: 'or',
+            conditions: [
+              { kind: 'compare-signal', comparator: '<=', constant: 2 },
+              { kind: 'compare-signal', comparator: '!=', constant: 0 },
+            ],
+          },
+        ],
+      },
+    });
+    expect(execution.deciderTemplates[0]?.template).toMatchObject({
+      condition: {
+        kind: 'and',
+        conditions: [
+          {
+            kind: 'compare',
+            right: { kind: 'constant', value: execution.parameters[0]?.handle },
+          },
+          { kind: 'or', conditions: [{ kind: 'compare' }, { kind: 'compare' }] },
+        ],
+      },
+    });
+  });
+
+  test('does not leak exact Decider parameters into IF, when, or negated conditions', () => {
+    const prefixes = [
+      `const exact = IF(input[A] > amount, input[A]);`,
+      `const exact = when(input[A] > amount).then(input[A]);`,
+      `const exact = Decider({ condition: !(input[A] > amount), outputs: [input[A]] });`,
+    ];
+    for (const statement of prefixes) {
+      const source = `const A = Signal('virtual', 'signal-A');\nconst input = new Network();\n${statement}`;
+      expect(() => exactParameterizedExecution(source)).toThrowError(
+        expect.objectContaining({
+          code: 'RT2027',
+          message: expect.stringContaining('only in exact Decider configuration conditions'),
+        }),
+      );
+    }
+  });
+
+  test('binds the Decider threshold through the paired NCIR and linked Entity', () => {
+    const source = `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const exact = Decider({ condition: input[A] > amount, outputs: [input[A]] }).at(4, 5, 2);
+const output = new Network();
+output += exact;`;
+    const environment = exactEnvironment();
+    const captured = exactParameterizedExecution(source, { environment });
+    const lowered = tryElaborateDirectPlan(captured.plan, environment.context);
+    expect(lowered.diagnostics).toEqual([]);
+    const execution = lowered.execution!;
+    const original = execution.circuit.ir;
+    const defaultBound = bindCapturedSourceConfigurationTemplates(captured, execution);
+    const bound = bindCapturedSourceConfigurationTemplates(captured, execution, [
+      { parameter: captured.parameters[0]!.handle, value: 7 },
+    ]);
+    const originalProducer = original.producers.find(({ kind }) => kind === 'decider')!;
+    const boundProducer = bound.producers.find(({ kind }) => kind === 'decider')!;
+    const originalEntity = original.entities.find(({ id }) => id === originalProducer.entityId)!;
+    const boundEntity = bound.entities.find(({ id }) => id === originalEntity.id)!;
+
+    expect(defaultBound).toEqual(original);
+    expect(bound.networks.map(({ id }) => id)).toEqual(original.networks.map(({ id }) => id));
+    expect(bound.producers.map(({ id }) => id)).toEqual(original.producers.map(({ id }) => id));
+    expect(bound.entities.map(({ id }) => id)).toEqual(original.entities.map(({ id }) => id));
+    expect(originalProducer).toMatchObject({
+      kind: 'decider',
+      config: { condition: { kind: 'compare', right: { kind: 'constant', value: 5 } } },
+    });
+    expect(boundProducer).toMatchObject({
+      kind: 'decider',
+      config: { condition: { kind: 'compare', right: { kind: 'constant', value: 7 } } },
+    });
+    expect(boundEntity.configuration).toMatchObject({
+      mode: 'decider',
+      condition: { kind: 'compare', right: { kind: 'constant', value: 7 } },
+    });
+    expect(originalEntity.placement).toBeDefined();
+    expect(boundEntity.placement).toEqual(originalEntity.placement);
+    const serialized = JSON.stringify(generateBlueprintJson(bound));
+    expect(serialized).not.toContain('amount');
+    expect(serialized).not.toContain('deciderTemplates');
+    expect(serialized).not.toContain('"kind":"number"');
+
+    const input = execution.network('input').id;
+    const output = execution.network('output').id;
+    const simulate = (ir: typeof original) =>
+      createSimulationFromNativeCircuitIr(ir, [
+        { network: input, values: new SparseBus([[signal('virtual', 'signal-A'), 7]]) },
+      ])
+        .step()
+        .read(output)
+        .get(signal('virtual', 'signal-A'));
+    expect(simulate(original)).toBe(7);
+    expect(simulate(bound)).toBe(0);
+    expect(execution.circuit.ir).toBe(original);
+    const beforeInvalidBinding = JSON.stringify(execution.circuit.ir);
+    expect(() =>
+      bindCapturedSourceConfigurationTemplates(captured, execution, [
+        { parameter: captured.parameters[0]!.handle, value: Number.MAX_SAFE_INTEGER + 1 },
+      ]),
+    ).toThrowError(expect.objectContaining({ code: 'CP1000' }));
+    expect(JSON.stringify(execution.circuit.ir)).toBe(beforeInvalidBinding);
+
+    const template = captured.deciderTemplates[0]!;
+    const missingCapture = {
+      ...captured,
+      deciderTemplates: [{ ...template, captureId: 'producer:missing' }],
+    };
+    expect(() => bindCapturedSourceConfigurationTemplates(missingCapture, execution)).toThrowError(
+      expect.objectContaining({ path: '$.deciderTemplates[0].captureId' }),
+    );
+    const duplicateCapture = {
+      ...captured,
+      deciderTemplates: [template, template],
+    };
+    expect(() =>
+      bindCapturedSourceConfigurationTemplates(duplicateCapture, execution),
+    ).toThrowError(expect.objectContaining({ path: '$.deciderTemplates[1].captureId' }));
+    const foreignSession = exactParameterizedExecution(source, { environment });
+    const foreignTemplate = { ...captured, deciderTemplates: foreignSession.deciderTemplates };
+    expect(() => bindCapturedSourceConfigurationTemplates(foreignTemplate, execution)).toThrowError(
+      expect.objectContaining({ path: '$.deciderTemplates[0].template' }),
+    );
+  });
+
+  test('applies one number binding to Arithmetic, Constant count, and Decider threshold', () => {
+    const source = `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const arithmetic = Arithmetic({ left: input[A], operation: 'add', right: amount, output: A });
+const arithmeticOutput = new Network();
+arithmeticOutput += arithmetic;
+const constant = Constant({ sections: [{ filters: [{ signal: A, value: amount }] }] });
+const constantOutput = new Network();
+constantOutput += constant;
+const decider = Decider({ condition: input[A] > amount, outputs: [input[A]] });
+const deciderOutput = new Network();
+deciderOutput += decider;`;
+    const environment = exactEnvironment(true);
+    const captured = exactParameterizedExecution(source, { environment });
+    const lowered = tryElaborateDirectPlan(captured.plan, environment.context);
+    expect(lowered.diagnostics).toEqual([]);
+    expect(captured.arithmeticTemplates).toHaveLength(1);
+    expect(captured.constantTemplates).toHaveLength(1);
+    expect(captured.deciderTemplates).toHaveLength(1);
+
+    const execution = lowered.execution!;
+    const original = execution.circuit.ir;
+    const bound = bindCapturedSourceConfigurationTemplates(captured, execution, [
+      { parameter: captured.parameters[0]!.handle, value: 7 },
+    ]);
+    expect(bound.producers.find(({ kind }) => kind === 'arithmetic')).toMatchObject({
+      kind: 'arithmetic',
+      config: { right: { kind: 'constant', value: 7 } },
+    });
+    expect(bound.producers.find(({ kind }) => kind === 'constant')).toMatchObject({
+      kind: 'constant',
+      config: { configuration: { sections: [{ filters: [{ value: 7 }] }] } },
+    });
+    expect(bound.producers.find(({ kind }) => kind === 'decider')).toMatchObject({
+      kind: 'decider',
+      config: { condition: { kind: 'compare', right: { kind: 'constant', value: 7 } } },
+    });
+    expect(bound.entities.map(({ id }) => id)).toEqual(original.entities.map(({ id }) => id));
+    expect(original.producers.find(({ kind }) => kind === 'decider')).toMatchObject({
+      config: { condition: { kind: 'compare', right: { kind: 'constant', value: 5 } } },
+    });
+  });
+
+  test('captures distinct dynamic Deciders and rolls back a failed enclosing instance', () => {
+    const environment = exactEnvironment();
+    const dynamicSource = `const A = Signal('virtual', 'signal-A');
+const inputA = new Network();
+const inputB = new Network();
+function Gate(source: Network) {
+  const exact = Decider({ condition: source[A] > amount, outputs: [source[A]] });
+  const sink = new Network();
+  sink += exact;
+  return exact;
+}
+const first = t.instantiate(Gate, inputA);
+const second = t.instantiate(Gate, inputB);
+const outputA = new Network();
+const outputB = new Network();
+outputA += first.value;
+outputB += second.value;`;
+    const dynamic = exactParameterizedExecution(dynamicSource, {
+      environment,
+      testContextName: 't',
+    });
+    expect(dynamic.deciderTemplates).toHaveLength(2);
+    expect(new Set(dynamic.deciderTemplates.map(({ captureId }) => captureId)).size).toBe(2);
+    const lowered = tryElaborateDirectPlan(dynamic.plan, environment.context);
+    expect(lowered.diagnostics).toEqual([]);
+    const bound = bindCapturedSourceConfigurationTemplates(dynamic, lowered.execution!, [
+      { parameter: dynamic.parameters[0]!.handle, value: 8 },
+    ]);
+    expect(bound.producers.filter(({ kind }) => kind === 'decider')).toHaveLength(2);
+    expect(
+      bound.producers
+        .filter((producer) => producer.kind === 'decider')
+        .every(
+          (producer) =>
+            producer.kind === 'decider' &&
+            producer.config.condition.kind === 'compare' &&
+            producer.config.condition.right.kind === 'constant' &&
+            producer.config.condition.right.value === 8,
+        ),
+    ).toBe(true);
+
+    const rollbackSource = `const A = Signal('virtual', 'signal-A');
+function Broken() {
+  Decider({ condition: input[A] > amount, outputs: [input[A]] });
+  const invalid: unknown = 1;
+  Decider({ condition: invalid, outputs: [input[A]] });
+}
+const input = new Network();
+try { t.instantiate(Broken); } catch {}
+const exact = Decider({ condition: input[A] > amount, outputs: [input[A]] });
+const output = new Network();
+output += exact;`;
+    const rolledBack = exactParameterizedExecution(rollbackSource, {
+      environment,
+      testContextName: 't',
+    });
+    expect(rolledBack.plan.producers).toHaveLength(1);
+    expect(rolledBack.plan.entities).toHaveLength(1);
+    expect(rolledBack.deciderTemplates).toHaveLength(1);
+    expect(rolledBack.deciderTemplates[0]?.captureId).toBe('producer:1');
+  });
+
   test('normalizes exact rows once and retains one linked Entity', () => {
     const plan = exactPlan();
     expect(plan.producers).toHaveLength(1);
