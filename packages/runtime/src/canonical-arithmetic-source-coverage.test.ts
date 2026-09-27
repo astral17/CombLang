@@ -6,13 +6,18 @@ import {
 } from '@comblang/compiler';
 import type { EntityId, EntityProfile } from '@comblang/compiler/entity';
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
-import { signal } from '@comblang/factorio';
+import { signal, SparseBus } from '@comblang/factorio';
 import { parseFile, validateDslSemantics } from '@comblang/language';
 import type { EntityPrototype } from '@comblang/prototypes';
 import { sourceFileId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
-import { inspectArithmeticConfigurationTemplate } from '../../compiler/src/arithmetic-configuration-template.js';
+import {
+  createArithmeticConfigurationTemplate,
+  inspectArithmeticConfigurationTemplate,
+} from '../../compiler/src/arithmetic-configuration-template.js';
 import { createBlueprintParameterSession } from '../../compiler/src/blueprint-parameters.js';
+import { bindCapturedSourceArithmeticTemplates } from './executed-blueprint-configuration-binding.js';
+import { createSimulationFromNativeCircuitIr } from './elaboration.js';
 import { tryElaborateDirectPlan } from './direct-plan.js';
 import {
   ElaborationExecutionError,
@@ -398,6 +403,7 @@ function Add(source: Network) {
 const dut = t.instantiate(Add, input);`;
     const parsed = parseFile({ path: sourceFile, text });
     const transformed = transformElaborationModule(parsed, { testContextName: 't' });
+    const environment = exactEnvironment();
     const execution = executeElaborationProgramWithParameters(
       {
         ...transformed,
@@ -408,7 +414,7 @@ const amount = ${transformed.runtimeParameter}.declareBlueprintNumberParameter(
   'amount', 4, undefined, { start: 0, end: 1 }
 );\n${transformed.code}`,
       },
-      exactEnvironment(),
+      environment,
     );
 
     expect(execution.plan.producers).toHaveLength(1);
@@ -441,6 +447,16 @@ const amount = ${transformed.runtimeParameter}.declareBlueprintNumberParameter(
     expect(record.template.right).toEqual({
       kind: 'constant',
       value: execution.parameters[1]!.handle,
+    });
+    const lowered = tryElaborateDirectPlan(execution.plan, environment.context);
+    expect(lowered.diagnostics).toEqual([]);
+    const bound = bindCapturedSourceArithmeticTemplates(execution, lowered.execution!, [
+      { parameter: execution.parameters[1]!.handle, value: 7 },
+    ]);
+    expect(bound.producers).toHaveLength(1);
+    expect(bound.producers[0]).toMatchObject({
+      kind: 'arithmetic',
+      config: { right: { kind: 'constant', value: 7 } },
     });
   });
 
@@ -867,5 +883,344 @@ output += exact;`,
         ({ profile }) => profile.prototypeKey === 'entity:synthetic-structural',
       )?.configuration,
     ).toEqual({ mode: 'raw', payload: {} });
+  });
+
+  test('binds a captured source Arithmetic slot into its matching canonical execution', () => {
+    const environment = exactEnvironment();
+    const text = `
+const A = Signal('virtual', 'signal-A');
+const input = new Network();
+function Add(source: Network) {
+  const exact: ArithmeticCombinator = Arithmetic({ left: source[A], operation: 'add', right: amount, output: A });
+  const sink = new Network();
+  sink += exact;
+  return exact;
+}
+const dut = t.instantiate(Add, input);
+const output = new Network();
+output += dut.value;`;
+    const parsed = parseFile({ path: sourceFile, text });
+    const transformed = transformElaborationModule(parsed, { testContextName: 't' });
+    const sourceExecution = executeElaborationProgramWithParameters(
+      {
+        ...transformed,
+        code: `const amount = ${transformed.runtimeParameter}.declareBlueprintNumberParameter(
+  'amount', 4, undefined, { start: 0, end: 1 }
+);\n${transformed.code}`,
+      },
+      environment,
+    );
+    const lowered = tryElaborateDirectPlan(sourceExecution.plan, environment.context);
+
+    expect(lowered.diagnostics).toEqual([]);
+    expect(sourceExecution.arithmeticTemplates).toHaveLength(1);
+    const canonicalExecution = lowered.execution!;
+    const defaultCircuit = bindCapturedSourceArithmeticTemplates(
+      sourceExecution,
+      canonicalExecution,
+    );
+    const originalIr = canonicalExecution.circuit.ir;
+    const originalProducer = originalIr.producers.find(({ kind }) => kind === 'arithmetic')!;
+    const originalEntity = originalIr.entities.find(
+      ({ id }) => id === sourceExecution.plan.producers[0]?.entityId,
+    )!;
+    const boundCircuit = bindCapturedSourceArithmeticTemplates(
+      sourceExecution,
+      canonicalExecution,
+      [{ parameter: sourceExecution.parameters[0]!.handle, value: 7 }],
+    );
+    const boundProducer = boundCircuit.producers.find(({ kind }) => kind === 'arithmetic')!;
+    const boundEntity = boundCircuit.entities.find(({ id }) => id === originalEntity.id)!;
+
+    expect(defaultCircuit).toEqual(originalIr);
+    expect(boundCircuit.networks.map(({ id }) => id)).toEqual(
+      originalIr.networks.map(({ id }) => id),
+    );
+    expect(boundCircuit.producers.map(({ id }) => id)).toEqual(
+      originalIr.producers.map(({ id }) => id),
+    );
+    expect(boundCircuit.entities.map(({ id }) => id)).toEqual(
+      originalIr.entities.map(({ id }) => id),
+    );
+    expect(originalProducer).toMatchObject({
+      kind: 'arithmetic',
+      config: { right: { kind: 'constant', value: 4 } },
+    });
+    expect(boundProducer).toMatchObject({
+      kind: 'arithmetic',
+      config: { right: { kind: 'constant', value: 7 } },
+    });
+    expect(originalEntity.configuration).toMatchObject({
+      mode: 'arithmetic',
+      right: { kind: 'constant', value: 4 },
+    });
+    expect(boundEntity.configuration).toMatchObject({
+      mode: 'arithmetic',
+      right: { kind: 'constant', value: 7 },
+    });
+    const boundBlueprint = generateBlueprintJson(boundCircuit);
+    const serializedBlueprint = JSON.stringify(boundBlueprint);
+    expect(serializedBlueprint).not.toContain('arithmeticTemplates');
+    expect(serializedBlueprint).not.toContain('amount');
+    expect(serializedBlueprint).not.toContain('"kind":"number"');
+
+    const inputNetwork = canonicalExecution.network('input').id;
+    const outputNetwork = canonicalExecution.network('output').id;
+    const simulated = (ir: typeof originalIr) =>
+      createSimulationFromNativeCircuitIr(ir, [
+        { network: inputNetwork, values: new SparseBus([[signal('virtual', 'signal-A'), 3]]) },
+      ])
+        .step()
+        .read(outputNetwork)
+        .get(signal('virtual', 'signal-A'));
+    expect(simulated(originalIr)).toBe(7);
+    expect(simulated(boundCircuit)).toBe(10);
+    expect(canonicalExecution.circuit.ir).toBe(originalIr);
+    expect(sourceExecution.plan.producers[0]).toMatchObject({
+      kind: 'arithmetic',
+      right: { kind: 'constant', value: 4 },
+    });
+  });
+
+  test('binds one shared source slot to each distinct dynamic Arithmetic producer', () => {
+    const environment = exactEnvironment();
+    const text = `
+const A = Signal('virtual', 'signal-A');
+const inputA = new Network();
+const inputB = new Network();
+function Add(source: Network) {
+  const exact: ArithmeticCombinator = Arithmetic({ left: source[A], operation: 'add', right: amount, output: A });
+  const sink = new Network();
+  sink += exact;
+  return exact;
+}
+const first = t.instantiate(Add, inputA);
+const second = t.instantiate(Add, inputB);
+const outputA = new Network();
+const outputB = new Network();
+outputA += first.value;
+outputB += second.value;`;
+    const parsed = parseFile({ path: sourceFile, text });
+    const transformed = transformElaborationModule(parsed, { testContextName: 't' });
+    const sourceExecution = executeElaborationProgramWithParameters(
+      {
+        ...transformed,
+        code: `const amount = ${transformed.runtimeParameter}.declareBlueprintNumberParameter(
+  'amount', 4, undefined, { start: 0, end: 1 }
+);\n${transformed.code}`,
+      },
+      environment,
+    );
+    const lowered = tryElaborateDirectPlan(sourceExecution.plan, environment.context);
+    expect(lowered.diagnostics).toEqual([]);
+    const execution = lowered.execution!;
+    const templates = sourceExecution.arithmeticTemplates;
+    expect(templates).toHaveLength(2);
+    expect(new Set(templates.map(({ captureId }) => captureId)).size).toBe(2);
+    const bound = bindCapturedSourceArithmeticTemplates(sourceExecution, execution, [
+      { parameter: sourceExecution.parameters[0]!.handle, value: 7 },
+    ]);
+    expect(bound.producers.filter(({ kind }) => kind === 'arithmetic')).toHaveLength(2);
+    expect(
+      bound.producers
+        .filter((producer) => producer.kind === 'arithmetic')
+        .map((producer) => (producer.kind === 'arithmetic' ? producer.config.right : undefined)),
+    ).toEqual([
+      { kind: 'constant', value: 7 },
+      { kind: 'constant', value: 7 },
+    ]);
+    expect(new Set(bound.producers.map(({ id }) => id)).size).toBe(2);
+    const simulate = (networkName: string, inputName: string, value: number) =>
+      createSimulationFromNativeCircuitIr(bound, [
+        {
+          network: execution.network(inputName).id,
+          values: new SparseBus([[signal('virtual', 'signal-A'), value]]),
+        },
+      ])
+        .step()
+        .read(execution.network(networkName).id)
+        .get(signal('virtual', 'signal-A'));
+    expect(simulate('outputA', 'inputA', 2)).toBe(9);
+    expect(simulate('outputB', 'inputB', 5)).toBe(12);
+  });
+
+  test('rejects cross-plan executions, missing or duplicate captures, and incompatible bindings', () => {
+    const environment = exactEnvironment();
+    const text = `
+const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const exact: ArithmeticCombinator = Arithmetic({ left: input[A], operation: 'add', right: amount, output: A });
+const output = new Network();
+output += exact;`;
+    const first = executeWithParameter(text);
+    const second = executeWithParameter(text.replace("'amount', 4", "'amount', 5"));
+    const firstExecution = tryElaborateDirectPlan(first.plan, environment.context).execution!;
+    const secondExecution = tryElaborateDirectPlan(second.plan, environment.context).execution!;
+    const capture = first.arithmeticTemplates[0]!;
+    const originalIr = JSON.stringify(firstExecution.circuit.ir);
+    const originalTemplate = capture.template;
+
+    expect(() => bindCapturedSourceArithmeticTemplates(first, secondExecution)).toThrowError(
+      expect.objectContaining({ code: 'CP1001', path: '$.execution' }),
+    );
+    const missingCapture = {
+      ...first,
+      arithmeticTemplates: [{ ...capture, captureId: 'producer:missing' }],
+    };
+    expect(() =>
+      bindCapturedSourceArithmeticTemplates(missingCapture, firstExecution),
+    ).toThrowError(
+      expect.objectContaining({ code: 'CP1001', path: '$.arithmeticTemplates[0].captureId' }),
+    );
+    const duplicateCapture = {
+      ...first,
+      arithmeticTemplates: [capture, capture],
+    };
+    expect(() =>
+      bindCapturedSourceArithmeticTemplates(duplicateCapture, firstExecution),
+    ).toThrowError(
+      expect.objectContaining({ code: 'CP1001', path: '$.arithmeticTemplates[1].captureId' }),
+    );
+
+    const missingNetworkTemplate = createArithmeticConfigurationTemplate(first.session, {
+      left: {
+        kind: 'signal',
+        refKind: 'single',
+        signal: signal('virtual', 'signal-A'),
+        network: 'missing-network' as never,
+      },
+      operation: 'add',
+      right: capture.template.right,
+      output: capture.template.output,
+    });
+    const missingNetwork = {
+      ...first,
+      arithmeticTemplates: [{ ...capture, template: missingNetworkTemplate }],
+    };
+    expect(() =>
+      bindCapturedSourceArithmeticTemplates(missingNetwork, firstExecution),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1001',
+        path: '$.arithmeticTemplates[0].template.left.network',
+      }),
+    );
+
+    expect(() =>
+      bindCapturedSourceArithmeticTemplates(first, firstExecution, [
+        { parameter: first.parameters[0]!.handle, value: Number.MAX_SAFE_INTEGER + 1 },
+      ]),
+    ).toThrowError(expect.objectContaining({ code: 'CP1000' }));
+
+    const fixedFieldTemplate = createArithmeticConfigurationTemplate(first.session, {
+      left: { kind: 'constant', value: 2 },
+      operation: 'add',
+      right: capture.template.right,
+      output: capture.template.output,
+    });
+    const fixedFieldMismatch = {
+      ...first,
+      arithmeticTemplates: [{ ...capture, template: fixedFieldTemplate }],
+    };
+    expect(() =>
+      bindCapturedSourceArithmeticTemplates(fixedFieldMismatch, firstExecution),
+    ).toThrowError(expect.objectContaining({ code: 'CP1001' }));
+    expect(JSON.stringify(firstExecution.circuit.ir)).toBe(originalIr);
+    expect(first.arithmeticTemplates[0]?.template).toBe(originalTemplate);
+    expect(first.parameters[0]?.handle).toBe(
+      capture.template.right.kind === 'constant' ? capture.template.right.value : undefined,
+    );
+  });
+
+  test('rejects a parameterized Arithmetic capture redirected to a different Producer kind', () => {
+    const environment = exactEnvironment();
+    const parsed = parseFile({
+      path: sourceFile,
+      text: `
+const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const exact: ArithmeticCombinator = Arithmetic({ left: input[A], operation: 'add', right: amount, output: A });
+const arithmeticSink = new Network();
+arithmeticSink += exact;
+function MakeConstant() {
+  const value: ConstantCombinator = Constant({ sections: [] });
+  const sink = new Network();
+  sink += value;
+  return value;
+}
+const capturedConstant = t.instantiate(MakeConstant);`,
+    });
+    const transformed = transformElaborationModule(parsed, { testContextName: 't' });
+    const sourceExecution = executeElaborationProgramWithParameters(
+      {
+        ...transformed,
+        code: `const amount = ${transformed.runtimeParameter}.declareBlueprintNumberParameter(
+  'amount', 4, undefined, { start: 0, end: 1 }
+);\n${transformed.code}`,
+      },
+      environment,
+    );
+    const constantCapture = sourceExecution.plan.producers.find(({ kind }) => kind === 'constant')
+      ?.debugCaptureIds?.[0];
+    expect(constantCapture).toBeDefined();
+    const redirected = {
+      ...sourceExecution,
+      arithmeticTemplates: sourceExecution.arithmeticTemplates.map((record) => ({
+        ...record,
+        captureId: constantCapture!,
+      })),
+    };
+    const execution = tryElaborateDirectPlan(sourceExecution.plan, environment.context).execution!;
+    expect(() => bindCapturedSourceArithmeticTemplates(redirected, execution)).toThrowError(
+      expect.objectContaining({ code: 'CP1001', path: '$.arithmeticTemplates[0].captureId' }),
+    );
+  });
+
+  test('binds a producer input even when source ownership moves afterward', () => {
+    const environment = exactEnvironment();
+    const parsed = parseFile({
+      path: sourceFile,
+      text: `
+const A = Signal('virtual', 'signal-A');
+function Pass(input: Move<Network>): Network { return input; }
+const input = new Network();
+const exact: ArithmeticCombinator = Arithmetic({ left: input[A], operation: 'add', right: amount, output: A });
+const sink = new Network();
+sink += exact;
+const moved = Pass(input);`,
+    });
+    const transformed = transformElaborationModule(parsed);
+    const sourceExecution = executeElaborationProgramWithParameters(
+      {
+        ...transformed,
+        code: `const amount = ${transformed.runtimeParameter}.declareBlueprintNumberParameter(
+  'amount', 4, undefined, { start: 0, end: 1 }
+);\n${transformed.code}`,
+      },
+      environment,
+    );
+    const lowered = tryElaborateDirectPlan(sourceExecution.plan, environment.context);
+    expect(lowered.diagnostics).toEqual([]);
+    const bound = bindCapturedSourceArithmeticTemplates(sourceExecution, lowered.execution!, [
+      { parameter: sourceExecution.parameters[0]!.handle, value: 7 },
+    ]);
+    expect(bound.producers[0]).toMatchObject({
+      kind: 'arithmetic',
+      config: { right: { kind: 'constant', value: 7 } },
+    });
+  });
+
+  test('returns an unchanged circuit through the existing binder when no Arithmetic slots were captured', () => {
+    const environment = exactEnvironment();
+    const sourceExecution = executeWithParameter(`
+const A = Signal('virtual', 'signal-A');
+const exact: ArithmeticCombinator = Arithmetic({ left: 2, operation: 'add', right: 3, output: A });
+const output = new Network();
+output += exact;`);
+    const lowered = tryElaborateDirectPlan(sourceExecution.plan, environment.context);
+    expect(lowered.diagnostics).toEqual([]);
+    expect(sourceExecution.arithmeticTemplates).toHaveLength(0);
+    const bound = bindCapturedSourceArithmeticTemplates(sourceExecution, lowered.execution!);
+    expect(bound).toEqual(lowered.execution!.circuit.ir);
   });
 });

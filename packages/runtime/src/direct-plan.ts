@@ -51,6 +51,7 @@ import {
 } from './debug-index.js';
 import { validateDirectPlanEnvelope } from './direct-plan-validation.js';
 import { DebugStructureExpectation } from './debug-structure.js';
+import { registerExecutedDirectPlanPairing } from './executed-direct-plan-pairing.js';
 import {
   DslRuntime,
   RuntimeDiagnosticError,
@@ -1484,6 +1485,7 @@ export function validateCanonicalDirectPlan(
 function canonicalizeDirectExecution(
   plan: DirectElaborationPlan,
   execution: ExecutedDirectPlan,
+  pairingPlan: DirectElaborationPlan = plan,
 ): CanonicalDirectPlanExecutionResult {
   const circuit = execution.circuit;
   const graph = canonicalCircuitGraph(circuit.graph) as ExecutedDirectPlan['circuit']['graph'];
@@ -1492,12 +1494,14 @@ function canonicalizeDirectExecution(
     circuit.graph.entities === circuit.ir.entities
       ? ({ ...canonicalIr, entities: graph.entities } as ExecutedDirectPlan['circuit']['ir'])
       : canonicalIr;
+  const canonicalExecution = Object.freeze({
+    ...execution,
+    circuit: Object.freeze({ ...circuit, graph, ir }),
+  });
+  registerExecutedDirectPlanPairing(canonicalExecution, pairingPlan);
   return {
     diagnostics: [],
-    execution: Object.freeze({
-      ...execution,
-      circuit: Object.freeze({ ...circuit, graph, ir }),
-    }),
+    execution: canonicalExecution,
     resolvedCircuit: canonicalResolvedCircuit(undefined, plan, ir) as ResolvedCircuit,
   };
 }
@@ -1514,13 +1518,13 @@ export function tryElaborateDirectPlan(
     const result = tryExecuteProducerPlan(plan);
     return result.execution === undefined
       ? { diagnostics: result.diagnostics }
-      : canonicalizeDirectExecution(plan, result.execution);
+      : canonicalizeDirectExecution(plan, result.execution, input as DirectElaborationPlan);
   }
   if (context === undefined) throw new Error('unreachable: Entity context was validated above.');
   const result = executeEntityPlan(plan, context);
   return result.execution === undefined
     ? { diagnostics: result.diagnostics }
-    : canonicalizeDirectExecution(plan, result.execution);
+    : canonicalizeDirectExecution(plan, result.execution, input as DirectElaborationPlan);
 }
 
 export function elaborateDirectPlan(
