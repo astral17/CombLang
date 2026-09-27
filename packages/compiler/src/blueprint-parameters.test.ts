@@ -5,7 +5,10 @@ import { describe, expect, test } from 'vitest';
 import {
   assertBlueprintParameterFromSession,
   BlueprintParameterError,
+  canonicalBlueprintParameterHandle,
   createBlueprintParameterSession,
+  createBlueprintParameterSourceView,
+  findBlueprintParameterHandle,
   inspectBlueprintParameterHandle,
 } from './blueprint-parameters.js';
 
@@ -101,6 +104,57 @@ describe('nominal blueprint parameter declarations', () => {
     expect(() =>
       assertBlueprintParameterFromSession({} as never, parameter, '$.session'),
     ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.session' }));
+  });
+
+  test('keeps opaque source views distinct while resolving them to their owned host handle', () => {
+    const session = createBlueprintParameterSession();
+    const foreignSession = createBlueprintParameterSession();
+    const handle = session.number('items', { defaultValue: 5, source });
+    const view = createBlueprintParameterSourceView(session, handle);
+
+    expect(Object.is(view, handle)).toBe(false);
+    expect(Object.isFrozen(handle)).toBe(true);
+    expect(handle).toMatchObject({ kind: 'number', label: 'items', defaultValue: 5, source });
+    expect(findBlueprintParameterHandle(view)).toMatchObject({
+      kind: 'number',
+      label: 'items',
+      defaultValue: 5,
+      source,
+    });
+    expect(canonicalBlueprintParameterHandle(view)).toBe(handle);
+    expect(assertBlueprintParameterFromSession(session, view, '$.parameter')).toEqual(
+      inspectBlueprintParameterHandle(handle, '$.parameter'),
+    );
+
+    const blockedReads: Array<() => unknown> = [
+      () => (view as Record<string, unknown>).label,
+      () => Object.keys(view),
+      () => Reflect.ownKeys(view),
+      () => Object.getOwnPropertyDescriptor(view, 'label'),
+      () => Object.getPrototypeOf(view),
+      () => String(view),
+    ];
+    for (const read of blockedReads) {
+      expect(read).toThrowError(
+        expect.objectContaining({ code: 'CP1001', path: '$.parameter', span: source }),
+      );
+    }
+
+    expect(() =>
+      assertBlueprintParameterFromSession(foreignSession, view, '$.parameter'),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1001',
+        path: '$.parameter',
+        message: expect.stringContaining('different parameter session'),
+      }),
+    );
+    expect(() => createBlueprintParameterSourceView(session, { ...handle })).toThrowError(
+      expect.objectContaining({ code: 'CP1001', path: '$.parameter' }),
+    );
+    expect(() => createBlueprintParameterSourceView(foreignSession, handle)).toThrowError(
+      expect.objectContaining({ code: 'CP1001', path: '$.parameter', span: source }),
+    );
   });
 
   test('keeps default validation errors in the parameter error family', () => {

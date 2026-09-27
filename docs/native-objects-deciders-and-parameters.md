@@ -215,7 +215,12 @@ not mutated. Handles and captured templates are not part of
 `SourceCompilationArtifact`; do not serialize or send them across a Worker
 boundary. Binding must happen in the host that owns the original compilation.
 The artifact also omits generated JavaScript containing private parameter-capture
-calls; the local compilation result retains that diagnostic view.
+calls; the local compilation result retains that diagnostic view. Source receives
+an opaque view distinct from the nominal handle exposed by the host API. Reads,
+reflection, destructuring, and enumeration of that source view are rejected with
+a located diagnostic; valid configuration slots canonicalize it to the original
+host handle. Host-side declaration metadata remains available through the
+host-local API.
 
 This API does not emit Factorio blueprint parameter fields, formulas, recipe or
 property dependencies, and makes no claim about native Factorio placement
@@ -224,11 +229,11 @@ native and Worker/UI workflows require separate implementation and independent
 Factorio-exported fixtures.
 
 Known limitation: this is a source-language feature, not a hardened sandbox.
-An ordinary JavaScript property read from a parameter handle (for example,
-`amount.defaultValue`) can currently escape the guarded direct-use paths and
-affect JavaScript control flow. Do not use handle properties in source. The
-source-level containment contract remains under review; direct-slot support
-must not be described as complete parameter-flow safety.
+JavaScript truthiness (`Boolean(parameter)` and `!!parameter`) cannot be trapped
+by the opaque view, and arbitrary native callbacks may observe object identity.
+Existing control-flow and arbitrary-call guards remain in place but do not
+establish general parameter-flow safety. Ordinary non-parameter objects retain
+their normal JavaScript property behavior.
 
 ## Dependencies and formulas
 

@@ -156,6 +156,7 @@ import {
   type SelectorConfigurationTemplate,
 } from '../../compiler/src/selector-configuration-template.js';
 import {
+  createBlueprintParameterSourceView,
   findBlueprintParameterHandle,
   BlueprintParameterError,
   type BlueprintNumberParameterHandle,
@@ -2444,7 +2445,13 @@ class ElaborationRecorder {
           );
         }
         this.#recordDslCall();
-        return this.#parameterCapture!.number(args[0], args[1], args[2], this.#span(args[3]));
+        const handle = this.#parameterCapture!.number(
+          args[0],
+          args[1],
+          args[2],
+          this.#span(args[3]),
+        );
+        return createBlueprintParameterSourceView(this.#parameterCapture!.session, handle);
       };
       executionOperations.declareBlueprintSignalParameter = (...args: unknown[]) => {
         if (args.length !== 4 || !isRawSpan(args[3])) {
@@ -2456,12 +2463,13 @@ class ElaborationRecorder {
         if (!this.#isSignal(args[1])) {
           throw new Error('Signal defaults must come from Signal(...) in this execution session.');
         }
-        return this.#parameterCapture!.signal(
+        const handle = this.#parameterCapture!.signal(
           args[0],
           this.#signalSnapshot(args[1]),
           args[2],
           this.#span(args[3]),
         );
+        return createBlueprintParameterSourceView(this.#parameterCapture!.session, handle);
       };
     }
     const wrapped = Object.entries(executionOperations).map(([name, operation]) => [

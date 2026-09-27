@@ -2,7 +2,10 @@ import { signal } from '@comblang/factorio';
 import type { SourceFileId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
-import { createBlueprintParameterSession } from './blueprint-parameters.js';
+import {
+  createBlueprintParameterSession,
+  createBlueprintParameterSourceView,
+} from './blueprint-parameters.js';
 import {
   assertBlueprintParameterNumberValue,
   canonicalizeBlueprintParameterSignal,
@@ -50,6 +53,28 @@ describe('shared blueprint parameter validation', () => {
     );
     expect(() => lookupBlueprintParameterSlot(target, 'signal', session, '$.target')).toThrowError(
       expect.objectContaining({ code: 'CP1001', path: '$.target', span: source }),
+    );
+  });
+
+  test('canonicalizes only registered source views at slots and host bindings', () => {
+    const session = createBlueprintParameterSession();
+    const parameter = session.number('count', { defaultValue: 3, source });
+    const view = createBlueprintParameterSourceView(session, parameter);
+
+    expect(lookupBlueprintParameterSlot(view, 'number', session, '$.count')).toMatchObject({
+      handle: parameter,
+      registration: { kind: 'number', label: 'count', defaultValue: 3 },
+    });
+    expect(readBlueprintParameterBindings(session, [{ parameter: view, value: 8 }])).toEqual([
+      { parameter, value: 8, registration: expect.objectContaining({ label: 'count' }) },
+    ]);
+    expect(() =>
+      readBlueprintParameterBindings(session, [
+        { parameter, value: 7 },
+        { parameter: view, value: 8 },
+      ]),
+    ).toThrowError(
+      expect.objectContaining({ code: 'CP1001', path: '$.bindings[1].parameter', span: source }),
     );
   });
 

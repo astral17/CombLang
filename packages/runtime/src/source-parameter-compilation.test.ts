@@ -27,6 +27,10 @@ import { createExecutedProducerCaptureReference } from './executed-blueprint-con
 import { createBlueprintConfigurationSet } from '../../compiler/src/blueprint-configuration-set.js';
 import { createSelectorConfigurationTemplate } from '../../compiler/src/selector-configuration-template.js';
 import { createBlueprintParameterSession } from '../../compiler/src/blueprint-parameters.js';
+import {
+  canonicalBlueprintParameterHandle,
+  findBlueprintParameterHandle,
+} from '../../compiler/src/blueprint-parameters.js';
 
 function parameterHost() {
   const families = [
@@ -107,6 +111,87 @@ describe('ordinary source parameter declarations', () => {
         sections: [{ filters: [{ signal: { type: 'virtual', name: 'signal-C' }, value: 5 }] }],
       },
     });
+  });
+
+  test('preserves source-view identity through aliases and ordinary containers', () => {
+    const compilation = compileSourceProgram(
+      {
+        path: 'parameter-view-aliases.factorio.ts',
+        text: `const amount = Param.number('Amount', 5);
+const alias = amount;
+const box = { values: [alias] };
+const input = new Network();
+const output = new Network();
+const arithmetic = Arithmetic({
+  left: input[Signal('virtual', 'signal-A')],
+  operation: 'add',
+  right: box.values[0],
+  output: Signal('virtual', 'signal-B'),
+});
+output += arithmetic;`,
+      },
+      parameterHost(),
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.plan?.producers).toMatchObject([
+      { kind: 'arithmetic', right: { kind: 'constant', value: 5 } },
+    ]);
+    expect(listSourceCompilationParameters(compilation)).toMatchObject([
+      { kind: 'number', label: 'Amount', defaultValue: 5 },
+    ]);
+  });
+
+  test('keeps the escaped source view distinct from the host-listed handle', () => {
+    const key = Symbol.for('comblang.test.source-parameter-view');
+    const globalRecord = globalThis as Record<PropertyKey, unknown>;
+    const hadPriorValue = Object.hasOwn(globalRecord, key);
+    const priorValue = globalRecord[key];
+    try {
+      const compilation = compileSourceProgram(
+        {
+          path: 'parameter-view-host-boundary.factorio.ts',
+          text: `const amount = Param.number('Amount', 5);
+globalThis[Symbol.for('comblang.test.source-parameter-view')] = amount;
+const input = new Network();
+const output = new Network();
+const arithmetic = Arithmetic({
+  left: input[Signal('virtual', 'signal-A')],
+  operation: 'add',
+  right: amount,
+  output: Signal('virtual', 'signal-B'),
+});
+output += arithmetic;`,
+        },
+        parameterHost(),
+      );
+      const sourceView = globalRecord[key] as object;
+      const hostHandle = listSourceCompilationParameters(compilation)[0]!.parameter;
+
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      expect(Object.is(sourceView, hostHandle)).toBe(false);
+      expect(canonicalBlueprintParameterHandle(sourceView)).toBe(hostHandle);
+      expect(findBlueprintParameterHandle(sourceView)).toMatchObject({
+        kind: 'number',
+        label: 'Amount',
+        defaultValue: 5,
+      });
+      expect(() => Reflect.ownKeys(sourceView)).toThrowError(
+        expect.objectContaining({ code: 'CP1001' }),
+      );
+      expect(
+        bindSourceCompilationParameters(compilation, [
+          { parameter: sourceView as never, value: 9 },
+        ]).producers.find(({ kind }) => kind === 'arithmetic'),
+      ).toMatchObject({ kind: 'arithmetic', config: { right: { kind: 'constant', value: 9 } } });
+      const artifact = sourceCompilationArtifact(compilation);
+      expect(artifact).not.toHaveProperty('parameters');
+      expect(JSON.stringify(artifact.plan)).not.toContain('Amount');
+      expect(JSON.stringify(artifact.resolvedCircuit)).not.toContain('Amount');
+    } finally {
+      if (!hadPriorValue) delete globalRecord[key];
+      else globalRecord[key] = priorValue;
+    }
   });
 
   test('lists host-local declarations and atomically binds them into a fresh concrete NCIR', () => {
@@ -715,14 +800,48 @@ output += selector;`;
     expect(JSON.stringify(bound)).not.toContain('Selected signal');
   });
 
-  test('records the remaining JavaScript handle-property escape for Sol review', () => {
-    const compilation = compileSourceProgram({
-      path: 'parameter-property-escape.factorio.ts',
-      text: `const amount = Param.number('Amount', 5);
-if (amount.defaultValue) {}`,
-    });
+  test('rejects source parameter property and reflection escapes while retaining host metadata', () => {
+    const reads = [
+      'amount.defaultValue;',
+      'const alias = amount; alias.label;',
+      'amount?.kind;',
+      "amount['source'];",
+      'const { defaultValue } = amount;',
+      "const key = 'label'; amount[key];",
+      'Object.keys(amount);',
+      'Reflect.ownKeys(amount);',
+      "Object.getOwnPropertyDescriptor(amount, 'label');",
+      '({ ...amount });',
+      'JSON.stringify(amount);',
+      'if (amount.defaultValue) {}',
+    ];
 
-    // The ordinary source transform cannot distinguish this metadata read from other JS values.
-    expect(compilation.pipelineDiagnostics).toEqual([]);
+    for (const read of reads) {
+      const text = `const amount = Param.number('Amount', 5);\n${read}`;
+      const declarationStart = text.indexOf('Param.number');
+      const declarationEnd = text.indexOf(');') + 1;
+      const compilation = compileSourceProgram({
+        path: 'parameter-property-escape.factorio.ts',
+        text,
+      });
+
+      expect(compilation.pipelineDiagnostics, read).toHaveLength(1);
+      const [diagnostic] = compilation.pipelineDiagnostics;
+      expect(diagnostic?.severity).toBe('error');
+      expect(['CP1001', 'RT2029']).toContain(diagnostic?.code);
+      expect(diagnostic?.span).toBeDefined();
+      expect([declarationStart, text.indexOf(read)]).toContain(diagnostic?.span?.start);
+    }
+
+    const hostCompilation = compileSourceProgram({
+      path: 'parameter-host-metadata.factorio.ts',
+      text: `const amount = Param.number('Amount', 5);
+const ordinary = { label: 'ordinary' };
+ordinary.label;`,
+    });
+    expect(hostCompilation.pipelineDiagnostics).toEqual([]);
+    expect(listSourceCompilationParameters(hostCompilation)).toMatchObject([
+      { kind: 'number', label: 'Amount', defaultValue: 5 },
+    ]);
   });
 });

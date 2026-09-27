@@ -11,6 +11,7 @@ import {
   assertBlueprintParameterFromSession,
   assertBlueprintParameterSession,
   BlueprintParameterError,
+  canonicalBlueprintParameterHandle,
   findBlueprintParameterHandle,
   type BlueprintParameterHandle,
   type BlueprintParameterKind,
@@ -199,7 +200,11 @@ export function lookupBlueprintParameterSlot(
   if (owned.kind !== kind) {
     fail('CP1001', path, `expected a ${kind} parameter, received ${owned.kind}.`, owned.source);
   }
-  return { handle: value as BlueprintParameterHandle, registration: owned };
+  const handle = canonicalBlueprintParameterHandle(value);
+  if (handle === undefined) {
+    fail('CP1001', path, 'value is not a registered parameter handle.', owned.source);
+  }
+  return { handle, registration: owned };
 }
 
 export function readBlueprintParameterBindings(
@@ -270,7 +275,11 @@ export function readBlueprintParameterBindings(
       fail('CP1001', `${entryPath}.parameter`, 'value is not a registered parameter handle.');
     }
     const owned = assertBlueprintParameterFromSession(session, parameter, `${entryPath}.parameter`);
-    if (seen.has(parameter as object)) {
+    const handle = canonicalBlueprintParameterHandle(parameter);
+    if (handle === undefined) {
+      fail('CP1001', `${entryPath}.parameter`, 'value is not a registered parameter handle.');
+    }
+    if (seen.has(handle)) {
       fail(
         'CP1001',
         `${entryPath}.parameter`,
@@ -278,9 +287,9 @@ export function readBlueprintParameterBindings(
         owned.source,
       );
     }
-    seen.add(parameter as object);
+    seen.add(handle);
     output.push({
-      parameter: parameter as BlueprintParameterHandle,
+      parameter: handle,
       value: record.value,
       registration: owned,
     });

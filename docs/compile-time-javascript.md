@@ -26,12 +26,18 @@ Arithmetic, Constant-filter, Decider-threshold, and Selector configuration
 slots. Selector support covers `select.index` (number or Signal) and
 `count.output` (Signal); `selectMax` stays concrete. They bind to concrete NCIR
 through a host-local compilation API; they do not add native Factorio parameter
-fields. Parameter handles are not ordinary JavaScript
-values. The transform rejects instrumented control-flow and direct coercion or
-arbitrary-call escapes, but ordinary property reads such as
-`parameter.defaultValue` are a known containment gap. This compiler is not a
-security sandbox, and source parameters must not be used through handle property
-reads pending review.
+fields. Source declarations return opaque views distinct from the nominal
+handles retained by the owning host. Reading, reflecting, destructuring, or
+enumerating a source view is rejected with a located parameter diagnostic;
+validated configuration slots resolve the view back to its original host
+handle. The host-local API continues to expose declaration metadata.
+
+This is not a security sandbox or complete parameter-flow containment.
+JavaScript object truthiness (`Boolean(parameter)` and `!!parameter`) cannot be
+intercepted by a Proxy, and arbitrary native callbacks may observe object
+identity. Existing control-flow and arbitrary-call guards remain in force, but
+must not be treated as a general sandbox boundary. Ordinary non-parameter
+objects keep their JavaScript property and reflection behavior.
 
 User function signatures are resolved by lexical symbol identity rather than name matching; a shadowing local binding never inherits an outer function's contract. Reassigned function bindings are left to executed validation. Non-optional calls carry argument provenance through aliases, object/array members, and spreads. Ordinary method receivers, getter-before-argument evaluation, spread iteration order, and direct `eval` scope are retained; this tracing does not consume the circuit-recording DSL-call budget. Optional calls, native callbacks, `super`, and private-method calls retain native invocation and may use the parameter declaration as diagnostic fallback.
 

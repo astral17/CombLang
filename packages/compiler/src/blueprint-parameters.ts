@@ -74,8 +74,14 @@ interface RegisteredParameter {
   readonly declaration: BlueprintParameterRegistration;
 }
 
+interface RegisteredSourceView {
+  readonly handle: BlueprintParameterHandle;
+  readonly registration: RegisteredParameter;
+}
+
 const sessionAuthorities = new WeakMap<object, SessionAuthority>();
 const parameterRegistrations = new WeakMap<object, RegisteredParameter>();
+const parameterSourceViews = new WeakMap<object, RegisteredSourceView>();
 
 function fail(
   code: BlueprintParameterErrorCode,
@@ -250,12 +256,71 @@ export function inspectBlueprintParameterHandle(
   return registration.declaration;
 }
 
+/** Creates the opaque object returned to source for one captured host declaration. */
+export function createBlueprintParameterSourceView(session: unknown, handle: unknown): object {
+  assertBlueprintParameterSession(session, '$.session');
+  const registration = isObject(handle) ? parameterRegistrations.get(handle) : undefined;
+  if (registration === undefined) {
+    fail('CP1001', '$.parameter', 'value is not a registered host parameter handle.');
+  }
+  if (registration.authority !== sessionAuthorities.get(session)) {
+    fail(
+      'CP1001',
+      '$.parameter',
+      'parameter belongs to a different parameter session.',
+      registration.declaration.source,
+    );
+  }
+
+  const rejectAccess = (): never =>
+    fail(
+      'CP1001',
+      '$.parameter',
+      'source parameter views do not expose declaration properties or reflection.',
+      registration.declaration.source,
+    );
+  const rejectCoercion = (): never =>
+    fail(
+      'CP1001',
+      '$.parameter',
+      'Blueprint parameter handles are symbolic configuration slots and cannot be coerced to JavaScript primitives.',
+      registration.declaration.source,
+    );
+  const target = Object.freeze(Object.create(null) as object);
+  const view = new Proxy(target, {
+    get: (_target, key) => (key === Symbol.toPrimitive ? rejectCoercion() : rejectAccess()),
+    set: rejectAccess,
+    has: rejectAccess,
+    ownKeys: rejectAccess,
+    getOwnPropertyDescriptor: rejectAccess,
+    defineProperty: rejectAccess,
+    deleteProperty: rejectAccess,
+    getPrototypeOf: rejectAccess,
+    setPrototypeOf: rejectAccess,
+    isExtensible: rejectAccess,
+    preventExtensions: rejectAccess,
+  });
+  parameterSourceViews.set(view, { handle: handle as BlueprintParameterHandle, registration });
+  return view;
+}
+
+/** Returns the original host handle for a registered source view or host handle. */
+export function canonicalBlueprintParameterHandle(
+  value: unknown,
+): BlueprintParameterHandle | undefined {
+  if (!isObject(value)) return undefined;
+  const sourceView = parameterSourceViews.get(value);
+  if (sourceView !== undefined) return sourceView.handle;
+  return parameterRegistrations.has(value) ? (value as BlueprintParameterHandle) : undefined;
+}
+
 /** Non-throwing registry lookup for template normalization of concrete data vs handles. */
 export function findBlueprintParameterHandle(
   value: unknown,
 ): BlueprintParameterRegistration | undefined {
   if (!isObject(value)) return undefined;
-  return parameterRegistrations.get(value)?.declaration;
+  return (parameterRegistrations.get(value) ?? parameterSourceViews.get(value)?.registration)
+    ?.declaration;
 }
 
 export function assertBlueprintParameterSession(
@@ -274,7 +339,9 @@ export function assertBlueprintParameterFromSession(
   path: string,
 ): BlueprintParameterRegistration {
   assertBlueprintParameterSession(session, '$.session');
-  const registration = isObject(parameter) ? parameterRegistrations.get(parameter) : undefined;
+  const registration = isObject(parameter)
+    ? (parameterRegistrations.get(parameter) ?? parameterSourceViews.get(parameter)?.registration)
+    : undefined;
   if (registration === undefined) {
     fail('CP1001', path, 'value is not a registered parameter handle.');
   }
