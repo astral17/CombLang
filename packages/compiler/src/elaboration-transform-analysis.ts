@@ -16,6 +16,7 @@ interface ProducerSlotDeclaration {
 export interface ElaborationTransformAnalysis {
   readonly runtimeParameter: string;
   readonly containsUnsupportedAsync: boolean;
+  readonly containsBlueprintParameterDeclarations: boolean;
   readonly signalNames: ReadonlySet<string>;
   readonly networkNames: ReadonlySet<string>;
   producerTypeForAssignment(
@@ -45,8 +46,19 @@ function producerArrayElementTypeName(
 export function analyzeElaborationTransform(file: ParsedSourceFile): ElaborationTransformAnalysis {
   const sourceIdentifiers = new Set<string>();
   let containsUnsupportedAsync = false;
+  let containsBlueprintParameterDeclarations = false;
   const collectIdentifiers = (node: ts.Node): void => {
     if (ts.isIdentifier(node)) sourceIdentifiers.add(node.text);
+    if (
+      ts.isCallExpression(node) &&
+      node.questionDotToken === undefined &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      ts.isIdentifier(node.expression.expression) &&
+      node.expression.expression.text === 'Param' &&
+      (node.expression.name.text === 'number' || node.expression.name.text === 'signal')
+    ) {
+      containsBlueprintParameterDeclarations = true;
+    }
     if (
       ts.isAwaitExpression(node) ||
       (ts.isForOfStatement(node) && node.awaitModifier !== undefined) ||
@@ -228,6 +240,7 @@ export function analyzeElaborationTransform(file: ParsedSourceFile): Elaboration
   return {
     runtimeParameter,
     containsUnsupportedAsync,
+    containsBlueprintParameterDeclarations,
     signalNames,
     networkNames,
     producerTypeForAssignment,

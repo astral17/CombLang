@@ -186,34 +186,54 @@ topology or tick; raw legacy `CC` remains usable without that authority.
 
 ## Blueprint parameter values
 
-Blueprint parameters are placement-time configuration, not runtime circuit objects. Candidate declarations include:
+The source language supports an initial, concrete-binding subset of configuration
+parameters. A declaration requires a label and a concrete default:
 
 ```ts
-const item = Param.signal('Item');
+const item = Param.signal('Item', Signal('item', 'iron-plate'));
 const limit = Param.number('Limit', 100);
 ```
 
-Uses such as `storage[item]`, `CC(limit * item)`, object filters, recipes, and native conditions remain symbolic until blueprint placement. A numeric expression over parameters becomes a typed `BlueprintFormula` AST and creates no combinator or tick.
+`Param` is reserved. The current supported slots are an exact Arithmetic
+configuration's direct numeric operand, an exact Constant filter's direct Signal
+or count, and an exact Decider condition's direct right-hand numeric threshold.
+The defaults compile once into an ordinary concrete Plan and NCIR. Parameters
+are not JavaScript numbers, booleans, or loop bounds; arithmetic on a handle,
+control-flow use, coercion, and arbitrary function calls are rejected. Unsupported
+declaration forms report a source diagnostic (`CL1050` for malformed syntax;
+`CP1000` for an invalid concrete default).
 
-Configuration-facing IR should admit symbolic values without infecting the concrete simulator bus:
+In a host-local compilation, `listSourceCompilationParameters(compilation)`
+returns declaration labels, defaults, spans, and nominal handles. The host may
+pass `{ parameter, value }` overrides to
+`bindSourceCompilationParameters(compilation, bindings)`, which returns a fresh
+concrete NCIR using the exact paired execution. Omitted overrides use the
+declared defaults. The original Plan, NCIR, topology, and physical identities are
+not mutated. Handles and captured templates are not part of
+`SourceCompilationArtifact`; do not serialize or send them across a Worker
+boundary. Binding must happen in the host that owns the original compilation.
+The artifact also omits generated JavaScript containing private parameter-capture
+calls; the local compilation result retains that diagnostic view.
 
-```text
-ConfigSignal = SignalId | BlueprintSignalParameter
-ConfigNumber = int32 | BlueprintNumberParameter | BlueprintNumericExpr
-ConfigRecipe = RecipeId | BlueprintRecipeParameter
-```
+This API does not emit Factorio blueprint parameter fields, formulas, recipe or
+property dependencies, and makes no claim about native Factorio placement
+behavior. Simulation and export still consume concrete configuration. Those
+native and Worker/UI workflows require separate implementation and independent
+Factorio-exported fixtures.
 
-The concrete side of this boundary is already explicit in NCIR as
-`ConcreteConfigSignal`, `ConcreteConfigNumber`, and `ConcreteConfigCondition`.
-Decider outputs are likewise split into `mode: "copy"` and `mode: "constant"`
-rows. A future parameter layer can extend these concrete categories without
-making the simulator bus symbolic.
-
-The exact types may live in a parameterized configuration layer before FCIR. NCIR simulation continues to use concrete `SignalId -> int32` buses. Tests instantiate parameters from supplied values or defaults before normal elaboration and simulation; a missing required value is a test/configuration error.
+Known limitation: this is a source-language feature, not a hardened sandbox.
+An ordinary JavaScript property read from a parameter handle (for example,
+`amount.defaultValue`) can currently escape the guarded direct-use paths and
+affect JavaScript control flow. Do not use handle properties in source. The
+source-level containment contract remains under review; direct-slot support
+must not be described as complete parameter-flow safety.
 
 ## Dependencies and formulas
 
-Dependent parameters form a graph. Recipe ingredients, recipe products, numeric formulas, and parameter properties are typed dependency nodes; users do not manage native parameter indices. The compiler topologically assigns backend ordering and rejects cycles.
+Dependent parameters remain future work. Recipe ingredients, recipe products,
+numeric formulas, and parameter properties will require typed dependency nodes;
+users should not manage native parameter indices. The compiler will need to
+assign backend ordering and reject cycles.
 
 Formula expressions should be stored as an AST, not an opaque string. The final set of operators, functions, parameter properties, and dependency kinds must follow captured capabilities from the target Factorio version.
 

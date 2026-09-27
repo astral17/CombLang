@@ -248,6 +248,31 @@ export function transformCallOrElementNode(
     }
   }
 
+  if (
+    ts.isCallExpression(node) &&
+    node.questionDotToken === undefined &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    ts.isIdentifier(node.expression.expression) &&
+    node.expression.expression.text === 'Param' &&
+    (node.expression.name.text === 'number' || node.expression.name.text === 'signal')
+  ) {
+    return context.dslCall(
+      node.expression.name.text === 'number'
+        ? 'declareBlueprintNumberParameter'
+        : 'declareBlueprintSignalParameter',
+      [
+        ...(node.arguments[0] === undefined
+          ? [factory.createVoidZero()]
+          : [ts.visitNode(node.arguments[0], visit) as ts.Expression]),
+        ...(node.arguments[1] === undefined
+          ? [factory.createVoidZero()]
+          : [ts.visitNode(node.arguments[1], visit) as ts.Expression]),
+        factory.createVoidZero(),
+        context.spanLiteral(node),
+      ],
+    );
+  }
+
   if (ts.isCallExpression(node)) {
     const instantiated = context.transformTestInstantiation(node);
     if (instantiated !== undefined) return instantiated;

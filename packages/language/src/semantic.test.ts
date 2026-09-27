@@ -483,6 +483,7 @@ for (let i = 0; i < arr.length; i++) output += arr[i] * 2;`,
     const parsed = parseFile({
       path: 'reserved-builtins.ts',
       text: `function Signal(value: string) { return value; }
+function Param(value: string) { return value; }
 function Section(value: string) { return value; }
 function Entity(value: string) { return value; }
 function Lamp(value: string) { return value; }
@@ -504,13 +505,14 @@ const prototypes = {};`,
     });
 
     const reserved = validateDslSemantics(parsed).filter(({ code }) => code === 'CL1045');
-    expect(reserved).toHaveLength(16);
+    expect(reserved).toHaveLength(17);
     expect(
       reserved.map(({ span }) =>
         span === undefined ? undefined : parsed.text.slice(span.start, span.end),
       ),
     ).toEqual([
       'Signal',
+      'Param',
       'Section',
       'Entity',
       'Lamp',
@@ -527,6 +529,26 @@ const prototypes = {};`,
       'EACH',
       'prototypes',
     ]);
+  });
+
+  test('validates the closed source parameter declaration forms and their spans', () => {
+    const valid = parseFile({
+      path: 'source-parameter-declarations.ts',
+      text: `Param.number('Amount', 5); Param.signal('Channel', Signal('virtual', 'signal-A'));`,
+    });
+    expect(validateDslSemantics(valid)).toEqual([]);
+
+    const invalid = parseFile({
+      path: 'invalid-source-parameter-declarations.ts',
+      text: `Param.number('missing'); Param.unknown('bad', 1); const value = Param;`,
+    });
+    const diagnostics = validateDslSemantics(invalid).filter(({ code }) => code === 'CL1050');
+    expect(diagnostics).toHaveLength(3);
+    expect(
+      diagnostics.map(({ span }) =>
+        span === undefined ? undefined : invalid.text.slice(span.start, span.end),
+      ),
+    ).toEqual([`Param.number('missing')`, `Param.unknown('bad', 1)`, 'Param']);
   });
 
   test('validates join arity and rejects borrowed or pair inputs statically', () => {

@@ -206,7 +206,7 @@ const exact = Decider({ condition: input[A] > amount, outputs: [input[A]] });`;
     const parsed = parseFile({ path: sourceFile, text: source });
     expect(() => exactParameterizedExecution(source, { missingDefault: true })).toThrowError(
       expect.objectContaining({
-        code: 'EX1001',
+        code: 'CP1000',
         span: { fileId: parsed.id, start: 0, end: 1 },
         message: expect.stringContaining('number declarations require a finite positional default'),
       }),

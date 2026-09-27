@@ -139,6 +139,7 @@ Call provenance is associated with the executed function identity, not its textu
 | `CL1047` | definite missing or non-Network argument for a known Network parameter    | pass a Network or a Combinator whose primary facet is readable                          |
 | `CL1048` | implicit enum value follows a non-constant initializer                    | give that enum member an explicit numeric initializer                                   |
 | `CL1049` | definite invalid `join(...)` arity or input category                      | pass at least one owned Network or physical Combinator                                  |
+| `CL1050` | malformed or unsupported `Param` declaration form                         | use `Param.number(label, default)` or `Param.signal(label, Signal(...))`                |
 | `CL2001` | combinator output has no user destination                                 | read or attach it, or keep the warning if intentional                                   |
 | `CL2002` | parameter implicitly borrows a Network for reading                        | use explicit `Readonly<Network>`, `Ref<Network>`, or `Move<Network>` to document intent |
 | `EX1001` | transformed elaboration program threw                                     | inspect the execution message and supported executed subset                             |
@@ -156,6 +157,8 @@ available. This is an export failure, not an error in source execution; see
 
 | Code     | Meaning                                                                                                     |
 | -------- | ----------------------------------------------------------------------------------------------------------- |
+| `CP1000` | invalid parameter declaration default or binding data                                                       |
+| `CP1001` | parameter handle is not registered to the owning session/compilation or captured configuration              |
 | `RT1001` | unsupported direct-plan format or version                                                                   |
 | `RT1002` | duplicate Network descriptor                                                                                |
 | `RT1003` | producer references an unknown input Network                                                                |

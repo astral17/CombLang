@@ -179,8 +179,11 @@ function registerParameter<K extends BlueprintParameterKind>(
   Object.defineProperty(handle, Symbol.toPrimitive, {
     enumerable: false,
     value: () => {
-      throw new TypeError(
+      throw new BlueprintParameterError(
+        'CP1001',
+        '$.parameter',
         'Blueprint parameter handles are symbolic configuration slots and cannot be coerced to JavaScript primitives.',
+        source,
       );
     },
   });

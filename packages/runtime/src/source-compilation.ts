@@ -1,5 +1,7 @@
 import { transformElaborationModule } from '@comblang/compiler/elaboration-transform';
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
+import type { NativeCircuitIr } from '@comblang/compiler/ir';
+import type { SignalId } from '@comblang/factorio';
 import {
   cloneEntityReplayContextTransport,
   entityReplayContextIdentity,
@@ -32,6 +34,18 @@ import type { EntityPrototypeResolver } from './entity-registry.js';
 import { executionFailureDiagnostic } from './execution-diagnostic.js';
 import type { ResolvedCircuit } from '@comblang/compiler/resolved-circuit';
 import { canonicalDirectPlan, canonicalizeCompilationArtifacts } from './canonical-circuit.js';
+import { bindCapturedSourceConfigurationTemplates } from './executed-blueprint-configuration-binding.js';
+import type { BlueprintParameterBinding } from '../../compiler/src/blueprint-parameter-validation.js';
+import {
+  executeElaborationProgramWithParameters,
+  type ExecutedElaborationWithBlueprintParameters,
+} from './elaboration-program.js';
+import type {
+  BlueprintParameterHandle,
+  BlueprintParameterKind,
+  BlueprintParameterRegistration,
+} from '../../compiler/src/blueprint-parameters.js';
+import type { SourceSpan } from '@comblang/shared';
 
 export interface SourceCompilationEnvironment {
   /** Normalized project policy applied only to the final returned diagnostics. */
@@ -66,6 +80,24 @@ export interface SourceCompilationArtifact extends ParseWorkerResult {
 export interface LocalSourceCompilation extends SourceCompilationArtifact {
   readonly execution?: ExecutedDirectPlan;
 }
+
+/** A source declaration exposed only to the host that owns this compilation result. */
+export interface SourceCompilationParameter {
+  readonly parameter: BlueprintParameterHandle;
+  readonly kind: BlueprintParameterKind;
+  readonly label: string;
+  readonly defaultValue: number | SignalId;
+  readonly source: SourceSpan;
+}
+
+const capturedParametersByCompilation = new WeakMap<
+  object,
+  {
+    readonly source: ExecutedElaborationWithBlueprintParameters;
+    readonly execution?: ExecutedDirectPlan;
+  }
+>();
+const parameterSourceArtifacts = new WeakSet<object>();
 
 export type SourceCompilationStage = 'parse' | 'semantic' | 'transform' | 'execute' | 'lower';
 
@@ -126,8 +158,11 @@ function compileParsedSource(
   const entityReplayContext = replayTransport(environment);
   let plan: DirectElaborationPlan | undefined;
   let execution: ExecutedDirectPlan | undefined;
+  let parameterPairedExecution: ExecutedDirectPlan | undefined;
   let resolvedCircuit: ResolvedCircuit | undefined;
   let elaborationJavaScript: string | undefined;
+  let hasSourceParameterDeclarations = false;
+  let capturedParameters: ExecutedElaborationWithBlueprintParameters | undefined;
   observe?.('semantic');
   const semanticDiagnostics = validateDslSemantics(parsed);
   const compilerDiagnostics: Diagnostic[] = [...preflightDiagnostics, ...semanticDiagnostics];
@@ -146,10 +181,18 @@ function compileParsedSource(
       observe?.('transform');
       const program = transformElaborationModule(parsed);
       elaborationJavaScript = program.code;
+      hasSourceParameterDeclarations = program.containsBlueprintParameterDeclarations === true;
       if (!compilerDiagnostics.some(({ severity }) => severity === 'error')) {
         observe?.('execute');
-        const executedPlan = executeElaborationProgram(program, environment);
+        const parameterExecution = hasSourceParameterDeclarations
+          ? executeElaborationProgramWithParameters(program, environment)
+          : undefined;
+        const executedPlan =
+          parameterExecution?.plan ?? executeElaborationProgram(program, environment);
         const canonicalPlan = canonicalDirectPlan(executedPlan);
+        if (parameterExecution !== undefined) {
+          capturedParameters = Object.freeze({ ...parameterExecution, plan: canonicalPlan });
+        }
         plan = canonicalPlan;
         observe?.('lower');
         const lowered = tryCanonicalDirectPlan(
@@ -157,6 +200,7 @@ function compileParsedSource(
           environment.trustedEntityReplayContext,
         );
         execution = lowered.execution;
+        parameterPairedExecution = lowered.execution;
         resolvedCircuit = lowered.resolvedCircuit;
         appendCompilerDiagnostics(executedPlan.diagnostics ?? []);
         appendCompilerDiagnostics(lowered.diagnostics);
@@ -168,7 +212,7 @@ function compileParsedSource(
     }
   }
 
-  return canonicalizeCompilationArtifacts({
+  const compilation = canonicalizeCompilationArtifacts({
     fileId: parsed.id,
     diagnostics: parsed.diagnostics,
     topLevel: summarizeTopLevel(parsed),
@@ -190,6 +234,53 @@ function compileParsedSource(
     ...(resolvedCircuit === undefined ? {} : { resolvedCircuit }),
     ...(execution === undefined ? {} : { execution }),
   } as unknown as Record<string, any>) as unknown as LocalSourceCompilation;
+  if (capturedParameters !== undefined) {
+    capturedParametersByCompilation.set(compilation, {
+      source: capturedParameters,
+      ...(parameterPairedExecution === undefined ? {} : { execution: parameterPairedExecution }),
+    });
+  }
+  if (hasSourceParameterDeclarations) parameterSourceArtifacts.add(compilation);
+  return compilation;
+}
+
+/** Lists nominal declarations for the owning host without adding them to the transport artifact. */
+export function listSourceCompilationParameters(
+  compilation: LocalSourceCompilation,
+): readonly SourceCompilationParameter[] {
+  const state = capturedParametersByCompilation.get(compilation);
+  if (state === undefined) return Object.freeze([]);
+  return Object.freeze(
+    state.source.parameters.map(({ handle, registration }) => {
+      const defaultValue = registration.defaultValue;
+      const source = registration.source;
+      if (defaultValue === undefined || source === undefined) {
+        throw new Error('Captured source parameters must have a concrete default and source span.');
+      }
+      return Object.freeze({
+        parameter: handle,
+        kind: registration.kind,
+        label: registration.label,
+        defaultValue,
+        source,
+      });
+    }),
+  );
+}
+
+/** Binds this exact compilation's declarations into a fresh concrete NCIR. */
+export function bindSourceCompilationParameters(
+  compilation: LocalSourceCompilation,
+  bindings: readonly BlueprintParameterBinding[] = [],
+): NativeCircuitIr {
+  const state = capturedParametersByCompilation.get(compilation);
+  if (state === undefined) {
+    throw new TypeError('Compilation has no host-local source parameter declarations.');
+  }
+  if (state.execution === undefined) {
+    throw new TypeError('Compilation has no canonical execution available for parameter binding.');
+  }
+  return bindCapturedSourceConfigurationTemplates(state.source, state.execution, bindings);
 }
 
 /** Runs the complete browser/Node-neutral compilation pipeline once. */
@@ -217,6 +308,14 @@ export function compileParsedSourceProgram(
 export function sourceCompilationArtifact(
   compilation: LocalSourceCompilation,
 ): SourceCompilationArtifact {
+  if (parameterSourceArtifacts.has(compilation)) {
+    const {
+      execution: _execution,
+      elaborationJavaScript: _internalLowering,
+      ...artifact
+    } = compilation;
+    return artifact;
+  }
   const { execution: _execution, ...artifact } = compilation;
   return artifact;
 }

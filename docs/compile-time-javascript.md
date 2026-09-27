@@ -18,7 +18,18 @@ Optional element and property-call chains remain native JavaScript and preserve 
 
 The generated JavaScript calls the elaboration runtime through a compiler-selected parameter name that does not occur anywhere in the source file. User bindings or references named `__dsl`, `__dsl_1`, and similar identifiers remain ordinary JavaScript and force a different bridge name; they neither shadow nor expose the runtime API.
 
-The language reserves all free DSL identifiers. User variables, parameters, destructuring bindings, functions, classes, and enums cannot be named `Signal`, `Section`, `Network`, `CC`, `Constant`, `Selector`, `IF`, `to`, `when`, `pair`, `Each`/`EACH`, `Anything`/`Any`/`ANYTHING`/`ANY`, or `Everything`/`All`/`EVERYTHING`/`ALL`; such a binding reports `CL1045`. Property names and methods are not free identifiers, so ordinary names such as `object.Each`, `{ All() {} }`, `object.to(...)`, and `object.then(...)` remain valid. In shorthand `{ Each }`, the property name stays ordinary while the value is the free DSL wildcard reference.
+The language reserves all free DSL identifiers, including `Param`. User variables, parameters, destructuring bindings, functions, classes, and enums cannot be named `Signal`, `Param`, `Section`, `Network`, `CC`, `Constant`, `Selector`, `IF`, `to`, `when`, `pair`, `Each`/`EACH`, `Anything`/`Any`/`ANYTHING`/`ANY`, or `Everything`/`All`/`EVERYTHING`/`ALL`; such a binding reports `CL1045`. Property names and methods are not free identifiers, so ordinary names such as `object.Each`, `{ All() {} }`, `object.to(...)`, and `object.then(...)` remain valid. In shorthand `{ Each }`, the property name stays ordinary while the value is the free DSL wildcard reference.
+
+The initial `Param.number(label, default)` and
+`Param.signal(label, Signal(...))` source forms are limited to direct exact
+Arithmetic, Constant-filter, and Decider-threshold configuration slots. They
+bind to concrete NCIR through a host-local compilation API; they do not add
+native Factorio parameter fields. Parameter handles are not ordinary JavaScript
+values. The transform rejects instrumented control-flow and direct coercion or
+arbitrary-call escapes, but ordinary property reads such as
+`parameter.defaultValue` are a known containment gap. This compiler is not a
+security sandbox, and source parameters must not be used through handle property
+reads pending review.
 
 User function signatures are resolved by lexical symbol identity rather than name matching; a shadowing local binding never inherits an outer function's contract. Reassigned function bindings are left to executed validation. Non-optional calls carry argument provenance through aliases, object/array members, and spreads. Ordinary method receivers, getter-before-argument evaluation, spread iteration order, and direct `eval` scope are retained; this tracing does not consume the circuit-recording DSL-call budget. Optional calls, native callbacks, `super`, and private-method calls retain native invocation and may use the parameter declaration as diagnostic fallback.
 

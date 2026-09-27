@@ -153,6 +153,7 @@ import {
 } from '../../compiler/src/decider-configuration-template.js';
 import {
   findBlueprintParameterHandle,
+  BlueprintParameterError,
   type BlueprintNumberParameterHandle,
   type BlueprintParameterSession,
 } from '../../compiler/src/blueprint-parameters.js';
@@ -2465,7 +2466,20 @@ class ElaborationRecorder {
               error instanceof ElaborationOperationLimitError ||
               error instanceof ElaborationExecutionError);
           let normalized: unknown = error;
+          if (error instanceof BlueprintParameterError) {
+            const source = error.span ?? (isRawSpan(rawSpan) ? this.#span(rawSpan) : undefined);
+            if (source !== undefined) {
+              normalized = new ElaborationExecutionError(
+                error.message,
+                source,
+                error.code,
+                undefined,
+                { cause: error },
+              );
+            }
+          }
           if (
+            !(error instanceof BlueprintParameterError) &&
             !(error instanceof ElaborationExecutionError) &&
             !(error instanceof ElaborationOperationLimitError) &&
             error instanceof Error &&
@@ -2534,6 +2548,18 @@ class ElaborationRecorder {
     }
     if (this.#isEntity(callable)) return this.#invokeEntity(callable, args, rawSpan);
     if (typeof callable !== 'function') throw new TypeError('Called value is not a function.');
+    const parameterDeclaration =
+      findBlueprintParameterHandle(receiver) ??
+      args
+        .map(({ value }) => findBlueprintParameterHandle(value))
+        .find((declaration) => declaration !== undefined);
+    if (parameterDeclaration !== undefined) {
+      throw new ElaborationExecutionError(
+        `Blueprint parameter "${parameterDeclaration.label}" cannot be passed to or invoked as an arbitrary JavaScript function; use it only in a supported direct configuration slot.`,
+        this.#span(rawSpan),
+        'RT2029',
+      );
+    }
     const invocation: Invocation = {
       callable,
       arguments: args,

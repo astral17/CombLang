@@ -172,15 +172,15 @@ function inspect(observed) { if (observed) {} }
 inspect(false);
 inspect(savedValues[0]);`;
 
-    expectControlGuard(source, 'observed');
+    expectControlGuard(source, 'inspect(savedValues[0])');
   });
 
-  test('documents an unpropagated host-JavaScript coercion boundary', () => {
+  test('rejects direct Boolean coercion before the host-JavaScript branch', () => {
     const source = `
 if (Boolean(flowGuard)) throw new Error('host coercion branch ran');`;
 
     expect(() => executeElaborationProgramWithParameters(parameterizedProgram(source))).toThrow(
-      'host coercion branch ran',
+      'cannot be passed to or invoked as an arbitrary JavaScript function',
     );
   });
 

@@ -22,6 +22,7 @@ export interface ElaborationJavaScript {
   readonly fileId: ParsedSourceFile['id'];
   readonly runtimeParameter: string;
   readonly containsUnsupportedAsync: boolean;
+  readonly containsBlueprintParameterDeclarations?: boolean;
   readonly code: string;
 }
 
@@ -60,6 +61,7 @@ export function transformElaborationModule(
   const {
     runtimeParameter,
     containsUnsupportedAsync,
+    containsBlueprintParameterDeclarations,
     signalNames,
     networkNames,
     producerTypeForAssignment,
@@ -445,6 +447,7 @@ export function transformElaborationModule(
     fileId: file.id,
     runtimeParameter,
     containsUnsupportedAsync,
+    containsBlueprintParameterDeclarations,
     code: javaScript,
   };
 }

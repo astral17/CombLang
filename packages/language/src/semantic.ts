@@ -830,6 +830,42 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
         asyncModifier,
       );
     }
+    if (
+      ts.isPropertyAccessExpression(node) &&
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'Param' &&
+      isDslBuiltin('Param')
+    ) {
+      const method = node.name.text;
+      const isDeclarationMethod = method === 'number' || method === 'signal';
+      const call =
+        ts.isCallExpression(node.parent) && node.parent.expression === node
+          ? node.parent
+          : undefined;
+      if (!isDeclarationMethod || call === undefined || call.questionDotToken !== undefined) {
+        report(
+          'CL1050',
+          'Param supports only direct Param.number(label, default) and Param.signal(label, default) declarations.',
+          call ?? node,
+        );
+      } else if (call.arguments.length !== 2 || call.arguments.some(ts.isSpreadElement)) {
+        report(
+          'CL1050',
+          'Param.number(label, default) and Param.signal(label, default) require exactly two non-spread arguments.',
+          call,
+        );
+      }
+    } else if (
+      ts.isIdentifier(node) &&
+      node.text === 'Param' &&
+      !(ts.isPropertyAccessExpression(node.parent) && node.parent.expression === node)
+    ) {
+      report(
+        'CL1050',
+        'Param is only valid as the receiver of a direct number or signal declaration.',
+        node,
+      );
+    }
     if (ts.isEnumDeclaration(node)) {
       const memberValues = new Map<string, number>();
       let nextNumericValue: number | undefined = 0;
