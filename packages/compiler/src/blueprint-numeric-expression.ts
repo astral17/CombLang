@@ -1,7 +1,7 @@
 import { constantConfigurationLimits } from '@comblang/factorio';
 import type { SourceSpan } from '@comblang/shared';
 
-import { registerArithmeticNumericExpressionAdapter } from './arithmetic-configuration-template.js';
+import { registerBlueprintNumericExpressionAdapter } from './blueprint-numeric-expression-bridge.js';
 import {
   assertBlueprintParameterFromSession,
   assertBlueprintParameterSession,
@@ -683,7 +683,7 @@ export function evaluateBlueprintNumericExpression(
   return result.value;
 }
 
-registerArithmeticNumericExpressionAdapter({
+registerBlueprintNumericExpressionAdapter({
   isRegistered: isRegisteredBlueprintNumericExpression,
   inspect: inspectBlueprintNumericExpression,
   evaluate: (session, expression, bindings) =>

@@ -3,6 +3,7 @@ import type { SourceFileId, SourceSpan } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
 import { createBlueprintParameterSession } from './blueprint-parameters.js';
+import { createBlueprintNumericExpression } from './blueprint-numeric-expression.js';
 import { bindDeciderConfigurationTemplate } from './decider-configuration-binding.js';
 import { createDeciderConfigurationTemplate } from './decider-configuration-template.js';
 
@@ -13,6 +14,176 @@ const source: SourceSpan = {
 };
 
 describe('binding symbolic Decider configuration templates', () => {
+  test('binds registered expressions in direct and nested compare thresholds per call', () => {
+    const session = createBlueprintParameterSession();
+    const amount = session.number('amount', { defaultValue: 3, source });
+    const direct = session.number('direct', { defaultValue: 7 });
+    const target = session.signal('target', { defaultValue: signal('item', 'iron-plate') });
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: amount },
+      right: { kind: 'literal', value: 2 },
+    });
+    const template = createDeciderConfigurationTemplate(session, {
+      condition: {
+        kind: 'and',
+        conditions: [
+          {
+            kind: 'compare',
+            left: { kind: 'signal', signal: target, refKind: 'single', network: 'network:in' },
+            comparator: '>',
+            right: { kind: 'constant', value: expression },
+          },
+          {
+            kind: 'or',
+            conditions: [
+              {
+                kind: 'compare',
+                left: {
+                  kind: 'wildcard',
+                  value: 'each',
+                  refKind: 'single',
+                  network: 'network:in',
+                },
+                comparator: '>=',
+                right: { kind: 'constant', value: expression },
+              },
+              {
+                kind: 'compare',
+                left: {
+                  kind: 'wildcard',
+                  value: 'anything',
+                  refKind: 'single',
+                  network: 'network:in',
+                },
+                comparator: '=',
+                right: { kind: 'constant', value: direct },
+              },
+            ],
+          },
+        ],
+      },
+      outputs: [{ mode: 'constant', signal: { kind: 'wildcard', value: 'each' }, value: amount }],
+    });
+
+    const defaults = bindDeciderConfigurationTemplate(template);
+    expect(defaults.condition).toMatchObject({
+      conditions: [
+        { right: { value: 5 } },
+        { conditions: [{ right: { value: 5 } }, { right: { value: 7 } }] },
+      ],
+    });
+    expect(defaults.outputs[0]).toMatchObject({ value: 3 });
+
+    const overridden = bindDeciderConfigurationTemplate(template, [
+      { parameter: amount, value: 10 },
+      { parameter: direct, value: 8 },
+    ]);
+    expect(overridden.condition).toMatchObject({
+      conditions: [
+        { right: { value: 12 } },
+        { conditions: [{ right: { value: 12 } }, { right: { value: 8 } }] },
+      ],
+    });
+    expect(overridden.outputs[0]).toMatchObject({ value: 10 });
+    expect(defaults.condition).toMatchObject({
+      conditions: [
+        { right: { value: 5 } },
+        { conditions: [{ right: { value: 5 } }, { right: { value: 7 } }] },
+      ],
+    });
+  });
+
+  test('keeps expression diagnostics, range normalization, and retry isolation', () => {
+    const session = createBlueprintParameterSession();
+    const amount = session.number('amount', { source });
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: amount },
+      right: { kind: 'literal', value: 1 },
+    });
+    const left = {
+      kind: 'wildcard',
+      value: 'each',
+      refKind: 'single',
+      network: 'network:in',
+    };
+    const template = createDeciderConfigurationTemplate(session, {
+      condition: {
+        kind: 'and',
+        conditions: [
+          {
+            kind: 'compare',
+            left,
+            comparator: '>',
+            right: { kind: 'constant', value: expression },
+          },
+          {
+            kind: 'or',
+            conditions: [
+              {
+                kind: 'compare',
+                left,
+                comparator: '<',
+                right: { kind: 'constant', value: expression },
+              },
+            ],
+          },
+        ],
+      },
+      outputs: [],
+    });
+
+    expect(() => bindDeciderConfigurationTemplate(template)).toThrowError(
+      expect.objectContaining({
+        code: 'CP1002',
+        path: '$.condition.conditions[0].right.value.left.parameter',
+        span: source,
+      }),
+    );
+    expect(() =>
+      bindDeciderConfigurationTemplate(template, [{ parameter: amount, value: 1.5 }]),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1000',
+        path: '$.condition.conditions[0].right.value',
+        span: source,
+      }),
+    );
+    expect(() =>
+      bindDeciderConfigurationTemplate(template, [
+        { parameter: amount, value: Number.MAX_SAFE_INTEGER + 1 },
+      ]),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1000',
+        path: '$.condition.conditions[0].right.value',
+        span: source,
+      }),
+    );
+
+    const concrete = bindDeciderConfigurationTemplate(template, [
+      { parameter: amount, value: 2_147_483_646 },
+    ]);
+    expect(concrete.condition).toMatchObject({
+      conditions: [
+        { right: { value: 2_147_483_647 } },
+        { conditions: [{ right: { value: 2_147_483_647 } }] },
+      ],
+    });
+    const overflow = bindDeciderConfigurationTemplate(template, [
+      { parameter: amount, value: 2_147_483_647 },
+    ]);
+    expect(overflow.condition).toMatchObject({
+      conditions: [
+        { right: { value: -2_147_483_648 } },
+        { conditions: [{ right: { value: -2_147_483_648 } }] },
+      ],
+    });
+  });
+
   test('resolves shared defaults and overrides into a fresh deeply immutable concrete config', () => {
     const session = createBlueprintParameterSession();
     const amount = session.number('amount', { defaultValue: 0, source });

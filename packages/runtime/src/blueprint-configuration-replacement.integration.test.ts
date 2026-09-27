@@ -6,6 +6,7 @@ import { generateBlueprintJson } from '@comblang/compiler/blueprint-json';
 import type {
   ArithmeticProducerConfig,
   CircuitProducerNode,
+  DeciderProducerConfig,
   NativeCircuitIr,
   SelectorProducerConfig,
 } from '@comblang/compiler/ir';
@@ -16,6 +17,7 @@ import type { BlueprintNumericExpression } from '../../compiler/src/blueprint-nu
 import { createBlueprintNumericExpression } from '../../compiler/src/blueprint-numeric-expression.js';
 import { createBlueprintParameterSession } from '../../compiler/src/blueprint-parameters.js';
 import { createArithmeticConfigurationTemplate } from '../../compiler/src/arithmetic-configuration-template.js';
+import { createDeciderConfigurationTemplate } from '../../compiler/src/decider-configuration-template.js';
 import { createConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-template.js';
 import { createSelectorConfigurationTemplate } from '../../compiler/src/selector-configuration-template.js';
 import { createSimulationFromNativeCircuitIr } from './elaboration.js';
@@ -351,6 +353,224 @@ describe('configuration-set replacement concrete consumers', () => {
     expect(next.producers[1]).not.toBe(replaced.producers[1]);
     expect(JSON.stringify(replaced)).toBe(replacedBeforeFailure);
     expect(JSON.stringify(circuit)).toBe(circuitBeforeFailure);
+  });
+
+  test('binds Decider thresholds with another family into detached concrete NCIR', () => {
+    const input = 'network:decider-expression-input' as NetworkId;
+    const output = 'network:decider-expression-output' as NetworkId;
+    const constantId = 'producer:decider-expression-constant' as ProducerId;
+    const deciderId = 'producer:decider-expression-decider' as ProducerId;
+    const source: SourceSpan = {
+      fileId: 'decider-expression-replacement.test.ts' as SourceFileId,
+      start: 8,
+      end: 27,
+    };
+    const session = createBlueprintParameterSession();
+    const formula = session.number('formula-only-label', { defaultValue: 3, source });
+    const amount = session.number('amount-only-label', { defaultValue: 7 });
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: formula },
+      right: { kind: 'literal', value: 2 },
+    });
+    const constantTemplate = createConstantConfigurationTemplate(session, {
+      sections: [{ filters: [{ signal: A, value: amount }] }],
+    });
+    const left = {
+      kind: 'wildcard',
+      value: 'each',
+      refKind: 'single',
+      network: input,
+    } as const;
+    const deciderTemplate = createDeciderConfigurationTemplate(session, {
+      condition: {
+        kind: 'and',
+        conditions: [
+          {
+            kind: 'compare',
+            left,
+            comparator: '>',
+            right: { kind: 'constant', value: expression },
+          },
+          {
+            kind: 'or',
+            conditions: [
+              {
+                kind: 'compare',
+                left: { ...left, value: 'anything' },
+                comparator: '<',
+                right: { kind: 'constant', value: expression },
+              },
+            ],
+          },
+        ],
+      },
+      outputs: [{ mode: 'copy', signal: { kind: 'wildcard', value: 'each' } }],
+    });
+    const set = createBlueprintConfigurationSet(session, [
+      { key: 'source', kind: 'constant', template: constantTemplate },
+      { key: 'threshold', kind: 'decider', template: deciderTemplate },
+    ]);
+    const bindings = [
+      { parameter: formula, value: 4 },
+      { parameter: amount, value: 9 },
+    ];
+    const bound = bindBlueprintConfigurationSet(set, bindings);
+    expect(bound[0]).toMatchObject({ config: { sections: [{ filters: [{ value: 9 }] }] } });
+    expect(bound[1]).toMatchObject({
+      config: {
+        condition: {
+          kind: 'and',
+          conditions: [
+            { right: { kind: 'constant', value: 6 } },
+            { conditions: [{ right: { kind: 'constant', value: 6 } }] },
+          ],
+        },
+      },
+    });
+
+    const constant = canonicalizeConstantConfiguration({
+      sections: [{ filters: [{ signal: A, value: 1 }] }],
+    });
+    const decider: DeciderProducerConfig = {
+      condition: {
+        kind: 'and',
+        conditions: [
+          {
+            kind: 'compare',
+            left: { ...left },
+            comparator: '>',
+            right: { kind: 'constant', value: 0 },
+          },
+          {
+            kind: 'or',
+            conditions: [
+              {
+                kind: 'compare',
+                left: { ...left, value: 'anything' },
+                comparator: '<',
+                right: { kind: 'constant', value: 0 },
+              },
+            ],
+          },
+        ],
+      },
+      outputs: [{ mode: 'copy', signal: { kind: 'wildcard', value: 'each' } }],
+    };
+    const constantProducer = {
+      id: constantId,
+      kind: 'constant',
+      config: { configuration: constant },
+      destinations: [input],
+      provenance,
+    } satisfies CircuitProducerNode;
+    const deciderProducer = {
+      id: deciderId,
+      kind: 'decider',
+      config: decider,
+      destinations: [output],
+      provenance,
+    } satisfies CircuitProducerNode;
+    const circuit: NativeCircuitIr = {
+      format: 'comblang-ncir',
+      networks: [
+        { id: input, color: 'red', provenance },
+        { id: output, color: 'green', provenance },
+      ],
+      entities: [],
+      producers: [constantProducer, deciderProducer],
+    };
+    const assignments = [
+      { key: 'source', producerId: constantId },
+      { key: 'threshold', producerId: deciderId },
+    ];
+    const replaced = replaceBlueprintConfigurationSetInNativeCircuitIr(
+      set,
+      circuit,
+      assignments,
+      bindings,
+    );
+    const manual: NativeCircuitIr = {
+      ...circuit,
+      producers: [
+        {
+          ...constantProducer,
+          config: {
+            configuration: canonicalizeConstantConfiguration({
+              sections: [{ filters: [{ signal: A, value: 9 }] }],
+            }),
+          },
+        },
+        {
+          ...deciderProducer,
+          config: {
+            ...decider,
+            condition: {
+              kind: 'and',
+              conditions: [
+                {
+                  kind: 'compare',
+                  left: { ...left },
+                  comparator: '>',
+                  right: { kind: 'constant', value: 6 },
+                },
+                {
+                  kind: 'or',
+                  conditions: [
+                    {
+                      kind: 'compare',
+                      left: { ...left, value: 'anything' },
+                      comparator: '<',
+                      right: { kind: 'constant', value: 6 },
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      ],
+    };
+    const symbolicReferences = collectExpressionNodes(expression);
+    symbolicReferences.add(formula);
+    symbolicReferences.add(amount);
+    expect(containsReference(bound, symbolicReferences)).toBe(false);
+    expect(containsReference(replaced, symbolicReferences)).toBe(false);
+    expect(generateBlueprintJson(replaced)).toEqual(generateBlueprintJson(manual));
+    expect(JSON.stringify(replaced)).not.toContain('formula-only-label');
+    expect(JSON.stringify(replaced)).not.toContain('amount-only-label');
+    expect(replaced.networks).toEqual(circuit.networks);
+    expect(replaced.producers.map(({ id }) => id)).toEqual(circuit.producers.map(({ id }) => id));
+    expect(replaced.producers.map(({ destinations }) => destinations)).toEqual(
+      circuit.producers.map(({ destinations }) => destinations),
+    );
+
+    const boundBeforeFailure = JSON.stringify(bound);
+    const circuitBeforeFailure = JSON.stringify(circuit);
+    const replacedBeforeFailure = JSON.stringify(replaced);
+    expect(() =>
+      replaceBlueprintConfigurationSetInNativeCircuitIr(set, circuit, assignments, [
+        { parameter: formula, value: 1.5 },
+        { parameter: amount, value: 11 },
+      ]),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1000',
+        path: '$.entries[1].condition.conditions[0].right.value',
+        span: source,
+      }),
+    );
+    expect(JSON.stringify(bound)).toBe(boundBeforeFailure);
+    expect(JSON.stringify(circuit)).toBe(circuitBeforeFailure);
+    expect(JSON.stringify(replaced)).toBe(replacedBeforeFailure);
+
+    const next = replaceBlueprintConfigurationSetInNativeCircuitIr(set, circuit, assignments, [
+      { parameter: formula, value: 5 },
+      { parameter: amount, value: 10 },
+    ]);
+    expect(next.producers[1]).not.toBe(replaced.producers[1]);
+    expect(JSON.stringify(replaced)).toBe(replacedBeforeFailure);
   });
 
   test('matches Selector Blueprint JSON and repeated simulator ticks', () => {

@@ -2,6 +2,11 @@ import { constantConfigurationLimits, int32, type SignalId } from '@comblang/fac
 import type { NetworkId } from '@comblang/shared';
 
 import type { Comparator, LogicalNetworkRef, Quantifier } from './ir.js';
+import type { BlueprintNumericExpression } from './blueprint-numeric-expression.js';
+import {
+  inspectRegisteredBlueprintNumericExpression,
+  isRegisteredBlueprintNumericExpression,
+} from './blueprint-numeric-expression-bridge.js';
 import {
   assertBlueprintParameterExactKeys,
   assertBlueprintParameterNumberValue,
@@ -27,13 +32,14 @@ const deciderTemplateBrand: unique symbol = Symbol('decider-configuration-templa
 
 type TemplateSignalSlot = SignalId | BlueprintSignalParameterHandle;
 type TemplateNumberSlot = number | BlueprintNumberParameterHandle;
+type TemplateThresholdSlot = TemplateNumberSlot | BlueprintNumericExpression;
 
 type DeciderTemplateConditionLeft =
   | ({ readonly kind: 'signal'; readonly signal: TemplateSignalSlot } & LogicalNetworkRef)
   | ({ readonly kind: 'wildcard'; readonly value: Quantifier } & LogicalNetworkRef);
 
 type DeciderTemplateScalarOperand =
-  | { readonly kind: 'constant'; readonly value: TemplateNumberSlot }
+  | { readonly kind: 'constant'; readonly value: TemplateThresholdSlot }
   | ({ readonly kind: 'signal'; readonly signal: TemplateSignalSlot } & LogicalNetworkRef);
 
 export type DeciderTemplateCondition =
@@ -77,6 +83,8 @@ export interface DeciderConfigurationTemplateRegistration {
 
 interface DeciderTemplateBudget extends BlueprintParameterDataBudget {
   parameterBytes: number;
+  expressionBytes: number;
+  readonly expressionRoots: WeakSet<object>;
 }
 
 interface DeciderConfigurationTemplateData {
@@ -112,10 +120,15 @@ function rejectRegisteredHandle(value: unknown, path: string): void {
 }
 
 function rejectParameterOutsideSlot(value: unknown, path: string): void {
-  rejectRegisteredHandle(value, path);
+  rejectExpressionOutsideSlot(value, path);
   if (isBlueprintParameterShaped(value)) {
     fail(path, 'unregistered parameter-like object.', 'CP1001');
   }
+}
+
+function rejectExpressionOutsideSlot(value: unknown, path: string): void {
+  rejectRegisteredHandle(value, path);
+  rejectUnsupportedNumericExpression(value, path);
 }
 
 function assertDeciderExactKeys(
@@ -220,11 +233,62 @@ function numberSlot(
   session: BlueprintParameterSession,
   budget: DeciderTemplateBudget,
 ): TemplateNumberSlot {
+  rejectUnsupportedNumericExpression(value, path);
   const slot = lookupBlueprintParameterSlot(value, 'number', session, path);
   if (slot !== undefined) {
     accountParameter(budget, slot.registration, path);
     budget.usedParameters.add(slot.handle);
     return slot.handle as BlueprintNumberParameterHandle;
+  }
+  return int32(assertBlueprintParameterNumberValue(value, path, 'safe-integer'));
+}
+
+function isNumericExpressionShaped(value: unknown): boolean {
+  if (value === null || typeof value !== 'object') return false;
+  const descriptor = Object.getOwnPropertyDescriptor(value, 'kind');
+  return (
+    descriptor !== undefined &&
+    'value' in descriptor &&
+    ['literal', 'parameter', 'negate', 'binary'].includes(String(descriptor.value))
+  );
+}
+
+function rejectUnsupportedNumericExpression(value: unknown, path: string): void {
+  if (isRegisteredBlueprintNumericExpression(value) || isNumericExpressionShaped(value)) {
+    fail(path, 'numeric expressions are supported only in constant Decider thresholds.', 'CP1001');
+  }
+}
+
+function thresholdSlot(
+  value: unknown,
+  path: string,
+  session: BlueprintParameterSession,
+  budget: DeciderTemplateBudget,
+): TemplateThresholdSlot {
+  const slot = lookupBlueprintParameterSlot(value, 'number', session, path);
+  if (slot !== undefined) {
+    accountParameter(budget, slot.registration, path);
+    budget.usedParameters.add(slot.handle);
+    return slot.handle as BlueprintNumberParameterHandle;
+  }
+  if (isRegisteredBlueprintNumericExpression(value)) {
+    const inspection = inspectRegisteredBlueprintNumericExpression(session, value, path);
+    if (!budget.expressionRoots.has(value)) {
+      budget.expressionRoots.add(value);
+      budget.nodes += inspection.nodeCount;
+      if (budget.nodes > constantConfigurationLimits.maxNodes) {
+        fail(path, `template exceeds the node limit of ${constantConfigurationLimits.maxNodes}.`);
+      }
+      budget.expressionBytes += inspection.byteLength;
+      if (budget.expressionBytes > constantConfigurationLimits.maxBytes) {
+        fail(path, `template exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`);
+      }
+      for (const parameter of inspection.dependencies) budget.usedParameters.add(parameter);
+    }
+    return value;
+  }
+  if (isNumericExpressionShaped(value)) {
+    fail(path, 'value is not a registered numeric expression.', 'CP1001');
   }
   return int32(assertBlueprintParameterNumberValue(value, path, 'safe-integer'));
 }
@@ -259,7 +323,7 @@ function conditionLeft(
   budget: DeciderTemplateBudget,
   session: BlueprintParameterSession,
 ): DeciderTemplateConditionLeft {
-  rejectRegisteredHandle(value, path);
+  rejectExpressionOutsideSlot(value, path);
   const opened = openBlueprintParameterRecord(value, path, depth, budget);
   try {
     const record = opened.value;
@@ -295,7 +359,7 @@ function scalarOperand(
   budget: DeciderTemplateBudget,
   session: BlueprintParameterSession,
 ): DeciderTemplateScalarOperand {
-  rejectRegisteredHandle(value, path);
+  rejectExpressionOutsideSlot(value, path);
   const opened = openBlueprintParameterRecord(value, path, depth, budget);
   try {
     const record = opened.value;
@@ -305,7 +369,7 @@ function scalarOperand(
       if (!Object.hasOwn(record, 'value')) fail(`${path}.value`, 'field is required.');
       return {
         kind: 'constant',
-        value: numberSlot(record.value, `${path}.value`, session, budget),
+        value: thresholdSlot(record.value, `${path}.value`, session, budget),
       };
     }
     if (record.kind === 'signal') {
@@ -330,7 +394,7 @@ function condition(
   budget: DeciderTemplateBudget,
   session: BlueprintParameterSession,
 ): DeciderTemplateCondition {
-  rejectRegisteredHandle(value, path);
+  rejectExpressionOutsideSlot(value, path);
   const opened = openBlueprintParameterRecord(value, path, depth, budget);
   try {
     const record = opened.value;
@@ -398,7 +462,7 @@ function outputSignal(
   budget: DeciderTemplateBudget,
   session: BlueprintParameterSession,
 ): DeciderTemplateOutputSignal {
-  rejectRegisteredHandle(value, path);
+  rejectExpressionOutsideSlot(value, path);
   const opened = openBlueprintParameterRecord(value, path, depth, budget);
   try {
     const record = opened.value;
@@ -428,7 +492,7 @@ function outputNetworkReference(
   depth: number,
   budget: DeciderTemplateBudget,
 ): LogicalNetworkRef {
-  rejectRegisteredHandle(value, path);
+  rejectExpressionOutsideSlot(value, path);
   const opened = openBlueprintParameterRecord(value, path, depth, budget);
   try {
     return networkReference(opened.value, [], path, depth, budget);
@@ -444,7 +508,7 @@ function output(
   budget: DeciderTemplateBudget,
   session: BlueprintParameterSession,
 ): DeciderTemplateOutput {
-  rejectRegisteredHandle(value, path);
+  rejectExpressionOutsideSlot(value, path);
   const opened = openBlueprintParameterRecord(value, path, depth, budget);
   try {
     const record = opened.value;
@@ -493,7 +557,7 @@ function outputRows(
   budget: DeciderTemplateBudget,
   session: BlueprintParameterSession,
 ): readonly DeciderTemplateOutput[] {
-  rejectRegisteredHandle(value, path);
+  rejectExpressionOutsideSlot(value, path);
   const entries = openBlueprintParameterArray(value, path, depth, budget);
   try {
     return Object.freeze(
@@ -515,8 +579,10 @@ export function createDeciderConfigurationTemplate(
   const budget: DeciderTemplateBudget = {
     ...createBlueprintParameterDataBudget(),
     parameterBytes: 0,
+    expressionBytes: 0,
+    expressionRoots: new WeakSet(),
   };
-  rejectRegisteredHandle(value, '$');
+  rejectExpressionOutsideSlot(value, '$');
   const root = openBlueprintParameterRecord(value, '$', 0, budget);
   let skeleton: DeciderConfigurationTemplateData;
   try {
@@ -543,6 +609,7 @@ export function createDeciderConfigurationTemplate(
 
   const templateBytes = new TextEncoder().encode(
     JSON.stringify(skeleton, (_key, child: unknown) => {
+      if (isRegisteredBlueprintNumericExpression(child)) return { kind: 'numeric-expression' };
       const parameter = findBlueprintParameterHandle(child);
       if (parameter === undefined) return child;
       return parameter.kind === 'number'
@@ -550,7 +617,10 @@ export function createDeciderConfigurationTemplate(
         : { type: 'virtual', name: 'signal-template-placeholder' };
     }),
   ).byteLength;
-  if (templateBytes + budget.parameterBytes > constantConfigurationLimits.maxBytes) {
+  if (
+    templateBytes + budget.parameterBytes + budget.expressionBytes >
+    constantConfigurationLimits.maxBytes
+  ) {
     fail('$', `template exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`);
   }
   const template = freezeDeep({ [deciderTemplateBrand]: true as const, ...skeleton });

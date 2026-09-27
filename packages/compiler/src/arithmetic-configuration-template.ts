@@ -2,10 +2,11 @@ import { constantConfigurationLimits, int32, signal, type SignalId } from '@comb
 import type { NetworkId } from '@comblang/shared';
 
 import type { ArithmeticOperation, LogicalNetworkRef } from './ir.js';
-import type {
-  BlueprintNumericExpression,
-  BlueprintNumericExpressionInspection,
-} from './blueprint-numeric-expression.js';
+import type { BlueprintNumericExpression } from './blueprint-numeric-expression.js';
+import {
+  inspectRegisteredBlueprintNumericExpression,
+  isRegisteredBlueprintNumericExpression,
+} from './blueprint-numeric-expression-bridge.js';
 import {
   assertBlueprintParameterExactKeys,
   assertBlueprintParameterNumberValue,
@@ -14,7 +15,6 @@ import {
   lookupBlueprintParameterSlot,
   openBlueprintParameterArray,
   openBlueprintParameterRecord,
-  type BlueprintParameterBinding,
   type BlueprintParameterDataBudget,
 } from './blueprint-parameter-validation.js';
 import {
@@ -75,22 +75,6 @@ const arithmeticTemplateRegistrations = new WeakMap<
   ArithmeticConfigurationTemplateRegistration
 >();
 
-interface ArithmeticNumericExpressionAdapter {
-  readonly isRegistered: (value: unknown) => value is BlueprintNumericExpression;
-  readonly inspect: (
-    session: BlueprintParameterSession,
-    expression: unknown,
-    path: string,
-  ) => BlueprintNumericExpressionInspection;
-  readonly evaluate: (
-    session: BlueprintParameterSession,
-    expression: BlueprintNumericExpression,
-    bindings: readonly BlueprintParameterBinding[],
-  ) => number;
-}
-
-let numericExpressionAdapter: ArithmeticNumericExpressionAdapter | undefined;
-
 const operations: readonly ArithmeticOperation[] = [
   'add',
   'subtract',
@@ -107,47 +91,6 @@ const operations: readonly ArithmeticOperation[] = [
 
 function fail(path: string, message: string, code: 'CP1000' | 'CP1001' = 'CP1000'): never {
   throw new BlueprintParameterError(code, path, message);
-}
-
-/** Installs the host-only expression implementation without pulling it into runtime consumers. */
-export function registerArithmeticNumericExpressionAdapter(
-  adapter: ArithmeticNumericExpressionAdapter,
-): void {
-  numericExpressionAdapter ??= Object.freeze(adapter);
-}
-
-export function isRegisteredArithmeticNumericExpression(
-  value: unknown,
-): value is BlueprintNumericExpression {
-  return numericExpressionAdapter?.isRegistered(value) ?? false;
-}
-
-export function inspectArithmeticNumericExpression(
-  session: BlueprintParameterSession,
-  expression: unknown,
-  path: string,
-): BlueprintNumericExpressionInspection {
-  if (
-    numericExpressionAdapter === undefined ||
-    !numericExpressionAdapter.isRegistered(expression)
-  ) {
-    fail(path, 'value is not a registered numeric expression.', 'CP1001');
-  }
-  return numericExpressionAdapter.inspect(session, expression, path);
-}
-
-export function evaluateArithmeticNumericExpression(
-  session: BlueprintParameterSession,
-  expression: BlueprintNumericExpression,
-  bindings: readonly BlueprintParameterBinding[],
-): number {
-  if (
-    numericExpressionAdapter === undefined ||
-    !numericExpressionAdapter.isRegistered(expression)
-  ) {
-    fail('$.expression', 'value is not a registered numeric expression.', 'CP1001');
-  }
-  return numericExpressionAdapter.evaluate(session, expression, bindings);
 }
 
 function addParameterBudget(
@@ -243,8 +186,8 @@ function numberSlot(
     budget.usedParameters.add(slot.handle);
     return slot.handle as BlueprintNumberParameterHandle;
   }
-  if (isRegisteredArithmeticNumericExpression(value)) {
-    const inspection = inspectArithmeticNumericExpression(session, value, path);
+  if (isRegisteredBlueprintNumericExpression(value)) {
+    const inspection = inspectRegisteredBlueprintNumericExpression(session, value, path);
     if (!budget.expressionRoots.has(value)) {
       budget.expressionRoots.add(value);
       budget.nodes += inspection.nodeCount;
@@ -402,7 +345,7 @@ export function createArithmeticConfigurationTemplate(
 
   const templateBytes = new TextEncoder().encode(
     JSON.stringify(skeleton, (_key, child: unknown) => {
-      if (isRegisteredArithmeticNumericExpression(child)) return { kind: 'numeric-expression' };
+      if (isRegisteredBlueprintNumericExpression(child)) return { kind: 'numeric-expression' };
       const parameter = findBlueprintParameterHandle(child);
       if (parameter === undefined) return child;
       return parameter.kind === 'number' ? 0 : signal('virtual', 'signal-template-placeholder');

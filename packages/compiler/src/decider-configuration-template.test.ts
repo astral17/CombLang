@@ -1,9 +1,11 @@
-import { signal } from '@comblang/factorio';
+import { constantConfigurationLimits, signal } from '@comblang/factorio';
 import type { SourceFileId, SourceSpan } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
 import { createBlueprintParameterSession } from './blueprint-parameters.js';
+import { createBlueprintNumericExpression } from './blueprint-numeric-expression.js';
 import { createDeciderConfigurationTemplate } from './decider-configuration-template.js';
+import { inspectDeciderConfigurationTemplate } from './decider-configuration-template.js';
 
 const source: SourceSpan = {
   fileId: 'decider-template.test.ts' as SourceFileId,
@@ -12,6 +14,176 @@ const source: SourceSpan = {
 };
 
 describe('symbolic Decider configuration templates', () => {
+  test('accepts registered expressions only in direct and nested constant thresholds', () => {
+    const session = createBlueprintParameterSession();
+    const other = createBlueprintParameterSession();
+    const threshold = session.number('threshold', { defaultValue: 3, source });
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: threshold },
+      right: { kind: 'literal', value: 2 },
+    });
+    const foreign = createBlueprintNumericExpression(other, {
+      kind: 'literal',
+      value: 5,
+    });
+    const left = {
+      kind: 'wildcard',
+      value: 'each',
+      refKind: 'single',
+      network: 'network:in',
+    };
+    const template = createDeciderConfigurationTemplate(session, {
+      condition: {
+        kind: 'and',
+        conditions: [
+          {
+            kind: 'compare',
+            left,
+            comparator: '>',
+            right: { kind: 'constant', value: expression },
+          },
+          {
+            kind: 'or',
+            conditions: [
+              {
+                kind: 'compare',
+                left,
+                comparator: '>=',
+                right: { kind: 'constant', value: expression },
+              },
+            ],
+          },
+        ],
+      },
+      outputs: [],
+    });
+
+    expect(template.condition).toMatchObject({
+      conditions: [
+        { right: { value: expression } },
+        { kind: 'or', conditions: [{ right: { value: expression } }] },
+      ],
+    });
+    expect(inspectDeciderConfigurationTemplate(template, '$.template').usedParameters).toEqual([
+      threshold,
+    ]);
+    expect(() =>
+      createDeciderConfigurationTemplate(session, {
+        condition: {
+          kind: 'compare',
+          left,
+          comparator: '>',
+          right: { kind: 'constant', value: foreign },
+        },
+        outputs: [],
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.condition.right.value' }));
+    expect(() =>
+      createDeciderConfigurationTemplate(session, {
+        condition: {
+          kind: 'compare',
+          left,
+          comparator: '>',
+          right: { kind: 'constant', value: { kind: 'literal', value: 5 } },
+        },
+        outputs: [],
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.condition.right.value' }));
+    expect(() =>
+      createDeciderConfigurationTemplate(session, {
+        condition: {
+          kind: 'compare',
+          left,
+          comparator: '>',
+          right: { kind: 'constant', value: 5 },
+        },
+        outputs: [
+          { mode: 'constant', signal: { kind: 'wildcard', value: 'each' }, value: expression },
+        ],
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.outputs[0].value' }));
+  });
+
+  test('budgets expression DAG nodes once and avoids expanding shared subgraphs', () => {
+    const session = createBlueprintParameterSession();
+    let shared: unknown = createBlueprintNumericExpression(session, {
+      kind: 'literal',
+      value: 1,
+    });
+    for (let depth = 0; depth < 18; depth += 1) {
+      shared = createBlueprintNumericExpression(session, {
+        kind: 'binary',
+        operator: 'add',
+        left: shared,
+        right: shared,
+      });
+    }
+    const left = {
+      kind: 'wildcard',
+      value: 'each',
+      refKind: 'single',
+      network: 'network:in',
+    };
+    const repeated = createDeciderConfigurationTemplate(session, {
+      condition: {
+        kind: 'and',
+        conditions: [
+          {
+            kind: 'compare',
+            left,
+            comparator: '>',
+            right: { kind: 'constant', value: shared },
+          },
+          {
+            kind: 'compare',
+            left,
+            comparator: '<',
+            right: { kind: 'constant', value: shared },
+          },
+        ],
+      },
+      outputs: [],
+    });
+    if (repeated.condition.kind !== 'and') throw new Error('expected an and condition');
+    expect(repeated.condition.conditions).toHaveLength(2);
+    for (const condition of repeated.condition.conditions) {
+      if (condition.kind !== 'compare' || condition.right.kind !== 'constant') {
+        throw new Error('expected a constant comparison threshold');
+      }
+      expect(condition.right.value).toBe(shared);
+    }
+
+    const balanced = (depth: number): unknown =>
+      depth === 0
+        ? { kind: 'literal', value: 1 }
+        : {
+            kind: 'binary',
+            operator: 'add',
+            left: balanced(depth - 1),
+            right: balanced(depth - 1),
+          };
+    const overBudget = createBlueprintNumericExpression(session, balanced(11));
+    expect(() =>
+      createDeciderConfigurationTemplate(session, {
+        condition: {
+          kind: 'compare',
+          left,
+          comparator: '>',
+          right: { kind: 'constant', value: overBudget },
+        },
+        outputs: [],
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1000',
+        path: '$.condition.right.value',
+        message: expect.stringContaining(`node limit of ${constantConfigurationLimits.maxNodes}`),
+      }),
+    );
+  });
+
   test('preserves nested conditions, typed operand slots, wildcard and ordered network pairs', () => {
     const session = createBlueprintParameterSession();
     const count = session.number('threshold', { source });

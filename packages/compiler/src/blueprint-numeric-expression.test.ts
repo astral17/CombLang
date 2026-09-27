@@ -17,10 +17,24 @@ import {
   inspectBlueprintNumericExpression,
 } from './blueprint-numeric-expression.js';
 import { assertBlueprintParameterNumberValue } from './blueprint-parameter-validation.js';
+import { registerBlueprintNumericExpressionAdapter } from './blueprint-numeric-expression-bridge.js';
+import type { BlueprintNumericExpression } from './blueprint-numeric-expression.js';
 
 const source = { fileId: 'numeric-expression.test.ts' as SourceFileId, start: 4, end: 28 };
 
 describe('host-local blueprint numeric expressions', () => {
+  test('rejects replacement by a conflicting host-local adapter', () => {
+    expect(() =>
+      registerBlueprintNumericExpressionAdapter({
+        isRegistered: (_value): _value is BlueprintNumericExpression => false,
+        inspect: () => {
+          throw new Error('unused test adapter');
+        },
+        evaluate: () => 0,
+      }),
+    ).toThrowError(/conflicting blueprint numeric expression adapter/);
+  });
+
   test('builds frozen typed nodes while preserving ordered operations and shared subexpressions', () => {
     const session = createBlueprintParameterSession();
     const product = {

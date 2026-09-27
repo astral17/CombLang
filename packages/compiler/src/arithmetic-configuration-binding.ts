@@ -13,14 +13,16 @@ import {
   inspectBlueprintParameterHandle,
 } from './blueprint-parameters.js';
 import {
-  evaluateArithmeticNumericExpression,
-  inspectArithmeticNumericExpression,
   inspectArithmeticConfigurationTemplate,
-  isRegisteredArithmeticNumericExpression,
   type ArithmeticConfigurationTemplate,
   type ArithmeticTemplateOperand,
   type ArithmeticTemplateOutput,
 } from './arithmetic-configuration-template.js';
+import {
+  evaluateRegisteredBlueprintNumericExpression,
+  inspectRegisteredBlueprintNumericExpression,
+  isRegisteredBlueprintNumericExpression,
+} from './blueprint-numeric-expression-bridge.js';
 import type { ArithmeticProducerConfig, LogicalNetworkRef } from './ir.js';
 
 function fail(
@@ -79,8 +81,8 @@ export function bindArithmeticConfigurationTemplate(
   const resolveNumber = (value: unknown, path: string): number => {
     const slot = lookupBlueprintParameterSlot(value, 'number', session, path);
     if (slot === undefined) {
-      if (isRegisteredArithmeticNumericExpression(value)) {
-        const inspection = inspectArithmeticNumericExpression(session, value, path);
+      if (isRegisteredBlueprintNumericExpression(value)) {
+        const inspection = inspectRegisteredBlueprintNumericExpression(session, value, path);
         const dependencies = new Set<object>(inspection.dependencies);
         for (const dependency of inspection.dependencies) used.add(dependency);
         const expressionBindings = bindings
@@ -88,7 +90,11 @@ export function bindArithmeticConfigurationTemplate(
           .map(({ parameter, value: bindingValue }) => ({ parameter, value: bindingValue }));
         let evaluated: number;
         try {
-          evaluated = evaluateArithmeticNumericExpression(session, value, expressionBindings);
+          evaluated = evaluateRegisteredBlueprintNumericExpression(
+            session,
+            value,
+            expressionBindings,
+          );
         } catch (error) {
           prefixExpressionError(error, path);
         }

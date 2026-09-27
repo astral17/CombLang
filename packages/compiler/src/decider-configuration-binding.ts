@@ -13,6 +13,11 @@ import {
   inspectBlueprintParameterHandle,
 } from './blueprint-parameters.js';
 import {
+  evaluateRegisteredBlueprintNumericExpression,
+  inspectRegisteredBlueprintNumericExpression,
+  isRegisteredBlueprintNumericExpression,
+} from './blueprint-numeric-expression-bridge.js';
+import {
   inspectDeciderConfigurationTemplate,
   type DeciderConfigurationTemplate,
   type DeciderTemplateCondition,
@@ -33,6 +38,21 @@ function fail(
   code: 'CP1000' | 'CP1001' | 'CP1002' = 'CP1000',
 ): never {
   throw new BlueprintParameterError(code, path, message, span);
+}
+
+function prefixExpressionError(error: unknown, path: string): never {
+  if (!(error instanceof BlueprintParameterError)) throw error;
+  const suffix =
+    error.path === '$' || error.path === '$.value'
+      ? ''
+      : error.path.startsWith('$')
+        ? error.path.slice(1)
+        : `.${error.path}`;
+  const messagePrefix = `${error.path}: `;
+  const message = error.message.startsWith(messagePrefix)
+    ? error.message.slice(messagePrefix.length)
+    : error.message;
+  throw new BlueprintParameterError(error.code, `${path}${suffix}`, message, error.span);
 }
 
 function freezeDeep<T>(value: T): T {
@@ -94,6 +114,30 @@ export function bindDeciderConfigurationTemplate(
     return normalized;
   };
 
+  const resolveThreshold = (value: unknown, path: string): number => {
+    if (!isRegisteredBlueprintNumericExpression(value)) return resolveNumber(value, path);
+    const inspection = inspectRegisteredBlueprintNumericExpression(session, value, path);
+    const dependencies = new Set<object>(inspection.dependencies);
+    for (const dependency of inspection.dependencies) used.add(dependency);
+    const expressionBindings = bindings
+      .filter((binding) => dependencies.has(binding.parameter))
+      .map(({ parameter, value: bindingValue }) => ({ parameter, value: bindingValue }));
+    let evaluated: number;
+    try {
+      evaluated = evaluateRegisteredBlueprintNumericExpression(session, value, expressionBindings);
+    } catch (error) {
+      prefixExpressionError(error, path);
+    }
+    const number = assertBlueprintParameterNumberValue(
+      evaluated,
+      path,
+      'safe-integer',
+      inspection.source,
+      'Decider constant values must be safe integers.',
+    );
+    return int32(number);
+  };
+
   const resolveSignal = (value: unknown, path: string): SignalId => {
     const slot = lookupBlueprintParameterSlot(value, 'signal', session, path);
     if (slot === undefined) return canonicalizeBlueprintParameterSignal(value, path);
@@ -136,7 +180,7 @@ export function bindDeciderConfigurationTemplate(
     path: string,
   ) =>
     operand.kind === 'constant'
-      ? { kind: 'constant' as const, value: resolveNumber(operand.value, `${path}.value`) }
+      ? { kind: 'constant' as const, value: resolveThreshold(operand.value, `${path}.value`) }
       : {
           kind: 'signal' as const,
           signal: resolveSignal(operand.signal, `${path}.signal`),
