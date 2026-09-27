@@ -20,6 +20,11 @@ import {
   type BlueprintParameterBinding,
 } from './blueprint-parameter-validation.js';
 import {
+  evaluateRegisteredBlueprintNumericExpression,
+  inspectRegisteredBlueprintNumericExpression,
+  isRegisteredBlueprintNumericExpression,
+} from './blueprint-numeric-expression-bridge.js';
+import {
   inspectConstantConfigurationTemplate,
   type ConstantConfigurationTemplate,
 } from './constant-configuration-template.js';
@@ -36,6 +41,21 @@ function fail(
   code: 'CP1000' | 'CP1001' | 'CP1002' = 'CP1000',
 ): never {
   throw new BlueprintParameterError(code, path, message, span);
+}
+
+function prefixExpressionError(error: unknown, path: string): never {
+  if (!(error instanceof BlueprintParameterError)) throw error;
+  const suffix =
+    error.path === '$' || error.path === '$.value'
+      ? ''
+      : error.path.startsWith('$')
+        ? error.path.slice(1)
+        : `.${error.path}`;
+  const messagePrefix = `${error.path}: `;
+  const message = error.message.startsWith(messagePrefix)
+    ? error.message.slice(messagePrefix.length)
+    : error.message;
+  throw new BlueprintParameterError(error.code, `${path}${suffix}`, message, error.span);
 }
 
 /** Resolves one internal symbolic Constant template to a fresh concrete configuration. */
@@ -98,11 +118,39 @@ export function bindConstantConfigurationTemplate(
     return canonicalValue;
   };
 
+  const resolveMultiplier = (value: unknown, path: string): number => {
+    if (!isRegisteredBlueprintNumericExpression(value)) {
+      return resolve(value, 'number', path, 'multiplier') as number;
+    }
+    const inspection = inspectRegisteredBlueprintNumericExpression(session, value, path);
+    const dependencies = new Set<object>(inspection.dependencies);
+    for (const dependency of inspection.dependencies) used.add(dependency);
+    const expressionBindings = bindings
+      .filter((binding) => dependencies.has(binding.parameter))
+      .map(({ parameter, value: bindingValue }) => ({ parameter, value: bindingValue }));
+    let evaluated: number;
+    try {
+      evaluated = evaluateRegisteredBlueprintNumericExpression(session, value, expressionBindings);
+    } catch (error) {
+      prefixExpressionError(error, path);
+    }
+    slotSources.set(path, {
+      ...(inspection.source === undefined ? {} : { span: inspection.source }),
+    });
+    return assertBlueprintParameterNumberValue(
+      evaluated,
+      path,
+      'finite',
+      inspection.source,
+      'Constant multipliers must be finite numbers.',
+    );
+  };
+
   for (const [sectionIndex, section] of template.sections.entries()) {
     const sectionPath = `$.sections[${sectionIndex}]`;
     const concreteSection: Record<string, unknown> = {
       active: section.active,
-      multiplier: resolve(section.multiplier, 'number', `${sectionPath}.multiplier`, 'multiplier'),
+      multiplier: resolveMultiplier(section.multiplier, `${sectionPath}.multiplier`),
       filters: section.filters.map((filter, filterIndex) => {
         const filterPath = `${sectionPath}.filters[${filterIndex}]`;
         return {

@@ -10,6 +10,7 @@ import {
 } from './entity-replay-context.js';
 import type { NativeCircuitIr } from './ir.js';
 import { createBlueprintParameterSession } from './blueprint-parameters.js';
+import { createBlueprintNumericExpression } from './blueprint-numeric-expression.js';
 import { createBlueprintConfigurationSet } from './blueprint-configuration-set.js';
 import { createConstantConfigurationTemplate } from './constant-configuration-template.js';
 import { createArithmeticConfigurationTemplate } from './arithmetic-configuration-template.js';
@@ -261,8 +262,17 @@ describe('concrete NCIR configuration-set replacement', () => {
   test('keeps the linked Entity association and updates its matching physical config', () => {
     const session = createBlueprintParameterSession();
     const amount = session.number('entity amount', { defaultValue: 5 });
+    const multiplier = session.number('entity multiplier', { defaultValue: 0.5 });
+    const multiplierExpression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: multiplier },
+      right: { kind: 'literal', value: 0.25 },
+    });
     const template = createConstantConfigurationTemplate(session, {
-      sections: [{ filters: [{ signal: targetSignal, value: amount }] }],
+      sections: [
+        { multiplier: multiplierExpression, filters: [{ signal: targetSignal, value: amount }] },
+      ],
     });
     const set = createBlueprintConfigurationSet(session, [
       { key: 'source', kind: 'constant', template },
@@ -322,18 +332,21 @@ describe('concrete NCIR configuration-set replacement', () => {
       set,
       circuit,
       [{ key: 'source', producerId: firstProducer }],
-      [{ parameter: amount, value: 11 }],
+      [
+        { parameter: amount, value: 11 },
+        { parameter: multiplier, value: 2.25 },
+      ],
     );
     expect(replaced.producers[0]?.entityId).toBe(entityId);
     expect(replaced.entities[0]?.id).toBe(entityId);
     expect(replaced.entities[0]?.configuration).toEqual({
       mode: 'constant',
       value: canonicalizeConstantConfiguration({
-        sections: [{ filters: [{ signal: targetSignal, value: 11 }] }],
+        sections: [{ multiplier: 2.5, filters: [{ signal: targetSignal, value: 11 }] }],
       }),
     });
     const expectedConfiguration = canonicalizeConstantConfiguration({
-      sections: [{ filters: [{ signal: targetSignal, value: 11 }] }],
+      sections: [{ multiplier: 2.5, filters: [{ signal: targetSignal, value: 11 }] }],
     });
     const expectedCircuit: NativeCircuitIr = {
       ...circuit,
@@ -347,6 +360,23 @@ describe('concrete NCIR configuration-set replacement', () => {
         ? entity.configuration.value.sections[0]?.filters[0]?.value
         : null,
     ).toBe(1);
+    expect(JSON.stringify(replaced)).not.toContain('entity multiplier');
+    expect(JSON.stringify(replaced)).not.toContain('entity amount');
+    const replacedBeforeFailure = JSON.stringify(replaced);
+    const circuitBeforeFailure = JSON.stringify(circuit);
+    expect(() =>
+      replaceBlueprintConfigurationSetInNativeCircuitIr(
+        set,
+        circuit,
+        [{ key: 'source', producerId: firstProducer }],
+        [
+          { parameter: amount, value: 12 },
+          { parameter: multiplier, value: Infinity },
+        ],
+      ),
+    ).toThrowError(expect.objectContaining({ code: 'CP1000' }));
+    expect(JSON.stringify(replaced)).toBe(replacedBeforeFailure);
+    expect(JSON.stringify(circuit)).toBe(circuitBeforeFailure);
 
     const duplicateLink: CircuitProducerNode = {
       ...producer,
@@ -357,7 +387,10 @@ describe('concrete NCIR configuration-set replacement', () => {
         set,
         { ...circuit, producers: [producer, duplicateLink] },
         [{ key: 'source', producerId: firstProducer }],
-        [{ parameter: amount, value: 12 }],
+        [
+          { parameter: amount, value: 12 },
+          { parameter: multiplier, value: 3 },
+        ],
       ),
     ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.ir.producers[1].entityId' }));
   });

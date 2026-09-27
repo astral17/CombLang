@@ -5,6 +5,7 @@ import { describe, expect, test } from 'vitest';
 import { bindBlueprintConfigurationSet } from './blueprint-configuration-binding.js';
 import { createBlueprintConfigurationSet } from './blueprint-configuration-set.js';
 import { createBlueprintParameterSession } from './blueprint-parameters.js';
+import { createBlueprintNumericExpression } from './blueprint-numeric-expression.js';
 import { createArithmeticConfigurationTemplate } from './arithmetic-configuration-template.js';
 import { createConstantConfigurationTemplate } from './constant-configuration-template.js';
 
@@ -15,6 +16,77 @@ const source: SourceSpan = {
 };
 
 describe('atomic blueprint configuration-set binding', () => {
+  test('partitions Constant multiplier expressions and direct handles across entries', () => {
+    const session = createBlueprintParameterSession();
+    const multiplier = session.number('multiplier-parameter', { defaultValue: 2.25 });
+    const count = session.number('count-parameter', { defaultValue: 3 });
+    const target = session.signal('target-parameter', {
+      defaultValue: signal('item', 'iron-plate'),
+    });
+    const offset = session.number('offset-parameter', { defaultValue: 4 });
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: multiplier },
+      right: { kind: 'literal', value: 0.25 },
+    });
+    const constant = createConstantConfigurationTemplate(session, {
+      sections: [{ multiplier: expression, filters: [{ signal: target, value: count }] }],
+    });
+    const arithmetic = createArithmeticConfigurationTemplate(session, {
+      left: { kind: 'constant', value: offset },
+      operation: 'add',
+      right: { kind: 'constant', value: 1 },
+      output: { kind: 'each' },
+    });
+    const configurationSet = createBlueprintConfigurationSet(session, [
+      { key: 'constant', kind: 'constant', template: constant },
+      { key: 'arithmetic', kind: 'arithmetic', template: arithmetic },
+    ]);
+    const bindings = [
+      { parameter: multiplier, value: 2.25 },
+      { parameter: count, value: 2_147_483_649 },
+      { parameter: target, value: signal('item', 'iron-plate', 'uncommon') },
+      { parameter: offset, value: 9 },
+    ];
+    const bound = bindBlueprintConfigurationSet(configurationSet, bindings);
+
+    expect(bound[0]).toMatchObject({
+      kind: 'constant',
+      config: {
+        sections: [
+          {
+            multiplier: 2.5,
+            filters: [
+              {
+                signal: signal('item', 'iron-plate', 'uncommon'),
+                value: -2_147_483_647,
+              },
+            ],
+          },
+        ],
+      },
+    });
+    expect(bound[1]).toMatchObject({
+      kind: 'arithmetic',
+      config: { left: { kind: 'constant', value: 9 } },
+    });
+    expect(JSON.stringify(bound)).not.toContain('multiplier-parameter');
+    expect(JSON.stringify(bound)).not.toContain('count-parameter');
+    expect(JSON.stringify(bound)).not.toContain('target-parameter');
+    expect(JSON.stringify(bound)).not.toContain('offset-parameter');
+    const before = JSON.stringify(bound);
+
+    expect(() =>
+      bindBlueprintConfigurationSet(configurationSet, [
+        ...bindings.slice(0, -1),
+        { parameter: offset, value: 1.5 },
+      ]),
+    ).toThrowError(expect.objectContaining({ code: 'CP1000', path: '$.entries[1].left.value' }));
+    expect(JSON.stringify(bound)).toBe(before);
+    expect(Object.isFrozen(bound)).toBe(true);
+  });
+
   test('partitions one binding list across ordered leaf templates', () => {
     const session = createBlueprintParameterSession();
     const amount = session.number('amount', { source });

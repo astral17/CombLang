@@ -1,4 +1,4 @@
-import { signal, type SignalId } from '@comblang/factorio';
+import { constantConfigurationLimits, signal, type SignalId } from '@comblang/factorio';
 import type { SourceFileId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
@@ -6,11 +6,164 @@ import {
   assertBlueprintParameterFromSession,
   createBlueprintParameterSession,
 } from './blueprint-parameters.js';
+import { createBlueprintNumericExpression } from './blueprint-numeric-expression.js';
 import {
   createConstantConfigurationTemplate,
   inspectConstantConfigurationTemplate,
 } from './constant-configuration-template.js';
 describe('symbolic Constant configuration templates', () => {
+  test('preserves one registered expression reused by section multipliers only', () => {
+    const session = createBlueprintParameterSession();
+    const multiplier = session.number('multiplier', {
+      defaultValue: 1.5,
+      source: {
+        fileId: 'constant-template.test.ts' as SourceFileId,
+        start: 12,
+        end: 22,
+      },
+    });
+    const target = session.signal('target', {
+      defaultValue: signal('item', 'iron-plate'),
+    });
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: multiplier },
+      right: { kind: 'literal', value: 0.25 },
+    });
+
+    const template = createConstantConfigurationTemplate(session, {
+      sections: [
+        { multiplier: expression, filters: [{ signal: target, value: multiplier }] },
+        { multiplier: expression, filters: [{ signal: target, value: 4 }] },
+      ],
+    });
+
+    expect(template.sections.map(({ multiplier: value }) => value)).toEqual([
+      expression,
+      expression,
+    ]);
+    expect(template.sections[0]?.multiplier).toBe(expression);
+    expect(template.sections[1]?.multiplier).toBe(expression);
+    expect(template.sections[0]?.filters[0]).toEqual({ signal: target, value: multiplier });
+    expect(inspectConstantConfigurationTemplate(template, '$.template').usedParameters).toEqual([
+      multiplier,
+      target,
+    ]);
+  });
+
+  test('rejects foreign, forged, and non-multiplier expressions at their slots', () => {
+    const session = createBlueprintParameterSession();
+    const other = createBlueprintParameterSession();
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'literal',
+      value: 2,
+    });
+    const foreign = createBlueprintNumericExpression(other, {
+      kind: 'literal',
+      value: 3,
+    });
+    const signalHandle = session.signal('signal', { defaultValue: signal('virtual', 'signal-A') });
+
+    expect(() =>
+      createConstantConfigurationTemplate(session, {
+        sections: [{ multiplier: foreign, filters: [] }],
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.sections[0].multiplier' }));
+    expect(() =>
+      createConstantConfigurationTemplate(session, {
+        sections: [{ multiplier: { kind: 'literal', value: 2 }, filters: [] }],
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.sections[0].multiplier' }));
+    expect(() =>
+      createConstantConfigurationTemplate(session, {
+        sections: [{ multiplier: 1, group: expression, filters: [] }],
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.sections[0].group' }));
+    expect(() =>
+      createConstantConfigurationTemplate(session, {
+        sections: [{ multiplier: 1, filters: [{ signal: expression, value: 1 }] }],
+      }),
+    ).toThrowError(
+      expect.objectContaining({ code: 'CP1001', path: '$.sections[0].filters[0].signal' }),
+    );
+    expect(() =>
+      createConstantConfigurationTemplate(session, {
+        sections: [{ multiplier: 1, filters: [{ signal: signalHandle, value: expression }] }],
+      }),
+    ).toThrowError(
+      expect.objectContaining({ code: 'CP1001', path: '$.sections[0].filters[0].value' }),
+    );
+    expect(() =>
+      createConstantConfigurationTemplate(session, {
+        sections: [],
+        unsupported: expression,
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.unsupported' }));
+  });
+
+  test('accounts shared expression DAG nodes and bytes without expanding the graph', () => {
+    const session = createBlueprintParameterSession();
+    let shared: unknown = createBlueprintNumericExpression(session, {
+      kind: 'literal',
+      value: 1,
+    });
+    for (let depth = 0; depth < 18; depth += 1) {
+      shared = createBlueprintNumericExpression(session, {
+        kind: 'binary',
+        operator: 'add',
+        left: shared,
+        right: shared,
+      });
+    }
+    const repeated = createConstantConfigurationTemplate(session, {
+      sections: [
+        { multiplier: shared, filters: [] },
+        { multiplier: shared, filters: [] },
+      ],
+    });
+    expect(repeated.sections[0]?.multiplier).toBe(shared);
+    expect(repeated.sections[1]?.multiplier).toBe(shared);
+
+    const balanced = (depth: number): unknown =>
+      depth === 0
+        ? { kind: 'literal', value: 1 }
+        : {
+            kind: 'binary',
+            operator: 'add',
+            left: balanced(depth - 1),
+            right: balanced(depth - 1),
+          };
+    const overBudget = createBlueprintNumericExpression(session, balanced(11));
+    expect(() =>
+      createConstantConfigurationTemplate(session, {
+        sections: [{ multiplier: overBudget, filters: [] }],
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1000',
+        path: '$.sections[0].multiplier',
+        message: expect.stringContaining(`node limit of ${constantConfigurationLimits.maxNodes}`),
+      }),
+    );
+
+    const largeLabel = session.number('x'.repeat(constantConfigurationLimits.maxBytes - 120));
+    const largeExpression = createBlueprintNumericExpression(session, {
+      kind: 'parameter',
+      parameter: largeLabel,
+    });
+    expect(() =>
+      createConstantConfigurationTemplate(session, {
+        sections: [{ multiplier: largeExpression, filters: [] }],
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1000',
+        message: expect.stringContaining('byte limit'),
+      }),
+    );
+  });
+
   test('blueprint-wide parameter handles remain scoped when used by Constant', () => {
     const owner = createBlueprintParameterSession();
     const foreign = createBlueprintParameterSession();

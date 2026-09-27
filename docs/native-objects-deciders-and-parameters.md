@@ -243,10 +243,13 @@ subtraction, and multiplication, with bounded construction and a pure
 default/binding evaluator. This internal foundation neither parses nor emits
 Factorio formulas and does not establish native formula arithmetic semantics.
 The reviewed host-local integration is limited to Arithmetic constant operand
-values and the constant `condition.compare.right` threshold in Decider templates,
-including nested AND/OR comparisons. Binding produces only the existing
-concrete int32 configuration value; Decider outputs and other slots remain
-concrete, and no native formula field is exported.
+values, the constant `condition.compare.right` threshold in Decider templates
+(including nested AND/OR comparisons), and Constant section multipliers. The
+first two use their existing safe-integer/int32 rule; a Constant multiplier is
+only required to be finite and remains a double in concrete configuration. It
+does not enable filter-count expressions or imply simulator support for non-unit
+multipliers. No native formula field is exported and no placement-time Factorio
+behavior is claimed.
 
 Native formula variables and dependent parameters remain future work. Recipe
 ingredients, recipe products, native numeric formulas, and parameter properties

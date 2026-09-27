@@ -27,10 +27,17 @@ import {
   type OpenBlueprintParameterArray,
   type OpenBlueprintParameterRecord,
 } from './blueprint-parameter-validation.js';
+import type { BlueprintNumericExpression } from './blueprint-numeric-expression.js';
+import {
+  inspectRegisteredBlueprintNumericExpression,
+  isRegisteredBlueprintNumericExpression,
+} from './blueprint-numeric-expression-bridge.js';
 
 const templateBrand: unique symbol = Symbol('constant-configuration-template');
 
 export type ConstantTemplateNumberSlot = number | BlueprintNumberParameterHandle;
+export type ConstantTemplateMultiplierSlot =
+  ConstantTemplateNumberSlot | BlueprintNumericExpression;
 export type ConstantTemplateSignalSlot = SignalId | BlueprintSignalParameterHandle;
 
 export interface ConstantConfigurationTemplateFilter {
@@ -41,7 +48,7 @@ export interface ConstantConfigurationTemplateFilter {
 export interface ConstantConfigurationTemplateSection {
   readonly active: boolean;
   readonly group?: string;
-  readonly multiplier: ConstantTemplateNumberSlot;
+  readonly multiplier: ConstantTemplateMultiplierSlot;
   readonly filters: readonly ConstantConfigurationTemplateFilter[];
 }
 
@@ -58,6 +65,8 @@ export interface ConstantConfigurationTemplateRegistration {
 
 interface TemplateBudget extends BlueprintParameterDataBudget {
   parameterBytes: number;
+  expressionBytes: number;
+  readonly expressionRoots: WeakSet<object>;
 }
 
 interface FilterSlots {
@@ -66,7 +75,7 @@ interface FilterSlots {
 }
 
 interface SectionSlots {
-  readonly multiplier?: BlueprintNumberParameterHandle;
+  readonly multiplier?: ConstantTemplateMultiplierSlot;
   readonly filters: readonly FilterSlots[];
 }
 
@@ -106,6 +115,7 @@ function accountParameter(
 }
 
 function rejectParameterOutsideSlot(value: unknown, path: string): void {
+  rejectNumericExpressionOutsideSlot(value, path);
   const registration = findBlueprintParameterHandle(value);
   if (registration !== undefined) {
     throw new BlueprintParameterError(
@@ -118,6 +128,41 @@ function rejectParameterOutsideSlot(value: unknown, path: string): void {
   if (isBlueprintParameterShaped(value)) {
     throw new BlueprintParameterError('CP1001', path, 'unregistered parameter-like object.');
   }
+}
+
+function isNumericExpressionShaped(value: unknown): boolean {
+  if (value === null || typeof value !== 'object') return false;
+  const descriptor = Object.getOwnPropertyDescriptor(value, 'kind');
+  return (
+    descriptor !== undefined &&
+    'value' in descriptor &&
+    ['literal', 'parameter', 'negate', 'binary'].includes(String(descriptor.value))
+  );
+}
+
+function rejectNumericExpressionOutsideSlot(value: unknown, path: string): void {
+  if (isRegisteredBlueprintNumericExpression(value) || isNumericExpressionShaped(value)) {
+    throw new BlueprintParameterError(
+      'CP1001',
+      path,
+      'numeric expressions are allowed only in Constant section multipliers.',
+    );
+  }
+}
+
+function assertConstantExactKeys(
+  record: Record<string, unknown>,
+  keys: readonly string[],
+  path: string,
+  message: string,
+): void {
+  const allowed = new Set(keys);
+  for (const key of Object.keys(record)) {
+    if (!allowed.has(key)) {
+      rejectNumericExpressionOutsideSlot(record[key], `${path}.${key}`);
+    }
+  }
+  assertBlueprintParameterExactKeys(record, keys, path, message);
 }
 
 function canonicalizePrepared(value: unknown): ConstantConfiguration {
@@ -145,12 +190,17 @@ export function createConstantConfigurationTemplate(
   value: unknown,
 ): ConstantConfigurationTemplate {
   assertBlueprintParameterSession(session, '$.session');
-  const budget: TemplateBudget = { ...createBlueprintParameterDataBudget(), parameterBytes: 0 };
+  const budget: TemplateBudget = {
+    ...createBlueprintParameterDataBudget(),
+    parameterBytes: 0,
+    expressionBytes: 0,
+    expressionRoots: new WeakSet(),
+  };
   const root = openBlueprintParameterRecord(value, '$', 0, budget);
   let normalized: ConstantConfiguration;
   let slots: readonly SectionSlots[];
   try {
-    assertBlueprintParameterExactKeys(
+    assertConstantExactKeys(
       root.value,
       ['isOn', 'sections'],
       '$',
@@ -182,7 +232,7 @@ export function createConstantConfigurationTemplate(
           budget,
         );
         try {
-          assertBlueprintParameterExactKeys(
+          assertConstantExactKeys(
             section.value,
             ['active', 'group', 'multiplier', 'filters'],
             sectionPath,
@@ -198,7 +248,7 @@ export function createConstantConfigurationTemplate(
               preparedSection[key] = section.value[key];
             }
           }
-          let multiplier: BlueprintNumberParameterHandle | undefined;
+          let multiplier: ConstantTemplateMultiplierSlot | undefined;
           if (Object.hasOwn(section.value, 'multiplier')) {
             const rawMultiplier = section.value.multiplier;
             const reference = accountParameter(
@@ -211,6 +261,39 @@ export function createConstantConfigurationTemplate(
             if (reference !== undefined) {
               multiplier = reference as BlueprintNumberParameterHandle;
               preparedSection.multiplier = 1;
+            } else if (isRegisteredBlueprintNumericExpression(rawMultiplier)) {
+              const expression = rawMultiplier;
+              const inspection = inspectRegisteredBlueprintNumericExpression(
+                session,
+                expression,
+                `${sectionPath}.multiplier`,
+              );
+              if (!budget.expressionRoots.has(expression)) {
+                budget.expressionRoots.add(expression);
+                budget.nodes += inspection.nodeCount;
+                if (budget.nodes > constantConfigurationLimits.maxNodes) {
+                  fail(
+                    `${sectionPath}.multiplier`,
+                    `template exceeds the node limit of ${constantConfigurationLimits.maxNodes}.`,
+                    inspection.source,
+                  );
+                }
+                budget.expressionBytes += inspection.byteLength;
+                if (budget.expressionBytes > constantConfigurationLimits.maxBytes) {
+                  fail(
+                    `${sectionPath}.multiplier`,
+                    `template exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`,
+                    inspection.source,
+                  );
+                }
+                for (const dependency of inspection.dependencies) {
+                  budget.usedParameters.add(dependency);
+                }
+              }
+              multiplier = expression;
+              preparedSection.multiplier = 1;
+            } else if (isNumericExpressionShaped(rawMultiplier)) {
+              rejectNumericExpressionOutsideSlot(rawMultiplier, `${sectionPath}.multiplier`);
             } else {
               preparedSection.multiplier = rawMultiplier;
             }
@@ -226,7 +309,7 @@ export function createConstantConfigurationTemplate(
               const filterPath = `${filtersPath}[${filterIndex}]`;
               const filter = openBlueprintParameterRecord(rawFilter, filterPath, 4, budget);
               try {
-                assertBlueprintParameterExactKeys(
+                assertConstantExactKeys(
                   filter.value,
                   ['signal', 'value'],
                   filterPath,
@@ -239,6 +322,7 @@ export function createConstantConfigurationTemplate(
                 let signalReference: BlueprintSignalParameterHandle | undefined;
                 if (Object.hasOwn(filter.value, 'signal')) {
                   const rawSignal = filter.value.signal;
+                  rejectNumericExpressionOutsideSlot(rawSignal, `${filterPath}.signal`);
                   const reference = accountParameter(
                     rawSignal,
                     'signal',
@@ -256,6 +340,7 @@ export function createConstantConfigurationTemplate(
                 let valueReference: BlueprintNumberParameterHandle | undefined;
                 if (Object.hasOwn(filter.value, 'value')) {
                   const rawValue = filter.value.value;
+                  rejectNumericExpressionOutsideSlot(rawValue, `${filterPath}.value`);
                   const reference = accountParameter(
                     rawValue,
                     'number',
@@ -303,7 +388,10 @@ export function createConstantConfigurationTemplate(
   }
 
   const canonicalBytes = new TextEncoder().encode(JSON.stringify(normalized)).byteLength;
-  if (canonicalBytes + budget.parameterBytes > constantConfigurationLimits.maxBytes) {
+  if (
+    canonicalBytes + budget.parameterBytes + budget.expressionBytes >
+    constantConfigurationLimits.maxBytes
+  ) {
     fail('$', `template exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`);
   }
   const template = freezeTemplate({
