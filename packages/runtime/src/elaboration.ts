@@ -409,6 +409,23 @@ export function createSimulationFromNativeCircuitIr(
   return kernel;
 }
 
+/** Creates a fresh test session that evaluates the supplied canonical IR. */
+export function createTestSessionFromNativeCircuitIr<Target>(
+  ir: NativeCircuitIr,
+  resolveNetwork: (target: Target) => NetworkId,
+): TestSession<Target> {
+  const networkIds = new Set(ir.networks.map(({ id }) => id));
+  const kernel = new ValueSimulationKernel();
+  for (const device of simulationDevicesForIr(ir).value) kernel.addDevice(device);
+  return new TestSession(kernel, {
+    resolveNetwork(target) {
+      const id = resolveNetwork(target);
+      if (!networkIds.has(id)) runtimeFailure('RT1005', `Unknown Network: ${id}.`);
+      return id;
+    },
+  });
+}
+
 export class DslRuntime {
   readonly #networkIds = new StableIdAllocator('network');
   readonly #producerIds = new StableIdAllocator('producer');

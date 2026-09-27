@@ -10,7 +10,7 @@ worker.addEventListener('message', (event: MessageEvent<TestWorkerRequest>) => {
   const response: TestWorkerResponse = {
     kind: 'tested',
     revision: event.data.revision,
-    run: runWebTests(event.data.plan, event.data.source),
+    run: runWebTests(event.data.plan, event.data.source, event.data.resolvedCircuit),
   };
   worker.postMessage(response);
 });

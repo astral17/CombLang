@@ -180,6 +180,7 @@ let renderTimer: ReturnType<typeof setTimeout> | undefined;
 let copyResetTimer: ReturnType<typeof setTimeout> | undefined;
 let currentBlueprintJson: string | undefined;
 let currentPlan: DirectElaborationPlan | undefined;
+let currentResolvedCircuit: ResolvedCircuit | undefined;
 let currentDemo: SourcePlanDemo | undefined;
 let sourceSimulation: SourceSimulationController | undefined;
 let selectedSimulationTick = 0;
@@ -694,6 +695,7 @@ function renderProofPending(): void {
   pauseSimulation();
   setSimulationEnabled(false);
   currentPlan = undefined;
+  currentResolvedCircuit = undefined;
   testRevision += 1;
   terminateTestWorker();
   proof.dataset.state = 'pending';
@@ -705,9 +707,14 @@ function renderProofPending(): void {
   resetCopyButton();
 }
 
-function renderProofError(message: string, compiledPlan?: DirectElaborationPlan): void {
+function renderProofError(
+  message: string,
+  compiledPlan?: DirectElaborationPlan,
+  compiledResolvedCircuit?: ResolvedCircuit,
+): void {
   pauseSimulation();
   currentPlan = compiledPlan;
+  currentResolvedCircuit = compiledResolvedCircuit;
   currentDemo = undefined;
   sourceSimulation = undefined;
   selectedSimulationTick = 0;
@@ -939,6 +946,7 @@ function terminateTestWorker(): void {
 
 function runTests(): void {
   const plan = currentPlan;
+  const resolvedCircuit = currentResolvedCircuit;
   if (plan === undefined) {
     setTestsWaiting('Waiting for valid source…');
     return;
@@ -952,6 +960,7 @@ function runTests(): void {
     kind: 'test',
     revision,
     plan,
+    ...(resolvedCircuit === undefined ? {} : { resolvedCircuit }),
     source: testEditor.getValue(),
   };
   setTestsWaiting('Running tests…');
@@ -1223,16 +1232,22 @@ function handleWorkerMessage(
     renderTestsBlocked('Fix the circuit source before running its tests.');
   } else {
     const previewPlan = parsed.plan;
+    const previewResolvedCircuit = parsed.resolvedCircuit;
     try {
       currentPlan = previewPlan;
-      renderSourceProof(previewPlan, foldedOperations, parsed.resolvedCircuit);
+      currentResolvedCircuit = previewResolvedCircuit;
+      renderSourceProof(previewPlan, foldedOperations, previewResolvedCircuit);
       scheduleTestRender();
     } catch (error) {
       const diagnostic = sourcePreviewDiagnostic(error);
       status.textContent = diagnostic.code === 'WEB1001' ? 'preview error' : 'runtime diagnostic';
       status.dataset.state = 'invalid';
       sourceEditor.setDiagnostics([...parsed.pipelineDiagnostics, diagnostic]);
-      renderProofError(formatSourceDiagnostic(diagnostic, sourceEditor.getValue()), previewPlan);
+      renderProofError(
+        formatSourceDiagnostic(diagnostic, sourceEditor.getValue()),
+        previewPlan,
+        previewResolvedCircuit,
+      );
       // Preview failures do not turn a successfully compiled circuit into invalid source.
       scheduleTestRender();
     }

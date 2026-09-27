@@ -31,6 +31,7 @@ import type {
 } from '@comblang/compiler/ir';
 import type { TrustedEntityReplayContext } from '@comblang/compiler/entity-replay-context';
 import type { ResolvedCircuit } from '@comblang/compiler/resolved-circuit';
+import { resolvedCircuitPlanFingerprint } from '@comblang/compiler/resolved-circuit';
 import { constantConfigurationFromOutputs } from '@comblang/factorio';
 import { validateCanonicalEntityPlanData } from './entity-plan-validation.js';
 import { lowerPreparedEntityRecords, prepareEntityRecords } from './entity-lowering.js';
@@ -53,6 +54,7 @@ import { DebugStructureExpectation } from './debug-structure.js';
 import {
   DslRuntime,
   RuntimeDiagnosticError,
+  createTestSessionFromNativeCircuitIr,
   type ElaboratedCircuit,
   type NetworkHandle,
   type ProducerHandle,
@@ -61,7 +63,9 @@ import {
   type RuntimeDeciderConfig,
   type RuntimeNetworkRef,
   type RuntimeSelectorConfig,
+  type SimulationInitialValue,
 } from './elaboration.js';
+import { hydrateResolvedCircuit } from './resolved-circuit.js';
 
 export interface ExecutedDirectPlan {
   readonly circuit: ElaboratedCircuit;
@@ -1131,6 +1135,305 @@ function preserveEntityProducerMetadata(
         : {}),
     } as CircuitProducerNode;
   });
+}
+
+function stableData(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'undefined';
+  if (Array.isArray(value)) return `[${value.map(stableData).join(',')}]`;
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .filter((key) => record[key] !== undefined)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${stableData(record[key])}`)
+    .join(',')}}`;
+}
+
+function assertResolvedMapping(condition: boolean, detail: string): asserts condition {
+  if (!condition) {
+    throw runtimeFailure('RT1001', `Resolved circuit does not match the Direct Plan: ${detail}`);
+  }
+}
+
+function assertSamePhysicalRows<T extends { readonly id: string }>(
+  expected: readonly T[],
+  actual: readonly T[],
+  label: string,
+): void {
+  const expectedById = new Map(expected.map((row) => [row.id, row]));
+  const actualById = new Map(actual.map((row) => [row.id, row]));
+  assertResolvedMapping(
+    expectedById.size === expected.length && actualById.size === actual.length,
+    `${label} IDs are not unique.`,
+  );
+  assertResolvedMapping(expectedById.size === actualById.size, `${label} ID set differs.`);
+  for (const [id, row] of expectedById) {
+    const candidate = actualById.get(id);
+    assertResolvedMapping(candidate !== undefined, `${label} ${id} is missing.`);
+    assertResolvedMapping(stableData(row) === stableData(candidate), `${label} ${id} differs.`);
+  }
+}
+
+function validateResolvedEntityMapping(
+  plan: DirectElaborationPlan,
+  physicalEntities: readonly EntityPhysicalRecord[],
+  networks: ReadonlyMap<string, NetworkHandle>,
+): void {
+  const planEntities = plan.entities;
+  assertResolvedMapping(Array.isArray(planEntities), 'plan Entity list is missing.');
+  const plannedById = new Map(planEntities.map((entity) => [entity.id, entity]));
+  const physicalById = new Map(physicalEntities.map((entity) => [entity.id, entity]));
+  assertResolvedMapping(
+    plannedById.size === planEntities.length && physicalById.size === physicalEntities.length,
+    'Entity IDs are not unique.',
+  );
+  assertResolvedMapping(plannedById.size === physicalById.size, 'Entity ID set differs.');
+  for (const [id, planned] of plannedById) {
+    const physical = physicalById.get(id);
+    assertResolvedMapping(physical !== undefined, `Entity ${id} is missing.`);
+    assertResolvedMapping(
+      planned.ordinal === physical.ordinal &&
+        stableData(planned.profile) === stableData(physical.profile) &&
+        stableData(planned.provenance) === stableData(physical.provenance) &&
+        stableData(planned.placement) === stableData(physical.placement),
+      `Entity ${id} identity or provenance differs.`,
+    );
+    assertResolvedMapping(
+      planned.connectorBindings.length === physical.connectorBindings.length,
+      `Entity ${id} connector count differs.`,
+    );
+    const physicalBindings = new Map(
+      physical.connectorBindings.map((binding) => [
+        stableData({
+          endpoint: binding.endpoint,
+          generation: binding.generation,
+          direction: binding.direction,
+          provenance: binding.provenance,
+        }),
+        binding,
+      ]),
+    );
+    assertResolvedMapping(
+      physicalBindings.size === physical.connectorBindings.length,
+      `Entity ${id} has ambiguous physical connector bindings.`,
+    );
+    for (const binding of planned.connectorBindings) {
+      const key = stableData({
+        endpoint: binding.endpoint,
+        generation: binding.generation,
+        direction: binding.direction,
+        provenance: binding.provenance,
+      });
+      const physicalBinding = physicalBindings.get(key);
+      assertResolvedMapping(physicalBinding !== undefined, `Entity ${id} connector is missing.`);
+      assertResolvedMapping(
+        (binding.network === undefined) === (physicalBinding.network === undefined),
+        `Entity ${id} connector Network presence differs.`,
+      );
+      if (binding.network !== undefined) {
+        const handle = networks.get(binding.network);
+        assertResolvedMapping(handle !== undefined, `Entity ${id} references an unknown Network.`);
+        assertResolvedMapping(
+          physicalBinding.network === handle.id,
+          `Entity ${id} connector Network ID differs.`,
+        );
+      }
+    }
+  }
+}
+
+/** Hydrates and validates a compiler-paired Direct Plan and physical circuit. */
+export function executeResolvedDirectPlan(
+  inputPlan: DirectElaborationPlan,
+  inputResolvedCircuit: unknown,
+): ExecutedEntityDirectPlan {
+  const hydrated = hydrateResolvedCircuit(inputResolvedCircuit);
+  assertResolvedMapping(
+    hydrated.artifact.planFingerprint === resolvedCircuitPlanFingerprint(inputPlan),
+    'plan fingerprint differs or the circuit is stale.',
+  );
+  const planEntities = inputPlan.entities ?? [];
+  assertResolvedMapping(
+    planEntities.length > 0 === hydrated.ir.entities.length > 0,
+    'Entity presence differs.',
+  );
+  assertResolvedMapping(
+    stableData(inputPlan.context) === stableData(hydrated.ir.context),
+    'replay context reference differs.',
+  );
+
+  let declaredNetworks: ReadonlyMap<string, NetworkHandle> | undefined;
+  const replayPlan: DirectElaborationPlan = {
+    ...inputPlan,
+    entities: [],
+    debugInstances: inputPlan.debugInstances ?? [],
+  };
+  const replay = executeDirectPlan(replayPlan, (networks) => {
+    declaredNetworks = networks;
+    return hydrated.ir.entities;
+  });
+  if (declaredNetworks === undefined) throw new Error('Resolved Network mapping was not created.');
+
+  const producers = preserveEntityProducerMetadata(inputPlan, replay.circuit.ir.producers);
+  assertSamePhysicalRows(replay.circuit.ir.networks, hydrated.ir.networks, 'Network');
+  assertSamePhysicalRows(producers, hydrated.ir.producers, 'Producer');
+  validateResolvedEntityMapping(inputPlan, hydrated.ir.entities, declaredNetworks);
+
+  const graph: ElaborationGraph = Object.freeze({
+    ...replay.circuit.graph,
+    ...(hydrated.ir.context === undefined ? {} : { context: hydrated.ir.context }),
+    networks: hydrated.ir.networks,
+    producers: hydrated.ir.producers,
+    entities: hydrated.ir.entities,
+  });
+  const circuit: ElaboratedEntityCircuit = Object.freeze({
+    ...replay.circuit,
+    graph,
+    ir: hydrated.ir,
+    createSimulation(initial: readonly SimulationInitialValue[] = []) {
+      return hydrated.createSimulation(
+        initial.map(({ network, values }) => {
+          if (!ownedNetworkHandles.has(network)) {
+            throw runtimeFailure('RT2001', 'Foreign or invalid resolved Network handle.');
+          }
+          return { network: hydrated.network(network.id), values };
+        }),
+      );
+    },
+    createTestSession<Target = NetworkHandle>(mapTarget?: (target: Target) => NetworkHandle) {
+      return createTestSessionFromNativeCircuitIr<Target>(hydrated.ir, (target) => {
+        const network =
+          mapTarget === undefined ? (target as unknown as NetworkHandle) : mapTarget(target);
+        if (!ownedNetworkHandles.has(network)) {
+          throw runtimeFailure('RT2001', 'Foreign or invalid resolved Network handle.');
+        }
+        return network.id;
+      });
+    },
+  });
+
+  const ownedNetworkHandles = new WeakSet<object>(
+    [...declaredNetworks.values()].map((handle) => handle as object),
+  );
+  const ownedDebugNetworks = new WeakSet<object>(
+    replay.debug.scopes.flatMap((scope) => scope.networks).map((entry) => entry as object),
+  );
+  const entityDebugEntries = new Map<EntityId, DebugEntityEntry>(
+    replay.debug.scopes.flatMap(({ entities }) => entities).map((entry) => [entry.entityId, entry]),
+  );
+  const debugInstances = materializeEntityDebugInstances(
+    inputPlan.debugInstances as readonly EntityPlanDebugInstance[] | undefined,
+    replay.instances,
+    entityDebugEntries,
+  );
+  const sessionObjects = new WeakMap<
+    TestSession<DirectPlanTestTarget>,
+    ReadonlyMap<EntityId | number, TestObjectHandle>
+  >();
+  const createTestSession = (): TestSession<DirectPlanTestTarget> => {
+    const session = createTestSessionFromNativeCircuitIr<DirectPlanTestTarget>(
+      hydrated.ir,
+      (target) => {
+        if (typeof target === 'object' && target !== null && 'planName' in target) {
+          if (!ownedDebugNetworks.has(target)) {
+            throw runtimeFailure('RT2001', 'Foreign or invalid debug Network target.');
+          }
+          const debugNetwork = target as DebugNetworkEntry;
+          if (debugNetwork.moved) {
+            throw runtimeFailure(
+              'RT2012',
+              `Cannot use moved debug Network: ${debugNetwork.planName}.`,
+              debugNetwork.source,
+            );
+          }
+          const handle = declaredNetworks!.get(debugNetwork.planName);
+          if (handle === undefined || handle.id !== debugNetwork.id) {
+            throw runtimeFailure('RT2001', 'Resolved debug Network mapping is invalid.');
+          }
+          return handle.id;
+        }
+        const network = target as unknown as NetworkHandle;
+        if (!ownedNetworkHandles.has(network)) {
+          throw runtimeFailure('RT2001', 'Foreign or invalid Network handle.');
+        }
+        return network.id;
+      },
+    );
+    const handles = new Map<EntityId | number, TestObjectHandle>();
+    for (const record of hydrated.ir.entities) {
+      const handle = session.adaptObject(entityObjectAdapter, record);
+      handles.set(record.id, handle);
+      handles.set(record.ordinal, handle);
+    }
+    sessionObjects.set(session, handles);
+    return session;
+  };
+
+  const instances = debugInstances;
+  const execution: ExecutedEntityDirectPlan = Object.freeze({
+    circuit,
+    capabilityUses: replay.capabilityUses,
+    debug: replay.debug,
+    instances,
+    createTestSession,
+    instance(nameOrIndex: string | number) {
+      if (typeof nameOrIndex === 'number') {
+        if (!Number.isSafeInteger(nameOrIndex) || nameOrIndex < 1) {
+          throw new RangeError('Debug instance index must be a positive safe integer.');
+        }
+        const instance = instances[nameOrIndex - 1];
+        if (instance !== undefined) return instance;
+        throw new DebugQueryError(
+          'DBG1001',
+          `No debug instance exists at index ${nameOrIndex}.`,
+          instances.map(({ name }, index) => `${index + 1}: ${name}`),
+        );
+      }
+      const matches = instances.filter(({ name }) => name === nameOrIndex);
+      if (matches.length === 1) return matches[0]!;
+      if (matches.length === 0) {
+        throw new DebugQueryError(
+          'DBG1001',
+          `No debug instance is named ${JSON.stringify(nameOrIndex)}.`,
+          instances.map(({ name }, index) => `${index + 1}: ${name}`),
+        );
+      }
+      throw new DebugQueryError(
+        'DBG1002',
+        `Debug instance ${JSON.stringify(nameOrIndex)} is ambiguous.`,
+        matches.map(({ $ }) => $.path.join(' / ')),
+      );
+    },
+    network: replay.network,
+    structure(scope = replay.debug.root) {
+      return new DebugStructureExpectation(scope, circuit.graph);
+    },
+    entity(idOrOrdinal: EntityId | number) {
+      const record = hydrated.ir.entities.find((entity) =>
+        typeof idOrOrdinal === 'number'
+          ? entity.ordinal === idOrOrdinal
+          : entity.id === idOrOrdinal,
+      );
+      if (record === undefined) {
+        throw runtimeFailure('RT3010', `Unknown physical Entity: ${idOrOrdinal}.`);
+      }
+      return record;
+    },
+    entityObject(session: TestSession<DirectPlanTestTarget>, idOrOrdinal: EntityId | number) {
+      const handles = sessionObjects.get(session);
+      if (handles === undefined) {
+        throw runtimeFailure(
+          'RT3010',
+          'Entity object lookup requires a TestSession created by this execution.',
+        );
+      }
+      const handle = handles.get(idOrOrdinal);
+      if (handle === undefined) {
+        throw runtimeFailure('RT3010', `Unknown physical Entity: ${idOrOrdinal}.`);
+      }
+      return handle;
+    },
+  });
+  return execution;
 }
 
 export interface CanonicalDirectPlanExecutionResult extends DirectPlanExecutionResult {

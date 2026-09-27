@@ -12,7 +12,11 @@ import {
 import { DebugQueryError } from './debug-index.js';
 import { createDebugDocument, type DebugDocument } from './debug-document.js';
 import { StructureAssertionError } from './debug-structure.js';
-import { type DirectPlanTestTarget, type ExecutedDirectPlan } from './direct-plan.js';
+import {
+  executeResolvedDirectPlan,
+  type DirectPlanTestTarget,
+  type ExecutedDirectPlan,
+} from './direct-plan.js';
 import { elaborateDirectPlan } from './direct-plan.js';
 import type { NetworkHandle } from './elaboration.js';
 
@@ -271,4 +275,26 @@ export function runDirectPlanTests(
     throw failure;
   };
   return runTestsWithExecution(getExecution, source, options);
+}
+
+/** Runs tests against an already-resolved, fingerprint-paired physical circuit. */
+export function runResolvedDirectPlanTests(
+  plan: DirectElaborationPlan,
+  resolvedCircuit: unknown,
+  source: string,
+  options: DirectPlanTestRunnerOptions = {},
+): DirectPlanTestRun {
+  let execution: ExecutedDirectPlan;
+  try {
+    execution = executeResolvedDirectPlan(plan, resolvedCircuit);
+  } catch (error) {
+    const sourceName = options.sourceName ?? 'circuit.test.js';
+    const stackLineOffset = options.stackLineOffset ?? 3;
+    return {
+      results: [failure('Circuit setup', error, sourceName, stackLineOffset)],
+      passed: 0,
+      failed: 1,
+    };
+  }
+  return runTestsWithExecution(() => execution, source, options);
 }
