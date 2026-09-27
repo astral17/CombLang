@@ -23,6 +23,22 @@ source executor, simulator, Node APIs, or browser APIs. Runtime owns execution
 and the canonical validation seam; simulator owns tick behavior; blueprint
 generation consumes resolved physical IR.
 
+## Host-local numeric expression foundation
+
+The compiler has an internal typed numeric-expression DAG for finite literals,
+session-owned number-parameter references, unary negation, and binary addition,
+subtraction, and multiplication. Construction validates and freezes the graph
+under the existing parameter depth/node/byte limits; a pure evaluator resolves
+defaults or host bindings using ordinary JavaScript finite-number arithmetic in
+deterministic left-to-right order, preserves negative zero, and memoizes shared
+nodes per evaluation. An expression can be built only while its owning
+parameter session is open, then evaluated after sealing.
+
+This is an internal modeling layer only. It adds no source syntax, Direct
+Plan/NCIR/Worker representation, Factorio formula grammar, native operator
+mapping, or claim about placement-time Factorio semantics. Native formula and
+dependency behavior remains fixture-gated.
+
 ## Source and execution
 
 The executed recorder owns one circuit state for a source revision. It tracks

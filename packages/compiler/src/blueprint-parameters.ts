@@ -332,6 +332,17 @@ export function assertBlueprintParameterSession(
   }
 }
 
+/** Verifies that session-owned configuration nodes may still be constructed. */
+export function assertBlueprintParameterSessionOpen(
+  session: unknown,
+  path: string,
+): asserts session is object {
+  assertBlueprintParameterSession(session, path);
+  if (sessionAuthorities.get(session)!.sealed) {
+    fail('CP1001', path, 'parameter session is sealed and cannot accept new expressions.');
+  }
+}
+
 /** Verifies both declaration authenticity and ownership by the supplied session. */
 export function assertBlueprintParameterFromSession(
   session: unknown,

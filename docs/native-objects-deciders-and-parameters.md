@@ -237,12 +237,21 @@ their normal JavaScript property behavior.
 
 ## Dependencies and formulas
 
-Dependent parameters remain future work. Recipe ingredients, recipe products,
-numeric formulas, and parameter properties will require typed dependency nodes;
-users should not manage native parameter indices. The compiler will need to
-assign backend ordering and reject cycles.
+An internal host-local numeric-expression DAG now covers finite literals,
+registered number-parameter references, unary negation, and binary addition,
+subtraction, and multiplication, with bounded construction and a pure
+default/binding evaluator. This internal foundation neither parses nor emits
+Factorio formulas and does not establish native formula arithmetic semantics.
 
-Formula expressions should be stored as an AST, not an opaque string. The final set of operators, functions, parameter properties, and dependency kinds must follow captured capabilities from the target Factorio version.
+Native formula variables and dependent parameters remain future work. Recipe
+ingredients, recipe products, native numeric formulas, and parameter properties
+will require typed dependency nodes; users should not manage native parameter
+indices. A future backend will need to assign ordering and reject cycles.
+
+Native formula expressions should be stored as an AST, not an opaque string.
+The final set of operators, functions, parameter properties, and dependency
+kinds must follow captured capabilities from the target Factorio version and
+independently reviewed Factorio fixtures.
 
 ## Conformance boundary
 
