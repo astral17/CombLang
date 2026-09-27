@@ -16,7 +16,7 @@ import {
   inspectArithmeticConfigurationTemplate,
 } from '../../compiler/src/arithmetic-configuration-template.js';
 import { createBlueprintParameterSession } from '../../compiler/src/blueprint-parameters.js';
-import { bindCapturedSourceArithmeticTemplates } from './executed-blueprint-configuration-binding.js';
+import { bindCapturedSourceConfigurationTemplates } from './executed-blueprint-configuration-binding.js';
 import { createSimulationFromNativeCircuitIr } from './elaboration.js';
 import { tryElaborateDirectPlan } from './direct-plan.js';
 import {
@@ -450,7 +450,7 @@ const amount = ${transformed.runtimeParameter}.declareBlueprintNumberParameter(
     });
     const lowered = tryElaborateDirectPlan(execution.plan, environment.context);
     expect(lowered.diagnostics).toEqual([]);
-    const bound = bindCapturedSourceArithmeticTemplates(execution, lowered.execution!, [
+    const bound = bindCapturedSourceConfigurationTemplates(execution, lowered.execution!, [
       { parameter: execution.parameters[1]!.handle, value: 7 },
     ]);
     expect(bound.producers).toHaveLength(1);
@@ -915,7 +915,7 @@ output += dut.value;`;
     expect(lowered.diagnostics).toEqual([]);
     expect(sourceExecution.arithmeticTemplates).toHaveLength(1);
     const canonicalExecution = lowered.execution!;
-    const defaultCircuit = bindCapturedSourceArithmeticTemplates(
+    const defaultCircuit = bindCapturedSourceConfigurationTemplates(
       sourceExecution,
       canonicalExecution,
     );
@@ -924,7 +924,7 @@ output += dut.value;`;
     const originalEntity = originalIr.entities.find(
       ({ id }) => id === sourceExecution.plan.producers[0]?.entityId,
     )!;
-    const boundCircuit = bindCapturedSourceArithmeticTemplates(
+    const boundCircuit = bindCapturedSourceConfigurationTemplates(
       sourceExecution,
       canonicalExecution,
       [{ parameter: sourceExecution.parameters[0]!.handle, value: 7 }],
@@ -1017,7 +1017,7 @@ outputB += second.value;`;
     const templates = sourceExecution.arithmeticTemplates;
     expect(templates).toHaveLength(2);
     expect(new Set(templates.map(({ captureId }) => captureId)).size).toBe(2);
-    const bound = bindCapturedSourceArithmeticTemplates(sourceExecution, execution, [
+    const bound = bindCapturedSourceConfigurationTemplates(sourceExecution, execution, [
       { parameter: sourceExecution.parameters[0]!.handle, value: 7 },
     ]);
     expect(bound.producers.filter(({ kind }) => kind === 'arithmetic')).toHaveLength(2);
@@ -1060,7 +1060,7 @@ output += exact;`;
     const originalIr = JSON.stringify(firstExecution.circuit.ir);
     const originalTemplate = capture.template;
 
-    expect(() => bindCapturedSourceArithmeticTemplates(first, secondExecution)).toThrowError(
+    expect(() => bindCapturedSourceConfigurationTemplates(first, secondExecution)).toThrowError(
       expect.objectContaining({ code: 'CP1001', path: '$.execution' }),
     );
     const missingCapture = {
@@ -1068,7 +1068,7 @@ output += exact;`;
       arithmeticTemplates: [{ ...capture, captureId: 'producer:missing' }],
     };
     expect(() =>
-      bindCapturedSourceArithmeticTemplates(missingCapture, firstExecution),
+      bindCapturedSourceConfigurationTemplates(missingCapture, firstExecution),
     ).toThrowError(
       expect.objectContaining({ code: 'CP1001', path: '$.arithmeticTemplates[0].captureId' }),
     );
@@ -1077,7 +1077,7 @@ output += exact;`;
       arithmeticTemplates: [capture, capture],
     };
     expect(() =>
-      bindCapturedSourceArithmeticTemplates(duplicateCapture, firstExecution),
+      bindCapturedSourceConfigurationTemplates(duplicateCapture, firstExecution),
     ).toThrowError(
       expect.objectContaining({ code: 'CP1001', path: '$.arithmeticTemplates[1].captureId' }),
     );
@@ -1098,7 +1098,7 @@ output += exact;`;
       arithmeticTemplates: [{ ...capture, template: missingNetworkTemplate }],
     };
     expect(() =>
-      bindCapturedSourceArithmeticTemplates(missingNetwork, firstExecution),
+      bindCapturedSourceConfigurationTemplates(missingNetwork, firstExecution),
     ).toThrowError(
       expect.objectContaining({
         code: 'CP1001',
@@ -1107,7 +1107,7 @@ output += exact;`;
     );
 
     expect(() =>
-      bindCapturedSourceArithmeticTemplates(first, firstExecution, [
+      bindCapturedSourceConfigurationTemplates(first, firstExecution, [
         { parameter: first.parameters[0]!.handle, value: Number.MAX_SAFE_INTEGER + 1 },
       ]),
     ).toThrowError(expect.objectContaining({ code: 'CP1000' }));
@@ -1123,7 +1123,7 @@ output += exact;`;
       arithmeticTemplates: [{ ...capture, template: fixedFieldTemplate }],
     };
     expect(() =>
-      bindCapturedSourceArithmeticTemplates(fixedFieldMismatch, firstExecution),
+      bindCapturedSourceConfigurationTemplates(fixedFieldMismatch, firstExecution),
     ).toThrowError(expect.objectContaining({ code: 'CP1001' }));
     expect(JSON.stringify(firstExecution.circuit.ir)).toBe(originalIr);
     expect(first.arithmeticTemplates[0]?.template).toBe(originalTemplate);
@@ -1171,7 +1171,7 @@ const capturedConstant = t.instantiate(MakeConstant);`,
       })),
     };
     const execution = tryElaborateDirectPlan(sourceExecution.plan, environment.context).execution!;
-    expect(() => bindCapturedSourceArithmeticTemplates(redirected, execution)).toThrowError(
+    expect(() => bindCapturedSourceConfigurationTemplates(redirected, execution)).toThrowError(
       expect.objectContaining({ code: 'CP1001', path: '$.arithmeticTemplates[0].captureId' }),
     );
   });
@@ -1201,7 +1201,7 @@ const moved = Pass(input);`,
     );
     const lowered = tryElaborateDirectPlan(sourceExecution.plan, environment.context);
     expect(lowered.diagnostics).toEqual([]);
-    const bound = bindCapturedSourceArithmeticTemplates(sourceExecution, lowered.execution!, [
+    const bound = bindCapturedSourceConfigurationTemplates(sourceExecution, lowered.execution!, [
       { parameter: sourceExecution.parameters[0]!.handle, value: 7 },
     ]);
     expect(bound.producers[0]).toMatchObject({
@@ -1220,7 +1220,7 @@ output += exact;`);
     const lowered = tryElaborateDirectPlan(sourceExecution.plan, environment.context);
     expect(lowered.diagnostics).toEqual([]);
     expect(sourceExecution.arithmeticTemplates).toHaveLength(0);
-    const bound = bindCapturedSourceArithmeticTemplates(sourceExecution, lowered.execution!);
+    const bound = bindCapturedSourceConfigurationTemplates(sourceExecution, lowered.execution!);
     expect(bound).toEqual(lowered.execution!.circuit.ir);
   });
 });

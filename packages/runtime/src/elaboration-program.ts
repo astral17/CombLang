@@ -66,7 +66,7 @@ import { CombinatorRegistry, type CombinatorRegistrySnapshot } from './combinato
 import { normalizeSignalValueSources, SignalValueSourceError } from './constant-signal-values.js';
 import {
   ConstantConfigurationSourceError,
-  normalizeConstantConfigurationSource,
+  normalizeConstantConfigurationSourceWithParameters,
 } from './constant-configuration-source.js';
 import {
   RuntimeValueRegistry,
@@ -141,6 +141,10 @@ import {
   type ArithmeticConfigurationTemplate,
 } from '../../compiler/src/arithmetic-configuration-template.js';
 import {
+  createConstantConfigurationTemplate,
+  type ConstantConfigurationTemplate,
+} from '../../compiler/src/constant-configuration-template.js';
+import {
   findBlueprintParameterHandle,
   type BlueprintNumberParameterHandle,
   type BlueprintParameterSession,
@@ -161,6 +165,12 @@ interface CallArgument {
 interface CapturedArithmeticConfigurationTemplate {
   readonly captureId: string;
   readonly template: ArithmeticConfigurationTemplate;
+  readonly source: SourceSpan;
+}
+
+interface CapturedConstantConfigurationTemplate {
+  readonly captureId: string;
+  readonly template: ConstantConfigurationTemplate;
   readonly source: SourceSpan;
 }
 
@@ -280,6 +290,7 @@ interface TopologySnapshot {
   readonly combinatorByOutput: ReadonlyMap<NetworkOwnershipState, CombinatorValue>;
   readonly combinators: CombinatorRegistrySnapshot;
   readonly arithmeticTemplatesLength: number;
+  readonly constantTemplatesLength: number;
   readonly debugInstancesLength: number;
   readonly debugInstanceCounts: ReadonlyMap<string, number>;
   readonly ownership: readonly NetworkOwnershipSnapshot[];
@@ -411,6 +422,7 @@ class ElaborationRecorder {
   readonly #implicitBorrowWarnings = new Set<string>();
   readonly #combinators = new CombinatorRegistry();
   readonly #arithmeticTemplates: CapturedArithmeticConfigurationTemplate[] = [];
+  readonly #constantTemplates: CapturedConstantConfigurationTemplate[] = [];
   readonly #combinatorByOutput = new Map<NetworkOwnershipState, CombinatorValue>();
   readonly #runtimeValues = new RuntimeValueRegistry();
   readonly #deciderMemberAliases = new WeakMap<
@@ -877,21 +889,22 @@ class ElaborationRecorder {
             'RT2027',
           );
         }
-        let configuration;
+        let normalized: ReturnType<typeof normalizeConstantConfigurationSourceWithParameters>;
         try {
-          configuration = normalizeConstantConfigurationSource(
+          normalized = normalizeConstantConfigurationSourceWithParameters(
             first!.value,
             {
               isSignal: (value): value is SignalHandle => this.#isSignal(value),
               isSignalValue: (value): value is SignalValue => this.#isSignalValue(value),
             },
+            this.#parameterCapture?.session,
             '$.configuration',
           );
         } catch (error) {
           if (error instanceof ConstantConfigurationSourceError) {
             throw new ElaborationExecutionError(
               error.message,
-              this.#span(first!.source),
+              this.#span(rawSpan),
               'RT2027',
               undefined,
               { cause: error },
@@ -899,7 +912,30 @@ class ElaborationRecorder {
           }
           throw error;
         }
-        return this.#createConstantProducer(configuration, rawSpan, undefined, true);
+        const producer = this.#createConstantProducer(
+          normalized.configuration,
+          rawSpan,
+          undefined,
+          true,
+        );
+        if (
+          normalized.templateConfiguration !== undefined &&
+          this.#parameterCapture !== undefined
+        ) {
+          const { captureId } = this.#combinators.capture(producer);
+          const template = createConstantConfigurationTemplate(
+            this.#parameterCapture.session,
+            normalized.templateConfiguration,
+          );
+          this.#constantTemplates.push(
+            Object.freeze({
+              captureId,
+              template,
+              source: Object.freeze({ ...this.#span(rawSpan) }),
+            }),
+          );
+        }
+        return producer;
       }),
     sectionOverload: (arguments_: readonly CallArgument[], rawSpan: RawSpan): SectionValue =>
       this.#withTopologyTransaction(rawSpan, () => {
@@ -2272,6 +2308,10 @@ class ElaborationRecorder {
     return Object.freeze([...this.#arithmeticTemplates]);
   }
 
+  constantTemplates(): readonly CapturedConstantConfigurationTemplate[] {
+    return Object.freeze([...this.#constantTemplates]);
+  }
+
   executionApi(): typeof this.api {
     const executionOperations: Record<string, unknown> = { ...this.api };
     if (this.#parameterCapture !== undefined) {
@@ -3380,6 +3420,7 @@ class ElaborationRecorder {
       combinatorByOutput: new Map(this.#combinatorByOutput),
       combinators: this.#combinators.snapshot(),
       arithmeticTemplatesLength: this.#arithmeticTemplates.length,
+      constantTemplatesLength: this.#constantTemplates.length,
       debugInstancesLength: this.#debugInstances.length,
       debugInstanceCounts: new Map(this.#debugInstanceCounts),
       ownership: [...ownership.values()],
@@ -3410,6 +3451,7 @@ class ElaborationRecorder {
     }
     this.#combinators.restore(snapshot.combinators);
     this.#arithmeticTemplates.length = snapshot.arithmeticTemplatesLength;
+    this.#constantTemplates.length = snapshot.constantTemplatesLength;
     this.#debugInstances.length = snapshot.debugInstancesLength;
     this.#debugInstanceCounts.clear();
     for (const [key, count] of snapshot.debugInstanceCounts)
@@ -6045,6 +6087,7 @@ function executeElaborationProgramInternal(
 ): {
   readonly plan: DirectElaborationPlan;
   readonly arithmeticTemplates: readonly CapturedArithmeticConfigurationTemplate[];
+  readonly constantTemplates: readonly CapturedConstantConfigurationTemplate[];
 } {
   if (program.format !== 'comblang-elaboration-js') {
     throw new Error('Unsupported elaboration JavaScript format.');
@@ -6077,7 +6120,11 @@ function executeElaborationProgramInternal(
     throw error;
   }
   const plan = recorder.plan();
-  return Object.freeze({ plan, arithmeticTemplates: recorder.arithmeticTemplates() });
+  return Object.freeze({
+    plan,
+    arithmeticTemplates: recorder.arithmeticTemplates(),
+    constantTemplates: recorder.constantTemplates(),
+  });
 }
 
 /** Executes the canonical source path and preserves the host-supplied replay context. */
@@ -6094,6 +6141,7 @@ export interface ExecutedElaborationWithBlueprintParameters {
   readonly session: BlueprintParameterSession;
   readonly parameters: readonly CapturedBlueprintParameter[];
   readonly arithmeticTemplates: readonly CapturedArithmeticConfigurationTemplate[];
+  readonly constantTemplates: readonly CapturedConstantConfigurationTemplate[];
 }
 
 /** Executes once and returns parameter capture beside, never inside, the concrete plan. */

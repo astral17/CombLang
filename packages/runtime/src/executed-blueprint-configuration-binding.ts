@@ -13,6 +13,11 @@ import {
   type ArithmeticConfigurationTemplate,
   type ArithmeticTemplateOperand,
 } from '../../compiler/src/arithmetic-configuration-template.js';
+import {
+  createConstantConfigurationTemplate,
+  inspectConstantConfigurationTemplate,
+  type ConstantConfigurationTemplate,
+} from '../../compiler/src/constant-configuration-template.js';
 import { replaceBlueprintConfigurationSetInNativeCircuitIr } from '../../compiler/src/blueprint-configuration-binding.js';
 import { BlueprintParameterError } from '../../compiler/src/blueprint-parameters.js';
 import {
@@ -402,14 +407,22 @@ function resolveCapturedOperand(
   return fail('CP1000', `${path}.refKind`, 'expected a single or pair Network reference.', source);
 }
 
-/** Converts source-captured Arithmetic templates to one atomic, execution-paired NCIR replacement. */
-export function bindCapturedSourceArithmeticTemplates(
+/** Converts source-captured templates to one atomic, execution-paired NCIR replacement. */
+export function bindCapturedSourceConfigurationTemplates(
   source: ExecutedElaborationWithBlueprintParameters,
   execution: ExecutedDirectPlan,
   bindingsValue: readonly BlueprintParameterBinding[] = [],
 ) {
-  if (!isDataRecord(source) || !Array.isArray(source.arithmeticTemplates)) {
-    fail('CP1000', '$.source', 'expected a source execution with captured Arithmetic templates.');
+  if (
+    !isDataRecord(source) ||
+    !Array.isArray(source.arithmeticTemplates) ||
+    !Array.isArray(source.constantTemplates)
+  ) {
+    fail(
+      'CP1000',
+      '$.source',
+      'expected a source execution with captured configuration templates.',
+    );
   }
   if (!executedDirectPlanMatchesPlan(execution, source.plan)) {
     fail(
@@ -437,7 +450,15 @@ export function bindCapturedSourceArithmeticTemplates(
   });
 
   const seenCaptures = new Set<string>();
-  const captures = source.arithmeticTemplates.map((candidate, index) => {
+  const captures: {
+    readonly index: number;
+    readonly entry: BlueprintConfigurationSetEntry;
+    readonly capture: {
+      readonly key: string;
+      readonly captureId: ExecutedProducerCaptureReference;
+    };
+    readonly producerId: ProducerId;
+  }[] = source.arithmeticTemplates.map((candidate, index) => {
     const path = `$.arithmeticTemplates[${index}]`;
     if (
       !isDataRecord(candidate) ||
@@ -538,13 +559,96 @@ export function bindCapturedSourceArithmeticTemplates(
     };
   });
 
+  source.constantTemplates.forEach((candidate, index) => {
+    const path = `$.constantTemplates[${index}]`;
+    if (
+      !isDataRecord(candidate) ||
+      !hasExactDataKeys(candidate, ['captureId', 'template', 'source'])
+    ) {
+      fail('CP1000', path, 'malformed captured Constant template.');
+    }
+    const captureId = candidate.captureId;
+    if (typeof captureId !== 'string' || captureId.length === 0 || captureId.length > 128) {
+      fail('CP1000', `${path}.captureId`, 'expected a non-empty bounded Producer capture ID.');
+    }
+    if (seenCaptures.has(captureId)) {
+      fail(
+        'CP1001',
+        `${path}.captureId`,
+        'configuration capture IDs must be unique.',
+        candidate.source as SourceSpan,
+      );
+    }
+    seenCaptures.add(captureId);
+
+    const planProducer = planProducerByCapture.get(captureId);
+    if (
+      planProducer === undefined ||
+      planProducer.index < 0 ||
+      planProducer.descriptor.kind !== 'constant'
+    ) {
+      fail(
+        'CP1001',
+        `${path}.captureId`,
+        'capture must identify exactly one source Constant Producer.',
+        candidate.source as SourceSpan,
+      );
+    }
+    const debugEntries = producerCapturesFor(execution, captureId);
+    if (
+      debugEntries.length !== 1 ||
+      debugEntries[0]!.producerKind !== 'constant' ||
+      stableData(debugEntries[0]!.descriptor) !== stableData(planProducer.descriptor)
+    ) {
+      fail(
+        'CP1001',
+        `${path}.captureId`,
+        'capture does not identify exactly one matching physical Constant Producer.',
+        candidate.source as SourceSpan,
+      );
+    }
+    const debugEntry = debugEntries[0]!;
+    if (!sameSourceSpan(candidate.source, planProducer.descriptor.source)) {
+      fail(
+        'CP1001',
+        `${path}.source`,
+        'captured provenance does not match its source Constant Producer.',
+        planProducer.descriptor.source,
+      );
+    }
+    const registration = inspectConstantConfigurationTemplate(
+      candidate.template,
+      `${path}.template`,
+    );
+    if (registration.session !== source.session) {
+      fail(
+        'CP1001',
+        `${path}.template`,
+        'captured template belongs to a different parameter session.',
+        candidate.source as SourceSpan,
+      );
+    }
+    const template = candidate.template as ConstantConfigurationTemplate;
+    const resolvedTemplate = createConstantConfigurationTemplate(source.session, {
+      isOn: template.isOn,
+      sections: template.sections,
+    });
+    const captureReference = createExecutedProducerCaptureReference(execution, captureId);
+    captures.push({
+      index: planProducer.index,
+      entry: { key: captureId, kind: 'constant', template: resolvedTemplate },
+      capture: { key: captureId, captureId: captureReference },
+      producerId: debugEntry.id,
+    });
+  });
+
   captures.sort((left, right) => left.index - right.index);
   const seenProducerIds = new Set<ProducerId>();
   for (const capture of captures) {
     if (seenProducerIds.has(capture.producerId)) {
       fail(
         'CP1001',
-        '$.arithmeticTemplates',
+        '$.configurationTemplates',
         'multiple templates identify the same physical Producer.',
       );
     }

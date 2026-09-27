@@ -1,11 +1,38 @@
-import { canonicalizeConstantConfiguration, type ConstantConfiguration } from '@comblang/factorio';
+import {
+  canonicalizeConstantConfiguration,
+  formatSignalRef,
+  type ConstantConfiguration,
+  type SignalId,
+} from '@comblang/factorio';
+import {
+  BlueprintParameterError,
+  type BlueprintNumberParameterHandle,
+  type BlueprintParameterSession,
+  type BlueprintSignalParameterHandle,
+} from '../../compiler/src/blueprint-parameters.js';
+import { lookupBlueprintParameterSlot } from '../../compiler/src/blueprint-parameter-validation.js';
 
 import {
   normalizeSignalValueSources,
+  SignalValueSourceError,
   type SignalValueSourceContext,
 } from './constant-signal-values.js';
 
 type DataRecord = Record<string, unknown>;
+
+interface ConstantFilterParameterSlots {
+  readonly signal?: BlueprintSignalParameterHandle;
+  readonly value?: BlueprintNumberParameterHandle;
+}
+
+interface NormalizedConstantFilters {
+  readonly filters: readonly {
+    readonly signal: ReturnType<typeof snapshotSignal>;
+    readonly value: number;
+  }[];
+  readonly slots: readonly ConstantFilterParameterSlots[];
+  readonly hasParameterSlots: boolean;
+}
 
 /** Runtime-facing source normalizer for the exact Constant({ isOn, sections }) form. */
 export interface ConstantConfigurationSourceContext extends SignalValueSourceContext {}
@@ -22,6 +49,24 @@ export class ConstantConfigurationSourceError extends TypeError {
 
 function fail(path: string, message: string): never {
   throw new ConstantConfigurationSourceError(path, message);
+}
+
+function normalizeSignalValues(
+  sources: readonly unknown[],
+  context: ConstantConfigurationSourceContext,
+  path: string,
+) {
+  try {
+    return normalizeSignalValueSources(sources, context, path);
+  } catch (error) {
+    if (error instanceof SignalValueSourceError) {
+      const message = error.message.startsWith(`${error.path}: `)
+        ? error.message.slice(error.path.length + 2)
+        : error.message;
+      fail(error.path, message);
+    }
+    throw error;
+  }
 }
 
 function ownDataRecord(value: unknown, path: string): DataRecord {
@@ -84,17 +129,128 @@ function snapshotSignal(signal: {
   });
 }
 
+function isDirectFilterCandidate(candidate: unknown): candidate is DataRecord {
+  if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) return false;
+  const prototype = Object.getPrototypeOf(candidate);
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  const signalField = Object.getOwnPropertyDescriptor(candidate, 'signal');
+  // A map-style row may legitimately contain the item Signal named "signal".
+  // Its count is numeric, so preserve that established interpretation.
+  return (
+    signalField !== undefined &&
+    (!('value' in signalField) || typeof signalField.value !== 'number')
+  );
+}
+
 function normalizeFilters(
   value: unknown,
   path: string,
   context: ConstantConfigurationSourceContext,
-): readonly { readonly signal: ReturnType<typeof snapshotSignal>; readonly value: number }[] {
-  const entries = normalizeSignalValueSources([value], context, path);
-  return Object.freeze(
-    entries.map(({ signal, value: count }) =>
+  session: BlueprintParameterSession | undefined,
+): NormalizedConstantFilters {
+  const directRows = Array.isArray(value) ? ownDataArray(value, path) : undefined;
+  const hasDirectFilter = directRows?.some(isDirectFilterCandidate);
+  if (!hasDirectFilter || directRows === undefined) {
+    const entries = normalizeSignalValues([value], context, path);
+    const filters = entries.map(({ signal, value: count }) =>
       Object.freeze({ signal: snapshotSignal(signal), value: count }),
-    ),
-  );
+    );
+    return {
+      filters: Object.freeze(filters),
+      slots: Object.freeze(filters.map(() => Object.freeze({}))),
+      hasParameterSlots: false,
+    };
+  }
+
+  const filters: { readonly signal: ReturnType<typeof snapshotSignal>; readonly value: number }[] =
+    [];
+  const slots: ConstantFilterParameterSlots[] = [];
+  let hasParameterSlots = false;
+  directRows.forEach((candidate, index) => {
+    const rowPath = `${path}[${index}]`;
+    const isDirectRow = isDirectFilterCandidate(candidate);
+    if (!isDirectRow) {
+      const entries = normalizeSignalValues([candidate], context, rowPath);
+      for (const entry of entries) {
+        filters.push(Object.freeze({ signal: snapshotSignal(entry.signal), value: entry.value }));
+        slots.push(Object.freeze({}));
+      }
+      return;
+    }
+
+    const row = ownDataRecord(candidate, rowPath);
+    for (const key of Object.keys(row)) {
+      if (key !== 'signal' && key !== 'value') {
+        fail(`${rowPath}.${key}`, 'unknown direct filter field.');
+      }
+    }
+    if (!Object.hasOwn(row, 'signal')) fail(`${rowPath}.signal`, 'field is required.');
+    if (!Object.hasOwn(row, 'value')) fail(`${rowPath}.value`, 'field is required.');
+
+    let rawSignal = row.signal;
+    let signalSlot: BlueprintSignalParameterHandle | undefined;
+    let rawCount = row.value;
+    let numberSlot: BlueprintNumberParameterHandle | undefined;
+    if (session !== undefined) {
+      try {
+        const slot = lookupBlueprintParameterSlot(
+          rawSignal,
+          'signal',
+          session,
+          `${rowPath}.signal`,
+        );
+        if (slot !== undefined) {
+          if (slot.registration.defaultValue === undefined) {
+            fail(`${rowPath}.signal`, 'Signal parameter requires a concrete default value.');
+          }
+          signalSlot = slot.handle as BlueprintSignalParameterHandle;
+          rawSignal = formatSignalRef(slot.registration.defaultValue as SignalId);
+        }
+        const countSlot = lookupBlueprintParameterSlot(
+          rawCount,
+          'number',
+          session,
+          `${rowPath}.value`,
+        );
+        if (countSlot !== undefined) {
+          if (typeof countSlot.registration.defaultValue !== 'number') {
+            fail(`${rowPath}.value`, 'number parameter requires a numeric default value.');
+          }
+          numberSlot = countSlot.handle as BlueprintNumberParameterHandle;
+          rawCount = countSlot.registration.defaultValue;
+        }
+      } catch (error) {
+        if (error instanceof ConstantConfigurationSourceError) throw error;
+        if (error instanceof BlueprintParameterError) {
+          const message = error.message.startsWith(`${error.path}: `)
+            ? error.message.slice(error.path.length + 2)
+            : error.message;
+          fail(error.path, message);
+        }
+        throw error;
+      }
+    }
+    const [entry] = normalizeSignalValues([[rawSignal, rawCount]], context, rowPath);
+    if (entry === undefined) fail(rowPath, 'expected one direct filter row.');
+    filters.push(Object.freeze({ signal: snapshotSignal(entry.signal), value: entry.value }));
+    slots.push(
+      Object.freeze({
+        ...(signalSlot === undefined ? {} : { signal: signalSlot }),
+        ...(numberSlot === undefined ? {} : { value: numberSlot }),
+      }),
+    );
+    hasParameterSlots ||= signalSlot !== undefined || numberSlot !== undefined;
+  });
+  return {
+    filters: Object.freeze(filters),
+    slots: Object.freeze(slots),
+    hasParameterSlots,
+  };
+}
+
+export interface NormalizedConstantConfigurationSource {
+  readonly configuration: ConstantConfiguration;
+  readonly templateConfiguration?: unknown;
 }
 
 /**
@@ -106,17 +262,33 @@ export function normalizeConstantConfigurationSource(
   context: ConstantConfigurationSourceContext,
   path = '$',
 ): ConstantConfiguration {
+  return normalizeConstantConfigurationSourceWithParameters(value, context, undefined, path)
+    .configuration;
+}
+
+/** Normalizes defaults and retains only direct filter parameter slots for host-local capture. */
+export function normalizeConstantConfigurationSourceWithParameters(
+  value: unknown,
+  context: ConstantConfigurationSourceContext,
+  session: BlueprintParameterSession | undefined,
+  path = '$',
+): NormalizedConstantConfigurationSource {
   const record = ownDataRecord(value, path);
   const sectionsValue =
     'sections' in record ? ownDataArray(record.sections, `${path}.sections`) : [];
+  const parameterSlots: (readonly ConstantFilterParameterSlots[])[] = [];
+  let hasParameterSlots = false;
   const sections = sectionsValue.map((section, index) => {
     const sectionPath = `${path}.sections[${index}]`;
     const source = ownDataRecord(section, sectionPath);
+    const normalizedFilters = Object.hasOwn(source, 'filters')
+      ? normalizeFilters(source.filters, `${sectionPath}.filters`, context, session)
+      : undefined;
+    parameterSlots.push(normalizedFilters?.slots ?? []);
+    hasParameterSlots ||= normalizedFilters?.hasParameterSlots ?? false;
     return {
       ...source,
-      ...(Object.hasOwn(source, 'filters')
-        ? { filters: normalizeFilters(source.filters, `${sectionPath}.filters`, context) }
-        : {}),
+      ...(normalizedFilters !== undefined ? { filters: normalizedFilters.filters } : {}),
     };
   });
   let configuration: ConstantConfiguration;
@@ -135,5 +307,21 @@ export function normalizeConstantConfigurationSource(
     }
     throw error;
   }
-  return configuration;
+  if (!hasParameterSlots) return { configuration };
+  const templateConfiguration = {
+    isOn: configuration.isOn,
+    sections: configuration.sections.map((section, sectionIndex) => ({
+      active: section.active,
+      ...(section.group === undefined ? {} : { group: section.group }),
+      multiplier: section.multiplier,
+      filters: section.filters.map((filter, filterIndex) => {
+        const slots = parameterSlots[sectionIndex]?.[filterIndex];
+        return {
+          signal: slots?.signal ?? filter.signal,
+          value: slots?.value ?? filter.value,
+        };
+      }),
+    })),
+  };
+  return { configuration, templateConfiguration };
 }

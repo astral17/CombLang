@@ -65,6 +65,18 @@ describe('exact Constant source configuration', () => {
     });
   });
 
+  test('keeps signal and value as ordinary signal keys in map-style filter rows', () => {
+    const configuration = normalizeConstantConfigurationSource(
+      { sections: [{ filters: [{ signal: 2, value: 3 }, { value: 5 }] }] },
+      context,
+    );
+    expect(configuration.sections[0]?.filters).toEqual([
+      { signal: signal('item', 'signal'), value: 2 },
+      { signal: signal('item', 'value'), value: 3 },
+      { signal: signal('item', 'value'), value: 5 },
+    ]);
+  });
+
   test.each([
     ['accessor', Object.defineProperty({}, 'isOn', { get: () => true })],
     [
