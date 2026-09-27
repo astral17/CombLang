@@ -136,7 +136,10 @@ import {
   BlueprintParameterCapture,
   type CapturedBlueprintParameter,
 } from './blueprint-parameter-capture.js';
-import type { BlueprintParameterSession } from '../../compiler/src/blueprint-parameters.js';
+import {
+  findBlueprintParameterHandle,
+  type BlueprintParameterSession,
+} from '../../compiler/src/blueprint-parameters.js';
 
 interface RawSpan {
   readonly start: number;
@@ -1550,6 +1553,7 @@ class ElaborationRecorder {
       return operators.dispatchComparison(operator, left, right, rawSpan, this.#operatorContext);
     },
     controlTest: (value: unknown, rawSpan: RawSpan): unknown => {
+      this.#rejectParameterControlValue(value, rawSpan);
       if (this.#isCondition(value)) {
         throw new ElaborationExecutionError(
           'A circuit Condition cannot be used as a JavaScript control-flow test; use IF(...) or when(...).then(...) to create circuit logic.',
@@ -1557,6 +1561,10 @@ class ElaborationRecorder {
           'RT2024',
         );
       }
+      return value;
+    },
+    controlValue: (value: unknown, rawSpan: RawSpan): unknown => {
+      this.#rejectParameterControlValue(value, rawSpan);
       return value;
     },
     decider: (...args: unknown[]): CombinatorValue => {
@@ -1695,9 +1703,10 @@ class ElaborationRecorder {
       operator: 'and' | 'or',
       evaluateLeft: () => unknown,
       evaluateRight: () => unknown,
-      _rawSpan: RawSpan,
+      rawSpan: RawSpan,
     ): unknown => {
       const left = evaluateLeft();
+      this.#rejectParameterControlValue(left, rawSpan);
       if (!this.#isCondition(left)) {
         return operator === 'and' ? (left ? evaluateRight() : left) : left ? left : evaluateRight();
       }
@@ -1711,7 +1720,8 @@ class ElaborationRecorder {
         condition: { kind: operator, conditions: [left.condition, right.condition] },
       });
     },
-    not: (value: unknown, _rawSpan: RawSpan): unknown => {
+    not: (value: unknown, rawSpan: RawSpan): unknown => {
+      this.#rejectParameterControlValue(value, rawSpan);
       if (!this.#isCondition(value)) return !value;
       this.#recordDslCall();
       return this.#runtimeValue({
@@ -3731,6 +3741,16 @@ class ElaborationRecorder {
 
   #isSignal(value: unknown): value is SignalHandle {
     return this.#runtimeValues.hasSignal(value);
+  }
+
+  #rejectParameterControlValue(value: unknown, rawSpan: RawSpan): void {
+    const declaration = findBlueprintParameterHandle(value);
+    if (declaration === undefined) return;
+    throw new ElaborationExecutionError(
+      `Blueprint parameter "${declaration.label}" cannot be used as a JavaScript control-flow value.`,
+      this.#span(rawSpan),
+      'RT2029',
+    );
   }
 
   #signalHandle(value: SignalId): SignalHandle {

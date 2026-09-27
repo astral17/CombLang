@@ -52,6 +52,14 @@ const channel = __runtime.declareBlueprintSignalParameter(
     ]);
     expect(JSON.stringify(result.plan)).not.toContain('amount');
     expect(JSON.stringify(result.plan)).not.toContain('signal-A');
+    expect('parameters' in result.plan).toBe(false);
+    expect('session' in result.plan).toBe(false);
+    const canonical = canonicalDirectPlan(result.plan);
+    expect(JSON.stringify(canonical)).not.toContain('amount');
+    expect(JSON.stringify(canonical)).not.toContain('signal-A');
+    const lowered = tryElaborateDirectPlan(canonical);
+    expect(lowered.diagnostics).toEqual([]);
+    expect(JSON.stringify(lowered.resolvedCircuit)).not.toContain('parameters');
     expect(() =>
       executeElaborationProgram(
         parameterProgram(`
@@ -214,7 +222,7 @@ globalThis[Symbol.for('comblang.test.delayed-parameter-call')] = () =>
     }
   });
 
-  test('parameter handles reject arithmetic and object-key coercion but remain JS-truthy', () => {
+  test('parameter handles reject coercion and transformed JavaScript control flow', () => {
     const arithmetic = parameterProgram(`
 const amount = __runtime.declareBlueprintNumberParameter('amount', 5, {}, { start: 1, end: 2 });
 if (typeof amount !== 'object') throw new Error('number declaration became a primitive');
@@ -241,15 +249,13 @@ __runtime.binary('*', amount, source, { start: 1, end: 4 });`);
       'A typed Signal value must use numericCount * Signal.',
     );
 
-    const branch = executeElaborationProgramWithParameters(
-      parameterProgram(`
+    expect(() =>
+      executeElaborationProgramWithParameters(
+        parameterProgram(`
 const amount = __runtime.declareBlueprintNumberParameter('amount', 5, {}, { start: 1, end: 2 });
-if (amount) __runtime.declareBlueprintNumberParameter('branch ran', 1, {}, { start: 3, end: 4 });`),
-    );
-    expect(branch.parameters.map(({ registration }) => registration.label)).toEqual([
-      'amount',
-      'branch ran',
-    ]);
+if (__runtime.controlTest(amount, { start: 1, end: 2 })) __runtime.declareBlueprintNumberParameter('branch ran', 1, {}, { start: 3, end: 4 });`),
+      ),
+    ).toThrow('cannot be used as a JavaScript control-flow value');
   });
 
   test('leaves ordinary parameter-free execution output byte-for-byte stable', () => {

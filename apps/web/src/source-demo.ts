@@ -288,15 +288,29 @@ export function runSourceCircuitDemo(
     throw new Error('The first source producer does not expose an input and output Network.');
   }
 
-  // Producer descriptors retain pre-take names. Preview the surviving physical
-  // Network via the shared debug mapping, not a consumed source-level handle.
+  // Producer descriptors retain pre-take names. The direct execution has the
+  // original debug mapping; a hydrated resolved circuit only lists survivors.
   const physicalNames = new Map(executed.circuit.ir.networks.map(({ id, name }) => [id, name]));
   const survivingNames = new Map(
     executed.debug.scopes
       .flatMap((scope) => scope.networks)
       .map(({ planName, id }) => [planName, physicalNames.get(id)] as const),
   );
-  const survivor = (name: string): string => survivingNames.get(name) ?? name;
+  const transferredTo = new Map(
+    (plan.networkTransfers ?? []).map(({ source, destination }) => [source, destination]),
+  );
+  const survivor = (name: string): string => {
+    const mapped = survivingNames.get(name);
+    if (mapped !== undefined) return mapped;
+    const visited = new Set<string>();
+    let current = name;
+    while (transferredTo.has(current)) {
+      if (visited.has(current)) throw new Error(`Cyclic Network transfer: ${current}.`);
+      visited.add(current);
+      current = transferredTo.get(current)!;
+    }
+    return survivingNames.get(current) ?? current;
+  };
   const inputName = inputNetworkName === undefined ? undefined : survivor(inputNetworkName);
   const survivingOutputName = survivor(outputName);
   const input = inputName === undefined ? undefined : executed.network(inputName);

@@ -6,9 +6,14 @@ import { describe, expect, test } from 'vitest';
 
 import { signal } from '@comblang/factorio';
 
-import { runSourcePlanDemo, SourceSimulationController } from './source-demo.js';
+import {
+  runSourceCircuitDemo,
+  runSourcePlanDemo,
+  SourceSimulationController,
+} from './source-demo.js';
 import { compileSource } from './compile-source.js';
 import { blueprintJsonForPlan } from './blueprint-demo.js';
+import { createSourceCircuitArtifact } from './source-circuit-artifact.js';
 
 function compileScale(multiplier: number) {
   const parsed = parseFile({
@@ -25,6 +30,43 @@ const output: Network = Scale(input);`,
 }
 
 describe('source-driven homepage proof', () => {
+  test('previews a transferred producer output from the canonical resolved circuit', () => {
+    const compiled = compileSource({
+      path: 'resolved-preview.factorio.ts',
+      text: `const input = new Network();
+const output = new Network();
+output += input + 1;`,
+    });
+    expect(compiled.compilerDiagnostics).toEqual([]);
+    expect(compiled.resolvedCircuit).toBeDefined();
+
+    const artifact = createSourceCircuitArtifact(compiled.plan!, compiled.resolvedCircuit);
+    expect(runSourceCircuitDemo(artifact)).toMatchObject({
+      outputNetwork: 'output',
+      outputValue: 8,
+    });
+  });
+
+  test('previews the homepage circuit through the canonical resolved path', () => {
+    const compiled = compileSource({
+      path: 'homepage-preview.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const input = new Network<R>();
+const scaled = input * 5 + 1;
+const biased = scaled + 5;
+const threshold = new Network();
+threshold += CC(40 * A);
+const output = new Network();
+const mirror = new Network();
+IF(biased[A] > threshold[A], biased[A]).to(output, mirror);`,
+    });
+    expect(compiled.compilerDiagnostics).toEqual([]);
+    expect(compiled.resolvedCircuit).toBeDefined();
+
+    const artifact = createSourceCircuitArtifact(compiled.plan!, compiled.resolvedCircuit);
+    expect(runSourceCircuitDemo(artifact)).toMatchObject({ outputNetwork: 'output' });
+  });
+
   test('compiles a NetworkSignal-authored circuit through preview, simulation, and blueprint output', () => {
     const A = signal('virtual', 'signal-A');
     const compiled = compileSource({
@@ -109,6 +151,16 @@ survivingOutput.take(output);`,
     expect(compiled.compilerDiagnostics).toEqual([]);
     const demo = runSourcePlanDemo(compiled.plan!, 7);
     expect(demo).toMatchObject({
+      inputNetwork: 'survivingInput',
+      outputNetwork: 'survivingOutput',
+      outputValue: 8,
+    });
+    expect(
+      runSourceCircuitDemo(
+        createSourceCircuitArtifact(compiled.plan!, compiled.resolvedCircuit),
+        7,
+      ),
+    ).toMatchObject({
       inputNetwork: 'survivingInput',
       outputNetwork: 'survivingOutput',
       outputValue: 8,

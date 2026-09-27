@@ -70,6 +70,7 @@ try {
     const events: string[] = [];
     const dsl = {
       controlTest: (value: unknown) => value,
+      controlValue: (value: unknown) => value,
       enterLoop: (name: string, value: unknown) => events.push(`enter:${name}:${String(value)}`),
       exitInstance: () => events.push('exit'),
     };
@@ -116,5 +117,32 @@ const result = condition() ? yes() : no();`);
     expect(result).toBe(7);
     expect(order).toEqual(['condition', 'guard', 'no']);
     expect(controlTest).toHaveBeenCalledOnce();
+  });
+
+  test('guards switch selectors and iteration collections after evaluating them once', () => {
+    const code = transformControlFlow(`
+switch (selector()) { case 1: break; }
+for (const value of values()) consume(value);
+for (const key in record()) consume(key);`);
+
+    expect(code).toContain('__dsl.controlValue(selector(), { start:');
+    expect(code).toContain('__dsl.controlValue(values(), { start:');
+    expect(code).toContain('__dsl.controlValue(record(), { start:');
+    expect(code.match(/__dsl\.controlValue\(/g)).toHaveLength(3);
+
+    const calls: string[] = [];
+    const dsl = {
+      controlValue: (value: unknown) => value,
+      enterLoop: () => undefined,
+      exitInstance: () => undefined,
+    };
+    Function('__dsl', 'selector, values, record, consume', `"use strict"; ${code}`)(
+      dsl,
+      () => (calls.push('selector'), 1),
+      () => (calls.push('values'), [2]),
+      () => (calls.push('record'), { key: 3 }),
+      () => undefined,
+    );
+    expect(calls).toEqual(['selector', 'values', 'record']);
   });
 });

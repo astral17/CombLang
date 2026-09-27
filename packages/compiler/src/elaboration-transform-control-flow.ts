@@ -17,6 +17,16 @@ function controlTest(
   ]);
 }
 
+function controlValue(
+  expression: ts.Expression,
+  context: ControlFlowTransformContext,
+): ts.Expression {
+  return context.dslCall('controlValue', [
+    ts.visitNode(expression, context.visit) as ts.Expression,
+    context.spanLiteral(expression),
+  ]);
+}
+
 function loopBinding(
   initializer: ts.ForInitializer,
   factory: ts.NodeFactory,
@@ -131,11 +141,18 @@ export function transformControlFlowNode(
   if (ts.isForOfStatement(node) || ts.isForInStatement(node)) {
     const binding = loopBinding(node.initializer, factory);
     const initializer = ts.visitNode(node.initializer, visit) as ts.ForInitializer;
-    const expression = ts.visitNode(node.expression, visit) as ts.Expression;
+    const expression = controlValue(node.expression, context);
     const body = instrumentLoopBody(node.statement, binding.name, binding.value, node, context);
     return ts.isForOfStatement(node)
       ? factory.updateForOfStatement(node, node.awaitModifier, initializer, expression, body)
       : factory.updateForInStatement(node, initializer, expression, body);
+  }
+  if (ts.isSwitchStatement(node)) {
+    return factory.updateSwitchStatement(
+      node,
+      controlValue(node.expression, context),
+      ts.visitNode(node.caseBlock, visit) as ts.CaseBlock,
+    );
   }
   if (ts.isWhileStatement(node)) {
     return factory.updateWhileStatement(
