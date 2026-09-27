@@ -50,6 +50,11 @@ A runnable testbench consists of two files:
 - `circuit.test.js` registers synchronous `test(name, callback)` bodies using
   ordinary JavaScript and the supplied `Signal` helper.
 
+These filenames and the source/test split describe the current single-file
+workbench, not a permanent project rule. The planned project model permits
+author-selected TypeScript circuit and test entrypoints plus imported local
+library modules; multi-file linking is not implemented yet.
+
 The current test file is **not** passed through the DSL operator transform.
 Use `session.expectSignal(output, A)`, not `output[A]` JavaScript indexing;
 use `[[A, 5]]` for drive/mock values, not source-only `5 * A`. Imports,

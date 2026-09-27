@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 
 import {
   createTrustedEntityReplayContext,
+  generateBlueprintJson,
   syntheticZeroPortEntityProfile,
 } from '@comblang/compiler';
 import type { EntityProfile } from '@comblang/compiler/entity';
@@ -17,11 +18,23 @@ import {
 import type { EntityPrototypeResolver } from './entity-registry.js';
 import { transformElaborationModule } from '@comblang/compiler';
 import { executeElaborationProgram } from './elaboration-program.js';
+import { executeElaborationProgramWithParameters } from './elaboration-program.js';
+import { bindCapturedSourceConfigurationTemplates } from './executed-blueprint-configuration-binding.js';
 import { canonicalDirectPlan } from './canonical-circuit.js';
 import { tryElaborateDirectPlan } from './direct-plan.js';
+import { bindExecutedPlanConfigurationSet } from './executed-blueprint-configuration-binding.js';
+import { createExecutedProducerCaptureReference } from './executed-blueprint-configuration-binding.js';
+import { createBlueprintConfigurationSet } from '../../compiler/src/blueprint-configuration-set.js';
+import { createSelectorConfigurationTemplate } from '../../compiler/src/selector-configuration-template.js';
+import { createBlueprintParameterSession } from '../../compiler/src/blueprint-parameters.js';
 
 function parameterHost() {
-  const families = ['arithmetic-combinator', 'constant-combinator', 'decider-combinator'] as const;
+  const families = [
+    'arithmetic-combinator',
+    'constant-combinator',
+    'decider-combinator',
+    'selector-combinator',
+  ] as const;
   const profiles = families.map((family, index) => ({
     ...structuredClone(syntheticZeroPortEntityProfile),
     ref: {
@@ -334,6 +347,372 @@ globalThis.${globalKey} = () => Param.number('Late', 6);`;
       ]),
     ).toThrow();
     expect(first.execution?.circuit.ir).toEqual(before);
+  });
+
+  test('captures the three exact Selector parameter slots and binds paired NCIR atomically', () => {
+    const text = `const numberIndex = Param.number('Index', 2);
+const signalIndex = Param.signal('Selected signal', Signal('virtual', 'signal-B'));
+const countOutput = Param.signal('Count output', Signal('virtual', 'signal-C'));
+const input = new Network();
+const secondary = new Network();
+const output = new Network();
+const byNumber = Selector({ input, operation: 'select', index: numberIndex }).at(2, 3);
+const bySignal = Selector({ input: pair(input, secondary), operation: 'select', selectMax: false, index: signalIndex });
+const counted = Selector({ input, operation: 'count', output: countOutput });
+output += byNumber;
+output += bySignal;
+output += counted;`;
+    const compilation = compileSourceProgram(
+      { path: 'source-selector-parameters.factorio.ts', text },
+      parameterHost(),
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(JSON.stringify(compilation.plan)).not.toMatch(/Index|Selected signal|Count output/);
+    expect(compilation.plan?.producers.filter(({ kind }) => kind === 'selector')).toMatchObject([
+      { operation: 'select', selectMax: true, index: 2 },
+      {
+        operation: 'select',
+        selectMax: false,
+        index: { type: 'virtual', name: 'signal-B' },
+      },
+      { operation: 'count', output: { type: 'virtual', name: 'signal-C' } },
+    ]);
+    expect(compilation.resolvedCircuit?.ir.entities).toHaveLength(3);
+    expect(
+      listSourceCompilationParameters(compilation).map(({ kind, label, defaultValue }) => ({
+        kind,
+        label,
+        defaultValue,
+      })),
+    ).toEqual([
+      { kind: 'number', label: 'Index', defaultValue: 2 },
+      {
+        kind: 'signal',
+        label: 'Selected signal',
+        defaultValue: { type: 'virtual', name: 'signal-B' },
+      },
+      {
+        kind: 'signal',
+        label: 'Count output',
+        defaultValue: { type: 'virtual', name: 'signal-C' },
+      },
+    ]);
+
+    const declarations = listSourceCompilationParameters(compilation);
+    const before = compilation.execution?.circuit.ir;
+    const bound = bindSourceCompilationParameters(compilation, [
+      { parameter: declarations[0]!.parameter, value: 7 },
+      {
+        parameter: declarations[1]!.parameter,
+        value: { type: 'virtual', name: 'signal-D' },
+      },
+      {
+        parameter: declarations[2]!.parameter,
+        value: { type: 'virtual', name: 'signal-E' },
+      },
+    ]);
+
+    const boundSelectors = bound.producers.filter(({ kind }) => kind === 'selector');
+    expect(boundSelectors.map(({ config }) => config)).toMatchObject([
+      { operation: 'select', selectMax: true, index: 7 },
+      {
+        operation: 'select',
+        selectMax: false,
+        index: { type: 'virtual', name: 'signal-D' },
+      },
+      { operation: 'count', output: { type: 'virtual', name: 'signal-E' } },
+    ]);
+    for (const producer of boundSelectors) {
+      expect(
+        bound.entities.find(({ id }) => id === producer.entityId)?.configuration,
+      ).toMatchObject({ mode: 'selector' });
+    }
+    expect(bound.networks).toEqual(before?.networks);
+    expect(bound.entities.map(({ id }) => id)).toEqual(before?.entities.map(({ id }) => id));
+    expect(bound.entities.map(({ placement }) => placement)).toEqual(
+      before?.entities.map(({ placement }) => placement),
+    );
+    expect(bound.producers.map(({ id }) => id)).toEqual(before?.producers.map(({ id }) => id));
+    expect(compilation.execution?.circuit.ir).toEqual(before);
+    const artifact = sourceCompilationArtifact(compilation);
+    expect(artifact).not.toHaveProperty('selectorTemplates');
+    expect(artifact).not.toHaveProperty('execution');
+    expect(artifact).not.toHaveProperty('elaborationJavaScript');
+    expect(structuredClone(artifact)).toEqual(artifact);
+    expect(JSON.stringify(generateBlueprintJson(bound))).not.toMatch(
+      /Index|Selected signal|Count output|BlueprintParameter/,
+    );
+    expect(() =>
+      bindSourceCompilationParameters(compilation, [
+        { parameter: declarations[0]!.parameter, value: 1.5 },
+      ]),
+    ).toThrow();
+    expect(() =>
+      bindSourceCompilationParameters(compilation, [
+        { parameter: declarations[1]!.parameter, value: 7 },
+      ]),
+    ).toThrow();
+    expect(compilation.execution?.circuit.ir).toEqual(before);
+  });
+
+  test('rejects missing and duplicate physical Selector capture assignments', () => {
+    const compilation = compileSourceProgram(
+      {
+        path: 'selector-capture-assignment.factorio.ts',
+        text: `const index = Param.number('Index', 1);
+const input = new Network();
+const output = new Network();
+const selector = Selector({ input, operation: 'select', index });
+output += selector;`,
+      },
+      parameterHost(),
+    );
+    const execution = compilation.execution;
+    const producer = execution?.circuit.ir.producers.find(({ kind }) => kind === 'selector');
+    const planSelector = compilation.plan?.producers.find(({ kind }) => kind === 'selector');
+    const captureId = planSelector?.debugCaptureIds?.[0];
+    if (execution === undefined || producer?.kind !== 'selector' || captureId === undefined) {
+      throw new Error('Expected a captured exact Selector Producer.');
+    }
+    const session = createBlueprintParameterSession();
+    const parameter = session.number('Index', { defaultValue: 0 });
+    const template = createSelectorConfigurationTemplate(session, {
+      operation: 'select',
+      input: producer.config.input,
+      selectMax: true,
+      index: parameter,
+    });
+    const capture = createExecutedProducerCaptureReference(execution, captureId);
+    const missingSet = createBlueprintConfigurationSet(session, [
+      { key: 'selector', kind: 'selector', template },
+    ]);
+    expect(() => bindExecutedPlanConfigurationSet(execution, missingSet, [])).toThrow(
+      'missing Producer capture assignment',
+    );
+
+    const duplicateSet = createBlueprintConfigurationSet(session, [
+      { key: 'selector-a', kind: 'selector', template },
+      { key: 'selector-b', kind: 'selector', template },
+    ]);
+    expect(() =>
+      bindExecutedPlanConfigurationSet(execution, duplicateSet, [
+        { key: 'selector-a', captureId: capture },
+        { key: 'selector-b', captureId: capture },
+      ]),
+    ).toThrow('Producer capture');
+  });
+
+  test('preserves parameter-free Selector defaults and reports wrong slot kinds at the value span', () => {
+    const parameterFreeSource = {
+      path: 'parameter-free-selector.factorio.ts',
+      text: `const input = new Network();
+const output = new Network();
+const selected = Selector({ input, operation: 'select' });
+output += selected;`,
+    };
+    const parameterFree = compileSourceProgram(parameterFreeSource, parameterHost());
+    const directPlan = canonicalDirectPlan(
+      executeElaborationProgram(transformElaborationModule(parseFile(parameterFreeSource)), {
+        trustedEntityReplayContext: parameterHost().trustedEntityReplayContext,
+        entityPrototypeResolver: parameterHost().entityPrototypeResolver,
+      }),
+    );
+    expect(parameterFree.pipelineDiagnostics).toEqual([]);
+    expect(listSourceCompilationParameters(parameterFree)).toEqual([]);
+    expect(parameterFree.plan).toEqual(directPlan);
+    expect(parameterFree.plan?.producers).toMatchObject([
+      { kind: 'selector', operation: 'select', selectMax: true, index: 0 },
+    ]);
+
+    const wrongSlotSource = `const numberParameter = Param.number('Not a signal', 4);
+const input = new Network();
+Selector({ input, operation: 'count', output: numberParameter });`;
+    const wrongSlot = compileSourceProgram(
+      { path: 'selector-wrong-parameter-kind.factorio.ts', text: wrongSlotSource },
+      parameterHost(),
+    );
+    expect(wrongSlot.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        severity: 'error',
+        span: expect.objectContaining({ start: wrongSlotSource.lastIndexOf('numberParameter') }),
+      }),
+    ]);
+
+    const symbolicMaxSource = `const max = Param.signal('Max', Signal('virtual', 'signal-max'));
+const input = new Network();
+Selector({ input, operation: 'select', selectMax: max, index: 0 });`;
+    const symbolicMax = compileSourceProgram(
+      { path: 'selector-symbolic-max.factorio.ts', text: symbolicMaxSource },
+      parameterHost(),
+    );
+    expect(symbolicMax.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        severity: 'error',
+        span: expect.objectContaining({ start: symbolicMaxSource.lastIndexOf('max') }),
+      }),
+    ]);
+  });
+
+  test('rejects foreign and forged handles in exact Selector parameter slots', () => {
+    const foreignKey = Symbol.for('comblang.test.foreign-selector-parameter');
+    const forgedKey = Symbol.for('comblang.test.forged-selector-parameter');
+    const globalRecord = globalThis as Record<PropertyKey, unknown>;
+    const previous = new Map<PropertyKey, { readonly had: boolean; readonly value: unknown }>([
+      [
+        foreignKey,
+        { had: Object.hasOwn(globalRecord, foreignKey), value: globalRecord[foreignKey] },
+      ],
+      [forgedKey, { had: Object.hasOwn(globalRecord, forgedKey), value: globalRecord[forgedKey] }],
+    ]);
+    globalRecord[foreignKey] = createBlueprintParameterSession().number('foreign', {
+      defaultValue: 5,
+    });
+    globalRecord[forgedKey] = { kind: 'number', label: 'forged', defaultValue: 5 };
+    try {
+      for (const [key, message] of [
+        ['comblang.test.foreign-selector-parameter', 'different parameter session'],
+        ['comblang.test.forged-selector-parameter', 'unregistered parameter-like object'],
+      ] as const) {
+        const text = `const local = Param.number('Local', 1);
+const input = new Network();
+Selector({ input, operation: 'select', index: globalThis[Symbol.for('${key}')] });`;
+        const compilation = compileSourceProgram(
+          { path: 'selector-foreign-parameter.factorio.ts', text },
+          parameterHost(),
+        );
+        expect(compilation.pipelineDiagnostics).toEqual([
+          expect.objectContaining({
+            code: 'RT2027',
+            message: expect.stringContaining(message),
+            span: expect.objectContaining({ start: text.lastIndexOf('globalThis') }),
+          }),
+        ]);
+      }
+    } finally {
+      for (const [key, value] of previous) {
+        if (value.had) globalRecord[key] = value.value;
+        else delete globalRecord[key];
+      }
+    }
+  });
+
+  test('captures repeated physical Selectors and rolls back templates with failed instances', () => {
+    const environment = parameterHost();
+    const source = `const index = Param.number('Index', 1);
+const inputA = new Network();
+const inputB = new Network();
+function Gate(input: Network) {
+  const selector = Selector({ input, operation: 'select', index });
+  const sink = new Network();
+  sink += selector;
+  return selector;
+}
+const first = t.instantiate(Gate, inputA);
+const second = t.instantiate(Gate, inputB);
+const outputA = new Network();
+const outputB = new Network();
+outputA += first.value;
+outputB += second.value;`;
+    const parsed = parseFile({ path: 'selector-capture-rollback.factorio.ts', text: source });
+    const program = transformElaborationModule(parsed, { testContextName: 't' });
+    const dynamic = executeElaborationProgramWithParameters(program, environment);
+
+    expect(dynamic.plan.producers.filter(({ kind }) => kind === 'selector')).toHaveLength(2);
+    expect(dynamic.plan.entities).toHaveLength(2);
+    expect(dynamic.selectorTemplates).toHaveLength(2);
+    expect(new Set(dynamic.selectorTemplates.map(({ captureId }) => captureId)).size).toBe(2);
+    const lowered = tryElaborateDirectPlan(dynamic.plan, environment.trustedEntityReplayContext);
+    expect(lowered.diagnostics).toEqual([]);
+    const bound = bindCapturedSourceConfigurationTemplates(dynamic, lowered.execution!, [
+      { parameter: dynamic.parameters[0]!.handle, value: 8 },
+    ]);
+    expect(
+      bound.producers.filter(({ kind }) => kind === 'selector').map(({ config }) => config),
+    ).toMatchObject([
+      { operation: 'select', index: 8 },
+      { operation: 'select', index: 8 },
+    ]);
+    const missingCapture = {
+      ...dynamic,
+      selectorTemplates: dynamic.selectorTemplates.map((entry) => ({
+        ...entry,
+        captureId: 'missing-selector-capture',
+      })),
+    };
+    expect(() =>
+      bindCapturedSourceConfigurationTemplates(missingCapture, lowered.execution!),
+    ).toThrow('capture must identify exactly one source Selector Producer');
+    const duplicateCapture = {
+      ...dynamic,
+      selectorTemplates: [...dynamic.selectorTemplates, dynamic.selectorTemplates[0]!],
+    };
+    expect(() =>
+      bindCapturedSourceConfigurationTemplates(duplicateCapture, lowered.execution!),
+    ).toThrow('Selector capture IDs must be unique');
+
+    const rollbackSource = `const index = Param.number('Index', 1);
+function Broken(input: Network) {
+  const selector = Selector({ input, operation: 'select', index });
+  const sink = new Network();
+  sink += selector;
+  const invalid: unknown = 1;
+  Selector(invalid);
+}
+const input = new Network();
+try { t.instantiate(Broken, input); } catch {}
+const selector = Selector({ input, operation: 'select', index });
+const output = new Network();
+output += selector;`;
+    const rollbackProgram = transformElaborationModule(
+      parseFile({ path: 'selector-failed-instance.factorio.ts', text: rollbackSource }),
+      { testContextName: 't' },
+    );
+    const rolledBack = executeElaborationProgramWithParameters(rollbackProgram, environment);
+    expect(rolledBack.plan.producers.filter(({ kind }) => kind === 'selector')).toHaveLength(1);
+    expect(rolledBack.plan.entities).toHaveLength(1);
+    expect(rolledBack.plan.debugInstances).toEqual([]);
+    expect(rolledBack.selectorTemplates).toHaveLength(1);
+    expect(rolledBack.selectorTemplates[0]?.captureId).toBe(
+      rolledBack.plan.producers[0]?.debugCaptureIds?.[0],
+    );
+  });
+
+  test('binds Selector parameters alongside Arithmetic, Constant, and Decider captures', () => {
+    const text = `${source}\nconst selector = Selector({ input, operation: 'select', index: amount });\noutput += selector;`;
+    const compilation = compileSourceProgram(
+      { path: 'mixed-source-configuration-parameters.factorio.ts', text },
+      parameterHost(),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.plan?.producers.map(({ kind }) => kind)).toEqual([
+      'arithmetic',
+      'constant',
+      'decider',
+      'selector',
+    ]);
+
+    const declarations = listSourceCompilationParameters(compilation);
+    const original = compilation.execution?.circuit.ir;
+    const bound = bindSourceCompilationParameters(compilation, [
+      { parameter: declarations[0]!.parameter, value: 9 },
+      {
+        parameter: declarations[1]!.parameter,
+        value: { type: 'virtual', name: 'signal-D' },
+      },
+    ]);
+    expect(bound.producers.find(({ kind }) => kind === 'selector')).toMatchObject({
+      kind: 'selector',
+      config: { operation: 'select', index: 9 },
+    });
+    expect(bound.networks).toEqual(original?.networks);
+    expect(bound.entities.map(({ id }) => id)).toEqual(original?.entities.map(({ id }) => id));
+    expect(bound.producers.map(({ id }) => id)).toEqual(original?.producers.map(({ id }) => id));
+    expect(compilation.execution?.circuit.ir).toEqual(original);
+    const artifact = sourceCompilationArtifact(compilation);
+    expect(artifact).not.toHaveProperty('selectorTemplates');
+    expect(JSON.stringify(bound)).not.toContain('Amount');
+    expect(JSON.stringify(bound)).not.toContain('Selected signal');
   });
 
   test('records the remaining JavaScript handle-property escape for Sol review', () => {

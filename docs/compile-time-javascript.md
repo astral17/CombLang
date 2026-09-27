@@ -22,9 +22,11 @@ The language reserves all free DSL identifiers, including `Param`. User variable
 
 The initial `Param.number(label, default)` and
 `Param.signal(label, Signal(...))` source forms are limited to direct exact
-Arithmetic, Constant-filter, and Decider-threshold configuration slots. They
-bind to concrete NCIR through a host-local compilation API; they do not add
-native Factorio parameter fields. Parameter handles are not ordinary JavaScript
+Arithmetic, Constant-filter, Decider-threshold, and Selector configuration
+slots. Selector support covers `select.index` (number or Signal) and
+`count.output` (Signal); `selectMax` stays concrete. They bind to concrete NCIR
+through a host-local compilation API; they do not add native Factorio parameter
+fields. Parameter handles are not ordinary JavaScript
 values. The transform rejects instrumented control-flow and direct coercion or
 arbitrary-call escapes, but ordinary property reads such as
 `parameter.defaultValue` are a known containment gap. This compiler is not a

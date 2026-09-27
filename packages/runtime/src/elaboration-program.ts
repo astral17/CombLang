@@ -127,7 +127,7 @@ import {
   resolveEntityReplayProfile,
   type TrustedEntityReplayContext,
 } from '@comblang/compiler/entity-replay-context';
-import type { EntityPlacement } from '@comblang/compiler/ir';
+import type { EntityPlacement, LogicalNetworkRef } from '@comblang/compiler/ir';
 import type { ArithmeticOperation, LogicalArithmeticOutput } from '@comblang/compiler/ir';
 import {
   BlueprintEntitySignalConversionError,
@@ -152,10 +152,15 @@ import {
   type DeciderTemplateOutput,
 } from '../../compiler/src/decider-configuration-template.js';
 import {
+  createSelectorConfigurationTemplate,
+  type SelectorConfigurationTemplate,
+} from '../../compiler/src/selector-configuration-template.js';
+import {
   findBlueprintParameterHandle,
   BlueprintParameterError,
   type BlueprintNumberParameterHandle,
   type BlueprintParameterSession,
+  type BlueprintSignalParameterHandle,
 } from '../../compiler/src/blueprint-parameters.js';
 import {
   isBlueprintParameterShaped,
@@ -191,6 +196,12 @@ interface CapturedDeciderConfigurationTemplate {
   readonly source: SourceSpan;
 }
 
+interface CapturedSelectorConfigurationTemplate {
+  readonly captureId: string;
+  readonly template: SelectorConfigurationTemplate;
+  readonly source: SourceSpan;
+}
+
 type PlanDeciderOutput = Extract<DirectPlanProducer, { kind: 'decider' }>['output'];
 
 type ExactArithmeticConfiguration = Omit<
@@ -222,15 +233,22 @@ interface NormalizedDeciderConfiguration {
   readonly elseOutputs?: readonly DeciderOutputCandidate[];
 }
 
+type SelectorParameterSlots =
+  | {
+      readonly operation: 'select';
+      readonly index: BlueprintNumberParameterHandle | BlueprintSignalParameterHandle;
+    }
+  | { readonly operation: 'count'; readonly output: BlueprintSignalParameterHandle };
+
 type NormalizedSelectorConfiguration =
-  | Pick<
+  | (Pick<
       Extract<DirectPlanSelector, { readonly operation: 'select' }>,
       'operation' | 'input' | 'selectMax' | 'index'
-    >
-  | Pick<
+    > & { readonly parameterSlots?: Extract<SelectorParameterSlots, { operation: 'select' }> })
+  | (Pick<
       Extract<DirectPlanSelector, { readonly operation: 'count' }>,
       'operation' | 'input' | 'output'
-    >;
+    > & { readonly parameterSlots?: Extract<SelectorParameterSlots, { operation: 'count' }> });
 
 interface DeciderOutputCandidate {
   readonly output: PlanDeciderOutput;
@@ -317,6 +335,7 @@ interface TopologySnapshot {
   readonly arithmeticTemplatesLength: number;
   readonly constantTemplatesLength: number;
   readonly deciderTemplatesLength: number;
+  readonly selectorTemplatesLength: number;
   readonly debugInstancesLength: number;
   readonly debugInstanceCounts: ReadonlyMap<string, number>;
   readonly ownership: readonly NetworkOwnershipSnapshot[];
@@ -450,6 +469,7 @@ class ElaborationRecorder {
   readonly #arithmeticTemplates: CapturedArithmeticConfigurationTemplate[] = [];
   readonly #constantTemplates: CapturedConstantConfigurationTemplate[] = [];
   readonly #deciderTemplates: CapturedDeciderConfigurationTemplate[] = [];
+  readonly #selectorTemplates: CapturedSelectorConfigurationTemplate[] = [];
   readonly #deciderParameterSlots = new WeakMap<object, BlueprintNumberParameterHandle>();
   readonly #combinatorByOutput = new Map<NetworkOwnershipState, CombinatorValue>();
   readonly #runtimeValues = new RuntimeValueRegistry();
@@ -1106,15 +1126,21 @@ class ElaborationRecorder {
           first!.source,
           first!.fieldSources,
         );
-        return this.#createCombinator(
+        const { parameterSlots, ...descriptorConfiguration } = configuration;
+        const producer = this.#createCombinator(
           {
             kind: 'selector',
-            ...configuration,
+            ...descriptorConfiguration,
             source: this.#span(rawSpan),
             instancePath: this.#path(),
           },
           rawSpan,
         );
+        if (parameterSlots !== undefined && this.#parameterCapture !== undefined) {
+          const { captureId } = this.#combinators.capture(producer);
+          this.#captureSelectorTemplate(producer, captureId, parameterSlots);
+        }
+        return producer;
       }),
     network: (
       name: string | undefined,
@@ -2404,6 +2430,10 @@ class ElaborationRecorder {
     return Object.freeze([...this.#deciderTemplates]);
   }
 
+  selectorTemplates(): readonly CapturedSelectorConfigurationTemplate[] {
+    return Object.freeze([...this.#selectorTemplates]);
+  }
+
   executionApi(): typeof this.api {
     const executionOperations: Record<string, unknown> = { ...this.api };
     if (this.#parameterCapture !== undefined) {
@@ -3539,6 +3569,7 @@ class ElaborationRecorder {
       arithmeticTemplatesLength: this.#arithmeticTemplates.length,
       constantTemplatesLength: this.#constantTemplates.length,
       deciderTemplatesLength: this.#deciderTemplates.length,
+      selectorTemplatesLength: this.#selectorTemplates.length,
       debugInstancesLength: this.#debugInstances.length,
       debugInstanceCounts: new Map(this.#debugInstanceCounts),
       ownership: [...ownership.values()],
@@ -3571,6 +3602,7 @@ class ElaborationRecorder {
     this.#arithmeticTemplates.length = snapshot.arithmeticTemplatesLength;
     this.#constantTemplates.length = snapshot.constantTemplatesLength;
     this.#deciderTemplates.length = snapshot.deciderTemplatesLength;
+    this.#selectorTemplates.length = snapshot.selectorTemplatesLength;
     this.#debugInstances.length = snapshot.debugInstancesLength;
     this.#debugInstanceCounts.clear();
     for (const [key, count] of snapshot.debugInstanceCounts)
@@ -4400,6 +4432,28 @@ class ElaborationRecorder {
   ): NormalizedSelectorConfiguration {
     const spanFor = (field: keyof NonNullable<CallArgument['fieldSources']>): SourceSpan =>
       this.#span(fieldSources?.[field] ?? source);
+    const parameterSlot = (
+      candidate: unknown,
+      kind: 'number' | 'signal',
+      field: 'index' | 'output',
+    ) => {
+      try {
+        return lookupBlueprintParameterSlot(
+          candidate,
+          kind,
+          this.#parameterCapture!.session,
+          `$.${field}`,
+        );
+      } catch (error) {
+        throw new ElaborationExecutionError(
+          error instanceof Error ? error.message : `Invalid Selector ${field} parameter slot.`,
+          spanFor(field),
+          'RT2027',
+          undefined,
+          { cause: error },
+        );
+      }
+    };
     if (!isPlainDataRecord(value)) {
       throw new ElaborationExecutionError(
         'Selector configuration must be a plain data record.',
@@ -4460,7 +4514,56 @@ class ElaborationRecorder {
       }
       const indexValue = value.index === undefined ? 0 : value.index;
       let index: number | SignalId;
-      if (this.#isSignal(indexValue)) {
+      let parameterSlots: Extract<SelectorParameterSlots, { operation: 'select' }> | undefined;
+      const registration = findBlueprintParameterHandle(indexValue);
+      if (registration !== undefined || isBlueprintParameterShaped(indexValue)) {
+        if (this.#parameterCapture === undefined) {
+          throw new ElaborationExecutionError(
+            'Selector parameter slots require a captured source parameter session.',
+            spanFor('index'),
+            'RT2027',
+          );
+        }
+        if (registration?.kind === 'signal') {
+          const slot = parameterSlot(indexValue, 'signal', 'index');
+          if (slot === undefined || typeof slot.registration.defaultValue !== 'object') {
+            throw new ElaborationExecutionError(
+              'Selector index Signal parameter requires a Signal default value.',
+              spanFor('index'),
+              'RT2027',
+            );
+          }
+          index = this.#signalSnapshot(slot.registration.defaultValue as SignalId);
+          parameterSlots = {
+            operation: 'select',
+            index: slot.handle as BlueprintSignalParameterHandle,
+          };
+        } else {
+          const slot = parameterSlot(indexValue, 'number', 'index');
+          if (slot === undefined || typeof slot.registration.defaultValue !== 'number') {
+            throw new ElaborationExecutionError(
+              'Selector index number parameter requires a numeric default value.',
+              spanFor('index'),
+              'RT2027',
+            );
+          }
+          try {
+            index = circuitConstant(slot.registration.defaultValue);
+          } catch (error) {
+            throw new ElaborationExecutionError(
+              error instanceof Error ? error.message : 'Invalid Selector index parameter default.',
+              spanFor('index'),
+              'RT2027',
+              undefined,
+              { cause: error },
+            );
+          }
+          parameterSlots = {
+            operation: 'select',
+            index: slot.handle as BlueprintNumberParameterHandle,
+          };
+        }
+      } else if (this.#isSignal(indexValue)) {
         index = this.#signalSnapshot(indexValue);
       } else if (typeof indexValue === 'number') {
         try {
@@ -4481,7 +4584,13 @@ class ElaborationRecorder {
           'RT2027',
         );
       }
-      return { operation, input, selectMax, index };
+      return {
+        operation,
+        input,
+        selectMax,
+        index,
+        ...(parameterSlots === undefined ? {} : { parameterSlots }),
+      };
     }
     if (!Object.prototype.hasOwnProperty.call(value, 'output')) {
       throw new ElaborationExecutionError(
@@ -4490,14 +4599,45 @@ class ElaborationRecorder {
         'RT2027',
       );
     }
-    if (!this.#isSignal(value.output)) {
+    let output: SignalId;
+    let parameterSlots: Extract<SelectorParameterSlots, { operation: 'count' }> | undefined;
+    const outputRegistration = findBlueprintParameterHandle(value.output);
+    if (outputRegistration !== undefined || isBlueprintParameterShaped(value.output)) {
+      if (this.#parameterCapture === undefined) {
+        throw new ElaborationExecutionError(
+          'Selector parameter slots require a captured source parameter session.',
+          spanFor('output'),
+          'RT2027',
+        );
+      }
+      const slot = parameterSlot(value.output, 'signal', 'output');
+      if (slot === undefined || typeof slot.registration.defaultValue !== 'object') {
+        throw new ElaborationExecutionError(
+          'Selector count-output Signal parameter requires a Signal default value.',
+          spanFor('output'),
+          'RT2027',
+        );
+      }
+      output = this.#signalSnapshot(slot.registration.defaultValue as SignalId);
+      parameterSlots = {
+        operation: 'count',
+        output: slot.handle as BlueprintSignalParameterHandle,
+      };
+    } else if (this.#isSignal(value.output)) {
+      output = this.#signalSnapshot(value.output);
+    } else {
       throw new ElaborationExecutionError(
         'Selector count configuration output must be a Signal.',
         spanFor('output'),
         'RT2027',
       );
     }
-    return { operation, input, output: this.#signalSnapshot(value.output) };
+    return {
+      operation,
+      input,
+      output,
+      ...(parameterSlots === undefined ? {} : { parameterSlots }),
+    };
   }
 
   #deciderConditionTemplate(condition: PlanDeciderCondition): {
@@ -4633,6 +4773,40 @@ class ElaborationRecorder {
           }),
     });
     this.#deciderTemplates.push(
+      Object.freeze({ captureId, template, source: Object.freeze({ ...descriptor.source }) }),
+    );
+  }
+
+  #captureSelectorTemplate(
+    value: CombinatorValue,
+    captureId: string,
+    parameterSlots: SelectorParameterSlots,
+  ): void {
+    if (this.#parameterCapture === undefined) return;
+    const descriptor = this.#combinators.stateFor(value).descriptor;
+    if (descriptor.kind !== 'selector' || descriptor.operation !== parameterSlots.operation) {
+      throw new Error('Selector parameter slots were associated with a mismatched producer.');
+    }
+    const input = descriptor.input as unknown as LogicalNetworkRef;
+    const template =
+      descriptor.operation === 'select' && parameterSlots.operation === 'select'
+        ? createSelectorConfigurationTemplate(this.#parameterCapture.session, {
+            operation: 'select',
+            input,
+            selectMax: descriptor.selectMax,
+            index: parameterSlots.index,
+          })
+        : descriptor.operation === 'count' && parameterSlots.operation === 'count'
+          ? createSelectorConfigurationTemplate(this.#parameterCapture.session, {
+              operation: 'count',
+              input,
+              output: parameterSlots.output,
+            })
+          : undefined;
+    if (template === undefined) {
+      throw new Error('Selector parameter slots could not be projected to a template.');
+    }
+    this.#selectorTemplates.push(
       Object.freeze({ captureId, template, source: Object.freeze({ ...descriptor.source }) }),
     );
   }
@@ -6359,6 +6533,7 @@ function executeElaborationProgramInternal(
   readonly arithmeticTemplates: readonly CapturedArithmeticConfigurationTemplate[];
   readonly constantTemplates: readonly CapturedConstantConfigurationTemplate[];
   readonly deciderTemplates: readonly CapturedDeciderConfigurationTemplate[];
+  readonly selectorTemplates: readonly CapturedSelectorConfigurationTemplate[];
 } {
   if (program.format !== 'comblang-elaboration-js') {
     throw new Error('Unsupported elaboration JavaScript format.');
@@ -6396,6 +6571,7 @@ function executeElaborationProgramInternal(
     arithmeticTemplates: recorder.arithmeticTemplates(),
     constantTemplates: recorder.constantTemplates(),
     deciderTemplates: recorder.deciderTemplates(),
+    selectorTemplates: recorder.selectorTemplates(),
   });
 }
 
@@ -6415,6 +6591,7 @@ export interface ExecutedElaborationWithBlueprintParameters {
   readonly arithmeticTemplates: readonly CapturedArithmeticConfigurationTemplate[];
   readonly constantTemplates: readonly CapturedConstantConfigurationTemplate[];
   readonly deciderTemplates: readonly CapturedDeciderConfigurationTemplate[];
+  readonly selectorTemplates: readonly CapturedSelectorConfigurationTemplate[];
 }
 
 /** Executes once and returns parameter capture beside, never inside, the concrete plan. */

@@ -241,6 +241,13 @@ physical state is committed. `.at(...)`, `.to(...)`, `Network +=`, aliases,
 functions, loops, and concrete `SelectorCombinator` annotations retain one
 physical Producer identity per constructor call.
 
+The initial source-parameter subset also permits `Param.number(...)` or
+`Param.signal(...)` directly in `select.index`, and `Param.signal(...)` directly
+in `count.output`. Each slot requires a concrete default; the default Selector
+configuration remains concrete, and host-local binding changes the paired
+Selector Producer and Entity without re-executing source or changing topology.
+This does not parameterize `selectMax` or add native Factorio parameter fields.
+
 Exact `random`, `quality`, `rocket-capacity`, `stack-size`, and `time` remain
 unsupported operation values. Use the structural checked/raw Entity overload
 for those native-shaped configurations; it remains inert and does not acquire

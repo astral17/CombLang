@@ -25,6 +25,11 @@ import {
   type DeciderTemplateCondition,
   type DeciderTemplateOutput,
 } from '../../compiler/src/decider-configuration-template.js';
+import {
+  createSelectorConfigurationTemplate,
+  inspectSelectorConfigurationTemplate,
+  type SelectorConfigurationTemplate,
+} from '../../compiler/src/selector-configuration-template.js';
 import type { LogicalNetworkRef } from '../../compiler/src/ir.js';
 import { replaceBlueprintConfigurationSetInNativeCircuitIr } from '../../compiler/src/blueprint-configuration-binding.js';
 import { BlueprintParameterError } from '../../compiler/src/blueprint-parameters.js';
@@ -534,7 +539,8 @@ export function bindCapturedSourceConfigurationTemplates(
     !isDataRecord(source) ||
     !Array.isArray(source.arithmeticTemplates) ||
     !Array.isArray(source.constantTemplates) ||
-    !Array.isArray(source.deciderTemplates)
+    !Array.isArray(source.deciderTemplates) ||
+    !Array.isArray(source.selectorTemplates)
   ) {
     fail(
       'CP1000',
@@ -865,6 +871,105 @@ export function bindCapturedSourceConfigurationTemplates(
     captures.push({
       index: planProducer.index,
       entry: { key: captureId, kind: 'decider', template: resolvedTemplate },
+      capture: { key: captureId, captureId: captureReference },
+      producerId: debugEntry.id,
+    });
+  });
+
+  source.selectorTemplates.forEach((candidate, index) => {
+    const path = `$.selectorTemplates[${index}]`;
+    if (
+      !isDataRecord(candidate) ||
+      !hasExactDataKeys(candidate, ['captureId', 'template', 'source'])
+    ) {
+      fail('CP1000', path, 'malformed captured Selector template.');
+    }
+    const captureId = candidate.captureId;
+    if (typeof captureId !== 'string' || captureId.length === 0 || captureId.length > 128) {
+      fail('CP1000', `${path}.captureId`, 'expected a non-empty bounded Producer capture ID.');
+    }
+    if (seenCaptures.has(captureId)) {
+      fail(
+        'CP1001',
+        `${path}.captureId`,
+        'Selector capture IDs must be unique.',
+        candidate.source as SourceSpan,
+      );
+    }
+    seenCaptures.add(captureId);
+
+    const planProducer = planProducerByCapture.get(captureId);
+    if (
+      planProducer === undefined ||
+      planProducer.index < 0 ||
+      planProducer.descriptor.kind !== 'selector'
+    ) {
+      fail(
+        'CP1001',
+        `${path}.captureId`,
+        'capture must identify exactly one source Selector Producer.',
+        candidate.source as SourceSpan,
+      );
+    }
+    const debugEntries = producerCapturesFor(execution, captureId);
+    if (
+      debugEntries.length !== 1 ||
+      debugEntries[0]!.producerKind !== 'selector' ||
+      stableData(debugEntries[0]!.descriptor) !== stableData(planProducer.descriptor)
+    ) {
+      fail(
+        'CP1001',
+        `${path}.captureId`,
+        'capture does not identify exactly one matching physical Selector Producer.',
+        candidate.source as SourceSpan,
+      );
+    }
+    const debugEntry = debugEntries[0]!;
+    if (!sameSourceSpan(candidate.source, planProducer.descriptor.source)) {
+      fail(
+        'CP1001',
+        `${path}.source`,
+        'captured provenance does not match its source Selector Producer.',
+        planProducer.descriptor.source,
+      );
+    }
+    const registration = inspectSelectorConfigurationTemplate(
+      candidate.template,
+      `${path}.template`,
+    );
+    if (registration.session !== source.session) {
+      fail(
+        'CP1001',
+        `${path}.template`,
+        'captured template belongs to a different parameter session.',
+        candidate.source as SourceSpan,
+      );
+    }
+    const template = candidate.template as SelectorConfigurationTemplate;
+    const input = resolveCapturedNetworkReference(
+      template.input,
+      source.plan,
+      execution,
+      `${path}.template.input`,
+      candidate.source as SourceSpan,
+    );
+    const resolvedTemplate =
+      template.operation === 'select'
+        ? createSelectorConfigurationTemplate(source.session, {
+            operation: 'select',
+            input,
+            selectMax: template.selectMax,
+            index: template.index,
+          })
+        : createSelectorConfigurationTemplate(source.session, {
+            operation: 'count',
+            input,
+            output: template.output,
+          });
+    const captureReference = createExecutedProducerCaptureReference(execution, captureId);
+    captures.push({
+      index: planProducer.index,
+      entry: { key: captureId, kind: 'selector', template: resolvedTemplate },
       capture: { key: captureId, captureId: captureReference },
       producerId: debugEntry.id,
     });

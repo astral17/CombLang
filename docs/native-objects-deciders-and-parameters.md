@@ -194,14 +194,16 @@ const item = Param.signal('Item', Signal('item', 'iron-plate'));
 const limit = Param.number('Limit', 100);
 ```
 
-`Param` is reserved. The current supported slots are an exact Arithmetic
-configuration's direct numeric operand, an exact Constant filter's direct Signal
-or count, and an exact Decider condition's direct right-hand numeric threshold.
-The defaults compile once into an ordinary concrete Plan and NCIR. Parameters
-are not JavaScript numbers, booleans, or loop bounds; arithmetic on a handle,
-control-flow use, coercion, and arbitrary function calls are rejected. Unsupported
-declaration forms report a source diagnostic (`CL1050` for malformed syntax;
-`CP1000` for an invalid concrete default).
+`Param` is reserved. Supported slots are an exact Arithmetic configuration's
+direct numeric operand, an exact Constant filter's direct Signal or count, an
+exact Decider condition's direct right-hand numeric threshold, and exact
+Selector `select`'s `index` (number or Signal) or `count`'s `output` (Signal).
+Selector `selectMax` remains concrete; other Selector operations and slots are
+not parameterized. The defaults compile once into an ordinary concrete Plan
+and NCIR. Parameters are not JavaScript numbers, booleans, or loop bounds;
+arithmetic on a handle, control-flow use, coercion, and arbitrary function calls
+are rejected. Unsupported declaration forms report a source diagnostic
+(`CL1050` for malformed syntax; `CP1000` for an invalid concrete default).
 
 In a host-local compilation, `listSourceCompilationParameters(compilation)`
 returns declaration labels, defaults, spans, and nominal handles. The host may
