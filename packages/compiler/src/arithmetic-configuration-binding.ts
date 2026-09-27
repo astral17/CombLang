@@ -13,7 +13,10 @@ import {
   inspectBlueprintParameterHandle,
 } from './blueprint-parameters.js';
 import {
+  evaluateArithmeticNumericExpression,
+  inspectArithmeticNumericExpression,
   inspectArithmeticConfigurationTemplate,
+  isRegisteredArithmeticNumericExpression,
   type ArithmeticConfigurationTemplate,
   type ArithmeticTemplateOperand,
   type ArithmeticTemplateOutput,
@@ -27,6 +30,21 @@ function fail(
   code: 'CP1000' | 'CP1001' | 'CP1002' = 'CP1000',
 ): never {
   throw new BlueprintParameterError(code, path, message, span);
+}
+
+function prefixExpressionError(error: unknown, path: string): never {
+  if (!(error instanceof BlueprintParameterError)) throw error;
+  const suffix =
+    error.path === '$' || error.path === '$.value'
+      ? ''
+      : error.path.startsWith('$')
+        ? error.path.slice(1)
+        : `.${error.path}`;
+  const messagePrefix = `${error.path}: `;
+  const message = error.message.startsWith(messagePrefix)
+    ? error.message.slice(messagePrefix.length)
+    : error.message;
+  throw new BlueprintParameterError(error.code, `${path}${suffix}`, message, error.span);
 }
 
 function freezeDeep<T>(value: T): T {
@@ -61,6 +79,28 @@ export function bindArithmeticConfigurationTemplate(
   const resolveNumber = (value: unknown, path: string): number => {
     const slot = lookupBlueprintParameterSlot(value, 'number', session, path);
     if (slot === undefined) {
+      if (isRegisteredArithmeticNumericExpression(value)) {
+        const inspection = inspectArithmeticNumericExpression(session, value, path);
+        const dependencies = new Set<object>(inspection.dependencies);
+        for (const dependency of inspection.dependencies) used.add(dependency);
+        const expressionBindings = bindings
+          .filter((binding) => dependencies.has(binding.parameter))
+          .map(({ parameter, value: bindingValue }) => ({ parameter, value: bindingValue }));
+        let evaluated: number;
+        try {
+          evaluated = evaluateArithmeticNumericExpression(session, value, expressionBindings);
+        } catch (error) {
+          prefixExpressionError(error, path);
+        }
+        const number = assertBlueprintParameterNumberValue(
+          evaluated,
+          path,
+          'safe-integer',
+          inspection.source,
+          'Arithmetic literal values must be safe integers.',
+        );
+        return int32(number);
+      }
       return int32(assertBlueprintParameterNumberValue(value, path, 'safe-integer'));
     }
     used.add(slot.handle);

@@ -2,6 +2,10 @@ import { constantConfigurationLimits, int32, signal, type SignalId } from '@comb
 import type { NetworkId } from '@comblang/shared';
 
 import type { ArithmeticOperation, LogicalNetworkRef } from './ir.js';
+import type {
+  BlueprintNumericExpression,
+  BlueprintNumericExpressionInspection,
+} from './blueprint-numeric-expression.js';
 import {
   assertBlueprintParameterExactKeys,
   assertBlueprintParameterNumberValue,
@@ -10,6 +14,7 @@ import {
   lookupBlueprintParameterSlot,
   openBlueprintParameterArray,
   openBlueprintParameterRecord,
+  type BlueprintParameterBinding,
   type BlueprintParameterDataBudget,
 } from './blueprint-parameter-validation.js';
 import {
@@ -25,7 +30,10 @@ import {
 const arithmeticTemplateBrand: unique symbol = Symbol('arithmetic-configuration-template');
 
 export type ArithmeticTemplateOperand =
-  | { readonly kind: 'constant'; readonly value: number | BlueprintNumberParameterHandle }
+  | {
+      readonly kind: 'constant';
+      readonly value: number | BlueprintNumberParameterHandle | BlueprintNumericExpression;
+    }
   | ({
       readonly kind: 'signal';
       readonly signal: SignalId | BlueprintSignalParameterHandle;
@@ -58,12 +66,30 @@ export interface ArithmeticConfigurationTemplateRegistration {
 
 interface ArithmeticTemplateBudget extends BlueprintParameterDataBudget {
   parameterBytes: number;
+  expressionBytes: number;
+  readonly expressionRoots: WeakSet<object>;
 }
 
 const arithmeticTemplateRegistrations = new WeakMap<
   object,
   ArithmeticConfigurationTemplateRegistration
 >();
+
+interface ArithmeticNumericExpressionAdapter {
+  readonly isRegistered: (value: unknown) => value is BlueprintNumericExpression;
+  readonly inspect: (
+    session: BlueprintParameterSession,
+    expression: unknown,
+    path: string,
+  ) => BlueprintNumericExpressionInspection;
+  readonly evaluate: (
+    session: BlueprintParameterSession,
+    expression: BlueprintNumericExpression,
+    bindings: readonly BlueprintParameterBinding[],
+  ) => number;
+}
+
+let numericExpressionAdapter: ArithmeticNumericExpressionAdapter | undefined;
 
 const operations: readonly ArithmeticOperation[] = [
   'add',
@@ -81,6 +107,47 @@ const operations: readonly ArithmeticOperation[] = [
 
 function fail(path: string, message: string, code: 'CP1000' | 'CP1001' = 'CP1000'): never {
   throw new BlueprintParameterError(code, path, message);
+}
+
+/** Installs the host-only expression implementation without pulling it into runtime consumers. */
+export function registerArithmeticNumericExpressionAdapter(
+  adapter: ArithmeticNumericExpressionAdapter,
+): void {
+  numericExpressionAdapter ??= Object.freeze(adapter);
+}
+
+export function isRegisteredArithmeticNumericExpression(
+  value: unknown,
+): value is BlueprintNumericExpression {
+  return numericExpressionAdapter?.isRegistered(value) ?? false;
+}
+
+export function inspectArithmeticNumericExpression(
+  session: BlueprintParameterSession,
+  expression: unknown,
+  path: string,
+): BlueprintNumericExpressionInspection {
+  if (
+    numericExpressionAdapter === undefined ||
+    !numericExpressionAdapter.isRegistered(expression)
+  ) {
+    fail(path, 'value is not a registered numeric expression.', 'CP1001');
+  }
+  return numericExpressionAdapter.inspect(session, expression, path);
+}
+
+export function evaluateArithmeticNumericExpression(
+  session: BlueprintParameterSession,
+  expression: BlueprintNumericExpression,
+  bindings: readonly BlueprintParameterBinding[],
+): number {
+  if (
+    numericExpressionAdapter === undefined ||
+    !numericExpressionAdapter.isRegistered(expression)
+  ) {
+    fail('$.expression', 'value is not a registered numeric expression.', 'CP1001');
+  }
+  return numericExpressionAdapter.evaluate(session, expression, bindings);
 }
 
 function addParameterBudget(
@@ -169,12 +236,28 @@ function numberSlot(
   path: string,
   session: BlueprintParameterSession,
   budget: ArithmeticTemplateBudget,
-): number | BlueprintNumberParameterHandle {
+): number | BlueprintNumberParameterHandle | BlueprintNumericExpression {
   const slot = lookupBlueprintParameterSlot(value, 'number', session, path);
   if (slot !== undefined) {
     addParameterBudget(budget, slot.registration, path);
     budget.usedParameters.add(slot.handle);
     return slot.handle as BlueprintNumberParameterHandle;
+  }
+  if (isRegisteredArithmeticNumericExpression(value)) {
+    const inspection = inspectArithmeticNumericExpression(session, value, path);
+    if (!budget.expressionRoots.has(value)) {
+      budget.expressionRoots.add(value);
+      budget.nodes += inspection.nodeCount;
+      if (budget.nodes > constantConfigurationLimits.maxNodes) {
+        fail(path, `template exceeds the node limit of ${constantConfigurationLimits.maxNodes}.`);
+      }
+      budget.expressionBytes += inspection.byteLength;
+      if (budget.expressionBytes > constantConfigurationLimits.maxBytes) {
+        fail(path, `template exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`);
+      }
+      for (const parameter of inspection.dependencies) budget.usedParameters.add(parameter);
+    }
+    return value;
   }
   return int32(assertBlueprintParameterNumberValue(value, path, 'safe-integer'));
 }
@@ -289,6 +372,8 @@ export function createArithmeticConfigurationTemplate(
   const budget: ArithmeticTemplateBudget = {
     ...createBlueprintParameterDataBudget(),
     parameterBytes: 0,
+    expressionBytes: 0,
+    expressionRoots: new WeakSet(),
   };
   const root = openBlueprintParameterRecord(value, '$', 0, budget);
   let skeleton: ArithmeticConfigurationTemplateData;
@@ -317,12 +402,16 @@ export function createArithmeticConfigurationTemplate(
 
   const templateBytes = new TextEncoder().encode(
     JSON.stringify(skeleton, (_key, child: unknown) => {
+      if (isRegisteredArithmeticNumericExpression(child)) return { kind: 'numeric-expression' };
       const parameter = findBlueprintParameterHandle(child);
       if (parameter === undefined) return child;
       return parameter.kind === 'number' ? 0 : signal('virtual', 'signal-template-placeholder');
     }),
   ).byteLength;
-  if (templateBytes + budget.parameterBytes > constantConfigurationLimits.maxBytes) {
+  if (
+    templateBytes + budget.parameterBytes + budget.expressionBytes >
+    constantConfigurationLimits.maxBytes
+  ) {
     fail('$', `template exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`);
   }
   const template = freezeDeep({

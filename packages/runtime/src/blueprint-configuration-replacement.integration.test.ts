@@ -1,5 +1,5 @@
 import { canonicalizeConstantConfiguration, signal } from '@comblang/factorio';
-import type { NetworkId, ProducerId } from '@comblang/shared';
+import type { NetworkId, ProducerId, SourceFileId, SourceSpan } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
 import { generateBlueprintJson } from '@comblang/compiler/blueprint-json';
@@ -10,7 +10,10 @@ import type {
   SelectorProducerConfig,
 } from '@comblang/compiler/ir';
 import { createBlueprintConfigurationSet } from '../../compiler/src/blueprint-configuration-set.js';
+import { bindBlueprintConfigurationSet } from '../../compiler/src/blueprint-configuration-binding.js';
 import { replaceBlueprintConfigurationSetInNativeCircuitIr } from '../../compiler/src/blueprint-configuration-binding.js';
+import type { BlueprintNumericExpression } from '../../compiler/src/blueprint-numeric-expression.js';
+import { createBlueprintNumericExpression } from '../../compiler/src/blueprint-numeric-expression.js';
 import { createBlueprintParameterSession } from '../../compiler/src/blueprint-parameters.js';
 import { createArithmeticConfigurationTemplate } from '../../compiler/src/arithmetic-configuration-template.js';
 import { createConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-template.js';
@@ -24,6 +27,40 @@ const provenance = { instancePath: [], expansionStack: [] } as const;
 function ticks(ir: NativeCircuitIr, network: NetworkId, outputSignal: typeof A): readonly number[] {
   const simulation = createSimulationFromNativeCircuitIr(ir);
   return Array.from({ length: 4 }, () => simulation.step().read(network).get(outputSignal));
+}
+
+function collectExpressionNodes(expression: BlueprintNumericExpression): Set<object> {
+  const nodes = new Set<object>();
+  const visit = (value: BlueprintNumericExpression): void => {
+    if (nodes.has(value)) return;
+    nodes.add(value);
+    if (value.kind === 'negate') visit(value.operand);
+    else if (value.kind === 'binary') {
+      visit(value.left);
+      visit(value.right);
+    }
+  };
+  visit(expression);
+  return nodes;
+}
+
+function containsReference(
+  value: unknown,
+  references: ReadonlySet<object>,
+  seen = new Set<object>(),
+): boolean {
+  if (value === null || typeof value !== 'object') return false;
+  if (references.has(value)) return true;
+  if (seen.has(value)) return false;
+  seen.add(value);
+  return Reflect.ownKeys(value).some((key) => {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    return (
+      descriptor !== undefined &&
+      'value' in descriptor &&
+      containsReference(descriptor.value, references, seen)
+    );
+  });
 }
 
 describe('configuration-set replacement concrete consumers', () => {
@@ -149,6 +186,171 @@ describe('configuration-set replacement concrete consumers', () => {
     expect(replacedTicks).toEqual(ticks(replaced, output, B));
     expect(nextResult.producers[0]).not.toBe(replaced.producers[0]);
     expect(JSON.stringify(replaced)).toBe(beforeFailure);
+  });
+
+  test('binds shared numeric expressions into detached NCIR without symbolic leakage', () => {
+    const input = 'network:expression-input' as NetworkId;
+    const output = 'network:expression-output' as NetworkId;
+    const constantId = 'producer:expression-constant' as ProducerId;
+    const arithmeticId = 'producer:expression-arithmetic' as ProducerId;
+    const source: SourceSpan = {
+      fileId: 'numeric-expression-replacement.test.ts' as SourceFileId,
+      start: 5,
+      end: 24,
+    };
+    const session = createBlueprintParameterSession();
+    const formula = session.number('formula-only-label', { defaultValue: 3, source });
+    const amount = session.number('amount-only-label', { defaultValue: 7 });
+    const offset = session.number('offset-only-label', { defaultValue: 5 });
+    const shared = {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: formula },
+      right: { kind: 'literal', value: 1 },
+    };
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'multiply',
+      left: shared,
+      right: shared,
+    });
+    const constantTemplate = createConstantConfigurationTemplate(session, {
+      sections: [{ filters: [{ signal: A, value: amount }] }],
+    });
+    const arithmeticTemplate = createArithmeticConfigurationTemplate(session, {
+      left: { kind: 'constant', value: expression },
+      operation: 'add',
+      right: { kind: 'constant', value: offset },
+      output: { kind: 'signal', signal: B },
+    });
+    const set = createBlueprintConfigurationSet(session, [
+      { key: 'source', kind: 'constant', template: constantTemplate },
+      { key: 'formula', kind: 'arithmetic', template: arithmeticTemplate },
+    ]);
+    const bindings = [
+      { parameter: formula, value: 4 },
+      { parameter: amount, value: 7 },
+      { parameter: offset, value: 6 },
+    ];
+    const bound = bindBlueprintConfigurationSet(set, bindings);
+    expect(bound[0]).toMatchObject({ config: { sections: [{ filters: [{ value: 7 }] }] } });
+    expect(bound[1]).toMatchObject({
+      config: {
+        left: { kind: 'constant', value: 25 },
+        right: { kind: 'constant', value: 6 },
+      },
+    });
+
+    const constant = canonicalizeConstantConfiguration({
+      sections: [{ filters: [{ signal: A, value: 1 }] }],
+    });
+    const arithmetic: ArithmeticProducerConfig = {
+      left: { kind: 'constant', value: 0 },
+      operation: 'add',
+      right: { kind: 'constant', value: 0 },
+      output: { kind: 'signal', signal: B },
+    };
+    const constantProducer = {
+      id: constantId,
+      kind: 'constant',
+      config: { configuration: constant },
+      destinations: [input],
+      provenance,
+    } satisfies CircuitProducerNode;
+    const arithmeticProducer = {
+      id: arithmeticId,
+      kind: 'arithmetic',
+      config: arithmetic,
+      destinations: [output],
+      provenance,
+    } satisfies CircuitProducerNode;
+    const circuit: NativeCircuitIr = {
+      format: 'comblang-ncir',
+      networks: [
+        { id: input, color: 'red', provenance },
+        { id: output, color: 'green', provenance },
+      ],
+      entities: [],
+      producers: [constantProducer, arithmeticProducer],
+    };
+    const assignments = [
+      { key: 'source', producerId: constantId },
+      { key: 'formula', producerId: arithmeticId },
+    ];
+    const replaced = replaceBlueprintConfigurationSetInNativeCircuitIr(
+      set,
+      circuit,
+      assignments,
+      bindings,
+    );
+    const manual: NativeCircuitIr = {
+      ...circuit,
+      producers: [
+        {
+          ...constantProducer,
+          config: {
+            configuration: canonicalizeConstantConfiguration({
+              sections: [{ filters: [{ signal: A, value: 7 }] }],
+            }),
+          },
+        },
+        {
+          ...arithmeticProducer,
+          config: {
+            left: { kind: 'constant', value: 25 },
+            operation: 'add',
+            right: { kind: 'constant', value: 6 },
+            output: { kind: 'signal', signal: B },
+          },
+        },
+      ],
+    };
+
+    const symbolicReferences = collectExpressionNodes(expression);
+    symbolicReferences.add(formula);
+    symbolicReferences.add(amount);
+    symbolicReferences.add(offset);
+    expect(containsReference(bound, symbolicReferences)).toBe(false);
+    expect(containsReference(replaced, symbolicReferences)).toBe(false);
+    expect(generateBlueprintJson(replaced)).toEqual(generateBlueprintJson(manual));
+    expect(JSON.stringify(replaced)).not.toContain('formula-only-label');
+    expect(JSON.stringify(replaced)).not.toContain('amount-only-label');
+    expect(JSON.stringify(replaced)).not.toContain('offset-only-label');
+    expect(replaced).not.toBe(circuit);
+    expect(replaced.networks).toEqual(circuit.networks);
+    expect(replaced.producers.map(({ id }) => id)).toEqual(circuit.producers.map(({ id }) => id));
+    expect(replaced.producers.map(({ destinations }) => destinations)).toEqual(
+      circuit.producers.map(({ destinations }) => destinations),
+    );
+
+    const boundBeforeFailure = JSON.stringify(bound);
+    const circuitBeforeFailure = JSON.stringify(circuit);
+    const replacedBeforeFailure = JSON.stringify(replaced);
+    expect(() =>
+      replaceBlueprintConfigurationSetInNativeCircuitIr(set, circuit, assignments, [
+        { parameter: formula, value: 1.5 },
+        { parameter: amount, value: 8 },
+        { parameter: offset, value: 9 },
+      ]),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1000',
+        path: '$.entries[1].left.value',
+        span: source,
+      }),
+    );
+    expect(JSON.stringify(bound)).toBe(boundBeforeFailure);
+    expect(JSON.stringify(circuit)).toBe(circuitBeforeFailure);
+    expect(JSON.stringify(replaced)).toBe(replacedBeforeFailure);
+
+    const next = replaceBlueprintConfigurationSetInNativeCircuitIr(set, circuit, assignments, [
+      { parameter: formula, value: 5 },
+      { parameter: amount, value: 9 },
+      { parameter: offset, value: 2 },
+    ]);
+    expect(next.producers[1]).not.toBe(replaced.producers[1]);
+    expect(JSON.stringify(replaced)).toBe(replacedBeforeFailure);
+    expect(JSON.stringify(circuit)).toBe(circuitBeforeFailure);
   });
 
   test('matches Selector Blueprint JSON and repeated simulator ticks', () => {

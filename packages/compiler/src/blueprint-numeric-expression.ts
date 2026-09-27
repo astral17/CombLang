@@ -1,6 +1,7 @@
 import { constantConfigurationLimits } from '@comblang/factorio';
 import type { SourceSpan } from '@comblang/shared';
 
+import { registerArithmeticNumericExpressionAdapter } from './arithmetic-configuration-template.js';
 import {
   assertBlueprintParameterFromSession,
   assertBlueprintParameterSession,
@@ -54,6 +55,21 @@ export type BlueprintNumericExpression =
   | BlueprintNumericParameterExpression
   | BlueprintNumericNegateExpression
   | BlueprintNumericBinaryExpression;
+
+export interface BlueprintNumericExpressionInspection {
+  readonly session: BlueprintParameterSession;
+  readonly dependencies: readonly BlueprintNumberParameterHandle[];
+  readonly nodeCount: number;
+  readonly byteLength: number;
+  readonly source?: SourceSpan;
+}
+
+/** Returns true only for nodes created by this module's nominal constructor. */
+export function isRegisteredBlueprintNumericExpression(
+  value: unknown,
+): value is BlueprintNumericExpression {
+  return isObject(value) && registeredExpressions.has(value);
+}
 
 type NumericExpressionNode =
   | { readonly kind: 'literal'; readonly value: number }
@@ -154,6 +170,122 @@ function chargeNode(
       registration?.source,
     );
   }
+}
+
+/** Inspects one registered expression without exposing its mutable construction state. */
+export function inspectBlueprintNumericExpression(
+  session: BlueprintParameterSession,
+  expression: unknown,
+  path: string,
+): BlueprintNumericExpressionInspection {
+  assertBlueprintParameterSession(session, '$.session');
+  const dependencies: BlueprintNumberParameterHandle[] = [];
+  const dependencySet = new Set<object>();
+  const active = new WeakSet<object>();
+  const visited = new WeakSet<object>();
+  let nodeCount = 0;
+  let byteLength = 0;
+  let source: SourceSpan | undefined;
+
+  const visitRegistered = (value: unknown, nodePath: string, depth: number): void => {
+    if (!isObject(value)) {
+      fail('CP1001', nodePath, 'value is not a registered numeric expression.');
+    }
+    const registered = registeredExpressions.get(value);
+    if (registered === undefined) {
+      fail('CP1001', nodePath, 'value is not a registered numeric expression.');
+    }
+    if (registered.session !== session) {
+      fail(
+        'CP1001',
+        nodePath,
+        'numeric expression belongs to a different parameter session.',
+        registered.source,
+      );
+    }
+    if (depth === 0) source = registered.source;
+    if (active.has(value)) {
+      fail('CP1000', nodePath, 'cyclic numeric expression graph is not supported.');
+    }
+    if (depth + registered.height > constantConfigurationLimits.maxDepth) {
+      fail(
+        'CP1000',
+        nodePath,
+        `expression exceeds the depth limit of ${constantConfigurationLimits.maxDepth}.`,
+        registered.source,
+      );
+    }
+    if (visited.has(value)) return;
+
+    active.add(value);
+    nodeCount += 1;
+    if (nodeCount > constantConfigurationLimits.maxNodes) {
+      fail(
+        'CP1000',
+        nodePath,
+        `expression exceeds the node limit of ${constantConfigurationLimits.maxNodes}.`,
+        registered.source,
+      );
+    }
+
+    let parameterRegistration: BlueprintParameterRegistration | undefined;
+    if (registered.node.kind === 'parameter') {
+      parameterRegistration = assertBlueprintParameterFromSession(
+        session,
+        registered.node.parameter,
+        `${nodePath}.parameter`,
+      );
+      if (parameterRegistration.kind !== 'number') {
+        fail(
+          'CP1001',
+          `${nodePath}.parameter`,
+          'numeric expressions can reference only number parameters.',
+          parameterRegistration.source,
+        );
+      }
+      const parameter = canonicalBlueprintParameterHandle(registered.node.parameter);
+      if (parameter === undefined || parameter.kind !== 'number') {
+        fail(
+          'CP1001',
+          `${nodePath}.parameter`,
+          'value is not a registered number parameter handle.',
+          parameterRegistration.source,
+        );
+      }
+      if (!dependencySet.has(parameter)) {
+        dependencySet.add(parameter);
+        dependencies.push(parameter);
+      }
+    }
+
+    byteLength += nodeByteCost(registered.node, parameterRegistration);
+    if (byteLength > constantConfigurationLimits.maxBytes) {
+      fail(
+        'CP1000',
+        nodePath,
+        `expression exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`,
+        parameterRegistration?.source ?? registered.source,
+      );
+    }
+
+    if (registered.node.kind === 'negate') {
+      visitRegistered(registered.node.operand, `${nodePath}.operand`, depth + 1);
+    } else if (registered.node.kind === 'binary') {
+      visitRegistered(registered.node.left, `${nodePath}.left`, depth + 1);
+      visitRegistered(registered.node.right, `${nodePath}.right`, depth + 1);
+    }
+    active.delete(value);
+    visited.add(value);
+  };
+
+  visitRegistered(expression, path, 0);
+  return Object.freeze({
+    session,
+    dependencies: Object.freeze(dependencies),
+    nodeCount,
+    byteLength,
+    ...(source ? { source } : {}),
+  });
 }
 
 function readPlainRecord(value: unknown, path: string): Record<string, unknown> {
@@ -550,3 +682,10 @@ export function evaluateBlueprintNumericExpression(
   }
   return result.value;
 }
+
+registerArithmeticNumericExpressionAdapter({
+  isRegistered: isRegisteredBlueprintNumericExpression,
+  inspect: inspectBlueprintNumericExpression,
+  evaluate: (session, expression, bindings) =>
+    evaluateBlueprintNumericExpression(session, expression, bindings),
+});

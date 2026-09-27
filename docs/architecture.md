@@ -34,6 +34,11 @@ deterministic left-to-right order, preserves negative zero, and memoizes shared
 nodes per evaluation. An expression can be built only while its owning
 parameter session is open, then evaluated after sealing.
 
+The reviewed host-local use is limited to the `value` of either constant
+operand in an Arithmetic configuration template. Binding evaluates that DAG,
+requires a safe-integer result, then applies the existing int32 normalization
+before producing concrete NCIR. The symbolic graph does not cross that boundary.
+
 This is an internal modeling layer only. It adds no source syntax, Direct
 Plan/NCIR/Worker representation, Factorio formula grammar, native operator
 mapping, or claim about placement-time Factorio semantics. Native formula and

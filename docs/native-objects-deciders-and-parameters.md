@@ -242,6 +242,9 @@ registered number-parameter references, unary negation, and binary addition,
 subtraction, and multiplication, with bounded construction and a pure
 default/binding evaluator. This internal foundation neither parses nor emits
 Factorio formulas and does not establish native formula arithmetic semantics.
+The reviewed integration is limited to a host-local Arithmetic template's
+constant operand value; binding produces only the existing concrete int32
+configuration value and does not export a native formula field.
 
 Native formula variables and dependent parameters remain future work. Recipe
 ingredients, recipe products, native numeric formulas, and parameter properties

@@ -3,6 +3,7 @@ import type { SourceFileId, SourceSpan } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
 import { createBlueprintParameterSession } from './blueprint-parameters.js';
+import { createBlueprintNumericExpression } from './blueprint-numeric-expression.js';
 import { createArithmeticConfigurationTemplate } from './arithmetic-configuration-template.js';
 import { bindArithmeticConfigurationTemplate } from './arithmetic-configuration-binding.js';
 
@@ -13,6 +14,167 @@ const source: SourceSpan = {
 };
 
 describe('binding symbolic Arithmetic configuration templates', () => {
+  test('evaluates expression slots with defaults and changed bindings before int32 normalization', () => {
+    const session = createBlueprintParameterSession();
+    const parameter = session.number('parameter', { defaultValue: 3, source });
+    const sharedReference = { kind: 'parameter', parameter };
+    const leftExpression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'subtract',
+      left: {
+        kind: 'binary',
+        operator: 'subtract',
+        left: { kind: 'literal', value: 100 },
+        right: sharedReference,
+      },
+      right: {
+        kind: 'binary',
+        operator: 'multiply',
+        left: sharedReference,
+        right: { kind: 'literal', value: 3 },
+      },
+    });
+    const rightExpression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'literal', value: 2_147_483_647 },
+      right: { kind: 'parameter', parameter },
+    });
+    const template = createArithmeticConfigurationTemplate(session, {
+      left: { kind: 'constant', value: leftExpression },
+      operation: 'add',
+      right: { kind: 'constant', value: rightExpression },
+      output: { kind: 'each' },
+    });
+
+    const defaults = bindArithmeticConfigurationTemplate(template);
+    const changedOnce = bindArithmeticConfigurationTemplate(template, [{ parameter, value: 4 }]);
+    const changedAgain = bindArithmeticConfigurationTemplate(template, [{ parameter, value: 7 }]);
+
+    expect(defaults.left).toEqual({ kind: 'constant', value: 88 });
+    expect(defaults.right).toEqual({ kind: 'constant', value: -2_147_483_646 });
+    expect(changedOnce.left).toEqual({ kind: 'constant', value: 84 });
+    expect(changedOnce.right).toEqual({ kind: 'constant', value: -2_147_483_645 });
+    expect(changedAgain.left).toEqual({ kind: 'constant', value: 72 });
+    expect(changedAgain.right).toEqual({ kind: 'constant', value: -2_147_483_642 });
+
+    const direct = session.number('direct', { defaultValue: 2 });
+    const directTemplate = createArithmeticConfigurationTemplate(session, {
+      left: { kind: 'constant', value: direct },
+      operation: 'add',
+      right: { kind: 'constant', value: 2_147_483_649 },
+      output: { kind: 'each' },
+    });
+    expect(
+      bindArithmeticConfigurationTemplate(directTemplate, [{ parameter: direct, value: 5 }]),
+    ).toEqual({
+      left: { kind: 'constant', value: 5 },
+      operation: 'add',
+      right: { kind: 'constant', value: -2_147_483_647 },
+      output: { kind: 'each' },
+    });
+  });
+
+  test('filters expression bindings to its dependencies and retains template-wide usage checks', () => {
+    const session = createBlueprintParameterSession();
+    const formula = session.number('formula', { defaultValue: 3, source });
+    const direct = session.number('direct', { defaultValue: 4, source });
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: formula },
+      right: { kind: 'literal', value: 1 },
+    });
+    const template = createArithmeticConfigurationTemplate(session, {
+      left: { kind: 'constant', value: expression },
+      operation: 'subtract',
+      right: { kind: 'constant', value: direct },
+      output: { kind: 'each' },
+    });
+
+    expect(
+      bindArithmeticConfigurationTemplate(template, [
+        { parameter: formula, value: 8 },
+        { parameter: direct, value: 9 },
+      ]),
+    ).toEqual({
+      left: { kind: 'constant', value: 9 },
+      operation: 'subtract',
+      right: { kind: 'constant', value: 9 },
+      output: { kind: 'each' },
+    });
+    expect(() =>
+      bindArithmeticConfigurationTemplate(template, [
+        { parameter: formula, value: 8 },
+        { parameter: session.number('unused', { defaultValue: 1 }), value: 1 },
+      ]),
+    ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.bindings' }));
+  });
+
+  test('reports expression missing, foreign, duplicate, fractional, and overflow failures atomically', () => {
+    const session = createBlueprintParameterSession();
+    const foreignSession = createBlueprintParameterSession();
+    const parameter = session.number('formula', { source });
+    const foreign = foreignSession.number('foreign', { source });
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'multiply',
+      left: { kind: 'parameter', parameter },
+      right: { kind: 'literal', value: 3 },
+    });
+    const template = createArithmeticConfigurationTemplate(session, {
+      left: { kind: 'constant', value: expression },
+      operation: 'add',
+      right: { kind: 'constant', value: 1 },
+      output: { kind: 'each' },
+    });
+
+    expect(() => bindArithmeticConfigurationTemplate(template)).toThrowError(
+      expect.objectContaining({
+        code: 'CP1002',
+        path: '$.left.value.left.parameter',
+        span: source,
+      }),
+    );
+    expect(() =>
+      bindArithmeticConfigurationTemplate(template, [{ parameter: foreign, value: 2 }]),
+    ).toThrowError(
+      expect.objectContaining({ code: 'CP1001', path: '$.bindings[0].parameter', span: source }),
+    );
+    expect(() =>
+      bindArithmeticConfigurationTemplate(template, [
+        { parameter, value: 2 },
+        { parameter, value: 3 },
+      ]),
+    ).toThrowError(
+      expect.objectContaining({ code: 'CP1001', path: '$.bindings[1].parameter', span: source }),
+    );
+    expect(() =>
+      bindArithmeticConfigurationTemplate(template, [{ parameter, value: 1.5 }]),
+    ).toThrowError(expect.objectContaining({ code: 'CP1000', path: '$.left.value', span: source }));
+
+    const overflow = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'multiply',
+      left: { kind: 'literal', value: Number.MAX_VALUE },
+      right: { kind: 'literal', value: Number.MAX_VALUE },
+    });
+    const overflowTemplate = createArithmeticConfigurationTemplate(session, {
+      left: { kind: 'constant', value: overflow },
+      operation: 'add',
+      right: { kind: 'constant', value: 1 },
+      output: { kind: 'each' },
+    });
+    expect(() => bindArithmeticConfigurationTemplate(overflowTemplate)).toThrowError(
+      expect.objectContaining({ code: 'CP1000', path: '$.left.value' }),
+    );
+
+    expect(bindArithmeticConfigurationTemplate(template, [{ parameter, value: 8 }]).left).toEqual({
+      kind: 'constant',
+      value: 24,
+    });
+  });
+
   test('applies defaults and Signal overrides to a fresh immutable concrete config', () => {
     const session = createBlueprintParameterSession();
     const count = session.number('count', { defaultValue: 0, source });

@@ -14,6 +14,7 @@ import {
 import {
   createBlueprintNumericExpression,
   evaluateBlueprintNumericExpression,
+  inspectBlueprintNumericExpression,
 } from './blueprint-numeric-expression.js';
 import { assertBlueprintParameterNumberValue } from './blueprint-parameter-validation.js';
 
@@ -96,6 +97,31 @@ describe('host-local blueprint numeric expressions', () => {
     expect(
       evaluateBlueprintNumericExpression(session, expression, [{ parameter, value: 11 }]),
     ).toBe(11);
+  });
+
+  test('inspects ordered unique dependencies on a shared DAG, including after sealing', () => {
+    const session = createBlueprintParameterSession();
+    const parameter = session.number('shared', { defaultValue: 5, source });
+    const sharedReference = { kind: 'parameter', parameter };
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: sharedReference,
+      right: sharedReference,
+    });
+
+    const beforeSeal = inspectBlueprintNumericExpression(session, expression, '$.expression');
+    sealBlueprintParameterSession(session, '$.session');
+    const afterSeal = inspectBlueprintNumericExpression(session, expression, '$.expression');
+
+    expect(beforeSeal.session).toBe(session);
+    expect(beforeSeal.dependencies).toEqual([parameter]);
+    expect(beforeSeal.nodeCount).toBe(2);
+    expect(beforeSeal.byteLength).toBeGreaterThan(0);
+    expect(Object.isFrozen(beforeSeal)).toBe(true);
+    expect(Object.isFrozen(beforeSeal.dependencies)).toBe(true);
+    expect(afterSeal).toEqual(beforeSeal);
+    expect(evaluateBlueprintNumericExpression(session, expression)).toBe(10);
   });
 
   test('rejects signal, foreign, and forged parameter references', () => {
@@ -339,8 +365,14 @@ describe('host-local blueprint numeric expressions', () => {
     expect(() => evaluateBlueprintNumericExpression(other, expression)).toThrowError(
       expect.objectContaining({ code: 'CP1001', path: '$.expression' }),
     );
+    expect(() => inspectBlueprintNumericExpression(other, expression, '$.expression')).toThrowError(
+      expect.objectContaining({ code: 'CP1001', path: '$.expression' }),
+    );
     expect(() =>
       evaluateBlueprintNumericExpression(owner, { kind: 'literal', value: 4 } as never),
+    ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.expression' }));
+    expect(() =>
+      inspectBlueprintNumericExpression(owner, { kind: 'literal', value: 4 }, '$.expression'),
     ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.expression' }));
     expect(() =>
       createBlueprintNumericExpression(other, {

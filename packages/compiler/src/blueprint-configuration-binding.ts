@@ -14,7 +14,10 @@ import {
   inspectBlueprintParameterHandle,
 } from './blueprint-parameters.js';
 import { bindArithmeticConfigurationTemplate } from './arithmetic-configuration-binding.js';
-import { inspectArithmeticConfigurationTemplate } from './arithmetic-configuration-template.js';
+import {
+  inspectArithmeticConfigurationTemplate,
+  isRegisteredArithmeticNumericExpression,
+} from './arithmetic-configuration-template.js';
 import { bindConstantConfigurationTemplate } from './constant-configuration-binding.js';
 import { inspectConstantConfigurationTemplate } from './constant-configuration-template.js';
 import { bindDeciderConfigurationTemplate } from './decider-configuration-binding.js';
@@ -347,6 +350,9 @@ function sameConcreteValue(
 }
 
 function templateSlotMatches(templateValue: unknown, concreteValue: unknown): boolean {
+  if (isRegisteredArithmeticNumericExpression(templateValue)) {
+    return typeof concreteValue === 'number';
+  }
   const parameter = findBlueprintParameterHandle(templateValue);
   if (parameter === undefined) return sameConcreteValue(templateValue, concreteValue);
   return parameter.kind === 'number'
