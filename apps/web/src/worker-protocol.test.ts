@@ -36,6 +36,7 @@ describe('compiler Worker protocol', () => {
     expect(Object.keys(request)).toEqual(['kind', 'revision', 'file']);
     expect('parameters' in request).toBe(false);
     expect('session' in request).toBe(false);
+    expect('arithmeticTemplates' in request).toBe(false);
     expect(structuredClone(request)).toEqual(request);
   });
 });

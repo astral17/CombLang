@@ -232,6 +232,10 @@ const result = Lookup(source);`,
       },
     });
     expect(response.result).not.toHaveProperty('execution');
+    expect(response.result).not.toHaveProperty('session');
+    expect(response.result).not.toHaveProperty('parameters');
+    expect(response.result).not.toHaveProperty('arithmeticTemplates');
+    expect(JSON.stringify(response)).not.toContain('arithmeticTemplates');
     expect(structuredClone(response)).toEqual(response);
   });
 

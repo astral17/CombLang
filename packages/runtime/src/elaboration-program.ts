@@ -137,9 +137,15 @@ import {
   type CapturedBlueprintParameter,
 } from './blueprint-parameter-capture.js';
 import {
+  createArithmeticConfigurationTemplate,
+  type ArithmeticConfigurationTemplate,
+} from '../../compiler/src/arithmetic-configuration-template.js';
+import {
   findBlueprintParameterHandle,
+  type BlueprintNumberParameterHandle,
   type BlueprintParameterSession,
 } from '../../compiler/src/blueprint-parameters.js';
+import { lookupBlueprintParameterSlot } from '../../compiler/src/blueprint-parameter-validation.js';
 
 interface RawSpan {
   readonly start: number;
@@ -152,7 +158,34 @@ interface CallArgument {
   readonly fieldSources?: Readonly<Record<string, RawSpan>>;
 }
 
+interface CapturedArithmeticConfigurationTemplate {
+  readonly captureId: string;
+  readonly template: ArithmeticConfigurationTemplate;
+  readonly source: SourceSpan;
+}
+
 type PlanDeciderOutput = Extract<DirectPlanProducer, { kind: 'decider' }>['output'];
+
+type ExactArithmeticConfiguration = Omit<
+  Extract<DirectPlanArithmetic, { readonly kind: 'arithmetic' }>,
+  | 'kind'
+  | 'destinations'
+  | 'source'
+  | 'instancePath'
+  | 'bindingName'
+  | 'debugCaptureIds'
+  | 'placement'
+>;
+
+interface NormalizedArithmeticConfiguration {
+  readonly configuration: ExactArithmeticConfiguration;
+  readonly parameterSlots:
+    | {
+        readonly left?: BlueprintNumberParameterHandle;
+        readonly right?: BlueprintNumberParameterHandle;
+      }
+    | undefined;
+}
 
 type NormalizedSelectorConfiguration =
   | Pick<
@@ -241,10 +274,14 @@ interface TopologySnapshot {
   readonly networksLength: number;
   readonly networkStates: ReadonlyMap<string, NetworkRuntimeState>;
   readonly networkNameCounts: ReadonlyMap<string, number>;
+  readonly networkAliases: ReadonlyMap<string, PendingNetworkAlias>;
   readonly networkTransfersLength: number;
   readonly combinatorOrdinal: number;
   readonly combinatorByOutput: ReadonlyMap<NetworkOwnershipState, CombinatorValue>;
   readonly combinators: CombinatorRegistrySnapshot;
+  readonly arithmeticTemplatesLength: number;
+  readonly debugInstancesLength: number;
+  readonly debugInstanceCounts: ReadonlyMap<string, number>;
   readonly ownership: readonly NetworkOwnershipSnapshot[];
   readonly colors: ElaborationColorConstraints;
   readonly entityRegistry?: EntityRegistrySnapshot;
@@ -373,6 +410,7 @@ class ElaborationRecorder {
   readonly #diagnostics: Diagnostic[] = [];
   readonly #implicitBorrowWarnings = new Set<string>();
   readonly #combinators = new CombinatorRegistry();
+  readonly #arithmeticTemplates: CapturedArithmeticConfigurationTemplate[] = [];
   readonly #combinatorByOutput = new Map<NetworkOwnershipState, CombinatorValue>();
   readonly #runtimeValues = new RuntimeValueRegistry();
   readonly #deciderMemberAliases = new WeakMap<
@@ -632,54 +670,58 @@ class ElaborationRecorder {
       }
     },
     instantiate: (...args: unknown[]): unknown => {
-      this.#recordDslCall();
       const rawSpan = args.at(-1);
-      const bindingName = args[0];
-      const factory = args[1];
-      const values = args.slice(2, -1);
       if (!isRawSpan(rawSpan)) throw new Error('t.instantiate(...) is missing provenance.');
-      if (typeof bindingName !== 'string' || bindingName.length === 0) {
-        throw new Error('t.instantiate(...) requires a stable instance name.');
-      }
-      if (typeof factory !== 'function') {
-        throw new ElaborationExecutionError(
-          't.instantiate(fn, ...args) requires a function as its first argument.',
-          this.#span(rawSpan),
-          'RT2026',
-        );
-      }
-      if (this.#pendingDebugInstance !== undefined) {
-        throw new Error('A debug instance factory entered another capture before function entry.');
-      }
-      const key = JSON.stringify([...this.#instancePath, bindingName]);
-      const occurrence = (this.#debugInstanceCounts.get(key) ?? 0) + 1;
-      this.#debugInstanceCounts.set(key, occurrence);
-      const capture: PendingDebugInstance = {
-        segment: `DUT ${bindingName}${occurrence === 1 ? '' : ` #${occurrence}`}`,
-      };
-      this.#pendingDebugInstance = capture;
-      let value: unknown;
-      try {
-        value = (factory as (...factoryArgs: unknown[]) => unknown)(...values);
-      } finally {
-        if (this.#pendingDebugInstance === capture) this.#pendingDebugInstance = undefined;
-      }
-      if (capture.path === undefined) {
-        throw new ElaborationExecutionError(
-          't.instantiate(...) requires an instrumented function declaration.',
-          this.#span(rawSpan),
-          'RT2026',
-        );
-      }
-      this.#debugInstances.push({
-        name: bindingName,
-        path: capture.path,
-        source: this.#span(rawSpan),
-        value: this.#debugValue(value, rawSpan, new Set()),
-      });
-      return Object.freeze({
-        value,
-        $: Object.freeze({ kind: 'debug-scope-token', name: bindingName, path: capture.path }),
+      return this.#withTopologyTransaction(rawSpan, () => {
+        this.#recordDslCall();
+        const bindingName = args[0];
+        const factory = args[1];
+        const values = args.slice(2, -1);
+        if (typeof bindingName !== 'string' || bindingName.length === 0) {
+          throw new Error('t.instantiate(...) requires a stable instance name.');
+        }
+        if (typeof factory !== 'function') {
+          throw new ElaborationExecutionError(
+            't.instantiate(fn, ...args) requires a function as its first argument.',
+            this.#span(rawSpan),
+            'RT2026',
+          );
+        }
+        if (this.#pendingDebugInstance !== undefined) {
+          throw new Error(
+            'A debug instance factory entered another capture before function entry.',
+          );
+        }
+        const key = JSON.stringify([...this.#instancePath, bindingName]);
+        const occurrence = (this.#debugInstanceCounts.get(key) ?? 0) + 1;
+        this.#debugInstanceCounts.set(key, occurrence);
+        const capture: PendingDebugInstance = {
+          segment: `DUT ${bindingName}${occurrence === 1 ? '' : ` #${occurrence}`}`,
+        };
+        this.#pendingDebugInstance = capture;
+        let value: unknown;
+        try {
+          value = (factory as (...factoryArgs: unknown[]) => unknown)(...values);
+        } finally {
+          if (this.#pendingDebugInstance === capture) this.#pendingDebugInstance = undefined;
+        }
+        if (capture.path === undefined) {
+          throw new ElaborationExecutionError(
+            't.instantiate(...) requires an instrumented function declaration.',
+            this.#span(rawSpan),
+            'RT2026',
+          );
+        }
+        this.#debugInstances.push({
+          name: bindingName,
+          path: capture.path,
+          source: this.#span(rawSpan),
+          value: this.#debugValue(value, rawSpan, new Set()),
+        });
+        return Object.freeze({
+          value,
+          $: Object.freeze({ kind: 'debug-scope-token', name: bindingName, path: capture.path }),
+        });
       });
     },
     signal: (...args: unknown[]) => {
@@ -875,9 +917,10 @@ class ElaborationRecorder {
           );
         }
         const argument = arguments_[0]!;
-        const configuration = this.#normalizeArithmeticConfigurationSource(
+        const normalized = this.#normalizeArithmeticConfigurationSource(
           argument.value,
           argument.source,
+          rawSpan,
         );
         if (this.#resolveCanonicalArithmeticProfile(rawSpan) === undefined) {
           throw new ElaborationExecutionError(
@@ -886,15 +929,20 @@ class ElaborationRecorder {
             'RT2027',
           );
         }
-        return this.#createCombinator(
+        const producer = this.#createCombinator(
           {
             kind: 'arithmetic',
-            ...configuration,
+            ...normalized.configuration,
             source: this.#span(rawSpan),
             instancePath: this.#path(),
           },
           rawSpan,
         );
+        if (normalized.parameterSlots !== undefined) {
+          const { captureId } = this.#combinators.capture(producer);
+          this.#captureArithmeticTemplate(producer, captureId, normalized.parameterSlots);
+        }
+        return producer;
       }),
     deciderOverload: (arguments_: readonly CallArgument[], rawSpan: RawSpan): CombinatorValue =>
       this.#withTopologyTransaction(rawSpan, () => {
@@ -2220,6 +2268,10 @@ class ElaborationRecorder {
     }
   }
 
+  arithmeticTemplates(): readonly CapturedArithmeticConfigurationTemplate[] {
+    return Object.freeze([...this.#arithmeticTemplates]);
+  }
+
   executionApi(): typeof this.api {
     const executionOperations: Record<string, unknown> = { ...this.api };
     if (this.#parameterCapture !== undefined) {
@@ -2531,6 +2583,42 @@ class ElaborationRecorder {
       't.instantiate(...) can retain only Networks, Producers, literals, arrays, and plain objects.',
       this.#span(rawSpan),
       'RT2026',
+    );
+  }
+
+  #captureArithmeticTemplate(
+    value: CombinatorValue,
+    captureId: string,
+    parameterSlots: {
+      readonly left?: BlueprintNumberParameterHandle;
+      readonly right?: BlueprintNumberParameterHandle;
+    },
+  ): void {
+    if (this.#parameterCapture === undefined) return;
+    const descriptor = this.#combinators.stateFor(value).descriptor;
+    if (descriptor.kind !== 'arithmetic') {
+      throw new Error('Arithmetic parameter slots were associated with a non-Arithmetic producer.');
+    }
+    const templateOperand = (
+      operand: PlanArithmeticOperand,
+      parameter: BlueprintNumberParameterHandle | undefined,
+    ): unknown => {
+      if (parameter !== undefined) return { kind: 'constant', value: parameter };
+      return operand.kind === 'signal'
+        ? { ...operand, signal: this.#signalSnapshot(operand.signal) }
+        : operand;
+    };
+    const template = createArithmeticConfigurationTemplate(this.#parameterCapture.session, {
+      left: templateOperand(descriptor.left, parameterSlots.left),
+      operation: descriptor.operation,
+      right: templateOperand(descriptor.right, parameterSlots.right),
+      output:
+        descriptor.output.kind === 'signal'
+          ? { kind: 'signal', signal: descriptor.output.signal }
+          : { kind: 'each' },
+    });
+    this.#arithmeticTemplates.push(
+      Object.freeze({ captureId, template, source: Object.freeze({ ...descriptor.source }) }),
     );
   }
 
@@ -3286,10 +3374,14 @@ class ElaborationRecorder {
       networksLength: this.#networks.length,
       networkStates: new Map(this.#networkStates),
       networkNameCounts: new Map(this.#networkNameCounts),
+      networkAliases: new Map(this.#networkAliases),
       networkTransfersLength: this.#networkTransfers.length,
       combinatorOrdinal: this.#combinatorOrdinal,
       combinatorByOutput: new Map(this.#combinatorByOutput),
       combinators: this.#combinators.snapshot(),
+      arithmeticTemplatesLength: this.#arithmeticTemplates.length,
+      debugInstancesLength: this.#debugInstances.length,
+      debugInstanceCounts: new Map(this.#debugInstanceCounts),
       ownership: [...ownership.values()],
       colors: this.#colors.clone(),
       ...(this.#entityRegistry === undefined
@@ -3309,12 +3401,19 @@ class ElaborationRecorder {
     this.#networkNameCounts.clear();
     for (const [name, count] of snapshot.networkNameCounts)
       this.#networkNameCounts.set(name, count);
+    this.#networkAliases.clear();
+    for (const [key, alias] of snapshot.networkAliases) this.#networkAliases.set(key, alias);
     this.#combinatorOrdinal = snapshot.combinatorOrdinal;
     this.#combinatorByOutput.clear();
     for (const [ownership, combinator] of snapshot.combinatorByOutput) {
       this.#combinatorByOutput.set(ownership, combinator);
     }
     this.#combinators.restore(snapshot.combinators);
+    this.#arithmeticTemplates.length = snapshot.arithmeticTemplatesLength;
+    this.#debugInstances.length = snapshot.debugInstancesLength;
+    this.#debugInstanceCounts.clear();
+    for (const [key, count] of snapshot.debugInstanceCounts)
+      this.#debugInstanceCounts.set(key, count);
     for (const saved of snapshot.ownership) {
       const state = saved.state;
       state.generation = saved.generation;
@@ -3806,16 +3905,8 @@ class ElaborationRecorder {
   #normalizeArithmeticConfigurationSource(
     value: unknown,
     source: RawSpan,
-  ): Omit<
-    Extract<DirectPlanArithmetic, { readonly kind: 'arithmetic' }>,
-    | 'kind'
-    | 'destinations'
-    | 'source'
-    | 'instancePath'
-    | 'bindingName'
-    | 'debugCaptureIds'
-    | 'placement'
-  > {
+    useSite: RawSpan,
+  ): NormalizedArithmeticConfiguration {
     if (!isPlainDataRecord(value)) {
       throw new ElaborationExecutionError(
         'Arithmetic configuration must be a plain data record.',
@@ -3854,9 +3945,70 @@ class ElaborationRecorder {
     }
     let left: PlanArithmeticOperand;
     let right: PlanArithmeticOperand;
+    let leftParameter: BlueprintNumberParameterHandle | undefined;
+    let rightParameter: BlueprintNumberParameterHandle | undefined;
     try {
-      left = this.#arithmeticOperand(value.left as DslValue, source);
-      right = this.#arithmeticOperand(value.right as DslValue, source);
+      const normalizeOperand = (
+        operand: unknown,
+        field: 'left' | 'right',
+      ): {
+        readonly operand: PlanArithmeticOperand;
+        readonly parameter?: BlueprintNumberParameterHandle;
+      } => {
+        if (this.#parameterCapture === undefined) {
+          return { operand: this.#arithmeticOperand(operand as DslValue, source) };
+        }
+        let slot;
+        try {
+          slot = lookupBlueprintParameterSlot(
+            operand,
+            'number',
+            this.#parameterCapture.session,
+            `$.${field}`,
+          );
+        } catch (error) {
+          throw new ElaborationExecutionError(
+            error instanceof Error ? error.message : 'Invalid Arithmetic parameter slot.',
+            this.#span(useSite),
+            'RT2027',
+            undefined,
+            { cause: error },
+          );
+        }
+        if (slot === undefined) {
+          return { operand: this.#arithmeticOperand(operand as DslValue, source) };
+        }
+        if (typeof slot.registration.defaultValue !== 'number') {
+          throw new ElaborationExecutionError(
+            `Arithmetic ${field} number parameter requires a numeric default value.`,
+            this.#span(useSite),
+            'RT2027',
+          );
+        }
+        try {
+          return {
+            operand: {
+              kind: 'constant',
+              value: circuitConstant(slot.registration.defaultValue),
+            },
+            parameter: slot.handle as BlueprintNumberParameterHandle,
+          };
+        } catch (error) {
+          throw new ElaborationExecutionError(
+            error instanceof Error ? error.message : 'Invalid Arithmetic number parameter default.',
+            this.#span(useSite),
+            'RT2027',
+            undefined,
+            { cause: error },
+          );
+        }
+      };
+      const normalizedLeft = normalizeOperand(value.left, 'left');
+      const normalizedRight = normalizeOperand(value.right, 'right');
+      left = normalizedLeft.operand;
+      right = normalizedRight.operand;
+      leftParameter = normalizedLeft.parameter;
+      rightParameter = normalizedRight.parameter;
     } catch (error) {
       if (error instanceof ElaborationExecutionError) throw error;
       throw new ElaborationExecutionError(
@@ -3880,7 +4032,17 @@ class ElaborationRecorder {
         'RT2027',
       );
     }
-    return { left, operation: operation as ArithmeticOperation, right, output };
+    const parameterSlots =
+      leftParameter === undefined && rightParameter === undefined
+        ? undefined
+        : {
+            ...(leftParameter === undefined ? {} : { left: leftParameter }),
+            ...(rightParameter === undefined ? {} : { right: rightParameter }),
+          };
+    return {
+      configuration: { left, operation: operation as ArithmeticOperation, right, output },
+      parameterSlots,
+    };
   }
 
   #createSectionValue(arguments_: readonly CallArgument[], rawSpan: RawSpan): SectionValue {
@@ -5880,7 +6042,10 @@ function executeElaborationProgramInternal(
   program: ElaborationJavaScript,
   options: ElaborationExecutionOptions = {},
   parameterCapture?: BlueprintParameterCapture,
-): DirectElaborationPlan {
+): {
+  readonly plan: DirectElaborationPlan;
+  readonly arithmeticTemplates: readonly CapturedArithmeticConfigurationTemplate[];
+} {
   if (program.format !== 'comblang-elaboration-js') {
     throw new Error('Unsupported elaboration JavaScript format.');
   }
@@ -5911,7 +6076,8 @@ function executeElaborationProgramInternal(
     recorder.closeAfterExecution();
     throw error;
   }
-  return recorder.plan();
+  const plan = recorder.plan();
+  return Object.freeze({ plan, arithmeticTemplates: recorder.arithmeticTemplates() });
 }
 
 /** Executes the canonical source path and preserves the host-supplied replay context. */
@@ -5919,7 +6085,7 @@ export function executeElaborationProgram(
   program: ElaborationJavaScript,
   options: ElaborationExecutionOptions = {},
 ): DirectElaborationPlan {
-  return executeElaborationProgramInternal(program, options);
+  return executeElaborationProgramInternal(program, options).plan;
 }
 
 /** Host-local test/preparation seam; deliberately omitted from the runtime package barrel. */
@@ -5927,6 +6093,7 @@ export interface ExecutedElaborationWithBlueprintParameters {
   readonly plan: DirectElaborationPlan;
   readonly session: BlueprintParameterSession;
   readonly parameters: readonly CapturedBlueprintParameter[];
+  readonly arithmeticTemplates: readonly CapturedArithmeticConfigurationTemplate[];
 }
 
 /** Executes once and returns parameter capture beside, never inside, the concrete plan. */
@@ -5936,9 +6103,9 @@ export function executeElaborationProgramWithParameters(
 ): ExecutedElaborationWithBlueprintParameters {
   const capture = new BlueprintParameterCapture();
   try {
-    const plan = executeElaborationProgramInternal(program, options, capture);
+    const execution = executeElaborationProgramInternal(program, options, capture);
     return Object.freeze({
-      plan,
+      ...execution,
       session: capture.session,
       parameters: capture.declarations(),
     });

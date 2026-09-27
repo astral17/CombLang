@@ -36,6 +36,7 @@ export interface CombinatorCapture {
 }
 
 export interface CombinatorRegistrySnapshot {
+  readonly captureOrdinal: number;
   readonly states: ReadonlyMap<
     object,
     {
@@ -86,6 +87,7 @@ export class CombinatorRegistry {
 
   snapshot(): CombinatorRegistrySnapshot {
     return {
+      captureOrdinal: this.#captureOrdinal,
       states: new Map(
         [...this.#states.entries()].map(([identity, state]) => [
           identity,
@@ -105,6 +107,7 @@ export class CombinatorRegistry {
   }
 
   restore(snapshot: CombinatorRegistrySnapshot): void {
+    this.#captureOrdinal = snapshot.captureOrdinal;
     this.#states.clear();
     for (const [identity, saved] of snapshot.states) {
       this.#states.set(identity, {

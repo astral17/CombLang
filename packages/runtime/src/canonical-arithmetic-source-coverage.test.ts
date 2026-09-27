@@ -11,8 +11,14 @@ import { parseFile, validateDslSemantics } from '@comblang/language';
 import type { EntityPrototype } from '@comblang/prototypes';
 import { sourceFileId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
+import { inspectArithmeticConfigurationTemplate } from '../../compiler/src/arithmetic-configuration-template.js';
+import { createBlueprintParameterSession } from '../../compiler/src/blueprint-parameters.js';
 import { tryElaborateDirectPlan } from './direct-plan.js';
-import { ElaborationExecutionError, executeElaborationProgram } from './elaboration-program.js';
+import {
+  ElaborationExecutionError,
+  executeElaborationProgram,
+  executeElaborationProgramWithParameters,
+} from './elaboration-program.js';
 
 const sourceFile = sourceFileId('canonical-arithmetic-source-coverage.ts');
 const operations = [
@@ -120,6 +126,43 @@ function exactPlan(text: string, environment = exactEnvironment()): DirectElabor
   return plan;
 }
 
+function executeWithParameter(
+  text: string,
+  declaration: (runtimeParameter: string) => string = (runtimeParameter) =>
+    `const amount = ${runtimeParameter}.declareBlueprintNumberParameter('amount', 4, undefined, { start: 0, end: 1 });`,
+) {
+  const parsed = parseFile({ path: sourceFile, text });
+  const transformed = transformElaborationModule(parsed);
+  return executeElaborationProgramWithParameters(
+    {
+      ...transformed,
+      code: `${declaration(transformed.runtimeParameter)}\n${transformed.code}`,
+    },
+    exactEnvironment(),
+  );
+}
+
+function expectArithmeticUseFailure(
+  text: string,
+  message: string,
+  declaration?: (runtimeParameter: string) => string,
+): void {
+  const parsed = parseFile({ path: sourceFile, text });
+  const start = text.indexOf('Arithmetic(');
+  const end = text.indexOf(');', start) + 1;
+  let caught: unknown;
+  try {
+    executeWithParameter(text, declaration);
+  } catch (error) {
+    caught = error;
+  }
+  expect(caught).toMatchObject({
+    code: 'RT2027',
+    span: { fileId: parsed.id, start, end },
+  });
+  expect(caught).toHaveProperty('message', expect.stringContaining(message));
+}
+
 function failureFor(text: string, environment = exactEnvironment()): ElaborationExecutionError {
   const parsed = parseFile({ path: sourceFile, text });
   try {
@@ -132,6 +175,443 @@ function failureFor(text: string, environment = exactEnvironment()): Elaboration
 }
 
 describe('executed canonical Arithmetic source contract', () => {
+  test('captures one exact Arithmetic parameter use beside its default-valued plan', () => {
+    const text = `
+const A = Signal('virtual', 'signal-A');
+function Add() {
+  const exact: ArithmeticCombinator = Arithmetic({ left: 2, operation: 'add', right: amount, output: A });
+  const sink = new Network();
+  sink += exact;
+  return exact;
+}
+const dut = t.instantiate(Add);`;
+    const parsed = parseFile({ path: sourceFile, text });
+    const transformed = transformElaborationModule(parsed, { testContextName: 't' });
+    const callStart = text.indexOf('Arithmetic(');
+    const callEnd = text.indexOf(';', callStart);
+    const useSpan = { fileId: parsed.id, start: callStart, end: callEnd };
+    const program = {
+      ...transformed,
+      code: `const amount = ${transformed.runtimeParameter}.declareBlueprintNumberParameter(
+  'amount', 4, undefined, { start: 0, end: 1 }
+);\n${transformed.code}`,
+    };
+    const execution = executeElaborationProgramWithParameters(program, exactEnvironment());
+
+    expect(execution.plan.producers).toHaveLength(1);
+    expect(execution.plan.producers[0]).toMatchObject({
+      kind: 'arithmetic',
+      left: { kind: 'constant', value: 2 },
+      operation: 'add',
+      right: { kind: 'constant', value: 4 },
+      output: { kind: 'signal', signal: { type: 'virtual', name: 'signal-A' } },
+    });
+    expect(execution.parameters).toHaveLength(1);
+    const captureId = execution.plan.producers[0]?.debugCaptureIds?.[0];
+    expect(captureId).toEqual(expect.any(String));
+    expect(execution).toHaveProperty('arithmeticTemplates');
+    const templates = (
+      execution as unknown as {
+        readonly arithmeticTemplates: readonly {
+          readonly captureId: string;
+          readonly template: { readonly right: unknown };
+          readonly source: unknown;
+        }[];
+      }
+    ).arithmeticTemplates;
+    expect(templates).toHaveLength(1);
+    expect(templates[0]).toMatchObject({
+      captureId,
+      template: { right: { kind: 'constant', value: execution.parameters[0]!.handle } },
+      source: useSpan,
+    });
+  });
+
+  test('captures distinct host-local templates for repeated producers in one function', () => {
+    const text = `
+const A = Signal('virtual', 'signal-A');
+function AddMany() {
+  const producers = [];
+  for (let index = 0; index < 2; index += 1) {
+    const exact = Arithmetic({ left: 2, operation: 'add', right: amount, output: A });
+    const sink = new Network();
+    sink += exact;
+    producers.push(exact);
+  }
+  return producers;
+}
+const dut = t.instantiate(AddMany);`;
+    const parsed = parseFile({ path: sourceFile, text });
+    const transformed = transformElaborationModule(parsed, { testContextName: 't' });
+    const execution = executeElaborationProgramWithParameters(
+      {
+        ...transformed,
+        code: `const amount = ${transformed.runtimeParameter}.declareBlueprintNumberParameter(
+  'amount', 4, undefined, { start: 0, end: 1 }
+);\n${transformed.code}`,
+      },
+      exactEnvironment(),
+    );
+
+    const captureIds = execution.plan.producers.map((producer) => producer.debugCaptureIds?.[0]);
+    expect(captureIds).toHaveLength(2);
+    expect(new Set(captureIds).size).toBe(2);
+    expect(execution.plan.producers.map((producer) => producer.debugCaptureIds)).toEqual([
+      ['producer:1', 'producer:3'],
+      ['producer:2', 'producer:4'],
+    ]);
+    expect(execution.arithmeticTemplates).toHaveLength(2);
+    expect(execution.arithmeticTemplates.map(({ captureId }) => captureId)).toEqual(captureIds);
+    expect(Object.isFrozen(execution.arithmeticTemplates)).toBe(true);
+    for (const record of execution.arithmeticTemplates) {
+      expect(Object.isFrozen(record)).toBe(true);
+      expect(Object.isFrozen(record.template)).toBe(true);
+    }
+  });
+
+  test.each(['left', 'right'] as const)(
+    'normalizes a direct source number slot in the %s operand to its default',
+    (slot) => {
+      const left = slot === 'left' ? 'amount' : '2';
+      const right = slot === 'right' ? 'amount' : '3';
+      const execution = executeWithParameter(`
+const A = Signal('virtual', 'signal-A');
+const exact = Arithmetic({ left: ${left}, operation: 'add', right: ${right}, output: A });
+const sink = new Network();
+sink += exact;`);
+
+      expect(execution.plan.producers[0]).toMatchObject({
+        kind: 'arithmetic',
+        left: { kind: 'constant', value: slot === 'left' ? 4 : 2 },
+        operation: 'add',
+        right: { kind: 'constant', value: slot === 'right' ? 4 : 3 },
+      });
+      expect(execution.arithmeticTemplates).toHaveLength(1);
+      expect(execution.arithmeticTemplates[0]?.captureId).toBe(
+        execution.plan.producers[0]?.debugCaptureIds?.[0],
+      );
+    },
+  );
+
+  test('normalizes one number handle used in both direct constant slots', () => {
+    const execution = executeWithParameter(`
+const A = Signal('virtual', 'signal-A');
+const exact = Arithmetic({ left: amount, operation: 'add', right: amount, output: A });
+const sink = new Network();
+sink += exact;`);
+
+    expect(execution.plan.producers[0]).toMatchObject({
+      kind: 'arithmetic',
+      left: { kind: 'constant', value: 4 },
+      right: { kind: 'constant', value: 4 },
+    });
+    expect(execution.arithmeticTemplates).toHaveLength(1);
+    expect(execution.arithmeticTemplates[0]?.captureId).toBe(
+      execution.plan.producers[0]?.debugCaptureIds?.[0],
+    );
+  });
+
+  test('rejects a non-circuit-integer parameter default at the Arithmetic use', () => {
+    expectArithmeticUseFailure(
+      `const A = Signal('virtual', 'signal-A');
+const exact = Arithmetic({ left: 2, operation: 'add', right: amount, output: A });`,
+      'safe integers before int32 normalization',
+      (runtimeParameter) =>
+        `const amount = ${runtimeParameter}.declareBlueprintNumberParameter('amount', Number.MAX_SAFE_INTEGER + 1, undefined, { start: 0, end: 1 });`,
+    );
+  });
+
+  test('rejects wrong-kind, foreign-session, and forged direct parameter slots at the call span', () => {
+    const wrongKind = `const A = Signal('virtual', 'signal-A');
+const exact = Arithmetic({ left: 2, operation: 'add', right: amount, output: A });`;
+    const wrongKindError = (() => {
+      try {
+        executeWithParameter(
+          wrongKind,
+          (runtimeParameter) => `
+const source = ${runtimeParameter}.signal('virtual', 'signal-parameter', { start: 0, end: 1 });
+const amount = ${runtimeParameter}.declareBlueprintSignalParameter('signal slot', source, undefined, { start: 0, end: 1 });`,
+        );
+      } catch (error) {
+        return error;
+      }
+      return undefined;
+    })();
+    const wrongKindSpan = (() => {
+      const parsed = parseFile({ path: sourceFile, text: wrongKind });
+      const start = wrongKind.indexOf('Arithmetic(');
+      return { fileId: parsed.id, start, end: wrongKind.indexOf(');', start) + 1 };
+    })();
+    expect(wrongKindError).toMatchObject({ code: 'RT2027', span: wrongKindSpan });
+    expect(wrongKindError).toHaveProperty(
+      'message',
+      expect.stringContaining('expected a number parameter, received signal'),
+    );
+
+    const foreignKey = Symbol.for('comblang.test.foreign-blueprint-number');
+    const forgedKey = Symbol.for('comblang.test.forged-blueprint-number');
+    const globalRecord = globalThis as Record<PropertyKey, unknown>;
+    const oldForeign = globalRecord[foreignKey];
+    const oldForged = globalRecord[forgedKey];
+    const hadForeign = Object.hasOwn(globalRecord, foreignKey);
+    const hadForged = Object.hasOwn(globalRecord, forgedKey);
+    globalRecord[foreignKey] = createBlueprintParameterSession().number('foreign', {
+      defaultValue: 4,
+    });
+    globalRecord[forgedKey] = { kind: 'number', label: 'forged', defaultValue: 4 };
+    try {
+      const invalidSlots: readonly (readonly [string, string])[] = [
+        [
+          'comblang.test.foreign-blueprint-number',
+          'parameter belongs to a different parameter session',
+        ],
+        ['comblang.test.forged-blueprint-number', 'unregistered parameter-like object'],
+      ];
+      for (const [key, message] of invalidSlots) {
+        const text = `const A = Signal('virtual', 'signal-A');
+const exact = Arithmetic({ left: 2, operation: 'add', right: globalThis[Symbol.for('${key}')], output: A });`;
+        expectArithmeticUseFailure(text, message);
+      }
+    } finally {
+      if (hadForeign) globalRecord[foreignKey] = oldForeign;
+      else delete globalRecord[foreignKey];
+      if (hadForged) globalRecord[forgedKey] = oldForged;
+      else delete globalRecord[forgedKey];
+    }
+  });
+
+  test('rolls back a caught invalid slot before capturing the following valid producer', () => {
+    const text = `
+const A = Signal('virtual', 'signal-A');
+const input = new Network();
+function Add(source: Network) {
+  try {
+    Arithmetic({ left: 2, operation: 'add', right: invalidAmount, output: A });
+  } catch (error) {
+    const caught = true;
+  }
+  const exact = Arithmetic({ left: source[A], operation: 'add', right: amount, output: A });
+  const sink = new Network();
+  sink += exact;
+  return exact;
+}
+const dut = t.instantiate(Add, input);`;
+    const parsed = parseFile({ path: sourceFile, text });
+    const transformed = transformElaborationModule(parsed, { testContextName: 't' });
+    const execution = executeElaborationProgramWithParameters(
+      {
+        ...transformed,
+        code: `const invalidAmount = ${transformed.runtimeParameter}.declareBlueprintNumberParameter(
+  'invalid', Number.MAX_SAFE_INTEGER + 1, undefined, { start: 0, end: 1 }
+);
+const amount = ${transformed.runtimeParameter}.declareBlueprintNumberParameter(
+  'amount', 4, undefined, { start: 0, end: 1 }
+);\n${transformed.code}`,
+      },
+      exactEnvironment(),
+    );
+
+    expect(execution.plan.producers).toHaveLength(1);
+    const producer = execution.plan.producers[0]!;
+    const record = execution.arithmeticTemplates[0]!;
+    expect(producer).toMatchObject({
+      kind: 'arithmetic',
+      left: {
+        kind: 'signal',
+        refKind: 'single',
+        network: 'input',
+        signal: signal('virtual', 'signal-A'),
+      },
+      right: { kind: 'constant', value: 4 },
+      instancePath: expect.arrayContaining(['DUT dut']),
+    });
+    expect(execution.arithmeticTemplates).toHaveLength(1);
+    expect(record.captureId).toBe(producer.debugCaptureIds?.[0]);
+    expect(record.source).toEqual(producer.source);
+    expect(Object.isFrozen(record.source)).toBe(true);
+    const registration = inspectArithmeticConfigurationTemplate(record.template, '$.template');
+    expect(registration.session).toBe(execution.session);
+    expect(registration.usedParameters).toEqual([execution.parameters[1]!.handle]);
+    expect(record.template.left).toEqual({
+      kind: 'signal',
+      refKind: 'single',
+      network: 'input',
+      signal: signal('virtual', 'signal-A'),
+    });
+    expect(record.template.right).toEqual({
+      kind: 'constant',
+      value: execution.parameters[1]!.handle,
+    });
+  });
+
+  test('rolls back templates and capture IDs from a failed t.instantiate before the next producer', () => {
+    const parsed = parseFile({
+      path: sourceFile,
+      text: `
+const A = Signal('virtual', 'signal-A');
+function Bad() {
+  const exact = Arithmetic({ left: 2, operation: 'add', right: amount, output: A });
+  const sink = new Network();
+  sink += exact;
+  return [exact, () => {}];
+}
+try {
+  const failed = t.instantiate(Bad);
+} catch (error) {
+  const caught = true;
+}
+const exact = Arithmetic({ left: 3, operation: 'add', right: amount, output: A });
+const sink = new Network();
+sink += exact;`,
+    });
+    const transformed = transformElaborationModule(parsed, { testContextName: 't' });
+    const execution = executeElaborationProgramWithParameters(
+      {
+        ...transformed,
+        code: `const amount = ${transformed.runtimeParameter}.declareBlueprintNumberParameter(
+  'amount', 4, undefined, { start: 0, end: 1 }
+);\n${transformed.code}`,
+      },
+      exactEnvironment(),
+    );
+
+    expect(execution.plan.producers).toHaveLength(1);
+    expect(execution.plan.producers[0]?.debugCaptureIds).toEqual(['producer:1']);
+    expect(execution.arithmeticTemplates).toHaveLength(1);
+    expect(execution.arithmeticTemplates[0]?.captureId).toBe('producer:1');
+    expect(execution.arithmeticTemplates[0]?.template.right).toEqual({
+      kind: 'constant',
+      value: execution.parameters[0]!.handle,
+    });
+  });
+
+  test('does not retain a nested debug instance when its outer instance rolls back', () => {
+    const parsed = parseFile({
+      path: sourceFile,
+      text: `
+const A = Signal('virtual', 'signal-A');
+function Inner() {
+  const exact = Arithmetic({ left: 2, operation: 'add', right: amount, output: A });
+  const sink = new Network();
+  sink += exact;
+  return exact;
+}
+function Outer() {
+  const nested = t.instantiate(Inner);
+  return [nested, () => {}];
+}
+try {
+  const failed = t.instantiate(Outer);
+} catch (error) {
+  const caught = true;
+}
+const valid = t.instantiate(Inner);`,
+    });
+    const transformed = transformElaborationModule(parsed, { testContextName: 't' });
+    const execution = executeElaborationProgramWithParameters(
+      {
+        ...transformed,
+        code: `const amount = ${transformed.runtimeParameter}.declareBlueprintNumberParameter(
+  'amount', 4, undefined, { start: 0, end: 1 }
+);\n${transformed.code}`,
+      },
+      exactEnvironment(),
+    );
+
+    expect(execution.plan.producers).toHaveLength(1);
+    expect(execution.arithmeticTemplates).toHaveLength(1);
+    expect(execution.plan.debugInstances).toHaveLength(1);
+    expect(execution.plan.debugInstances?.[0]?.name).toBe('valid');
+  });
+
+  test('withholds a previously created symbolic producer after an uncaught failure', () => {
+    const parsed = parseFile({
+      path: sourceFile,
+      text: `
+const A = Signal('virtual', 'signal-A');
+function Add() {
+  const exact = Arithmetic({ left: 2, operation: 'add', right: amount, output: A });
+  const sink = new Network();
+  sink += exact;
+  throw new Error('failure after symbolic producer');
+}
+const dut = t.instantiate(Add);`,
+    });
+    const transformed = transformElaborationModule(parsed, { testContextName: 't' });
+    const program = {
+      ...transformed,
+      code: `const amount = ${transformed.runtimeParameter}.declareBlueprintNumberParameter(
+  'amount', 4, undefined, { start: 0, end: 1 }
+);\n${transformed.code}`,
+    };
+
+    expect(() => executeElaborationProgramWithParameters(program, exactEnvironment())).toThrow(
+      'failure after symbolic producer',
+    );
+  });
+
+  test('does not substitute source number handles into operator sugar or JavaScript control flow', () => {
+    expect(() =>
+      executeWithParameter(`
+const input = new Network();
+const output = new Network();
+output += input + amount;`),
+    ).toThrow('Circuit arithmetic currently requires a Network or numeric operand.');
+
+    expect(() => executeWithParameter('if (amount) {}')).toThrow(
+      'cannot be used as a JavaScript control-flow value',
+    );
+  });
+
+  test('keeps parameter templates outside direct, canonical, linked Entity and resolved data', () => {
+    const environment = exactEnvironment();
+    const parsed = parseFile({
+      path: sourceFile,
+      text: `
+const A = Signal('virtual', 'signal-A');
+function Add() {
+  const exact = Arithmetic({ left: 2, operation: 'add', right: amount, output: A });
+  const sink = new Network();
+  sink += exact;
+  return exact;
+}
+const dut = t.instantiate(Add);`,
+    });
+    const transformed = transformElaborationModule(parsed, { testContextName: 't' });
+    const execution = executeElaborationProgramWithParameters(
+      {
+        ...transformed,
+        code: `const amount = ${transformed.runtimeParameter}.declareBlueprintNumberParameter(
+  'amount', 4, undefined, { start: 0, end: 1 }
+);\n${transformed.code}`,
+      },
+      environment,
+    );
+    const lowered = tryElaborateDirectPlan(execution.plan, environment.context);
+
+    expect(execution.arithmeticTemplates).toHaveLength(1);
+    expect(execution.plan).not.toHaveProperty('arithmeticTemplates');
+    expect(execution.plan.producers[0]).toMatchObject({
+      kind: 'arithmetic',
+      right: { kind: 'constant', value: 4 },
+    });
+    expect(execution.plan.entities[0]?.configuration).toMatchObject({ mode: 'arithmetic' });
+    expect(lowered.diagnostics).toEqual([]);
+    expect(lowered.resolvedCircuit?.format).toBe('comblang-resolved-circuit');
+    expect(lowered.resolvedCircuit?.ir.entities[0]?.configuration).toMatchObject({
+      mode: 'arithmetic',
+    });
+
+    const serialized = JSON.stringify({
+      plan: execution.plan,
+      canonicalExecution: lowered.execution?.circuit,
+      resolvedCircuit: lowered.resolvedCircuit,
+    });
+    expect(serialized).not.toContain('amount');
+    expect(serialized).not.toContain('arithmeticTemplates');
+    expect(serialized).not.toContain('"kind":"number"');
+  });
+
   test.each(operations)('accepts canonical operation %s', (operation) => {
     const plan = exactPlan(`const A = Signal('virtual', 'signal-A');
 const exact: ArithmeticCombinator = Arithmetic({ left: 2, operation: '${operation}', right: 3, output: A });
