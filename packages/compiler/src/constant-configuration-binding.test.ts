@@ -53,6 +53,173 @@ describe('binding symbolic Constant configuration templates', () => {
     expect(defaults.sections.map(({ multiplier: value }) => value)).toEqual([1.75, 1.75]);
   });
 
+  test('binds ordered filter-count expressions with shared subexpressions and per-call defaults', () => {
+    const session = createBlueprintParameterSession();
+    const base = session.number('base', { defaultValue: 2, source });
+    const extra = session.number('extra', { defaultValue: 3 });
+    const target = session.signal('target', {
+      defaultValue: signal('item', 'iron-plate'),
+    });
+    const shared = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: base },
+      right: { kind: 'literal', value: 1 },
+    });
+    const firstCount = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: shared,
+      right: { kind: 'parameter', parameter: extra },
+    });
+    const secondCount = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'multiply',
+      left: shared,
+      right: { kind: 'literal', value: 2 },
+    });
+    const template = createConstantConfigurationTemplate(session, {
+      sections: [
+        {
+          filters: [
+            { signal: target, value: firstCount },
+            { signal: signal('virtual', 'signal-B'), value: secondCount },
+            { signal: signal('virtual', 'signal-C'), value: 17 },
+          ],
+        },
+        {
+          filters: [
+            { signal: target, value: firstCount },
+            { signal: target, value: extra },
+          ],
+        },
+      ],
+    });
+
+    const defaults = bindConstantConfigurationTemplate(template);
+    expect(defaults.sections.map(({ filters }) => filters.map(({ value }) => value))).toEqual([
+      [6, 6, 17],
+      [6, 3],
+    ]);
+
+    const firstOverride = bindConstantConfigurationTemplate(template, [
+      { parameter: base, value: 5 },
+      { parameter: extra, value: 4 },
+    ]);
+    expect(firstOverride.sections.map(({ filters }) => filters.map(({ value }) => value))).toEqual([
+      [10, 12, 17],
+      [10, 4],
+    ]);
+
+    const secondOverride = bindConstantConfigurationTemplate(template, [
+      { parameter: base, value: 1 },
+      { parameter: extra, value: 2 },
+    ]);
+    expect(secondOverride.sections.map(({ filters }) => filters.map(({ value }) => value))).toEqual(
+      [
+        [4, 4, 17],
+        [4, 2],
+      ],
+    );
+    expect(defaults.sections.map(({ filters }) => filters.map(({ value }) => value))).toEqual([
+      [6, 6, 17],
+      [6, 3],
+    ]);
+  });
+
+  test('requires safe-integer expression results before Constant int32 normalization', () => {
+    const session = createBlueprintParameterSession();
+    const base = session.number('base', { defaultValue: -1, source });
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: base },
+      right: { kind: 'literal', value: 1 },
+    });
+    const template = createConstantConfigurationTemplate(session, {
+      sections: [{ filters: [{ signal: signal('virtual', 'signal-A'), value: expression }] }],
+    });
+
+    expect(bindConstantConfigurationTemplate(template).sections[0]?.filters[0]?.value).toBe(0);
+    expect(
+      bindConstantConfigurationTemplate(template, [{ parameter: base, value: -4 }]).sections[0]
+        ?.filters[0]?.value,
+    ).toBe(-3);
+    expect(
+      bindConstantConfigurationTemplate(template, [{ parameter: base, value: 2_147_483_647 }])
+        .sections[0]?.filters[0]?.value,
+    ).toBe(-2_147_483_648);
+
+    expect(() =>
+      bindConstantConfigurationTemplate(template, [{ parameter: base, value: 0.5 }]),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1000',
+        path: '$.sections[0].filters[0].value',
+        span: source,
+        message: expect.stringContaining('safe integers'),
+      }),
+    );
+    expect(() =>
+      bindConstantConfigurationTemplate(template, [
+        { parameter: base, value: Number.MAX_SAFE_INTEGER },
+      ]),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1000',
+        path: '$.sections[0].filters[0].value',
+        span: source,
+        message: expect.stringContaining('safe integers'),
+      }),
+    );
+
+    const overflowSession = createBlueprintParameterSession();
+    const large = overflowSession.number('large', { defaultValue: 1, source });
+    const overflow = createBlueprintNumericExpression(overflowSession, {
+      kind: 'binary',
+      operator: 'multiply',
+      left: { kind: 'parameter', parameter: large },
+      right: { kind: 'literal', value: Number.MAX_VALUE },
+    });
+    const overflowTemplate = createConstantConfigurationTemplate(overflowSession, {
+      sections: [{ filters: [{ signal: signal('virtual', 'signal-A'), value: overflow }] }],
+    });
+    expect(() =>
+      bindConstantConfigurationTemplate(overflowTemplate, [{ parameter: large, value: 2 }]),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1000',
+        path: '$.sections[0].filters[0].value',
+        span: source,
+        message: expect.stringContaining('finite number'),
+      }),
+    );
+  });
+
+  test('preserves count-expression missing-default paths and permits retry', () => {
+    const session = createBlueprintParameterSession();
+    const amount = session.number('amount', { source });
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: amount },
+      right: { kind: 'literal', value: 1 },
+    });
+    const template = createConstantConfigurationTemplate(session, {
+      sections: [{ filters: [{ signal: signal('virtual', 'signal-A'), value: expression }] }],
+    });
+
+    expect(() => bindConstantConfigurationTemplate(template)).toThrowError(
+      expect.objectContaining({
+        code: 'CP1002',
+        path: '$.sections[0].filters[0].value.left.parameter',
+        span: source,
+      }),
+    );
+    const retried = bindConstantConfigurationTemplate(template, [{ parameter: amount, value: 4 }]);
+    expect(retried.sections[0]?.filters[0]?.value).toBe(5);
+  });
+
   test('keeps multiplier expressions finite-double, preserves negative zero and supports retry', () => {
     const session = createBlueprintParameterSession();
     const amount = session.number('amount', { source });
@@ -244,6 +411,36 @@ describe('binding symbolic Constant configuration templates', () => {
     ).toThrowError(
       expect.objectContaining({ code: 'CP1000', path: '$.sections[0].filters[0].value' }),
     );
+  });
+
+  test('keeps global duplicate, foreign and unused checks for expression dependencies', () => {
+    const session = createBlueprintParameterSession();
+    const other = createBlueprintParameterSession();
+    const count = session.number('count', { defaultValue: 1 });
+    const unused = session.number('unused', { defaultValue: 3 });
+    const foreign = other.number('foreign', { defaultValue: 1 });
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: count },
+      right: { kind: 'literal', value: 0 },
+    });
+    const template = createConstantConfigurationTemplate(session, {
+      sections: [{ filters: [{ signal: signal('virtual', 'signal-A'), value: expression }] }],
+    });
+
+    expect(() =>
+      bindConstantConfigurationTemplate(template, [
+        { parameter: count, value: 1 },
+        { parameter: count, value: 2 },
+      ]),
+    ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.bindings[1].parameter' }));
+    expect(() =>
+      bindConstantConfigurationTemplate(template, [{ parameter: unused, value: 3 }]),
+    ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.bindings' }));
+    expect(() =>
+      bindConstantConfigurationTemplate(template, [{ parameter: foreign, value: 1 }]),
+    ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.bindings[0].parameter' }));
   });
 
   test('validates malformed Signal IDs at their slot and keeps earlier results untouched', () => {

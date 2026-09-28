@@ -16,22 +16,36 @@ const source: SourceSpan = {
 };
 
 describe('atomic blueprint configuration-set binding', () => {
-  test('partitions Constant multiplier expressions and direct handles across entries', () => {
+  test('partitions Constant multiplier/count expressions and direct handles across entries', () => {
     const session = createBlueprintParameterSession();
-    const multiplier = session.number('multiplier-parameter', { defaultValue: 2.25 });
-    const count = session.number('count-parameter', { defaultValue: 3 });
+    const shared = session.number('shared-parameter', { defaultValue: 2.25 });
+    const directCount = session.number('direct-count-parameter', { defaultValue: 3 });
     const target = session.signal('target-parameter', {
       defaultValue: signal('item', 'iron-plate'),
     });
     const offset = session.number('offset-parameter', { defaultValue: 4 });
-    const expression = createBlueprintNumericExpression(session, {
+    const multiplierExpression = createBlueprintNumericExpression(session, {
       kind: 'binary',
       operator: 'add',
-      left: { kind: 'parameter', parameter: multiplier },
+      left: { kind: 'parameter', parameter: shared },
+      right: { kind: 'literal', value: 0.25 },
+    });
+    const countExpression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'subtract',
+      left: { kind: 'parameter', parameter: shared },
       right: { kind: 'literal', value: 0.25 },
     });
     const constant = createConstantConfigurationTemplate(session, {
-      sections: [{ multiplier: expression, filters: [{ signal: target, value: count }] }],
+      sections: [
+        {
+          multiplier: multiplierExpression,
+          filters: [
+            { signal: target, value: countExpression },
+            { signal: signal('virtual', 'signal-B'), value: directCount },
+          ],
+        },
+      ],
     });
     const arithmetic = createArithmeticConfigurationTemplate(session, {
       left: { kind: 'constant', value: offset },
@@ -44,8 +58,8 @@ describe('atomic blueprint configuration-set binding', () => {
       { key: 'arithmetic', kind: 'arithmetic', template: arithmetic },
     ]);
     const bindings = [
-      { parameter: multiplier, value: 2.25 },
-      { parameter: count, value: 2_147_483_649 },
+      { parameter: shared, value: 3.25 },
+      { parameter: directCount, value: 2_147_483_649 },
       { parameter: target, value: signal('item', 'iron-plate', 'uncommon') },
       { parameter: offset, value: 9 },
     ];
@@ -56,12 +70,13 @@ describe('atomic blueprint configuration-set binding', () => {
       config: {
         sections: [
           {
-            multiplier: 2.5,
+            multiplier: 3.5,
             filters: [
               {
                 signal: signal('item', 'iron-plate', 'uncommon'),
-                value: -2_147_483_647,
+                value: 3,
               },
+              { signal: signal('virtual', 'signal-B'), value: -2_147_483_647 },
             ],
           },
         ],
@@ -71,8 +86,8 @@ describe('atomic blueprint configuration-set binding', () => {
       kind: 'arithmetic',
       config: { left: { kind: 'constant', value: 9 } },
     });
-    expect(JSON.stringify(bound)).not.toContain('multiplier-parameter');
-    expect(JSON.stringify(bound)).not.toContain('count-parameter');
+    expect(JSON.stringify(bound)).not.toContain('shared-parameter');
+    expect(JSON.stringify(bound)).not.toContain('direct-count-parameter');
     expect(JSON.stringify(bound)).not.toContain('target-parameter');
     expect(JSON.stringify(bound)).not.toContain('offset-parameter');
     const before = JSON.stringify(bound);

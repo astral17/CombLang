@@ -24,6 +24,7 @@ import {
   inspectRegisteredBlueprintNumericExpression,
   isRegisteredBlueprintNumericExpression,
 } from './blueprint-numeric-expression-bridge.js';
+import type { BlueprintNumericExpression } from './blueprint-numeric-expression.js';
 import {
   inspectConstantConfigurationTemplate,
   type ConstantConfigurationTemplate,
@@ -118,10 +119,11 @@ export function bindConstantConfigurationTemplate(
     return canonicalValue;
   };
 
-  const resolveMultiplier = (value: unknown, path: string): number => {
-    if (!isRegisteredBlueprintNumericExpression(value)) {
-      return resolve(value, 'number', path, 'multiplier') as number;
-    }
+  const resolveNumericExpression = (
+    value: BlueprintNumericExpression,
+    path: string,
+    domain: 'count' | 'multiplier',
+  ): number => {
     const inspection = inspectRegisteredBlueprintNumericExpression(session, value, path);
     const dependencies = new Set<object>(inspection.dependencies);
     for (const dependency of inspection.dependencies) used.add(dependency);
@@ -140,11 +142,23 @@ export function bindConstantConfigurationTemplate(
     return assertBlueprintParameterNumberValue(
       evaluated,
       path,
-      'finite',
+      domain === 'count' ? 'safe-integer' : 'finite',
       inspection.source,
-      'Constant multipliers must be finite numbers.',
+      domain === 'count'
+        ? 'Constant filter counts must be safe integers.'
+        : 'Constant multipliers must be finite numbers.',
     );
   };
+
+  const resolveMultiplier = (value: unknown, path: string): number =>
+    isRegisteredBlueprintNumericExpression(value)
+      ? resolveNumericExpression(value, path, 'multiplier')
+      : (resolve(value, 'number', path, 'multiplier') as number);
+
+  const resolveCount = (value: unknown, path: string): number =>
+    isRegisteredBlueprintNumericExpression(value)
+      ? resolveNumericExpression(value, path, 'count')
+      : (resolve(value, 'number', path, 'count') as number);
 
   for (const [sectionIndex, section] of template.sections.entries()) {
     const sectionPath = `$.sections[${sectionIndex}]`;
@@ -155,7 +169,7 @@ export function bindConstantConfigurationTemplate(
         const filterPath = `${sectionPath}.filters[${filterIndex}]`;
         return {
           signal: resolve(filter.signal, 'signal', `${filterPath}.signal`, 'signal'),
-          value: resolve(filter.value, 'number', `${filterPath}.value`, 'count'),
+          value: resolveCount(filter.value, `${filterPath}.value`),
         };
       }),
     };

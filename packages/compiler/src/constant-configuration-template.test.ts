@@ -52,7 +52,70 @@ describe('symbolic Constant configuration templates', () => {
     ]);
   });
 
-  test('rejects foreign, forged, and non-multiplier expressions at their slots', () => {
+  test('preserves registered expressions in ordered filter-count slots across sections', () => {
+    const session = createBlueprintParameterSession();
+    const base = session.number('base', { defaultValue: 2 });
+    const extra = session.number('extra', { defaultValue: 3 });
+    const target = session.signal('target', {
+      defaultValue: signal('item', 'iron-plate'),
+    });
+    const shared = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: base },
+      right: { kind: 'literal', value: 1 },
+    });
+    const firstCount = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: shared,
+      right: { kind: 'parameter', parameter: extra },
+    });
+    const secondCount = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'multiply',
+      left: shared,
+      right: { kind: 'literal', value: 2 },
+    });
+
+    const input = {
+      sections: [
+        {
+          filters: [
+            { signal: target, value: firstCount },
+            { signal: signal('virtual', 'signal-B'), value: secondCount },
+            { signal: target, value: 7 },
+          ],
+        },
+        {
+          filters: [
+            { signal: target, value: firstCount },
+            { signal: target, value: extra },
+          ],
+        },
+      ],
+    };
+    const inputBefore = JSON.stringify(input);
+    const template = createConstantConfigurationTemplate(session, input);
+
+    expect(template.sections[0]?.filters.map(({ value }) => value)).toEqual([
+      firstCount,
+      secondCount,
+      7,
+    ]);
+    expect(template.sections[1]?.filters.map(({ value }) => value)).toEqual([firstCount, extra]);
+    expect(inspectConstantConfigurationTemplate(template, '$.template').usedParameters).toEqual([
+      target,
+      base,
+      extra,
+    ]);
+    expect(JSON.stringify(input)).toBe(inputBefore);
+    expect(Object.isFrozen(input)).toBe(false);
+    expect(Object.isFrozen(input.sections[0])).toBe(false);
+    expect(Object.isFrozen(input.sections[0]?.filters)).toBe(false);
+  });
+
+  test('rejects foreign, forged, and unsupported expressions at their slots', () => {
     const session = createBlueprintParameterSession();
     const other = createBlueprintParameterSession();
     const expression = createBlueprintNumericExpression(session, {
@@ -89,7 +152,19 @@ describe('symbolic Constant configuration templates', () => {
     );
     expect(() =>
       createConstantConfigurationTemplate(session, {
-        sections: [{ multiplier: 1, filters: [{ signal: signalHandle, value: expression }] }],
+        sections: [{ multiplier: 1, filters: [{ signal: signalHandle, value: foreign }] }],
+      }),
+    ).toThrowError(
+      expect.objectContaining({ code: 'CP1001', path: '$.sections[0].filters[0].value' }),
+    );
+    expect(() =>
+      createConstantConfigurationTemplate(session, {
+        sections: [
+          {
+            multiplier: 1,
+            filters: [{ signal: signalHandle, value: { kind: 'literal', value: 2 } }],
+          },
+        ],
       }),
     ).toThrowError(
       expect.objectContaining({ code: 'CP1001', path: '$.sections[0].filters[0].value' }),
@@ -118,12 +193,20 @@ describe('symbolic Constant configuration templates', () => {
     }
     const repeated = createConstantConfigurationTemplate(session, {
       sections: [
-        { multiplier: shared, filters: [] },
-        { multiplier: shared, filters: [] },
+        {
+          multiplier: shared,
+          filters: [{ signal: signal('virtual', 'signal-A'), value: shared }],
+        },
+        {
+          multiplier: shared,
+          filters: [{ signal: signal('virtual', 'signal-A'), value: shared }],
+        },
       ],
     });
     expect(repeated.sections[0]?.multiplier).toBe(shared);
     expect(repeated.sections[1]?.multiplier).toBe(shared);
+    expect(repeated.sections[0]?.filters[0]?.value).toBe(shared);
+    expect(repeated.sections[1]?.filters[0]?.value).toBe(shared);
 
     const balanced = (depth: number): unknown =>
       depth === 0
@@ -134,15 +217,27 @@ describe('symbolic Constant configuration templates', () => {
             left: balanced(depth - 1),
             right: balanced(depth - 1),
           };
+    const largeShared = createBlueprintNumericExpression(session, balanced(10));
+    const sharedAcrossSlots = createConstantConfigurationTemplate(session, {
+      sections: [
+        {
+          multiplier: largeShared,
+          filters: [{ signal: signal('virtual', 'signal-A'), value: largeShared }],
+        },
+      ],
+    });
+    expect(sharedAcrossSlots.sections[0]?.multiplier).toBe(largeShared);
+    expect(sharedAcrossSlots.sections[0]?.filters[0]?.value).toBe(largeShared);
+
     const overBudget = createBlueprintNumericExpression(session, balanced(11));
     expect(() =>
       createConstantConfigurationTemplate(session, {
-        sections: [{ multiplier: overBudget, filters: [] }],
+        sections: [{ filters: [{ signal: signal('virtual', 'signal-A'), value: overBudget }] }],
       }),
     ).toThrowError(
       expect.objectContaining({
         code: 'CP1000',
-        path: '$.sections[0].multiplier',
+        path: '$.sections[0].filters[0].value',
         message: expect.stringContaining(`node limit of ${constantConfigurationLimits.maxNodes}`),
       }),
     );
@@ -154,7 +249,9 @@ describe('symbolic Constant configuration templates', () => {
     });
     expect(() =>
       createConstantConfigurationTemplate(session, {
-        sections: [{ multiplier: largeExpression, filters: [] }],
+        sections: [
+          { filters: [{ signal: signal('virtual', 'signal-A'), value: largeExpression }] },
+        ],
       }),
     ).toThrowError(
       expect.objectContaining({
@@ -162,6 +259,24 @@ describe('symbolic Constant configuration templates', () => {
         message: expect.stringContaining('byte limit'),
       }),
     );
+
+    const halfBudgetLabel = session.number(
+      'y'.repeat(Math.floor(constantConfigurationLimits.maxBytes / 2)),
+    );
+    const halfBudgetExpression = createBlueprintNumericExpression(session, {
+      kind: 'parameter',
+      parameter: halfBudgetLabel,
+    });
+    const sharedBytes = createConstantConfigurationTemplate(session, {
+      sections: [
+        {
+          multiplier: halfBudgetExpression,
+          filters: [{ signal: signal('virtual', 'signal-A'), value: halfBudgetExpression }],
+        },
+      ],
+    });
+    expect(sharedBytes.sections[0]?.multiplier).toBe(halfBudgetExpression);
+    expect(sharedBytes.sections[0]?.filters[0]?.value).toBe(halfBudgetExpression);
   });
 
   test('blueprint-wide parameter handles remain scoped when used by Constant', () => {

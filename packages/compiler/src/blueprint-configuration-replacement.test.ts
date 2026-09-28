@@ -263,6 +263,12 @@ describe('concrete NCIR configuration-set replacement', () => {
     const session = createBlueprintParameterSession();
     const amount = session.number('entity amount', { defaultValue: 5 });
     const multiplier = session.number('entity multiplier', { defaultValue: 0.5 });
+    const countExpression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: amount },
+      right: { kind: 'literal', value: 0 },
+    });
     const multiplierExpression = createBlueprintNumericExpression(session, {
       kind: 'binary',
       operator: 'add',
@@ -271,7 +277,13 @@ describe('concrete NCIR configuration-set replacement', () => {
     });
     const template = createConstantConfigurationTemplate(session, {
       sections: [
-        { multiplier: multiplierExpression, filters: [{ signal: targetSignal, value: amount }] },
+        {
+          multiplier: multiplierExpression,
+          filters: [
+            { signal: targetSignal, value: countExpression },
+            { signal: signal('virtual', 'signal-B'), value: 4 },
+          ],
+        },
       ],
     });
     const set = createBlueprintConfigurationSet(session, [
@@ -295,7 +307,14 @@ describe('concrete NCIR configuration-set replacement', () => {
       profiles: [profile],
     });
     const originalConfiguration = canonicalizeConstantConfiguration({
-      sections: [{ filters: [{ signal: targetSignal, value: 1 }] }],
+      sections: [
+        {
+          filters: [
+            { signal: targetSignal, value: 1 },
+            { signal: signal('virtual', 'signal-B'), value: 4 },
+          ],
+        },
+      ],
     });
     const producer = {
       id: firstProducer,
@@ -342,11 +361,27 @@ describe('concrete NCIR configuration-set replacement', () => {
     expect(replaced.entities[0]?.configuration).toEqual({
       mode: 'constant',
       value: canonicalizeConstantConfiguration({
-        sections: [{ multiplier: 2.5, filters: [{ signal: targetSignal, value: 11 }] }],
+        sections: [
+          {
+            multiplier: 2.5,
+            filters: [
+              { signal: targetSignal, value: 11 },
+              { signal: signal('virtual', 'signal-B'), value: 4 },
+            ],
+          },
+        ],
       }),
     });
     const expectedConfiguration = canonicalizeConstantConfiguration({
-      sections: [{ multiplier: 2.5, filters: [{ signal: targetSignal, value: 11 }] }],
+      sections: [
+        {
+          multiplier: 2.5,
+          filters: [
+            { signal: targetSignal, value: 11 },
+            { signal: signal('virtual', 'signal-B'), value: 4 },
+          ],
+        },
+      ],
     });
     const expectedCircuit: NativeCircuitIr = {
       ...circuit,
@@ -364,6 +399,21 @@ describe('concrete NCIR configuration-set replacement', () => {
     expect(JSON.stringify(replaced)).not.toContain('entity amount');
     const replacedBeforeFailure = JSON.stringify(replaced);
     const circuitBeforeFailure = JSON.stringify(circuit);
+    expect(() =>
+      replaceBlueprintConfigurationSetInNativeCircuitIr(
+        set,
+        circuit,
+        [{ key: 'source', producerId: firstProducer }],
+        [{ parameter: amount, value: 12.5 }],
+      ),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1000',
+        path: '$.entries[0].sections[0].filters[0].value',
+      }),
+    );
+    expect(JSON.stringify(replaced)).toBe(replacedBeforeFailure);
+    expect(JSON.stringify(circuit)).toBe(circuitBeforeFailure);
     expect(() =>
       replaceBlueprintConfigurationSetInNativeCircuitIr(
         set,

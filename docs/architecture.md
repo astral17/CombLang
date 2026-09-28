@@ -36,15 +36,15 @@ parameter session is open, then evaluated after sealing.
 
 The reviewed host-local use is limited to the `value` of either constant
 operand in an Arithmetic template, the constant `condition.compare.right`
-threshold in a Decider template (including nested AND/OR conditions), and a
-Constant template section's `multiplier`. Arithmetic and Decider results require
-a safe integer and use their existing int32 normalization. A Constant multiplier
-instead requires only a finite double and passes through the existing Constant
-canonicalizer, preserving values such as fractions and negative zero. The
-symbolic graph does not cross the binding boundary; filter counts, Decider
-outputs, and every other slot remain concrete. Non-unit multipliers may remain
-unsupported by the simulator; this host-local binding/export path does not claim
-simulator or native Factorio behavior.
+threshold in a Decider template (including nested AND/OR conditions), and
+Constant template section multipliers and filter counts. Arithmetic, Decider,
+and filter-count results require a safe integer and use their existing int32
+normalization. A Constant multiplier instead requires only a finite double and
+passes through the existing Constant canonicalizer, preserving values such as
+fractions and negative zero. The symbolic graph does not cross the binding
+boundary; Decider outputs and every other slot remain concrete. Non-unit
+multipliers may remain unsupported by the simulator; this host-local
+binding/export path does not claim simulator or native Factorio behavior.
 
 This is an internal modeling layer only. It adds no source syntax, Direct
 Plan/NCIR/Worker representation, Factorio formula grammar, native operator

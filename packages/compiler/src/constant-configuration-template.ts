@@ -42,7 +42,7 @@ export type ConstantTemplateSignalSlot = SignalId | BlueprintSignalParameterHand
 
 export interface ConstantConfigurationTemplateFilter {
   readonly signal: ConstantTemplateSignalSlot;
-  readonly value: ConstantTemplateNumberSlot;
+  readonly value: ConstantTemplateNumberSlot | BlueprintNumericExpression;
 }
 
 export interface ConstantConfigurationTemplateSection {
@@ -71,7 +71,7 @@ interface TemplateBudget extends BlueprintParameterDataBudget {
 
 interface FilterSlots {
   readonly signal?: BlueprintSignalParameterHandle;
-  readonly value?: BlueprintNumberParameterHandle;
+  readonly value?: ConstantTemplateNumberSlot | BlueprintNumericExpression;
 }
 
 interface SectionSlots {
@@ -114,6 +114,38 @@ function accountParameter(
   return slot.handle as BlueprintNumberParameterHandle | BlueprintSignalParameterHandle;
 }
 
+function accountExpression(
+  expression: BlueprintNumericExpression,
+  session: BlueprintParameterSession,
+  path: string,
+  budget: TemplateBudget,
+): BlueprintNumericExpression {
+  const inspection = inspectRegisteredBlueprintNumericExpression(session, expression, path);
+  if (!budget.expressionRoots.has(expression)) {
+    budget.expressionRoots.add(expression);
+    budget.nodes += inspection.nodeCount;
+    if (budget.nodes > constantConfigurationLimits.maxNodes) {
+      fail(
+        path,
+        `template exceeds the node limit of ${constantConfigurationLimits.maxNodes}.`,
+        inspection.source,
+      );
+    }
+    budget.expressionBytes += inspection.byteLength;
+    if (budget.expressionBytes > constantConfigurationLimits.maxBytes) {
+      fail(
+        path,
+        `template exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`,
+        inspection.source,
+      );
+    }
+    for (const dependency of inspection.dependencies) {
+      budget.usedParameters.add(dependency);
+    }
+  }
+  return expression;
+}
+
 function rejectParameterOutsideSlot(value: unknown, path: string): void {
   rejectNumericExpressionOutsideSlot(value, path);
   const registration = findBlueprintParameterHandle(value);
@@ -145,7 +177,7 @@ function rejectNumericExpressionOutsideSlot(value: unknown, path: string): void 
     throw new BlueprintParameterError(
       'CP1001',
       path,
-      'numeric expressions are allowed only in Constant section multipliers.',
+      'numeric expressions are allowed only in Constant section multipliers and filter counts.',
     );
   }
 }
@@ -262,35 +294,12 @@ export function createConstantConfigurationTemplate(
               multiplier = reference as BlueprintNumberParameterHandle;
               preparedSection.multiplier = 1;
             } else if (isRegisteredBlueprintNumericExpression(rawMultiplier)) {
-              const expression = rawMultiplier;
-              const inspection = inspectRegisteredBlueprintNumericExpression(
+              multiplier = accountExpression(
+                rawMultiplier,
                 session,
-                expression,
                 `${sectionPath}.multiplier`,
+                budget,
               );
-              if (!budget.expressionRoots.has(expression)) {
-                budget.expressionRoots.add(expression);
-                budget.nodes += inspection.nodeCount;
-                if (budget.nodes > constantConfigurationLimits.maxNodes) {
-                  fail(
-                    `${sectionPath}.multiplier`,
-                    `template exceeds the node limit of ${constantConfigurationLimits.maxNodes}.`,
-                    inspection.source,
-                  );
-                }
-                budget.expressionBytes += inspection.byteLength;
-                if (budget.expressionBytes > constantConfigurationLimits.maxBytes) {
-                  fail(
-                    `${sectionPath}.multiplier`,
-                    `template exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`,
-                    inspection.source,
-                  );
-                }
-                for (const dependency of inspection.dependencies) {
-                  budget.usedParameters.add(dependency);
-                }
-              }
-              multiplier = expression;
               preparedSection.multiplier = 1;
             } else if (isNumericExpressionShaped(rawMultiplier)) {
               rejectNumericExpressionOutsideSlot(rawMultiplier, `${sectionPath}.multiplier`);
@@ -337,22 +346,33 @@ export function createConstantConfigurationTemplate(
                     preparedFilter.signal = rawSignal;
                   }
                 }
-                let valueReference: BlueprintNumberParameterHandle | undefined;
+                let valueReference:
+                  ConstantTemplateNumberSlot | BlueprintNumericExpression | undefined;
                 if (Object.hasOwn(filter.value, 'value')) {
                   const rawValue = filter.value.value;
-                  rejectNumericExpressionOutsideSlot(rawValue, `${filterPath}.value`);
-                  const reference = accountParameter(
-                    rawValue,
-                    'number',
-                    session,
-                    `${filterPath}.value`,
-                    budget,
-                  );
-                  if (reference !== undefined) {
-                    valueReference = reference as BlueprintNumberParameterHandle;
+                  if (isRegisteredBlueprintNumericExpression(rawValue)) {
+                    valueReference = accountExpression(
+                      rawValue,
+                      session,
+                      `${filterPath}.value`,
+                      budget,
+                    );
                     preparedFilter.value = 0;
                   } else {
-                    preparedFilter.value = rawValue;
+                    rejectNumericExpressionOutsideSlot(rawValue, `${filterPath}.value`);
+                    const reference = accountParameter(
+                      rawValue,
+                      'number',
+                      session,
+                      `${filterPath}.value`,
+                      budget,
+                    );
+                    if (reference !== undefined) {
+                      valueReference = reference as BlueprintNumberParameterHandle;
+                      preparedFilter.value = 0;
+                    } else {
+                      preparedFilter.value = rawValue;
+                    }
                   }
                 }
                 preparedFilters.push(preparedFilter);
