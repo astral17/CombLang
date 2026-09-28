@@ -8,6 +8,7 @@ import { createBlueprintParameterSession } from './blueprint-parameters.js';
 import { createBlueprintNumericExpression } from './blueprint-numeric-expression.js';
 import { createArithmeticConfigurationTemplate } from './arithmetic-configuration-template.js';
 import { createConstantConfigurationTemplate } from './constant-configuration-template.js';
+import { createDeciderConfigurationTemplate } from './decider-configuration-template.js';
 
 const source: SourceSpan = {
   fileId: 'configuration-set.test.ts' as SourceFileId,
@@ -16,6 +17,75 @@ const source: SourceSpan = {
 };
 
 describe('atomic blueprint configuration-set binding', () => {
+  test('partitions a shared Decider output expression with another producer family atomically', () => {
+    const session = createBlueprintParameterSession();
+    const amount = session.number('shared-decider-amount', { defaultValue: 3, source });
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: amount },
+      right: { kind: 'literal', value: 2 },
+    });
+    const decider = createDeciderConfigurationTemplate(session, {
+      condition: {
+        kind: 'compare',
+        left: { kind: 'wildcard', value: 'each', refKind: 'single', network: 'network:in' },
+        comparator: '>',
+        right: { kind: 'constant', value: expression },
+      },
+      outputs: [
+        { mode: 'constant', signal: { kind: 'wildcard', value: 'each' }, value: expression },
+        { mode: 'constant', signal: { kind: 'wildcard', value: 'each' }, value: expression },
+        { mode: 'copy', signal: { kind: 'wildcard', value: 'anything' } },
+      ],
+      elseOutputs: [
+        { mode: 'constant', signal: { kind: 'wildcard', value: 'anything' }, value: expression },
+      ],
+    });
+    const arithmetic = createArithmeticConfigurationTemplate(session, {
+      left: { kind: 'constant', value: amount },
+      operation: 'add',
+      right: { kind: 'constant', value: 1 },
+      output: { kind: 'each' },
+    });
+    const configurationSet = createBlueprintConfigurationSet(session, [
+      { key: 'decision', kind: 'decider', template: decider },
+      { key: 'arithmetic', kind: 'arithmetic', template: arithmetic },
+    ]);
+    const bound = bindBlueprintConfigurationSet(configurationSet, [
+      { parameter: amount, value: 10 },
+    ]);
+
+    expect(bound[0]).toMatchObject({
+      kind: 'decider',
+      config: {
+        condition: { right: { value: 12 } },
+        outputs: [
+          { mode: 'constant', value: 12 },
+          { mode: 'constant', value: 12 },
+          { mode: 'copy' },
+        ],
+        elseOutputs: [{ mode: 'constant', value: 12 }],
+      },
+    });
+    expect(bound[1]).toMatchObject({
+      kind: 'arithmetic',
+      config: { left: { kind: 'constant', value: 10 }, right: { kind: 'constant', value: 1 } },
+    });
+    expect(JSON.stringify(bound)).not.toContain('shared-decider-amount');
+    expect(JSON.stringify(bound)).not.toContain('"kind":"binary"');
+    expect(Object.isFrozen(bound)).toBe(true);
+    expect(Object.isFrozen(bound[0])).toBe(true);
+    const previous = JSON.stringify(bound);
+
+    expect(() =>
+      bindBlueprintConfigurationSet(configurationSet, [{ parameter: amount, value: 1.5 }]),
+    ).toThrowError(
+      expect.objectContaining({ code: 'CP1000', path: '$.entries[0].condition.right.value' }),
+    );
+    expect(JSON.stringify(bound)).toBe(previous);
+  });
+
   test('partitions Constant multiplier/count expressions and direct handles across entries', () => {
     const session = createBlueprintParameterSession();
     const shared = session.number('shared-parameter', { defaultValue: 2.25 });

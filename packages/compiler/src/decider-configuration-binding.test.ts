@@ -14,6 +14,186 @@ const source: SourceSpan = {
 };
 
 describe('binding symbolic Decider configuration templates', () => {
+  test('binds shared expressions in ordered outputs and elseOutputs per call', () => {
+    const session = createBlueprintParameterSession();
+    const amount = session.number('amount', { defaultValue: 3, source });
+    const direct = session.number('direct', { defaultValue: 7, source });
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: amount },
+      right: { kind: 'literal', value: 2 },
+    });
+    const template = createDeciderConfigurationTemplate(session, {
+      condition: {
+        kind: 'compare',
+        left: { kind: 'wildcard', value: 'each', refKind: 'single', network: 'network:in' },
+        comparator: '>',
+        right: { kind: 'constant', value: expression },
+      },
+      outputs: [
+        { mode: 'constant', signal: { kind: 'wildcard', value: 'each' }, value: expression },
+        { mode: 'constant', signal: { kind: 'wildcard', value: 'each' }, value: expression },
+        { mode: 'constant', signal: { kind: 'wildcard', value: 'anything' }, value: direct },
+        { mode: 'constant', signal: { kind: 'wildcard', value: 'each' }, value: 9 },
+        { mode: 'copy', signal: { kind: 'wildcard', value: 'everything' } },
+      ],
+      elseOutputs: [
+        { mode: 'constant', signal: { kind: 'wildcard', value: 'anything' }, value: expression },
+        { mode: 'copy', signal: { kind: 'wildcard', value: 'each' } },
+      ],
+    });
+    const values = (entries: typeof template.outputs | NonNullable<typeof template.elseOutputs>) =>
+      entries.map((entry) => (entry.mode === 'constant' ? entry.value : 'copy'));
+
+    const defaults = bindDeciderConfigurationTemplate(template);
+    expect(defaults.condition).toMatchObject({ right: { value: 5 } });
+    expect(values(defaults.outputs)).toEqual([5, 5, 7, 9, 'copy']);
+    expect(values(defaults.elseOutputs ?? [])).toEqual([5, 'copy']);
+
+    const first = bindDeciderConfigurationTemplate(template, [
+      { parameter: amount, value: 10 },
+      { parameter: direct, value: 8 },
+    ]);
+    const second = bindDeciderConfigurationTemplate(template, [
+      { parameter: amount, value: -4 },
+      { parameter: direct, value: 0 },
+    ]);
+    expect(first.condition).toMatchObject({ right: { value: 12 } });
+    expect(values(first.outputs)).toEqual([12, 12, 8, 9, 'copy']);
+    expect(values(first.elseOutputs ?? [])).toEqual([12, 'copy']);
+    expect(second.condition).toMatchObject({ right: { value: -2 } });
+    expect(values(second.outputs)).toEqual([-2, -2, 0, 9, 'copy']);
+    expect(values(second.elseOutputs ?? [])).toEqual([-2, 'copy']);
+    expect(values(defaults.outputs)).toEqual([5, 5, 7, 9, 'copy']);
+    expect(
+      values(
+        bindDeciderConfigurationTemplate(template, [
+          { parameter: amount, value: -2 },
+          { parameter: direct, value: 4 },
+        ]).outputs,
+      ),
+    ).toEqual([0, 0, 4, 9, 'copy']);
+    expect(
+      values(
+        bindDeciderConfigurationTemplate(template, [
+          { parameter: amount, value: 2_147_483_647 },
+          { parameter: direct, value: 4 },
+        ]).outputs,
+      ),
+    ).toEqual([-2_147_483_647, -2_147_483_647, 4, 9, 'copy']);
+  });
+
+  test('reports output expression paths for missing, fractional and non-finite results', () => {
+    const session = createBlueprintParameterSession();
+    const foreignSession = createBlueprintParameterSession();
+    const denominator = session.number('denominator', { source });
+    const large = session.number('large', { defaultValue: Number.MAX_SAFE_INTEGER, source });
+    const unused = session.number('unused');
+    const foreign = foreignSession.number('foreign');
+    const fraction = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'multiply',
+      left: { kind: 'parameter', parameter: denominator },
+      right: { kind: 'literal', value: 0.5 },
+    });
+    const overflowingFraction = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'multiply',
+      left: fraction,
+      right: { kind: 'literal', value: Number.MAX_VALUE },
+    });
+    const unsafe = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: large },
+      right: { kind: 'literal', value: 1 },
+    });
+    const template = createDeciderConfigurationTemplate(session, {
+      condition: {
+        kind: 'compare',
+        left: { kind: 'wildcard', value: 'each', refKind: 'single', network: 'network:in' },
+        comparator: '>',
+        right: { kind: 'constant', value: 0 },
+      },
+      outputs: [
+        {
+          mode: 'constant',
+          signal: { kind: 'wildcard', value: 'each' },
+          value: overflowingFraction,
+        },
+        { mode: 'constant', signal: { kind: 'wildcard', value: 'anything' }, value: unsafe },
+      ],
+    });
+
+    expect(() => bindDeciderConfigurationTemplate(template)).toThrowError(
+      expect.objectContaining({
+        code: 'CP1002',
+        path: '$.outputs[0].value.left.left.parameter',
+        span: source,
+      }),
+    );
+    expect(() =>
+      bindDeciderConfigurationTemplate(template, [
+        { parameter: denominator, value: 1 },
+        { parameter: denominator, value: 2 },
+      ]),
+    ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.bindings[1].parameter' }));
+    expect(() =>
+      bindDeciderConfigurationTemplate(template, [{ parameter: foreign, value: 1 }]),
+    ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.bindings[0].parameter' }));
+    expect(() =>
+      bindDeciderConfigurationTemplate(template, [
+        { parameter: unused, value: 1 },
+        { parameter: denominator, value: 0 },
+        { parameter: large, value: 0 },
+      ]),
+    ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.bindings' }));
+    expect(() =>
+      bindDeciderConfigurationTemplate(template, [
+        { parameter: denominator, value: Number.MAX_SAFE_INTEGER },
+      ]),
+    ).toThrowError(
+      expect.objectContaining({ code: 'CP1000', path: '$.outputs[0].value', span: source }),
+    );
+    expect(() =>
+      bindDeciderConfigurationTemplate(template, [{ parameter: denominator, value: 1 }]),
+    ).toThrowError(
+      expect.objectContaining({ code: 'CP1000', path: '$.outputs[0].value', span: source }),
+    );
+    expect(() =>
+      bindDeciderConfigurationTemplate(template, [{ parameter: denominator, value: 0 }]),
+    ).toThrowError(
+      expect.objectContaining({ code: 'CP1000', path: '$.outputs[1].value', span: source }),
+    );
+    expect(
+      bindDeciderConfigurationTemplate(template, [
+        { parameter: denominator, value: 0 },
+        { parameter: large, value: 0 },
+      ]).outputs,
+    ).toMatchObject([
+      { mode: 'constant', value: 0 },
+      { mode: 'constant', value: 1 },
+    ]);
+
+    const elseTemplate = createDeciderConfigurationTemplate(session, {
+      condition: template.condition,
+      outputs: [],
+      elseOutputs: [
+        {
+          mode: 'constant',
+          signal: { kind: 'wildcard', value: 'each' },
+          value: overflowingFraction,
+        },
+      ],
+    });
+    expect(() =>
+      bindDeciderConfigurationTemplate(elseTemplate, [{ parameter: denominator, value: 1 }]),
+    ).toThrowError(
+      expect.objectContaining({ code: 'CP1000', path: '$.elseOutputs[0].value', span: source }),
+    );
+  });
+
   test('binds registered expressions in direct and nested compare thresholds per call', () => {
     const session = createBlueprintParameterSession();
     const amount = session.number('amount', { defaultValue: 3, source });

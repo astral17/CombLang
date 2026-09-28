@@ -32,14 +32,14 @@ const deciderTemplateBrand: unique symbol = Symbol('decider-configuration-templa
 
 type TemplateSignalSlot = SignalId | BlueprintSignalParameterHandle;
 type TemplateNumberSlot = number | BlueprintNumberParameterHandle;
-type TemplateThresholdSlot = TemplateNumberSlot | BlueprintNumericExpression;
+type TemplateNumericSlot = TemplateNumberSlot | BlueprintNumericExpression;
 
 type DeciderTemplateConditionLeft =
   | ({ readonly kind: 'signal'; readonly signal: TemplateSignalSlot } & LogicalNetworkRef)
   | ({ readonly kind: 'wildcard'; readonly value: Quantifier } & LogicalNetworkRef);
 
 type DeciderTemplateScalarOperand =
-  | { readonly kind: 'constant'; readonly value: TemplateThresholdSlot }
+  | { readonly kind: 'constant'; readonly value: TemplateNumericSlot }
   | ({ readonly kind: 'signal'; readonly signal: TemplateSignalSlot } & LogicalNetworkRef);
 
 export type DeciderTemplateCondition =
@@ -65,7 +65,7 @@ export type DeciderTemplateOutput =
   | {
       readonly mode: 'constant';
       readonly signal: DeciderTemplateOutputSignal;
-      readonly value: TemplateNumberSlot;
+      readonly value: TemplateNumericSlot;
       readonly input?: LogicalNetworkRef;
     };
 
@@ -227,22 +227,6 @@ function networkReference(
   fail(`${path}.refKind`, 'expected a concrete single or pair network reference.');
 }
 
-function numberSlot(
-  value: unknown,
-  path: string,
-  session: BlueprintParameterSession,
-  budget: DeciderTemplateBudget,
-): TemplateNumberSlot {
-  rejectUnsupportedNumericExpression(value, path);
-  const slot = lookupBlueprintParameterSlot(value, 'number', session, path);
-  if (slot !== undefined) {
-    accountParameter(budget, slot.registration, path);
-    budget.usedParameters.add(slot.handle);
-    return slot.handle as BlueprintNumberParameterHandle;
-  }
-  return int32(assertBlueprintParameterNumberValue(value, path, 'safe-integer'));
-}
-
 function isNumericExpressionShaped(value: unknown): boolean {
   if (value === null || typeof value !== 'object') return false;
   const descriptor = Object.getOwnPropertyDescriptor(value, 'kind');
@@ -255,16 +239,20 @@ function isNumericExpressionShaped(value: unknown): boolean {
 
 function rejectUnsupportedNumericExpression(value: unknown, path: string): void {
   if (isRegisteredBlueprintNumericExpression(value) || isNumericExpressionShaped(value)) {
-    fail(path, 'numeric expressions are supported only in constant Decider thresholds.', 'CP1001');
+    fail(
+      path,
+      'numeric expressions are supported only in constant Decider thresholds and output values.',
+      'CP1001',
+    );
   }
 }
 
-function thresholdSlot(
+function numericSlot(
   value: unknown,
   path: string,
   session: BlueprintParameterSession,
   budget: DeciderTemplateBudget,
-): TemplateThresholdSlot {
+): TemplateNumericSlot {
   const slot = lookupBlueprintParameterSlot(value, 'number', session, path);
   if (slot !== undefined) {
     accountParameter(budget, slot.registration, path);
@@ -369,7 +357,7 @@ function scalarOperand(
       if (!Object.hasOwn(record, 'value')) fail(`${path}.value`, 'field is required.');
       return {
         kind: 'constant',
-        value: thresholdSlot(record.value, `${path}.value`, session, budget),
+        value: numericSlot(record.value, `${path}.value`, session, budget),
       };
     }
     if (record.kind === 'signal') {
@@ -536,7 +524,7 @@ function output(
       return {
         mode: 'constant',
         signal: signalValue,
-        value: numberSlot(record.value, `${path}.value`, session, budget),
+        value: numericSlot(record.value, `${path}.value`, session, budget),
         ...(input === undefined ? {} : { input }),
       };
     }

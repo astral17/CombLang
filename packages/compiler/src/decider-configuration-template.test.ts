@@ -14,7 +14,7 @@ const source: SourceSpan = {
 };
 
 describe('symbolic Decider configuration templates', () => {
-  test('accepts registered expressions only in direct and nested constant thresholds', () => {
+  test('accepts registered expressions in direct and nested constant thresholds', () => {
     const session = createBlueprintParameterSession();
     const other = createBlueprintParameterSession();
     const threshold = session.number('threshold', { defaultValue: 3, source });
@@ -91,19 +91,103 @@ describe('symbolic Decider configuration templates', () => {
         outputs: [],
       }),
     ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.condition.right.value' }));
+  });
+
+  test('preserves one registered expression across threshold and ordered output value slots', () => {
+    const session = createBlueprintParameterSession();
+    const amount = session.number('amount', { defaultValue: 3, source });
+    const direct = session.number('direct', { defaultValue: 7, source });
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: amount },
+      right: { kind: 'literal', value: 2 },
+    });
+    const condition = {
+      kind: 'compare',
+      left: { kind: 'wildcard', value: 'each', refKind: 'single', network: 'network:in' },
+      comparator: '>',
+      right: { kind: 'constant', value: expression },
+    } as const;
+    const input = {
+      condition,
+      outputs: [
+        { mode: 'constant', signal: { kind: 'wildcard', value: 'each' }, value: expression },
+        { mode: 'constant', signal: { kind: 'wildcard', value: 'each' }, value: expression },
+        { mode: 'constant', signal: { kind: 'wildcard', value: 'anything' }, value: direct },
+        { mode: 'constant', signal: { kind: 'wildcard', value: 'each' }, value: 9 },
+        { mode: 'copy', signal: { kind: 'wildcard', value: 'everything' } },
+      ],
+      elseOutputs: [
+        { mode: 'constant', signal: { kind: 'wildcard', value: 'anything' }, value: expression },
+        { mode: 'copy', signal: { kind: 'wildcard', value: 'each' } },
+      ],
+    };
+    const template = createDeciderConfigurationTemplate(session, input);
+
+    expect(template.condition).toMatchObject({ right: { value: expression } });
+    expect(template.outputs[0]).toMatchObject({ value: expression });
+    expect(template.outputs[1]).toMatchObject({ value: expression });
+    expect(template.outputs[2]).toMatchObject({ value: direct });
+    expect(template.outputs[3]).toEqual({
+      mode: 'constant',
+      signal: { kind: 'wildcard', value: 'each' },
+      value: 9,
+    });
+    expect(template.outputs[4]).toEqual({
+      mode: 'copy',
+      signal: { kind: 'wildcard', value: 'everything' },
+    });
+    expect(template.elseOutputs?.[0]).toMatchObject({ value: expression });
+    expect(template.elseOutputs?.[1]).toEqual({
+      mode: 'copy',
+      signal: { kind: 'wildcard', value: 'each' },
+    });
+    expect(inspectDeciderConfigurationTemplate(template, '$.template').usedParameters).toEqual([
+      amount,
+      direct,
+    ]);
+    expect(Object.isFrozen(input)).toBe(false);
+    expect(Object.isFrozen(input.outputs)).toBe(false);
+    expect(Object.isFrozen(input.outputs[0])).toBe(false);
+    expect(input.outputs[0]?.value).toBe(expression);
+
+    const other = createBlueprintParameterSession();
+    const foreign = createBlueprintNumericExpression(other, { kind: 'literal', value: 1 });
+    for (const invalid of [foreign, { kind: 'literal', value: 1 }]) {
+      expect(() =>
+        createDeciderConfigurationTemplate(session, {
+          condition,
+          outputs: [
+            { mode: 'constant', signal: { kind: 'wildcard', value: 'each' }, value: invalid },
+          ],
+        }),
+      ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.outputs[0].value' }));
+    }
     expect(() =>
       createDeciderConfigurationTemplate(session, {
-        condition: {
-          kind: 'compare',
-          left,
-          comparator: '>',
-          right: { kind: 'constant', value: 5 },
-        },
+        condition,
         outputs: [
-          { mode: 'constant', signal: { kind: 'wildcard', value: 'each' }, value: expression },
+          {
+            mode: 'copy',
+            signal: { kind: 'wildcard', value: 'each' },
+            value: expression,
+          },
         ],
       }),
     ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.outputs[0].value' }));
+    expect(() =>
+      createDeciderConfigurationTemplate(session, {
+        condition,
+        outputs: [
+          {
+            mode: 'constant',
+            signal: { kind: 'wildcard', value: expression },
+            value: 1,
+          },
+        ],
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.outputs[0].signal.value' }));
   });
 
   test('budgets expression DAG nodes once and avoids expanding shared subgraphs', () => {
@@ -144,10 +228,15 @@ describe('symbolic Decider configuration templates', () => {
           },
         ],
       },
-      outputs: [],
+      outputs: [{ mode: 'constant', signal: { kind: 'wildcard', value: 'each' }, value: shared }],
+      elseOutputs: [
+        { mode: 'constant', signal: { kind: 'wildcard', value: 'each' }, value: shared },
+      ],
     });
     if (repeated.condition.kind !== 'and') throw new Error('expected an and condition');
     expect(repeated.condition.conditions).toHaveLength(2);
+    expect(repeated.outputs[0]).toMatchObject({ value: shared });
+    expect(repeated.elseOutputs?.[0]).toMatchObject({ value: shared });
     for (const condition of repeated.condition.conditions) {
       if (condition.kind !== 'compare' || condition.right.kind !== 'constant') {
         throw new Error('expected a constant comparison threshold');

@@ -627,13 +627,18 @@ describe('concrete NCIR configuration-set replacement', () => {
     const conditionSignal = session.signal('condition', { defaultValue: targetSignal });
     const threshold = session.number('threshold', { defaultValue: 4 });
     const outputSignal = session.signal('output', { defaultValue: signal('virtual', 'signal-B') });
-    const elseValue = session.number('else value', { defaultValue: 6 });
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: threshold },
+      right: { kind: 'literal', value: 2 },
+    });
     const template = createDeciderConfigurationTemplate(session, {
       condition: {
         kind: 'compare',
         left: { kind: 'signal', signal: conditionSignal, refKind: 'single', network: input },
         comparator: '>=',
-        right: { kind: 'constant', value: threshold },
+        right: { kind: 'constant', value: expression },
       },
       outputs: [
         {
@@ -641,10 +646,10 @@ describe('concrete NCIR configuration-set replacement', () => {
           signal: { kind: 'signal', signal: outputSignal },
           input: { refKind: 'single', network: output },
         },
-        { mode: 'constant', signal: { kind: 'wildcard', value: 'anything' }, value: 2 },
+        { mode: 'constant', signal: { kind: 'wildcard', value: 'anything' }, value: expression },
       ],
       elseOutputs: [
-        { mode: 'constant', signal: { kind: 'signal', signal: outputSignal }, value: elseValue },
+        { mode: 'constant', signal: { kind: 'signal', signal: outputSignal }, value: expression },
       ],
     });
     const set = createBlueprintConfigurationSet(session, [
@@ -674,6 +679,36 @@ describe('concrete NCIR configuration-set replacement', () => {
       ],
     };
     const source = sourceSpan(sourceFileId('replacement.test.ts'), 0, 1);
+    const linkedEntityId = 'entity:decider' as EntityId;
+    const profile: EntityProfile = {
+      ...syntheticZeroPortEntityProfile,
+      prototypeType: 'decider-combinator',
+      ref: {
+        ...syntheticZeroPortEntityProfile.ref,
+        prototypeKey: 'entity:decider-combinator',
+      },
+    };
+    const trustedContext = createTrustedEntityReplayContext({
+      database: profile.ref.database,
+      source: 'synthetic',
+      evidenceIdentity: 'decider-output-expression-test-evidence',
+      policyIdentity: 'decider-output-expression-test-policy',
+      profiles: [profile],
+    });
+    const linkedEntity: EntityPhysicalRecord = {
+      id: linkedEntityId,
+      ordinal: 1,
+      profile: profile.ref,
+      prototypeName: 'decider-combinator',
+      provenance: { source, instancePath: [], expansionStack: [], creationRevision: 1 },
+      connectorBindings: [],
+      configuration: {
+        mode: 'decider',
+        condition: original.condition,
+        outputs: original.outputs,
+        ...(original.elseOutputs === undefined ? {} : { elseOutputs: original.elseOutputs }),
+      },
+    };
     const normalOrigins = [0, 1].map((ordinal) => ({
       branch: 'normal' as const,
       ordinal,
@@ -693,6 +728,7 @@ describe('concrete NCIR configuration-set replacement', () => {
     const deciderProducer = {
       id: firstProducer,
       kind: 'decider',
+      entityId: linkedEntityId,
       config: original,
       outputOrigins: normalOrigins,
       elseOutputOrigins: elseOrigins,
@@ -701,11 +737,12 @@ describe('concrete NCIR configuration-set replacement', () => {
     } satisfies CircuitProducerNode;
     const circuit: NativeCircuitIr = {
       format: 'comblang-ncir',
+      context: entityReplayContextRef(trustedContext),
       networks: [
         { id: input, color: 'red', provenance },
         { id: output, color: 'green', provenance },
       ],
-      entities: [],
+      entities: [linkedEntity],
       producers: [deciderProducer],
     };
     const replaced = replaceBlueprintConfigurationSetInNativeCircuitIr(
@@ -716,7 +753,6 @@ describe('concrete NCIR configuration-set replacement', () => {
         { parameter: conditionSignal, value: signal('virtual', 'signal-C') },
         { parameter: threshold, value: 8 },
         { parameter: outputSignal, value: signal('virtual', 'signal-D') },
-        { parameter: elseValue, value: 10 },
       ],
     );
     const changed = replaced.producers[0];
@@ -724,6 +760,16 @@ describe('concrete NCIR configuration-set replacement', () => {
     if (changed?.kind !== 'decider') throw new Error('expected Decider producer');
     expect(changed.config.outputs).toHaveLength(2);
     expect(changed.config.elseOutputs).toHaveLength(1);
+    expect(changed.entityId).toBe(linkedEntityId);
+    expect(changed.destinations).toEqual([output]);
+    expect(changed.id).toBe(firstProducer);
+    expect(replaced.networks).toEqual(circuit.networks);
+    expect(replaced.entities[0]?.configuration).toEqual({
+      mode: 'decider',
+      condition: changed.config.condition,
+      outputs: changed.config.outputs,
+      elseOutputs: changed.config.elseOutputs,
+    });
     expect(changed.outputOrigins).toEqual(normalOrigins);
     expect(changed.elseOutputOrigins).toEqual(elseOrigins);
     const concrete: DeciderProducerConfig = {
@@ -736,7 +782,7 @@ describe('concrete NCIR configuration-set replacement', () => {
           network: input,
         },
         comparator: '>=',
-        right: { kind: 'constant', value: 8 },
+        right: { kind: 'constant', value: 10 },
       },
       outputs: [
         {
@@ -744,7 +790,7 @@ describe('concrete NCIR configuration-set replacement', () => {
           signal: { kind: 'signal', signal: signal('virtual', 'signal-D') },
           input: { refKind: 'single', network: output },
         },
-        { mode: 'constant', signal: { kind: 'wildcard', value: 'anything' }, value: 2 },
+        { mode: 'constant', signal: { kind: 'wildcard', value: 'anything' }, value: 10 },
       ],
       elseOutputs: [
         {
@@ -755,8 +801,41 @@ describe('concrete NCIR configuration-set replacement', () => {
       ],
     };
     expect(generateBlueprintJson(replaced)).toEqual(
-      generateBlueprintJson({ ...circuit, producers: [{ ...deciderProducer, config: concrete }] }),
+      generateBlueprintJson({
+        ...circuit,
+        entities: [
+          {
+            ...linkedEntity,
+            configuration: {
+              mode: 'decider',
+              condition: concrete.condition,
+              outputs: concrete.outputs,
+              ...(concrete.elseOutputs === undefined ? {} : { elseOutputs: concrete.elseOutputs }),
+            },
+          },
+        ],
+        producers: [{ ...deciderProducer, config: concrete }],
+      }),
     );
+    expect(JSON.stringify(replaced)).not.toContain('"kind":"binary"');
+    const circuitBeforeFailure = JSON.stringify(circuit);
+    const replacedBeforeFailure = JSON.stringify(replaced);
+    expect(() =>
+      replaceBlueprintConfigurationSetInNativeCircuitIr(
+        set,
+        circuit,
+        [{ key: 'decision', producerId: firstProducer }],
+        [
+          { parameter: conditionSignal, value: signal('virtual', 'signal-C') },
+          { parameter: threshold, value: 1.5 },
+          { parameter: outputSignal, value: signal('virtual', 'signal-D') },
+        ],
+      ),
+    ).toThrowError(
+      expect.objectContaining({ code: 'CP1000', path: '$.entries[0].condition.right.value' }),
+    );
+    expect(JSON.stringify(circuit)).toBe(circuitBeforeFailure);
+    expect(JSON.stringify(replaced)).toBe(replacedBeforeFailure);
     const missingElse: DeciderProducerConfig = {
       condition: original.condition,
       outputs: original.outputs,

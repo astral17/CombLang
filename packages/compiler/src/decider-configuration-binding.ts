@@ -114,7 +114,7 @@ export function bindDeciderConfigurationTemplate(
     return normalized;
   };
 
-  const resolveThreshold = (value: unknown, path: string): number => {
+  const resolveNumericSlot = (value: unknown, path: string): number => {
     if (!isRegisteredBlueprintNumericExpression(value)) return resolveNumber(value, path);
     const inspection = inspectRegisteredBlueprintNumericExpression(session, value, path);
     const dependencies = new Set<object>(inspection.dependencies);
@@ -180,7 +180,7 @@ export function bindDeciderConfigurationTemplate(
     path: string,
   ) =>
     operand.kind === 'constant'
-      ? { kind: 'constant' as const, value: resolveThreshold(operand.value, `${path}.value`) }
+      ? { kind: 'constant' as const, value: resolveNumericSlot(operand.value, `${path}.value`) }
       : {
           kind: 'signal' as const,
           signal: resolveSignal(operand.signal, `${path}.signal`),
@@ -224,7 +224,7 @@ export function bindDeciderConfigurationTemplate(
     return {
       mode: 'constant',
       signal,
-      value: resolveNumber(value.value, `${path}.value`),
+      value: resolveNumericSlot(value.value, `${path}.value`),
       ...(input === undefined ? {} : { input }),
     };
   };
