@@ -23,8 +23,10 @@ import { transformElaborationModule } from '@comblang/compiler';
 import { executeElaborationProgram } from './elaboration-program.js';
 import { executeElaborationProgramWithParameters } from './elaboration-program.js';
 import { bindCapturedSourceConfigurationTemplates } from './executed-blueprint-configuration-binding.js';
+import { bindCapturedSourceConfigurationTemplatesWithRelations } from './executed-blueprint-configuration-binding.js';
 import { canonicalDirectPlan, canonicalResolvedCircuit } from './canonical-circuit.js';
 import { executeResolvedDirectPlan, tryElaborateDirectPlan } from './direct-plan.js';
+import { materializeCapturedPlan } from './source-configuration-materialization.js';
 import { bindExecutedPlanConfigurationSet } from './executed-blueprint-configuration-binding.js';
 import { createExecutedProducerCaptureReference } from './executed-blueprint-configuration-binding.js';
 import { createBlueprintConfigurationSet } from '../../compiler/src/blueprint-configuration-set.js';
@@ -86,6 +88,42 @@ const decider = Decider({ condition: input[A] > amount, outputs: [input[A]] });
 output += arithmetic;
 output += constant;
 output += decider;`;
+
+function expectConcreteDataTree(value: unknown, active = new WeakSet<object>()): void {
+  if (typeof value === 'string') {
+    expect(value).not.toMatch(
+      /Amount|Channel|BlueprintParameter|configurationTemplate|numericExpression/i,
+    );
+    return;
+  }
+  if (value === null || typeof value !== 'object') {
+    expect(typeof value).not.toBe('symbol');
+    expect(typeof value).not.toBe('function');
+    return;
+  }
+  expect(active.has(value)).toBe(false);
+  if (active.has(value)) return;
+  active.add(value);
+  if (!Array.isArray(value)) {
+    const prototype = Object.getPrototypeOf(value);
+    expect(prototype === Object.prototype || prototype === null).toBe(true);
+  }
+  for (const key of Reflect.ownKeys(value)) {
+    expect(typeof key).toBe('string');
+    if (typeof key !== 'string') continue;
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    expect(descriptor).toBeDefined();
+    if (descriptor === undefined) continue;
+    expect(Object.hasOwn(descriptor, 'value')).toBe(true);
+    if (Array.isArray(value) && key === 'length') continue;
+    expect(descriptor.enumerable).toBe(true);
+    expect(key).not.toMatch(
+      /Amount|Channel|BlueprintParameter|configurationTemplate|numericExpression/i,
+    );
+    expectConcreteDataTree(descriptor.value, active);
+  }
+  active.delete(value);
+}
 
 describe('ordinary source parameter declarations', () => {
   test('keeps a bound circuit paired with a replayable concrete plan', () => {
@@ -960,12 +998,66 @@ selectorOutput += counted;`,
     expect(defaultModel.simulation.get(signal('virtual', 'signal-B'))).toBe(5);
     expect(overriddenModel.simulation.get(signal('virtual', 'signal-B'))).toBe(10);
     expect(overriddenModel.simulation.get(signal('virtual', 'signal-D'))).toBe(10);
+
+    const blueprintEntities = (pair: ReturnType<typeof bindSourceCompilationCircuit>) =>
+      generateBlueprintJson(pair.resolvedCircuit.ir).blueprint.entities;
+    const arithmeticConditions = (
+      entities: ReturnType<typeof blueprintEntities>,
+    ): Record<string, unknown> => {
+      const matches = entities.filter(({ name }) => name === 'arithmetic-combinator');
+      expect(matches).toHaveLength(1);
+      return (matches[0]!.control_behavior as { arithmetic_conditions: Record<string, unknown> })
+        .arithmetic_conditions;
+    };
+    const constantFilters = (
+      entities: ReturnType<typeof blueprintEntities>,
+    ): Record<string, unknown>[] => {
+      const matches = entities.filter(({ name }) => name === 'constant-combinator');
+      expect(matches).toHaveLength(1);
+      return (
+        matches[0]!.control_behavior as {
+          sections: { sections: { filters: Record<string, unknown>[] }[] };
+        }
+      ).sections.sections[0]!.filters;
+    };
+    expect(arithmeticConditions(blueprintEntities(defaults))).toMatchObject({
+      first_signal: { type: 'virtual', name: 'signal-A' },
+      operation: '+',
+      second_constant: 5,
+      output_signal: { type: 'virtual', name: 'signal-B' },
+    });
+    expect(arithmeticConditions(blueprintEntities(overridden))).toMatchObject({
+      first_signal: { type: 'virtual', name: 'signal-A' },
+      operation: '+',
+      second_constant: 10,
+      output_signal: { type: 'virtual', name: 'signal-B' },
+    });
+    expect(constantFilters(blueprintEntities(defaults))).toEqual([
+      {
+        index: 1,
+        name: 'signal-C',
+        type: 'virtual',
+        quality: 'normal',
+        comparator: '=',
+        count: 5,
+      },
+    ]);
+    expect(constantFilters(blueprintEntities(overridden))).toEqual([
+      {
+        index: 1,
+        name: 'signal-D',
+        type: 'virtual',
+        quality: 'normal',
+        comparator: '=',
+        count: 10,
+      },
+    ]);
     expect(generateBlueprintJson(overridden.resolvedCircuit.ir)).toEqual(
       generateBlueprintJson(overriddenModel.replay.circuit.ir),
     );
-    expect(JSON.stringify(overridden)).not.toMatch(
-      /Amount|Channel|BlueprintParameter|configurationTemplate|numericExpression/i,
-    );
+    expectConcreteDataTree(defaults);
+    expectConcreteDataTree(overridden);
+    expect(structuredClone(overridden)).toEqual(overridden);
     expect(() =>
       bindSourceCompilationCircuit(compilation, [
         { parameter: declarations[0]!.parameter, value: 1.5 },
@@ -1114,6 +1206,138 @@ Selector({ input, operation: 'select', index: globalThis[Symbol.for('${key}')] }
         else delete globalRecord[key];
       }
     }
+  });
+
+  test('maps captured Selector templates by stable IDs after Plan producer reordering', () => {
+    const environment = parameterHost();
+    const program = transformElaborationModule(
+      parseFile({
+        path: 'selector-reordered-plan-captures.factorio.ts',
+        text: `const firstIndex = Param.number('First index', 1);
+const secondIndex = Param.number('Second index', 2);
+const inputA = new Network();
+const inputB = new Network();
+const outputA = new Network();
+const outputB = new Network();
+outputA += Selector({ input: inputA, operation: 'select', index: firstIndex });
+outputB += Selector({ input: inputB, operation: 'select', index: secondIndex });`,
+      }),
+      { testContextName: 't' },
+    );
+    const dynamic = executeElaborationProgramWithParameters(program, environment);
+    expect(dynamic.selectorTemplates).toHaveLength(2);
+    const captureValues = new Map([
+      [dynamic.selectorTemplates[0]!.captureId, 8],
+      [dynamic.selectorTemplates[1]!.captureId, 13],
+    ]);
+    const reorderedPlan = {
+      ...dynamic.plan,
+      producers: [...dynamic.plan.producers].reverse(),
+    };
+    const reordered = { ...dynamic, plan: reorderedPlan };
+    const lowered = tryElaborateDirectPlan(reorderedPlan, environment.trustedEntityReplayContext);
+    expect(lowered.diagnostics).toEqual([]);
+
+    const bound = bindCapturedSourceConfigurationTemplates(reordered, lowered.execution!, [
+      { parameter: dynamic.parameters[0]!.handle, value: 8 },
+      { parameter: dynamic.parameters[1]!.handle, value: 13 },
+    ]);
+    const physicalCaptures = lowered.execution!.debug.scopes.flatMap((scope) => scope.producers);
+    for (const physical of physicalCaptures) {
+      const captureId = physical.descriptor.debugCaptureIds?.find((id) => captureValues.has(id));
+      if (captureId === undefined) throw new Error('Expected a captured Selector producer.');
+      expect(bound.producers.find(({ id }) => id === physical.id)).toMatchObject({
+        kind: 'selector',
+        config: { index: captureValues.get(captureId) },
+      });
+    }
+  });
+
+  test('rejects a capture ID shared by distinct Plan producers during lowering', () => {
+    const environment = parameterHost();
+    const program = transformElaborationModule(
+      parseFile({
+        path: 'selector-duplicate-plan-capture.factorio.ts',
+        text: `const firstIndex = Param.number('First index', 1);
+const secondIndex = Param.number('Second index', 2);
+const inputA = new Network();
+const inputB = new Network();
+const outputA = new Network();
+const outputB = new Network();
+outputA += Selector({ input: inputA, operation: 'select', index: firstIndex });
+outputB += Selector({ input: inputB, operation: 'select', index: secondIndex });`,
+      }),
+      { testContextName: 't' },
+    );
+    const dynamic = executeElaborationProgramWithParameters(program, environment);
+    const duplicateId = dynamic.plan.producers[0]!.debugCaptureIds![0]!;
+    const duplicatePlan = {
+      ...dynamic.plan,
+      producers: dynamic.plan.producers.map((producer, index) =>
+        index === 1 ? { ...producer, debugCaptureIds: [duplicateId] } : producer,
+      ),
+    };
+    const lowered = tryElaborateDirectPlan(duplicatePlan, environment.trustedEntityReplayContext);
+    expect(lowered.diagnostics).toEqual([
+      expect.objectContaining({
+        code: 'RT1001',
+        message: expect.stringContaining('$.producers[1].debugCaptureIds[0]'),
+      }),
+    ]);
+  });
+
+  test('rejects duplicate Plan and linked Entity materialization targets atomically', () => {
+    const environment = parameterHost();
+    const program = transformElaborationModule(
+      parseFile({
+        path: 'selector-duplicate-materialization-targets.factorio.ts',
+        text: `const firstIndex = Param.number('First index', 1);
+const secondIndex = Param.number('Second index', 2);
+const inputA = new Network();
+const inputB = new Network();
+const outputA = new Network();
+const outputB = new Network();
+outputA += Selector({ input: inputA, operation: 'select', index: firstIndex });
+outputB += Selector({ input: inputB, operation: 'select', index: secondIndex });`,
+      }),
+      { testContextName: 't' },
+    );
+    const dynamic = executeElaborationProgramWithParameters(program, environment);
+    const lowered = tryElaborateDirectPlan(dynamic.plan, environment.trustedEntityReplayContext);
+    expect(lowered.diagnostics).toEqual([]);
+    const bound = bindCapturedSourceConfigurationTemplatesWithRelations(
+      dynamic,
+      lowered.execution!,
+    );
+    expect(bound.captureRelations).toHaveLength(2);
+    const [first, second] = bound.captureRelations;
+    if (first === undefined || second === undefined) {
+      throw new Error('Expected two validated Selector capture relations.');
+    }
+    const originalPlan = structuredClone(dynamic.plan);
+    const originalCircuit = structuredClone(bound.circuit);
+
+    expect(() => materializeCapturedPlan(dynamic.plan, [first, first], bound.circuit)).toThrow(
+      'Captured configuration no longer matches its Direct Plan producer.',
+    );
+
+    const firstEntityId = dynamic.plan.producers[first.planIndex]?.entityId;
+    const secondEntityId = dynamic.plan.producers[second.planIndex]?.entityId;
+    if (firstEntityId === undefined || secondEntityId === undefined) {
+      throw new Error('Expected linked physical Entities for both Selector producers.');
+    }
+    expect(firstEntityId).not.toBe(secondEntityId);
+    const duplicateEntityPlan = {
+      ...dynamic.plan,
+      producers: dynamic.plan.producers.map((producer, index) =>
+        index === second.planIndex ? { ...producer, entityId: firstEntityId } : producer,
+      ),
+    };
+    expect(() =>
+      materializeCapturedPlan(duplicateEntityPlan, [first, second], bound.circuit),
+    ).toThrow('Captured configuration no longer matches its Direct Plan producer.');
+    expect(dynamic.plan).toEqual(originalPlan);
+    expect(bound.circuit).toEqual(originalCircuit);
   });
 
   test('captures repeated physical Selectors and rolls back templates with failed instances', () => {

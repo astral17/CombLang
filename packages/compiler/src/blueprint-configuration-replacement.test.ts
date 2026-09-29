@@ -72,6 +72,7 @@ describe('concrete NCIR configuration-set replacement', () => {
     const { amount, set, session } = oneEntrySet();
     const circuit = constantCircuit();
     const assignments = [{ key: 'source', producerId: firstProducer }];
+    const before = structuredClone(circuit);
     const defaults = bindAndReplaceBlueprintConfigurationSetInNativeCircuitIr(
       set,
       circuit,
@@ -89,7 +90,7 @@ describe('concrete NCIR configuration-set replacement', () => {
       assignments,
       [{ parameter: amount, value: 17 }],
     );
-    const before = structuredClone(circuit);
+    expect(circuit).toEqual(before);
 
     expect(defaults.configurations[0]).toMatchObject({
       key: 'source',

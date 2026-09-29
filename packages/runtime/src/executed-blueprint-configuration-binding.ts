@@ -1,10 +1,11 @@
-import { constantConfigurationLimits } from '@comblang/factorio';
 import type { NetworkId, ProducerId, SourceSpan } from '@comblang/shared';
 import type { CircuitProducerNode } from '@comblang/compiler/ir';
+import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
 
 import {
   inspectBlueprintConfigurationSet,
   createBlueprintConfigurationSet,
+  type BoundBlueprintConfiguration,
   type BlueprintConfigurationSetEntry,
 } from '../../compiler/src/blueprint-configuration-set.js';
 import {
@@ -64,6 +65,32 @@ interface ResolvedCaptureAssignment {
   readonly producerId: ProducerId;
 }
 
+interface PlanCaptureEntry {
+  readonly index: number;
+  readonly descriptor: DirectElaborationPlan['producers'][number];
+}
+
+interface IndexedPhysicalProducer {
+  readonly index: number;
+  readonly producer: CircuitProducerNode;
+}
+
+export interface CapturedPlanConfigurationRelation {
+  readonly captureId: string;
+  readonly planIndex: number;
+  readonly producerId: ProducerId;
+  readonly producerIndex: number;
+  readonly kind: BoundBlueprintConfiguration['kind'];
+  readonly configuration: BoundBlueprintConfiguration;
+}
+
+interface CaptureRelationIndex {
+  readonly execution: ExecutedDirectPlan;
+  readonly planByCaptureId: Map<string, PlanCaptureEntry[]>;
+  readonly debugByCaptureId: Map<string, DebugProducerEntry[]>;
+  readonly physicalByProducerId: Map<string, IndexedPhysicalProducer[]>;
+}
+
 const captureReferences = new WeakMap<object, CaptureReferenceRegistration>();
 
 function fail(
@@ -81,21 +108,60 @@ function captureProvenance(entry: DebugProducerEntry): string {
   return ` Producer provenance: ${source}, instance ${JSON.stringify(instance)}.`;
 }
 
-function debugEntriesForCapture(
+function addIndexEntry<K, V>(index: Map<K, V[]>, key: K, value: V): void {
+  const entries = index.get(key);
+  if (entries === undefined) index.set(key, [value]);
+  else entries.push(value);
+}
+
+/** Builds one bind-call index, retaining collisions so callers can reject them at their source path. */
+function buildCaptureRelationIndex(
   execution: ExecutedDirectPlan,
+  plan?: DirectElaborationPlan,
+): CaptureRelationIndex {
+  const planByCaptureId = new Map<string, PlanCaptureEntry[]>();
+  plan?.producers.forEach((descriptor, index) => {
+    for (const captureId of descriptor.debugCaptureIds ?? []) {
+      addIndexEntry(planByCaptureId, captureId, { index, descriptor });
+    }
+  });
+
+  const debugByCaptureId = new Map<string, DebugProducerEntry[]>();
+  for (const scope of execution.debug.scopes) {
+    for (const entry of scope.producers) {
+      for (const captureId of entry.descriptor.debugCaptureIds ?? []) {
+        addIndexEntry(debugByCaptureId, captureId, entry);
+      }
+    }
+  }
+
+  const physicalByProducerId = new Map<string, IndexedPhysicalProducer[]>();
+  execution.circuit.ir.producers.forEach((producer, index) => {
+    addIndexEntry(physicalByProducerId, producer.id, { index, producer });
+  });
+
+  return {
+    execution,
+    planByCaptureId,
+    debugByCaptureId,
+    physicalByProducerId,
+  };
+}
+
+function planCaptureFor(
+  index: CaptureRelationIndex,
   captureId: string,
-): readonly DebugProducerEntry[] {
-  return execution.debug.scopes.flatMap((scope) =>
-    scope.producers.filter((entry) => entry.descriptor.debugCaptureIds?.includes(captureId)),
-  );
+): PlanCaptureEntry | undefined {
+  const matches = index.planByCaptureId.get(captureId);
+  return matches?.length === 1 ? matches[0] : undefined;
 }
 
 function physicalProducerForEntry(
-  execution: ExecutedDirectPlan,
   entry: DebugProducerEntry,
   path: string,
-): CircuitProducerNode {
-  const matches = execution.circuit.ir.producers.filter((producer) => producer.id === entry.id);
+  index: CaptureRelationIndex,
+): IndexedPhysicalProducer {
+  const matches = index.physicalByProducerId.get(entry.id) ?? [];
   if (matches.length !== 1) {
     fail(
       'CP1001',
@@ -104,7 +170,8 @@ function physicalProducerForEntry(
       entry.source,
     );
   }
-  const producer = matches[0]!;
+  const indexedProducer = matches[0]!;
+  const producer = indexedProducer.producer;
   if (producer.kind !== entry.producerKind) {
     fail(
       'CP1001',
@@ -113,7 +180,30 @@ function physicalProducerForEntry(
       entry.source,
     );
   }
-  return producer;
+  return indexedProducer;
+}
+
+function createExecutedProducerCaptureReferenceFromIndex(
+  execution: ExecutedDirectPlan,
+  captureId: string,
+  index: CaptureRelationIndex,
+  path: string,
+): { readonly reference: ExecutedProducerCaptureReference; readonly producerIndex: number } {
+  const entries = index.debugByCaptureId.get(captureId) ?? [];
+  if (entries.length !== 1) {
+    const entry = entries[0];
+    fail(
+      'CP1001',
+      path,
+      `expected exactly one Producer debug capture in this execution; found ${entries.length}.${entry === undefined ? '' : captureProvenance(entry)}`,
+      entry?.source,
+    );
+  }
+  const entry = entries[0]!;
+  const physical = physicalProducerForEntry(entry, path, index);
+  const reference = Object.freeze(Object.create(null)) as ExecutedProducerCaptureReference;
+  captureReferences.set(reference, { execution, captureId, entry });
+  return { reference, producerIndex: physical.index };
 }
 
 /** Creates an unforgeable, execution-scoped reference using only the executed debug mapping. */
@@ -125,45 +215,27 @@ export function createExecutedProducerCaptureReference(
   if (typeof captureId !== 'string' || captureId.length === 0 || captureId.length > 128) {
     fail('CP1000', path, 'expected a non-empty bounded debug capture ID.');
   }
-  const entries = debugEntriesForCapture(execution, captureId);
-  if (entries.length !== 1) {
-    const entry = entries[0];
-    fail(
-      'CP1001',
-      path,
-      `expected exactly one Producer debug capture in this execution; found ${entries.length}.${entry === undefined ? '' : captureProvenance(entry)}`,
-      entry?.source,
-    );
-  }
-  const entry = entries[0]!;
-  physicalProducerForEntry(execution, entry, path);
-  const reference = Object.freeze(Object.create(null)) as ExecutedProducerCaptureReference;
-  captureReferences.set(reference, { execution, captureId, entry });
-  return reference;
+  const index = buildCaptureRelationIndex(execution);
+  return createExecutedProducerCaptureReferenceFromIndex(execution, captureId, index, path)
+    .reference;
 }
 
 function resolveCaptureAssignments(
   execution: ExecutedDirectPlan,
   entries: readonly BlueprintConfigurationSetEntry[],
   value: unknown,
+  index: CaptureRelationIndex,
 ): readonly ResolvedCaptureAssignment[] {
   const path = '$.captures';
   const budget = createBlueprintParameterDataBudget();
   const opened = openBlueprintParameterArray(value, path, 0, budget);
   try {
-    if (opened.value.length > constantConfigurationLimits.maxNodes) {
-      fail(
-        'CP1000',
-        path,
-        `capture assignments exceed the node limit of ${constantConfigurationLimits.maxNodes}.`,
-      );
-    }
     const entryByKey = new Map(entries.map((entry) => [entry.key, entry]));
     const seenKeys = new Set<string>();
     const seenCaptureIds = new Set<string>();
     const seenProducerIds = new Set<ProducerId>();
-    const resolved = opened.value.map((valueAtIndex, index) => {
-      const itemPath = `${path}[${index}]`;
+    const resolved = opened.value.map((valueAtIndex, itemIndex) => {
+      const itemPath = `${path}[${itemIndex}]`;
       const openedRecord = openBlueprintParameterRecord(valueAtIndex, itemPath, 1, budget);
       try {
         assertBlueprintParameterExactKeys(
@@ -233,7 +305,7 @@ function resolveCaptureAssignments(
         }
         seenCaptureIds.add(reference.captureId);
 
-        const matches = debugEntriesForCapture(execution, reference.captureId);
+        const matches = index.debugByCaptureId.get(reference.captureId) ?? [];
         if (matches.length !== 1 || matches[0] !== reference.entry) {
           fail(
             'CP1001',
@@ -242,11 +314,12 @@ function resolveCaptureAssignments(
             reference.entry.source,
           );
         }
-        const producer = physicalProducerForEntry(
-          execution,
+        const indexedProducer = physicalProducerForEntry(
           reference.entry,
           `${itemPath}.captureId`,
+          index,
         );
+        const producer = indexedProducer.producer;
         if (producer.kind !== configuration.kind) {
           fail(
             'CP1001',
@@ -287,14 +360,24 @@ function resolveCaptureAssignments(
 }
 
 /** Binds a registered configuration set to Producers captured by one exact executed plan. */
-export function bindExecutedPlanConfigurationSetWithConfigurations(
+function bindExecutedPlanConfigurationSetWithConfigurations(
   execution: ExecutedDirectPlan,
   setValue: unknown,
   capturesValue: unknown,
   bindingsValue: readonly BlueprintParameterBinding[] = [],
+  captureIndex?: CaptureRelationIndex,
 ) {
   const registration = inspectBlueprintConfigurationSet(setValue, '$.set');
-  const assignments = resolveCaptureAssignments(execution, registration.entries, capturesValue);
+  const index = captureIndex ?? buildCaptureRelationIndex(execution);
+  if (index.execution !== execution) {
+    fail('CP1001', '$.execution', 'capture index belongs to a different ExecutedDirectPlan.');
+  }
+  const assignments = resolveCaptureAssignments(
+    execution,
+    registration.entries,
+    capturesValue,
+    index,
+  );
   return bindAndReplaceBlueprintConfigurationSetInNativeCircuitIr(
     setValue,
     execution.circuit.ir,
@@ -348,12 +431,6 @@ function stableData(value: unknown): string {
     .sort()
     .map((key) => `${JSON.stringify(key)}:${stableData(record[key])}`)
     .join(',')}}`;
-}
-
-function producerCapturesFor(execution: ExecutedDirectPlan, captureId: string) {
-  return execution.debug.scopes.flatMap((scope) =>
-    scope.producers.filter((entry) => entry.descriptor.debugCaptureIds?.includes(captureId)),
-  );
 }
 
 function resolveCapturedNetwork(
@@ -545,7 +622,7 @@ function resolveCapturedDeciderOutput(
 }
 
 /** Converts source-captured templates to one atomic, execution-paired NCIR replacement. */
-export function bindCapturedSourceConfigurationTemplatesWithConfigurations(
+function bindCapturedSourceConfigurationTemplatesInternal(
   source: ExecutedElaborationWithBlueprintParameters,
   execution: ExecutedDirectPlan,
   bindingsValue: readonly BlueprintParameterBinding[] = [],
@@ -574,19 +651,7 @@ export function bindCapturedSourceConfigurationTemplatesWithConfigurations(
     fail('CP1001', '$.execution.circuit.ir', 'expected a canonical NCIR execution.');
   }
 
-  const planProducerByCapture = new Map<
-    string,
-    { index: number; descriptor: (typeof source.plan.producers)[number] }
-  >();
-  source.plan.producers.forEach((descriptor, index) => {
-    for (const captureId of descriptor.debugCaptureIds ?? []) {
-      if (planProducerByCapture.has(captureId)) {
-        planProducerByCapture.set(captureId, { index: -1, descriptor });
-      } else {
-        planProducerByCapture.set(captureId, { index, descriptor });
-      }
-    }
-  });
+  const captureIndex = buildCaptureRelationIndex(execution, source.plan);
 
   const seenCaptures = new Set<string>();
   const captures: {
@@ -597,6 +662,7 @@ export function bindCapturedSourceConfigurationTemplatesWithConfigurations(
       readonly captureId: ExecutedProducerCaptureReference;
     };
     readonly producerId: ProducerId;
+    readonly producerIndex: number;
   }[] = source.arithmeticTemplates.map((candidate, index) => {
     const path = `$.arithmeticTemplates[${index}]`;
     if (
@@ -619,12 +685,8 @@ export function bindCapturedSourceConfigurationTemplatesWithConfigurations(
     }
     seenCaptures.add(captureId);
 
-    const planProducer = planProducerByCapture.get(captureId);
-    if (
-      planProducer === undefined ||
-      planProducer.index < 0 ||
-      planProducer.descriptor.kind !== 'arithmetic'
-    ) {
+    const planProducer = planCaptureFor(captureIndex, captureId);
+    if (planProducer === undefined || planProducer.descriptor.kind !== 'arithmetic') {
       fail(
         'CP1001',
         `${path}.captureId`,
@@ -632,7 +694,7 @@ export function bindCapturedSourceConfigurationTemplatesWithConfigurations(
         candidate.source as SourceSpan,
       );
     }
-    const debugEntries = producerCapturesFor(execution, captureId);
+    const debugEntries = captureIndex.debugByCaptureId.get(captureId) ?? [];
     if (
       debugEntries.length !== 1 ||
       debugEntries[0]!.producerKind !== 'arithmetic' ||
@@ -666,7 +728,13 @@ export function bindCapturedSourceConfigurationTemplatesWithConfigurations(
         candidate.source as SourceSpan,
       );
     }
-    const captureReference = createExecutedProducerCaptureReference(execution, captureId);
+    const { reference: captureReference, producerIndex } =
+      createExecutedProducerCaptureReferenceFromIndex(
+        execution,
+        captureId,
+        captureIndex,
+        '$.captures.captureId',
+      );
     const template = candidate.template as ArithmeticConfigurationTemplate;
     const resolvedTemplate = createArithmeticConfigurationTemplate(source.session, {
       left: resolveCapturedOperand(
@@ -695,6 +763,7 @@ export function bindCapturedSourceConfigurationTemplatesWithConfigurations(
       },
       capture: { key: captureId, captureId: captureReference },
       producerId: debugEntry.id,
+      producerIndex,
     };
   });
 
@@ -720,12 +789,8 @@ export function bindCapturedSourceConfigurationTemplatesWithConfigurations(
     }
     seenCaptures.add(captureId);
 
-    const planProducer = planProducerByCapture.get(captureId);
-    if (
-      planProducer === undefined ||
-      planProducer.index < 0 ||
-      planProducer.descriptor.kind !== 'constant'
-    ) {
+    const planProducer = planCaptureFor(captureIndex, captureId);
+    if (planProducer === undefined || planProducer.descriptor.kind !== 'constant') {
       fail(
         'CP1001',
         `${path}.captureId`,
@@ -733,7 +798,7 @@ export function bindCapturedSourceConfigurationTemplatesWithConfigurations(
         candidate.source as SourceSpan,
       );
     }
-    const debugEntries = producerCapturesFor(execution, captureId);
+    const debugEntries = captureIndex.debugByCaptureId.get(captureId) ?? [];
     if (
       debugEntries.length !== 1 ||
       debugEntries[0]!.producerKind !== 'constant' ||
@@ -772,12 +837,19 @@ export function bindCapturedSourceConfigurationTemplatesWithConfigurations(
       isOn: template.isOn,
       sections: template.sections,
     });
-    const captureReference = createExecutedProducerCaptureReference(execution, captureId);
+    const { reference: captureReference, producerIndex } =
+      createExecutedProducerCaptureReferenceFromIndex(
+        execution,
+        captureId,
+        captureIndex,
+        '$.captures.captureId',
+      );
     captures.push({
       index: planProducer.index,
       entry: { key: captureId, kind: 'constant', template: resolvedTemplate },
       capture: { key: captureId, captureId: captureReference },
       producerId: debugEntry.id,
+      producerIndex,
     });
   });
 
@@ -803,12 +875,8 @@ export function bindCapturedSourceConfigurationTemplatesWithConfigurations(
     }
     seenCaptures.add(captureId);
 
-    const planProducer = planProducerByCapture.get(captureId);
-    if (
-      planProducer === undefined ||
-      planProducer.index < 0 ||
-      planProducer.descriptor.kind !== 'decider'
-    ) {
+    const planProducer = planCaptureFor(captureIndex, captureId);
+    if (planProducer === undefined || planProducer.descriptor.kind !== 'decider') {
       fail(
         'CP1001',
         `${path}.captureId`,
@@ -816,7 +884,7 @@ export function bindCapturedSourceConfigurationTemplatesWithConfigurations(
         candidate.source as SourceSpan,
       );
     }
-    const debugEntries = producerCapturesFor(execution, captureId);
+    const debugEntries = captureIndex.debugByCaptureId.get(captureId) ?? [];
     if (
       debugEntries.length !== 1 ||
       debugEntries[0]!.producerKind !== 'decider' ||
@@ -882,12 +950,19 @@ export function bindCapturedSourceConfigurationTemplatesWithConfigurations(
             ),
           }),
     });
-    const captureReference = createExecutedProducerCaptureReference(execution, captureId);
+    const { reference: captureReference, producerIndex } =
+      createExecutedProducerCaptureReferenceFromIndex(
+        execution,
+        captureId,
+        captureIndex,
+        '$.captures.captureId',
+      );
     captures.push({
       index: planProducer.index,
       entry: { key: captureId, kind: 'decider', template: resolvedTemplate },
       capture: { key: captureId, captureId: captureReference },
       producerId: debugEntry.id,
+      producerIndex,
     });
   });
 
@@ -913,12 +988,8 @@ export function bindCapturedSourceConfigurationTemplatesWithConfigurations(
     }
     seenCaptures.add(captureId);
 
-    const planProducer = planProducerByCapture.get(captureId);
-    if (
-      planProducer === undefined ||
-      planProducer.index < 0 ||
-      planProducer.descriptor.kind !== 'selector'
-    ) {
+    const planProducer = planCaptureFor(captureIndex, captureId);
+    if (planProducer === undefined || planProducer.descriptor.kind !== 'selector') {
       fail(
         'CP1001',
         `${path}.captureId`,
@@ -926,7 +997,7 @@ export function bindCapturedSourceConfigurationTemplatesWithConfigurations(
         candidate.source as SourceSpan,
       );
     }
-    const debugEntries = producerCapturesFor(execution, captureId);
+    const debugEntries = captureIndex.debugByCaptureId.get(captureId) ?? [];
     if (
       debugEntries.length !== 1 ||
       debugEntries[0]!.producerKind !== 'selector' ||
@@ -981,12 +1052,19 @@ export function bindCapturedSourceConfigurationTemplatesWithConfigurations(
             input,
             output: template.output,
           });
-    const captureReference = createExecutedProducerCaptureReference(execution, captureId);
+    const { reference: captureReference, producerIndex } =
+      createExecutedProducerCaptureReferenceFromIndex(
+        execution,
+        captureId,
+        captureIndex,
+        '$.captures.captureId',
+      );
     captures.push({
       index: planProducer.index,
       entry: { key: captureId, kind: 'selector', template: resolvedTemplate },
       capture: { key: captureId, captureId: captureReference },
       producerId: debugEntry.id,
+      producerIndex,
     });
   });
 
@@ -1006,12 +1084,56 @@ export function bindCapturedSourceConfigurationTemplatesWithConfigurations(
     source.session,
     captures.map(({ entry }) => entry),
   );
-  return bindExecutedPlanConfigurationSetWithConfigurations(
+  const bound = bindExecutedPlanConfigurationSetWithConfigurations(
     execution,
     configurationSet,
     captures.map(({ capture }) => capture),
     bindingsValue,
+    captureIndex,
   );
+  const capturesById = new Map(captures.map((capture) => [capture.capture.key, capture] as const));
+  const captureRelations = bound.configurations.map((configuration) => {
+    const capture = capturesById.get(configuration.key);
+    if (capture === undefined || capture.entry.kind !== configuration.kind) {
+      fail(
+        'CP1001',
+        '$.configurationTemplates',
+        'bound configuration no longer matches its validated capture relation.',
+      );
+    }
+    return Object.freeze({
+      captureId: configuration.key,
+      planIndex: capture.index,
+      producerId: capture.producerId,
+      producerIndex: capture.producerIndex,
+      kind: configuration.kind,
+      configuration,
+    });
+  });
+  return Object.freeze({ bound, captureRelations: Object.freeze(captureRelations) });
+}
+
+/** Internal source-compilation seam that carries validated relations to Plan materialization. */
+export function bindCapturedSourceConfigurationTemplatesWithRelations(
+  source: ExecutedElaborationWithBlueprintParameters,
+  execution: ExecutedDirectPlan,
+  bindingsValue: readonly BlueprintParameterBinding[] = [],
+) {
+  const { bound, captureRelations } = bindCapturedSourceConfigurationTemplatesInternal(
+    source,
+    execution,
+    bindingsValue,
+  );
+  return Object.freeze({ ...bound, captureRelations });
+}
+
+/** Binds source-captured templates and returns their concrete NCIR plus configurations. */
+export function bindCapturedSourceConfigurationTemplatesWithConfigurations(
+  source: ExecutedElaborationWithBlueprintParameters,
+  execution: ExecutedDirectPlan,
+  bindingsValue: readonly BlueprintParameterBinding[] = [],
+) {
+  return bindCapturedSourceConfigurationTemplatesInternal(source, execution, bindingsValue).bound;
 }
 
 /** Binds source-captured templates and returns only their concrete NCIR replacement. */
