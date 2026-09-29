@@ -1,5 +1,20 @@
 import { transformElaborationModule } from '@comblang/compiler/elaboration-transform';
-import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
+import type {
+  DirectElaborationPlan,
+  DirectPlanArithmetic,
+  DirectPlanDecider,
+  DirectPlanProducer,
+  PlanArithmeticOperand,
+  PlanDeciderCondition,
+} from '@comblang/compiler/direct-plan-schema';
+import type { EntityPlanConfiguration } from '@comblang/compiler/entity';
+import type {
+  ArithmeticProducerConfig,
+  DeciderProducerConfig,
+  LogicalArithmeticOperand,
+  LogicalDeciderCondition,
+  LogicalDeciderOutput,
+} from '@comblang/compiler/ir';
 import type { NativeCircuitIr } from '@comblang/compiler/ir';
 import type { SignalId } from '@comblang/factorio';
 import {
@@ -33,8 +48,17 @@ import { executeElaborationProgram } from './elaboration-program.js';
 import type { EntityPrototypeResolver } from './entity-registry.js';
 import { executionFailureDiagnostic } from './execution-diagnostic.js';
 import type { ResolvedCircuit } from '@comblang/compiler/resolved-circuit';
-import { canonicalDirectPlan, canonicalizeCompilationArtifacts } from './canonical-circuit.js';
-import { bindCapturedSourceConfigurationTemplates } from './executed-blueprint-configuration-binding.js';
+import {
+  canonicalDirectPlan,
+  canonicalResolvedCircuit,
+  canonicalizeCompilationArtifacts,
+} from './canonical-circuit.js';
+import {
+  bindCapturedSourceConfigurationTemplates,
+  bindCapturedSourceConfigurationTemplatesWithConfigurations,
+} from './executed-blueprint-configuration-binding.js';
+import type { BoundBlueprintConfiguration } from '../../compiler/src/blueprint-configuration-set.js';
+import { executeResolvedDirectPlan } from './direct-plan.js';
 import type { BlueprintParameterBinding } from '../../compiler/src/blueprint-parameter-validation.js';
 import {
   executeElaborationProgramWithParameters,
@@ -88,6 +112,293 @@ export interface SourceCompilationParameter {
   readonly label: string;
   readonly defaultValue: number | SignalId;
   readonly source: SourceSpan;
+}
+
+function pairMaterializationFailure(): never {
+  throw new TypeError('Captured configuration no longer matches its Direct Plan producer.');
+}
+
+function materializeArithmeticOperand(
+  planned: PlanArithmeticOperand,
+  concrete: LogicalArithmeticOperand,
+): PlanArithmeticOperand {
+  if (planned.kind !== concrete.kind) return pairMaterializationFailure();
+  if (planned.kind === 'constant' && concrete.kind === 'constant') {
+    return { ...planned, value: concrete.value };
+  }
+  if (planned.kind === 'signal' && concrete.kind === 'signal') {
+    if (planned.refKind !== concrete.refKind) return pairMaterializationFailure();
+    return { ...planned, signal: concrete.signal };
+  }
+  if (planned.kind === 'each' && concrete.kind === 'each') {
+    if (planned.refKind !== concrete.refKind) return pairMaterializationFailure();
+    return planned;
+  }
+  return pairMaterializationFailure();
+}
+
+function materializeArithmeticProducer(
+  planned: DirectPlanArithmetic,
+  concrete: ArithmeticProducerConfig,
+): DirectPlanArithmetic {
+  if (planned.operation !== concrete.operation) return pairMaterializationFailure();
+  let output: DirectPlanArithmetic['output'];
+  if (planned.output.kind === 'signal' && concrete.output.kind === 'signal') {
+    output = { ...planned.output, signal: concrete.output.signal };
+  } else if (planned.output.kind === 'each' && concrete.output.kind === 'each') {
+    output = planned.output;
+  } else {
+    return pairMaterializationFailure();
+  }
+  return {
+    ...planned,
+    left: materializeArithmeticOperand(planned.left, concrete.left),
+    right: materializeArithmeticOperand(planned.right, concrete.right),
+    output,
+  };
+}
+
+function materializeDeciderCondition(
+  planned: PlanDeciderCondition,
+  concrete: LogicalDeciderCondition,
+): PlanDeciderCondition {
+  if (planned.kind === 'and' || planned.kind === 'or') {
+    if (
+      concrete.kind !== planned.kind ||
+      planned.conditions.length !== concrete.conditions.length
+    ) {
+      return pairMaterializationFailure();
+    }
+    return {
+      ...planned,
+      conditions: planned.conditions.map((condition, index) =>
+        materializeDeciderCondition(condition, concrete.conditions[index]!),
+      ),
+    };
+  }
+  if (concrete.kind !== 'compare' || planned.comparator !== concrete.comparator) {
+    return pairMaterializationFailure();
+  }
+  if (planned.kind === 'compare-each') {
+    if (
+      concrete.left.kind !== 'wildcard' ||
+      concrete.left.value !== 'each' ||
+      concrete.right.kind !== 'constant'
+    ) {
+      return pairMaterializationFailure();
+    }
+    return { ...planned, constant: concrete.right.value };
+  }
+  if (planned.kind === 'compare-signal') {
+    if (concrete.left.kind !== 'signal' || concrete.right.kind !== 'constant') {
+      return pairMaterializationFailure();
+    }
+    return {
+      ...planned,
+      signal: concrete.left.signal,
+      constant: concrete.right.value,
+    };
+  }
+  if (planned.kind === 'compare-wildcard') {
+    if (
+      concrete.left.kind !== 'wildcard' ||
+      concrete.left.value !== planned.wildcard ||
+      concrete.right.kind !== 'constant'
+    ) {
+      return pairMaterializationFailure();
+    }
+    return { ...planned, constant: concrete.right.value };
+  }
+  if (planned.kind === 'compare-signals') {
+    if (concrete.left.kind !== 'signal' || concrete.right.kind !== 'signal') {
+      return pairMaterializationFailure();
+    }
+    return {
+      ...planned,
+      left: { ...planned.left, signal: concrete.left.signal },
+      right: { ...planned.right, signal: concrete.right.signal },
+    };
+  }
+  if (
+    concrete.left.kind !== 'wildcard' ||
+    concrete.left.value !== planned.left.wildcard ||
+    concrete.right.kind !== 'signal'
+  ) {
+    return pairMaterializationFailure();
+  }
+  return {
+    ...planned,
+    right: { ...planned.right, signal: concrete.right.signal },
+  };
+}
+
+function materializeDeciderOutput(
+  planned: DirectPlanDecider['output'],
+  concrete: LogicalDeciderOutput,
+): DirectPlanDecider['output'] {
+  if (planned.kind === 'each-constant') {
+    if (
+      concrete.mode !== 'constant' ||
+      concrete.signal.kind !== 'wildcard' ||
+      concrete.signal.value !== 'each'
+    ) {
+      return pairMaterializationFailure();
+    }
+    return { ...planned, value: concrete.value };
+  }
+  if (planned.kind === 'signal-constant') {
+    if (concrete.mode !== 'constant' || concrete.signal.kind !== 'signal') {
+      return pairMaterializationFailure();
+    }
+    return { ...planned, signal: concrete.signal.signal, value: concrete.value };
+  }
+  if (concrete.mode !== 'copy') return pairMaterializationFailure();
+  if (planned.kind === 'each') {
+    if (concrete.signal.kind !== 'wildcard' || concrete.signal.value !== 'each') {
+      return pairMaterializationFailure();
+    }
+    return planned;
+  }
+  if (planned.kind === 'signal') {
+    if (concrete.signal.kind !== 'signal') return pairMaterializationFailure();
+    return { ...planned, signal: concrete.signal.signal };
+  }
+  if (concrete.signal.kind !== 'wildcard' || concrete.signal.value !== planned.wildcard) {
+    return pairMaterializationFailure();
+  }
+  return planned;
+}
+
+function materializeDeciderProducer(
+  planned: DirectPlanDecider,
+  concrete: DeciderProducerConfig,
+): DirectPlanDecider {
+  const plannedOutputs = planned.outputs ?? [planned.output];
+  if (plannedOutputs.length !== concrete.outputs.length || concrete.outputs.length === 0) {
+    return pairMaterializationFailure();
+  }
+  const outputs = plannedOutputs.map((output, index) =>
+    materializeDeciderOutput(output, concrete.outputs[index]!),
+  );
+  let elseOutputs: readonly DirectPlanDecider['output'][] | undefined;
+  if (planned.elseOutputs !== undefined || concrete.elseOutputs !== undefined) {
+    if (
+      planned.elseOutputs === undefined ||
+      concrete.elseOutputs === undefined ||
+      planned.elseOutputs.length !== concrete.elseOutputs.length
+    ) {
+      return pairMaterializationFailure();
+    }
+    elseOutputs = planned.elseOutputs.map((output, index) =>
+      materializeDeciderOutput(output, concrete.elseOutputs![index]!),
+    );
+  }
+  return {
+    ...planned,
+    condition: materializeDeciderCondition(planned.condition, concrete.condition),
+    output: outputs[0]!,
+    ...(planned.outputs === undefined ? {} : { outputs }),
+    ...(elseOutputs === undefined ? {} : { elseOutputs }),
+  };
+}
+
+function materializeCapturedProducer(
+  planned: DirectPlanProducer,
+  concrete: BoundBlueprintConfiguration,
+): DirectPlanProducer {
+  if (planned.kind !== concrete.kind) return pairMaterializationFailure();
+  switch (concrete.kind) {
+    case 'arithmetic':
+      if (planned.kind !== 'arithmetic') return pairMaterializationFailure();
+      return materializeArithmeticProducer(planned, concrete.config);
+    case 'constant':
+      if (planned.kind !== 'constant' || planned.configuration === undefined) {
+        return pairMaterializationFailure();
+      }
+      return { ...planned, configuration: concrete.config };
+    case 'decider':
+      if (planned.kind !== 'decider') return pairMaterializationFailure();
+      return materializeDeciderProducer(planned, concrete.config);
+    case 'selector':
+      if (planned.kind !== 'selector' || planned.operation !== concrete.config.operation) {
+        return pairMaterializationFailure();
+      }
+      if (planned.operation === 'select' && concrete.config.operation === 'select') {
+        return { ...planned, index: concrete.config.index };
+      }
+      if (planned.operation === 'count' && concrete.config.operation === 'count') {
+        return { ...planned, output: concrete.config.output };
+      }
+      return pairMaterializationFailure();
+  }
+}
+
+function entityPlanConfiguration(producer: DirectPlanProducer): EntityPlanConfiguration {
+  switch (producer.kind) {
+    case 'constant':
+      if (producer.configuration === undefined) return pairMaterializationFailure();
+      return { mode: 'constant', value: producer.configuration };
+    case 'arithmetic':
+      return {
+        mode: 'arithmetic',
+        left: producer.left,
+        operation: producer.operation,
+        right: producer.right,
+        output: producer.output,
+      };
+    case 'decider':
+      return {
+        mode: 'decider',
+        condition: producer.condition,
+        outputs: producer.outputs ?? [producer.output],
+        ...(producer.elseOutputs === undefined ? {} : { elseOutputs: producer.elseOutputs }),
+      };
+    case 'selector':
+      return producer.operation === 'select'
+        ? {
+            mode: 'selector',
+            operation: 'select',
+            input: producer.input,
+            selectMax: producer.selectMax,
+            index: producer.index,
+          }
+        : {
+            mode: 'selector',
+            operation: 'count',
+            input: producer.input,
+            output: producer.output,
+          };
+  }
+}
+
+function materializeCapturedPlan(
+  plan: DirectElaborationPlan,
+  configurations: readonly BoundBlueprintConfiguration[],
+): DirectElaborationPlan {
+  const replacements = new Map<number, DirectPlanProducer>();
+  for (const configuration of configurations) {
+    const matches = plan.producers.flatMap((producer, index) =>
+      producer.debugCaptureIds?.includes(configuration.key) ? [index] : [],
+    );
+    if (matches.length !== 1) return pairMaterializationFailure();
+    const index = matches[0]!;
+    const producer = plan.producers[index]!;
+    if (replacements.has(index)) return pairMaterializationFailure();
+    replacements.set(index, materializeCapturedProducer(producer, configuration));
+  }
+  const producers = plan.producers.map((producer, index) => replacements.get(index) ?? producer);
+  const producersByEntityId = new Map(
+    [...replacements.values()].flatMap((producer) =>
+      producer.entityId === undefined ? [] : [[producer.entityId, producer] as const],
+    ),
+  );
+  const entities = plan.entities.map((entity) => {
+    const producer = producersByEntityId.get(entity.id);
+    return producer === undefined
+      ? entity
+      : { ...entity, configuration: entityPlanConfiguration(producer) };
+  });
+  return canonicalDirectPlan({ ...plan, producers, entities });
 }
 
 const capturedParametersByCompilation = new WeakMap<
@@ -281,6 +592,43 @@ export function bindSourceCompilationParameters(
     throw new TypeError('Compilation has no canonical execution available for parameter binding.');
   }
   return bindCapturedSourceConfigurationTemplates(state.source, state.execution, bindings);
+}
+
+/** Immutable host-local pair of one compilation's concrete Plan and physical circuit. */
+export interface BoundSourceCompilationCircuit {
+  readonly plan: DirectElaborationPlan;
+  readonly resolvedCircuit: ResolvedCircuit;
+}
+
+/** Binds this exact compilation into a matching, strictly replayable concrete pair. */
+export function bindSourceCompilationCircuit(
+  compilation: LocalSourceCompilation,
+  bindings: readonly BlueprintParameterBinding[] = [],
+): BoundSourceCompilationCircuit {
+  const state = capturedParametersByCompilation.get(compilation);
+  if (state === undefined) {
+    throw new TypeError('Compilation has no host-local source parameter declarations.');
+  }
+  if (state.execution === undefined || compilation.plan === undefined) {
+    throw new TypeError('Compilation has no canonical execution available for parameter binding.');
+  }
+  if (compilation.resolvedCircuit === undefined) {
+    throw new TypeError('Compilation has no resolved circuit available for parameter binding.');
+  }
+
+  const replacement = bindCapturedSourceConfigurationTemplatesWithConfigurations(
+    state.source,
+    state.execution,
+    bindings,
+  );
+  const plan = materializeCapturedPlan(compilation.plan, replacement.configurations);
+  const resolvedCircuit = canonicalResolvedCircuit(
+    compilation.resolvedCircuit,
+    plan,
+    replacement.circuit,
+  ) as ResolvedCircuit;
+  executeResolvedDirectPlan(plan, resolvedCircuit);
+  return Object.freeze({ plan, resolvedCircuit });
 }
 
 /** Runs the complete browser/Node-neutral compilation pipeline once. */

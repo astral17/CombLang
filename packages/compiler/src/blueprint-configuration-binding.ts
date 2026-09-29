@@ -637,13 +637,18 @@ function producerWithReplacement(
   replacementFail('CP1001', '$.assignments', 'replacement kind does not match Producer kind.');
 }
 
+export interface BoundBlueprintConfigurationReplacement {
+  readonly circuit: NativeCircuitIr;
+  readonly configurations: readonly BoundBlueprintConfiguration[];
+}
+
 /** Replaces only explicitly assigned concrete Producer configurations on a detached NCIR copy. */
-export function replaceBlueprintConfigurationSetInNativeCircuitIr(
+export function bindAndReplaceBlueprintConfigurationSetInNativeCircuitIr(
   setValue: unknown,
   circuit: NativeCircuitIr,
   assignmentsValue: unknown,
   bindingsValue: readonly BlueprintParameterBinding[] = [],
-): NativeCircuitIr {
+): BoundBlueprintConfigurationReplacement {
   const validatedCircuit = parseReplacementCircuit(circuit);
   const setRegistration = inspectBlueprintConfigurationSet(setValue, '$.set');
   const assignments = validateConfigurationAssignments(
@@ -651,8 +656,8 @@ export function replaceBlueprintConfigurationSetInNativeCircuitIr(
     validatedCircuit,
     assignmentsValue,
   );
-  const bound = bindBlueprintConfigurationSet(setValue, bindingsValue);
-  const boundByKey = new Map(bound.map((entry) => [entry.key, entry]));
+  const configurations = bindBlueprintConfigurationSet(setValue, bindingsValue);
+  const boundByKey = new Map(configurations.map((entry) => [entry.key, entry]));
   const replacementsByProducerId = new Map<string, BoundBlueprintConfiguration>();
   const entityConfigurations = new Map<string, EntityPhysicalConfiguration>();
 
@@ -696,11 +701,29 @@ export function replaceBlueprintConfigurationSetInNativeCircuitIr(
     const configuration = entityConfigurations.get(entity.id);
     return configuration === undefined ? entity : { ...entity, configuration };
   });
-  return parseReplacementCircuit({
-    ...validatedCircuit,
-    producers,
-    entities,
+  return Object.freeze({
+    circuit: parseReplacementCircuit({
+      ...validatedCircuit,
+      producers,
+      entities,
+    }),
+    configurations,
   });
+}
+
+/** Replaces only explicitly assigned concrete Producer configurations on a detached NCIR copy. */
+export function replaceBlueprintConfigurationSetInNativeCircuitIr(
+  setValue: unknown,
+  circuit: NativeCircuitIr,
+  assignmentsValue: unknown,
+  bindingsValue: readonly BlueprintParameterBinding[] = [],
+): NativeCircuitIr {
+  return bindAndReplaceBlueprintConfigurationSetInNativeCircuitIr(
+    setValue,
+    circuit,
+    assignmentsValue,
+    bindingsValue,
+  ).circuit;
 }
 
 /** Binds every leaf as one transaction and returns only the complete immutable result. */

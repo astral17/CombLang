@@ -16,7 +16,10 @@ import { createConstantConfigurationTemplate } from './constant-configuration-te
 import { createArithmeticConfigurationTemplate } from './arithmetic-configuration-template.js';
 import { createSelectorConfigurationTemplate } from './selector-configuration-template.js';
 import { createDeciderConfigurationTemplate } from './decider-configuration-template.js';
-import { replaceBlueprintConfigurationSetInNativeCircuitIr } from './blueprint-configuration-binding.js';
+import {
+  bindAndReplaceBlueprintConfigurationSetInNativeCircuitIr,
+  replaceBlueprintConfigurationSetInNativeCircuitIr,
+} from './blueprint-configuration-binding.js';
 import type {
   ArithmeticProducerConfig,
   CircuitProducerNode,
@@ -65,6 +68,55 @@ function oneEntrySet() {
 }
 
 describe('concrete NCIR configuration-set replacement', () => {
+  test('shares one immutable bound configuration result with the physical replacement', () => {
+    const { amount, set, session } = oneEntrySet();
+    const circuit = constantCircuit();
+    const assignments = [{ key: 'source', producerId: firstProducer }];
+    const defaults = bindAndReplaceBlueprintConfigurationSetInNativeCircuitIr(
+      set,
+      circuit,
+      assignments,
+    );
+    const firstOverride = bindAndReplaceBlueprintConfigurationSetInNativeCircuitIr(
+      set,
+      circuit,
+      assignments,
+      [{ parameter: amount, value: 9 }],
+    );
+    const secondOverride = bindAndReplaceBlueprintConfigurationSetInNativeCircuitIr(
+      set,
+      circuit,
+      assignments,
+      [{ parameter: amount, value: 17 }],
+    );
+    const before = structuredClone(circuit);
+
+    expect(defaults.configurations[0]).toMatchObject({
+      key: 'source',
+      kind: 'constant',
+      config: { sections: [{ filters: [{ value: 2 }] }] },
+    });
+    expect(firstOverride.configurations[0]?.config).toEqual(
+      (firstOverride.circuit.producers[0]?.config as { configuration: unknown }).configuration,
+    );
+    expect(secondOverride.configurations[0]).toMatchObject({
+      config: { sections: [{ filters: [{ value: 17 }] }] },
+    });
+    expect(firstOverride.configurations[0]).toMatchObject({
+      config: { sections: [{ filters: [{ value: 9 }] }] },
+    });
+    expect(Object.isFrozen(firstOverride)).toBe(true);
+    expect(Object.isFrozen(firstOverride.configurations)).toBe(true);
+    expect(Object.isFrozen(firstOverride.configurations[0])).toBe(true);
+    expect(() =>
+      bindAndReplaceBlueprintConfigurationSetInNativeCircuitIr(set, circuit, assignments, [
+        { parameter: amount, value: 11 },
+        { parameter: session.number('unused', { defaultValue: 1 }), value: 13 },
+      ]),
+    ).toThrow('not used by this configuration set');
+    expect(circuit).toEqual(before);
+  });
+
   test('validates assignments as exact bounded data and copies the successful input', () => {
     const { amount, set } = oneEntrySet();
     const circuit = constantCircuit();

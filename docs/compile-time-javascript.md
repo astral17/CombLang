@@ -25,8 +25,9 @@ The initial `Param.number(label, default)` and
 Arithmetic, Constant-filter, Decider-threshold, and Selector configuration
 slots. Selector support covers `select.index` (number or Signal) and
 `count.output` (Signal); `selectMax` stays concrete. They bind to concrete NCIR
-through a host-local compilation API; they do not add native Factorio parameter
-fields. Source declarations return opaque views distinct from the nominal
+or a matching Direct Plan/ResolvedCircuit pair through host-local compilation
+APIs; they do not add native Factorio parameter fields. Source declarations
+return opaque views distinct from the nominal
 handles retained by the owning host. Reading, reflecting, destructuring, or
 enumerating a source view is rejected with a located parameter diagnostic;
 validated configuration slots resolve the view back to its original host

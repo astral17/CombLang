@@ -5,23 +5,26 @@ import {
   generateBlueprintJson,
   syntheticZeroPortEntityProfile,
 } from '@comblang/compiler';
+import { signal, SparseBus } from '@comblang/factorio';
 import type { EntityProfile } from '@comblang/compiler/entity';
 import type { EntityPrototype } from '@comblang/prototypes';
 import { parseFile, reservedDslValueNames, validateDslSemantics } from '@comblang/language';
 
 import {
+  bindSourceCompilationCircuit,
   bindSourceCompilationParameters,
   compileSourceProgram,
   listSourceCompilationParameters,
   sourceCompilationArtifact,
 } from './source-compilation.js';
+import type { LocalSourceCompilation } from './source-compilation.js';
 import type { EntityPrototypeResolver } from './entity-registry.js';
 import { transformElaborationModule } from '@comblang/compiler';
 import { executeElaborationProgram } from './elaboration-program.js';
 import { executeElaborationProgramWithParameters } from './elaboration-program.js';
 import { bindCapturedSourceConfigurationTemplates } from './executed-blueprint-configuration-binding.js';
-import { canonicalDirectPlan } from './canonical-circuit.js';
-import { tryElaborateDirectPlan } from './direct-plan.js';
+import { canonicalDirectPlan, canonicalResolvedCircuit } from './canonical-circuit.js';
+import { executeResolvedDirectPlan, tryElaborateDirectPlan } from './direct-plan.js';
 import { bindExecutedPlanConfigurationSet } from './executed-blueprint-configuration-binding.js';
 import { createExecutedProducerCaptureReference } from './executed-blueprint-configuration-binding.js';
 import { createBlueprintConfigurationSet } from '../../compiler/src/blueprint-configuration-set.js';
@@ -85,6 +88,191 @@ output += constant;
 output += decider;`;
 
 describe('ordinary source parameter declarations', () => {
+  test('keeps a bound circuit paired with a replayable concrete plan', () => {
+    const compilation = compileSourceProgram(
+      {
+        path: 'paired-source-parameter.factorio.ts',
+        text: `const amount = Param.number('Amount', 5);
+const output = new Network();
+const arithmetic = Arithmetic({
+  left: 2,
+  operation: 'add',
+  right: amount,
+  output: Signal('virtual', 'signal-A'),
+});
+output += arithmetic;`,
+      },
+      parameterHost(),
+    );
+    const parameter = listSourceCompilationParameters(compilation)[0]!.parameter;
+    const boundIr = bindSourceCompilationParameters(compilation, [{ parameter, value: 12 }]);
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(() =>
+      executeResolvedDirectPlan(
+        compilation.plan!,
+        canonicalResolvedCircuit(compilation.resolvedCircuit, compilation.plan, boundIr),
+      ),
+    ).toThrow(/Producer/);
+
+    const pair = bindSourceCompilationCircuit(compilation, [{ parameter, value: 12 }]);
+    const replay = executeResolvedDirectPlan(pair.plan, pair.resolvedCircuit);
+
+    expect(pair.plan.producers[0]).toMatchObject({
+      kind: 'arithmetic',
+      right: { kind: 'constant', value: 12 },
+    });
+    expect(
+      replay.circuit
+        .createSimulation()
+        .step()
+        .read(replay.network('output').id)
+        .get(signal('virtual', 'signal-A')),
+    ).toBe(14);
+  });
+
+  test('keeps repeated and failed pair binds atomic to one host compilation', () => {
+    let sourceExecutions = 0;
+    const file = {
+      path: 'paired-binding-ownership.factorio.ts',
+      text: `const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Arithmetic({
+  left: 2,
+  operation: 'add',
+  right: amount,
+  output: Signal('virtual', 'signal-A'),
+});`,
+    };
+    const compilation = compileSourceProgram(file, parameterHost(), [], (stage) => {
+      if (stage === 'execute') sourceExecutions += 1;
+    });
+    const parameter = listSourceCompilationParameters(compilation)[0]!.parameter;
+    const originalPlan = compilation.plan;
+    const originalResolvedCircuit = compilation.resolvedCircuit;
+    const first = bindSourceCompilationCircuit(compilation, [{ parameter, value: 8 }]);
+    const second = bindSourceCompilationCircuit(compilation, [{ parameter, value: 13 }]);
+
+    expect(first.plan.producers[0]).toMatchObject({ right: { kind: 'constant', value: 8 } });
+    expect(second.plan.producers[0]).toMatchObject({ right: { kind: 'constant', value: 13 } });
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(Object.isFrozen(first.plan)).toBe(true);
+    expect(Object.isFrozen(first.resolvedCircuit)).toBe(true);
+    expect(Object.isFrozen(first.resolvedCircuit.ir.producers[0])).toBe(true);
+    expect(sourceExecutions).toBe(1);
+
+    expect(() =>
+      bindSourceCompilationCircuit(compilation, [
+        { parameter, value: Number.MAX_SAFE_INTEGER + 1 },
+      ]),
+    ).toThrow();
+    expect(first.plan.producers[0]).toMatchObject({ right: { kind: 'constant', value: 8 } });
+    expect(compilation.plan).toBe(originalPlan);
+    expect(compilation.resolvedCircuit).toBe(originalResolvedCircuit);
+    expect(bindSourceCompilationCircuit(compilation).plan).toEqual(originalPlan);
+
+    const foreign = compileSourceProgram(file, parameterHost());
+    const foreignParameter = listSourceCompilationParameters(foreign)[0]!.parameter;
+    expect(() =>
+      bindSourceCompilationCircuit(compilation, [{ parameter: foreignParameter, value: 2 }]),
+    ).toThrow('parameter belongs to a different parameter session');
+    const copiedCompilation = { ...compilation } as LocalSourceCompilation;
+    expect(() => bindSourceCompilationCircuit(copiedCompilation)).toThrow(
+      'Compilation has no host-local source parameter declarations',
+    );
+    expect(compilation.plan?.context).toEqual(compilation.resolvedCircuit?.ir.context);
+    expect(sourceExecutions).toBe(1);
+  });
+
+  test('materializes exact Arithmetic and Constant configs without changing physical identity', () => {
+    const compilation = compileSourceProgram(
+      {
+        path: 'paired-arithmetic-constant.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const amount = Param.number('Amount', 5);
+const channel = Param.signal('Channel', Signal('virtual', 'signal-C'));
+const input = new Network();
+const output = new Network();
+const arithmetic = Arithmetic({ left: input[A], operation: 'add', right: amount, output: B });
+const constant = Constant({
+  isOn: true,
+  sections: [
+    { active: true, multiplier: 0.5, filters: [{ signal: channel, value: amount }] },
+    { active: false, group: 'backup', multiplier: 3, filters: [{ signal: A, value: 4 }] },
+  ],
+});
+output += arithmetic;
+output += constant;
+output += CC(2 * A);`,
+      },
+      parameterHost(),
+    );
+    const declarations = listSourceCompilationParameters(compilation);
+    const defaults = bindSourceCompilationCircuit(compilation);
+    const overridden = bindSourceCompilationCircuit(compilation, [
+      { parameter: declarations[0]!.parameter, value: 11 },
+      {
+        parameter: declarations[1]!.parameter,
+        value: { type: 'virtual', name: 'signal-D' },
+      },
+    ]);
+    const reset = bindSourceCompilationCircuit(compilation);
+
+    expect(overridden.plan.producers.find(({ kind }) => kind === 'arithmetic')).toMatchObject({
+      kind: 'arithmetic',
+      right: { kind: 'constant', value: 11 },
+    });
+    expect(
+      overridden.plan.producers.find(
+        (producer) => producer.kind === 'constant' && 'configuration' in producer,
+      ),
+    ).toMatchObject({
+      kind: 'constant',
+      configuration: {
+        isOn: true,
+        sections: [
+          {
+            active: true,
+            multiplier: 0.5,
+            filters: [{ signal: { type: 'virtual', name: 'signal-D' }, value: 11 }],
+          },
+          {
+            active: false,
+            group: 'backup',
+            multiplier: 3,
+            filters: [{ signal: { type: 'virtual', name: 'signal-A' }, value: 4 }],
+          },
+        ],
+      },
+    });
+    expect(overridden.plan.producers[2]).toEqual(defaults.plan.producers[2]);
+    expect(reset.plan).toEqual(defaults.plan);
+    expect(reset.resolvedCircuit).toEqual(defaults.resolvedCircuit);
+    expect(overridden.plan.networks.map(({ name }) => name)).toEqual(
+      defaults.plan.networks.map(({ name }) => name),
+    );
+    expect(overridden.resolvedCircuit.ir.networks.map(({ id }) => id)).toEqual(
+      defaults.resolvedCircuit.ir.networks.map(({ id }) => id),
+    );
+    expect(overridden.resolvedCircuit.ir.producers.map(({ id }) => id)).toEqual(
+      defaults.resolvedCircuit.ir.producers.map(({ id }) => id),
+    );
+    expect(overridden.resolvedCircuit.ir.entities.map(({ id }) => id)).toEqual(
+      defaults.resolvedCircuit.ir.entities.map(({ id }) => id),
+    );
+    for (const producer of overridden.plan.producers) {
+      if (producer.entityId === undefined) continue;
+      const linkedEntity = overridden.resolvedCircuit.ir.entities.find(
+        ({ id }) => id === producer.entityId,
+      );
+      expect(linkedEntity?.configuration?.mode).toBe(producer.kind);
+    }
+    expect(JSON.stringify(overridden)).not.toMatch(
+      /Amount|Channel|declareBlueprint|BlueprintParameter|configurationTemplate/i,
+    );
+  });
+
   test('reserves Param and compiles exact supported defaults into a concrete plan', () => {
     const parsed = parseFile({ path: 'source-parameters.factorio.ts', text: source });
     expect(reservedDslValueNames.has('Param')).toBe(true);
@@ -539,6 +727,252 @@ output += counted;`;
       ]),
     ).toThrow();
     expect(compilation.execution?.circuit.ir).toEqual(before);
+  });
+
+  test('materializes nested Decider branches and Selector modes through strict replay', () => {
+    const compilation = compileSourceProgram(
+      {
+        path: 'paired-decider-selector.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const C = Signal('virtual', 'signal-C');
+const amount = Param.number('Threshold', 5);
+const numberIndex = Param.number('Index', 2);
+const signalIndex = Param.signal('Selected signal', B);
+const countOutput = Param.signal('Count output', C);
+const input = new Network();
+const secondary = new Network();
+const deciderOutput = new Network();
+const selectorOutput = new Network();
+const gate = Decider({
+  condition: (input[A] > amount) && (input[B] <= 2 || input[A] != 0),
+  outputs: [input[A], input[A], 4 * C],
+  elseOutputs: [input[B], input[B]],
+});
+const byNumber = Selector({ input, operation: 'select', index: numberIndex }).at(2, 3);
+const bySignal = Selector({
+  input: pair(input, secondary),
+  operation: 'select',
+  selectMax: false,
+  index: signalIndex,
+});
+const counted = Selector({ input, operation: 'count', output: countOutput });
+deciderOutput += gate;
+selectorOutput += byNumber;
+selectorOutput += bySignal;
+selectorOutput += counted;`,
+      },
+      parameterHost(),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const declarations = listSourceCompilationParameters(compilation);
+    const defaults = bindSourceCompilationCircuit(compilation);
+    const overridden = bindSourceCompilationCircuit(compilation, [
+      { parameter: declarations[0]!.parameter, value: 9 },
+      { parameter: declarations[1]!.parameter, value: 7 },
+      {
+        parameter: declarations[2]!.parameter,
+        value: { type: 'virtual', name: 'signal-D' },
+      },
+      {
+        parameter: declarations[3]!.parameter,
+        value: { type: 'virtual', name: 'signal-E' },
+      },
+    ]);
+    const replay = executeResolvedDirectPlan(overridden.plan, overridden.resolvedCircuit);
+    const decider = overridden.plan.producers.find(({ kind }) => kind === 'decider');
+    const defaultDecider = defaults.plan.producers.find(({ kind }) => kind === 'decider');
+    const selectors = overridden.plan.producers.filter(({ kind }) => kind === 'selector');
+
+    expect(decider).toMatchObject({
+      kind: 'decider',
+      condition: {
+        kind: 'and',
+        conditions: [
+          { kind: 'compare-signal', constant: 9 },
+          {
+            kind: 'or',
+            conditions: [
+              { kind: 'compare-signal', constant: 2 },
+              { kind: 'compare-signal', constant: 0 },
+            ],
+          },
+        ],
+      },
+      outputs: [
+        { kind: 'signal', signal: { type: 'virtual', name: 'signal-A' } },
+        { kind: 'signal', signal: { type: 'virtual', name: 'signal-A' } },
+        { kind: 'signal-constant', signal: { type: 'virtual', name: 'signal-C' }, value: 4 },
+      ],
+      elseOutputs: [
+        { kind: 'signal', signal: { type: 'virtual', name: 'signal-B' } },
+        { kind: 'signal', signal: { type: 'virtual', name: 'signal-B' } },
+      ],
+    });
+    if (decider?.kind !== 'decider') throw new Error('Expected a replayed Decider.');
+    if (defaultDecider?.kind !== 'decider') throw new Error('Expected a default Decider.');
+    expect(decider.output).toEqual(decider.outputs?.[0]);
+    expect(decider.outputs?.[0]).toEqual(decider.outputs?.[1]);
+    expect(decider.elseOutputs?.[0]).toEqual(decider.elseOutputs?.[1]);
+    expect(decider.outputOrigins).toEqual(defaultDecider.outputOrigins);
+    expect(decider.elseOutputOrigins).toEqual(defaultDecider.elseOutputOrigins);
+    expect(selectors).toMatchObject([
+      { operation: 'select', selectMax: true, index: 7 },
+      {
+        operation: 'select',
+        selectMax: false,
+        index: { type: 'virtual', name: 'signal-D' },
+      },
+      { operation: 'count', output: { type: 'virtual', name: 'signal-E' } },
+    ]);
+
+    for (const producer of overridden.plan.producers) {
+      const matchingDebugEntries = replay.debug.scopes.flatMap(({ producers: entries }) =>
+        entries.filter(({ descriptor }) =>
+          producer.debugCaptureIds?.some((captureId) =>
+            descriptor.debugCaptureIds?.includes(captureId),
+          ),
+        ),
+      );
+      expect(matchingDebugEntries).toHaveLength(1);
+      expect(matchingDebugEntries[0]?.descriptor).toEqual(producer);
+    }
+    expect(overridden.resolvedCircuit.ir.producers.map(({ id }) => id)).toEqual(
+      defaults.resolvedCircuit.ir.producers.map(({ id }) => id),
+    );
+    expect(overridden.resolvedCircuit.ir.entities.map(({ id }) => id)).toEqual(
+      defaults.resolvedCircuit.ir.entities.map(({ id }) => id),
+    );
+    expect(generateBlueprintJson(overridden.resolvedCircuit.ir)).not.toEqual(
+      generateBlueprintJson(defaults.resolvedCircuit.ir),
+    );
+
+    const simulateDecider = (pair: ReturnType<typeof bindSourceCompilationCircuit>) => {
+      const execution = executeResolvedDirectPlan(pair.plan, pair.resolvedCircuit);
+      return execution.circuit
+        .createSimulation([
+          {
+            network: execution.network('input'),
+            values: new SparseBus([
+              [signal('virtual', 'signal-A'), 7],
+              [signal('virtual', 'signal-B'), 3],
+            ]),
+          },
+        ])
+        .step()
+        .read(execution.network('deciderOutput').id);
+    };
+    expect(simulateDecider(defaults).get(signal('virtual', 'signal-A'))).toBeGreaterThan(0);
+    expect(simulateDecider(overridden).get(signal('virtual', 'signal-A'))).toBe(0);
+    expect(simulateDecider(overridden).get(signal('virtual', 'signal-B'))).toBeGreaterThan(0);
+  });
+
+  test('keeps aggregate parameter pairs aligned across compilation, simulation, tests, and JSON', () => {
+    let sourceExecutions = 0;
+    const compilation = compileSourceProgram(
+      {
+        path: 'paired-aggregate-parameters.factorio.ts',
+        text: `${source}
+const secondary = new Network();
+const selectorOutput = new Network();
+const byNumber = Selector({ input, operation: 'select', index: amount });
+const bySignal = Selector({
+  input: pair(input, secondary),
+  operation: 'select',
+  selectMax: false,
+  index: channel,
+});
+const counted = Selector({ input, operation: 'count', output: channel });
+selectorOutput += byNumber;
+selectorOutput += bySignal;
+selectorOutput += counted;`,
+      },
+      parameterHost(),
+      [],
+      (stage) => {
+        if (stage === 'execute') sourceExecutions += 1;
+      },
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const declarations = listSourceCompilationParameters(compilation);
+    const defaults = bindSourceCompilationCircuit(compilation);
+    const overridden = bindSourceCompilationCircuit(compilation, [
+      { parameter: declarations[0]!.parameter, value: 10 },
+      {
+        parameter: declarations[1]!.parameter,
+        value: { type: 'virtual', name: 'signal-D' },
+      },
+    ]);
+    const alternate = bindSourceCompilationCircuit(compilation, [
+      { parameter: declarations[0]!.parameter, value: 7 },
+      {
+        parameter: declarations[1]!.parameter,
+        value: { type: 'virtual', name: 'signal-E' },
+      },
+    ]);
+
+    expect(overridden.plan.producers).toMatchObject([
+      { kind: 'arithmetic', right: { kind: 'constant', value: 10 } },
+      {
+        kind: 'constant',
+        configuration: {
+          sections: [{ filters: [{ signal: { type: 'virtual', name: 'signal-D' }, value: 10 }] }],
+        },
+      },
+      {
+        kind: 'decider',
+        condition: { kind: 'compare-signal', constant: 10 },
+      },
+      { kind: 'selector', operation: 'select', index: 10 },
+      {
+        kind: 'selector',
+        operation: 'select',
+        index: { type: 'virtual', name: 'signal-D' },
+      },
+      { kind: 'selector', operation: 'count', output: { type: 'virtual', name: 'signal-D' } },
+    ]);
+    expect(alternate.plan.producers.find(({ kind }) => kind === 'arithmetic')).toMatchObject({
+      right: { kind: 'constant', value: 7 },
+    });
+    expect(alternate.plan.producers[0]).not.toEqual(overridden.plan.producers[0]);
+    expect(overridden.resolvedCircuit.ir.producers.map(({ id }) => id)).toEqual(
+      defaults.resolvedCircuit.ir.producers.map(({ id }) => id),
+    );
+
+    const runModel = (pair: ReturnType<typeof bindSourceCompilationCircuit>) => {
+      const replay = executeResolvedDirectPlan(pair.plan, pair.resolvedCircuit);
+      const simulationRun = replay.circuit.createSimulation();
+      simulationRun.step();
+      simulationRun.step();
+      const simulation = simulationRun.step();
+      const session = replay.createTestSession();
+      session.tick(3);
+      return {
+        simulation: simulation.read(replay.network('output').id),
+        testSession: session.read(replay.network('output')),
+        replay,
+      };
+    };
+    const defaultModel = runModel(defaults);
+    const overriddenModel = runModel(overridden);
+    expect(defaultModel.simulation.toJSON()).toEqual(defaultModel.testSession.toJSON());
+    expect(overriddenModel.simulation.toJSON()).toEqual(overriddenModel.testSession.toJSON());
+    expect(defaultModel.simulation.get(signal('virtual', 'signal-B'))).toBe(5);
+    expect(overriddenModel.simulation.get(signal('virtual', 'signal-B'))).toBe(10);
+    expect(overriddenModel.simulation.get(signal('virtual', 'signal-D'))).toBe(10);
+    expect(generateBlueprintJson(overridden.resolvedCircuit.ir)).toEqual(
+      generateBlueprintJson(overriddenModel.replay.circuit.ir),
+    );
+    expect(JSON.stringify(overridden)).not.toMatch(
+      /Amount|Channel|BlueprintParameter|configurationTemplate|numericExpression/i,
+    );
+    expect(() =>
+      bindSourceCompilationCircuit(compilation, [
+        { parameter: declarations[0]!.parameter, value: 1.5 },
+      ]),
+    ).toThrow();
+    expect(compilation.execution?.circuit.ir).toEqual(compilation.resolvedCircuit?.ir);
+    expect(sourceExecutions).toBe(1);
   });
 
   test('rejects missing and duplicate physical Selector capture assignments', () => {

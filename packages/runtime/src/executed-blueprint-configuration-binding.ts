@@ -31,7 +31,7 @@ import {
   type SelectorConfigurationTemplate,
 } from '../../compiler/src/selector-configuration-template.js';
 import type { LogicalNetworkRef } from '../../compiler/src/ir.js';
-import { replaceBlueprintConfigurationSetInNativeCircuitIr } from '../../compiler/src/blueprint-configuration-binding.js';
+import { bindAndReplaceBlueprintConfigurationSetInNativeCircuitIr } from '../../compiler/src/blueprint-configuration-binding.js';
 import { BlueprintParameterError } from '../../compiler/src/blueprint-parameters.js';
 import {
   assertBlueprintParameterExactKeys,
@@ -287,7 +287,7 @@ function resolveCaptureAssignments(
 }
 
 /** Binds a registered configuration set to Producers captured by one exact executed plan. */
-export function bindExecutedPlanConfigurationSet(
+export function bindExecutedPlanConfigurationSetWithConfigurations(
   execution: ExecutedDirectPlan,
   setValue: unknown,
   capturesValue: unknown,
@@ -295,12 +295,27 @@ export function bindExecutedPlanConfigurationSet(
 ) {
   const registration = inspectBlueprintConfigurationSet(setValue, '$.set');
   const assignments = resolveCaptureAssignments(execution, registration.entries, capturesValue);
-  return replaceBlueprintConfigurationSetInNativeCircuitIr(
+  return bindAndReplaceBlueprintConfigurationSetInNativeCircuitIr(
     setValue,
     execution.circuit.ir,
     assignments,
     bindingsValue,
   );
+}
+
+/** Binds a configuration set to captures from one exact execution, returning only NCIR. */
+export function bindExecutedPlanConfigurationSet(
+  execution: ExecutedDirectPlan,
+  setValue: unknown,
+  capturesValue: unknown,
+  bindingsValue: readonly BlueprintParameterBinding[] = [],
+) {
+  return bindExecutedPlanConfigurationSetWithConfigurations(
+    execution,
+    setValue,
+    capturesValue,
+    bindingsValue,
+  ).circuit;
 }
 
 function isDataRecord(value: unknown): value is Record<string, unknown> {
@@ -530,7 +545,7 @@ function resolveCapturedDeciderOutput(
 }
 
 /** Converts source-captured templates to one atomic, execution-paired NCIR replacement. */
-export function bindCapturedSourceConfigurationTemplates(
+export function bindCapturedSourceConfigurationTemplatesWithConfigurations(
   source: ExecutedElaborationWithBlueprintParameters,
   execution: ExecutedDirectPlan,
   bindingsValue: readonly BlueprintParameterBinding[] = [],
@@ -991,10 +1006,23 @@ export function bindCapturedSourceConfigurationTemplates(
     source.session,
     captures.map(({ entry }) => entry),
   );
-  return bindExecutedPlanConfigurationSet(
+  return bindExecutedPlanConfigurationSetWithConfigurations(
     execution,
     configurationSet,
     captures.map(({ capture }) => capture),
     bindingsValue,
   );
+}
+
+/** Binds source-captured templates and returns only their concrete NCIR replacement. */
+export function bindCapturedSourceConfigurationTemplates(
+  source: ExecutedElaborationWithBlueprintParameters,
+  execution: ExecutedDirectPlan,
+  bindingsValue: readonly BlueprintParameterBinding[] = [],
+) {
+  return bindCapturedSourceConfigurationTemplatesWithConfigurations(
+    source,
+    execution,
+    bindingsValue,
+  ).circuit;
 }

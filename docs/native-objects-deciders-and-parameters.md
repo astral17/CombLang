@@ -210,10 +210,19 @@ returns declaration labels, defaults, spans, and nominal handles. The host may
 pass `{ parameter, value }` overrides to
 `bindSourceCompilationParameters(compilation, bindings)`, which returns a fresh
 concrete NCIR using the exact paired execution. Omitted overrides use the
-declared defaults. The original Plan, NCIR, topology, and physical identities are
-not mutated. Handles and captured templates are not part of
+declared defaults. For callers that need a replayable result,
+`bindSourceCompilationCircuit(compilation, bindings)` returns an immutable
+`{ plan, resolvedCircuit }` pair with the same concrete values in both artifacts.
+The pair is validated by the strict `executeResolvedDirectPlan` replay check;
+the default Plan cannot be combined with a separately bound NCIR. Both APIs
+bind the exact owning compilation without re-executing source, and repeated
+bindings produce independent results. A copied or foreign compilation and
+foreign parameter handles are rejected. The original Plan, NCIR, topology, and
+physical identities are not mutated. Handles and captured templates are not part of
 `SourceCompilationArtifact`; do not serialize or send them across a Worker
 boundary. Binding must happen in the host that owns the original compilation.
+The bound pair contains only concrete Plan and ResolvedCircuit data; it is not
+attached to the default artifact.
 The artifact also omits generated JavaScript containing private parameter-capture
 calls; the local compilation result retains that diagnostic view. Source receives
 an opaque view distinct from the nominal handle exposed by the host API. Reads,
