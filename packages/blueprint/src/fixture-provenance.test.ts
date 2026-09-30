@@ -50,6 +50,27 @@ async function readExchange(url: URL): Promise<string> {
 }
 
 describe('blueprint fixture provenance', () => {
+  test.each(manifest.fixtures.filter((fixture) => fixture.factorioVersion === '2.1.17'))(
+    'preserves the independent parameter document $id',
+    async (fixture) => {
+      expect(fixture).toMatchObject({
+        origin: 'factorio-export',
+        reviewStatus: 'parameter-document-shape-reviewed',
+      });
+      const exchange = await readExchange(new URL(fixture.path, fixtureRoot));
+      expect(sha256(exchange)).toBe(fixture.encodedExchangeSha256);
+      const document = await decodeBlueprintExchange(exchange);
+      const json = stringifyLosslessJson(document);
+      expect(sha256(json)).toBe(fixture.decodedJsonSha256);
+      const projection = classifyBlueprintDocument(document);
+      expect(projection.kind).toBe('blueprint');
+      if (projection.kind !== 'blueprint') throw new Error('Expected blueprint root.');
+      expect(projection.semantic).toEqual(fixture.expectedSemanticHeader);
+      const roundTrip = await decodeBlueprintExchange(await encodeBlueprintExchange(document));
+      expect(stringifyLosslessJson(roundTrip)).toBe(json);
+    },
+  );
+
   test('keeps the checked-in generated fixture explicitly internal', async () => {
     expect(manifest.schemaVersion).toBe(1);
     expect(selfGenerated).toMatchObject({
@@ -58,8 +79,16 @@ describe('blueprint fixture provenance', () => {
       reviewStatus: 'internal-only-not-native-evidence',
     });
     expect(
-      manifest.fixtures.filter((fixture) => fixture.origin === 'factorio-export'),
-    ).toHaveLength(1);
+      manifest.fixtures
+        .filter((fixture) => fixture.origin === 'factorio-export')
+        .map((fixture) => fixture.path)
+        .sort(),
+    ).toEqual([
+      'factorio-2.1.10/plain-circuit.txt',
+      'factorio-2.1.17/dependency-chain.txt',
+      'factorio-2.1.17/display-quality.txt',
+      'factorio-2.1.17/recipe-formulas.txt',
+    ]);
     expect(manifest.externalEvidence).toMatchObject({
       status: 'codec-framing-reviewed',
       receivedPath: 'factorio-2.1.10/plain-circuit.txt',

@@ -92,25 +92,72 @@ const identifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const maximumArrayLength = 100_000;
 const maximumConditionDepth = 128;
 const planFingerprintPattern = /^plan-fnv1a64:[0-9a-f]{16}$/;
+// Plan condition/debug limits count semantic levels; serialization also counts arrays/records.
+const maximumFingerprintDepth = 512;
 
-function stableJson(value: unknown): string {
-  if (value === null) return 'null';
-  if (value === undefined) return 'null';
+function stableJson(value: unknown, active = new WeakSet<object>(), depth = 0): string {
+  if (depth > maximumFingerprintDepth) {
+    throw new TypeError('Plan fingerprint data exceeds the nesting limit.');
+  }
+  if (value === null || value === undefined) return 'null';
   if (typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') {
-    const encoded = JSON.stringify(value);
-    if (encoded === undefined) throw new TypeError('Cannot fingerprint a non-JSON value.');
-    return encoded;
+    if (typeof value === 'number' && !Number.isFinite(value)) {
+      throw new TypeError('Cannot fingerprint a non-finite number.');
+    }
+    return JSON.stringify(value);
   }
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
-  if (typeof value === 'object') {
-    const record = value as Record<string, unknown>;
-    return `{${Object.keys(record)
-      .filter((key) => record[key] !== undefined)
+  if (typeof value !== 'object') throw new TypeError('Cannot fingerprint a non-JSON value.');
+  if (active.has(value)) throw new TypeError('Cyclic Plan fingerprint data.');
+  const array = Array.isArray(value);
+  const prototype = Object.getPrototypeOf(value);
+  if (
+    array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null
+  ) {
+    throw new TypeError('Plan fingerprint data requires plain records and arrays.');
+  }
+  if (array && value.length > maximumArrayLength) {
+    throw new TypeError('Plan fingerprint array exceeds the item limit.');
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  const keys: string[] = [];
+  for (const key of Reflect.ownKeys(descriptors)) {
+    if (typeof key !== 'string')
+      throw new TypeError('Plan fingerprint data cannot have symbol keys.');
+    if (array && key === 'length') continue;
+    const descriptor = descriptors[key]!;
+    if (!('value' in descriptor) || !descriptor.enumerable) {
+      throw new TypeError(
+        'Plan fingerprint data requires enumerable data properties, not accessors.',
+      );
+    }
+    if (array && (!/^(0|[1-9][0-9]*)$/.test(key) || Number(key) >= value.length)) {
+      throw new TypeError('Plan fingerprint arrays cannot have extra fields.');
+    }
+    keys.push(key);
+  }
+  active.add(value);
+  try {
+    if (array) {
+      const items: string[] = [];
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = descriptors[index];
+        if (descriptor === undefined || descriptor.value === undefined) {
+          throw new TypeError('Plan fingerprint arrays cannot have holes or undefined items.');
+        }
+        items.push(stableJson(descriptor.value, active, depth + 1));
+      }
+      return `[${items.join(',')}]`;
+    }
+    return `{${keys
+      .filter((key) => descriptors[key]!.value !== undefined)
       .sort()
-      .map((key) => `${JSON.stringify(key)}:${stableJson(record[key])}`)
+      .map(
+        (key) => `${JSON.stringify(key)}:${stableJson(descriptors[key]!.value, active, depth + 1)}`,
+      )
       .join(',')}}`;
+  } finally {
+    active.delete(value);
   }
-  throw new TypeError('Cannot fingerprint a non-JSON value.');
 }
 
 /**

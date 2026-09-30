@@ -13,7 +13,12 @@ import type { EntityPrototype } from '@comblang/prototypes';
 import type { EntityPrototypeResolver } from './entity-registry.js';
 import { validateCanonicalDirectPlan, tryElaborateDirectPlan } from './direct-plan.js';
 import { hydrateResolvedCircuit } from './resolved-circuit.js';
-import { parseResolvedCircuit, validateResolvedCircuit } from '@comblang/compiler/resolved-circuit';
+import {
+  parseResolvedCircuit,
+  validateResolvedCircuit,
+  resolvedCircuitPlanFingerprint,
+} from '@comblang/compiler/resolved-circuit';
+import { canonicalPlanFingerprint, canonicalResolvedCircuit } from './canonical-circuit.js';
 import { compileSourceProgram } from './source-compilation.js';
 import { runDirectPlanTests } from './test-runner.js';
 
@@ -128,6 +133,42 @@ function assertCanonicalResolved(
 }
 
 describe('canonical circuit contract', () => {
+  test('shares Plan fingerprints across nested options, Unicode, and object key order', () => {
+    const reverseKeys = (value: unknown): unknown => {
+      if (Array.isArray(value)) return value.map(reverseKeys);
+      if (value === null || typeof value !== 'object') return value;
+      return Object.fromEntries(
+        Object.entries(value)
+          .reverse()
+          .map(([key, item]) => [key, reverseKeys(item)]),
+      );
+    };
+    const compilations = [
+      compileSourceProgram(mixedSource(), canonicalHost()),
+      ...[2, 3].map((amount) =>
+        compileSourceProgram({
+          path: 'схемы/信号😀.factorio.ts',
+          text: `const A = Signal('virtual', 'signal-A');
+const output = new Network();
+output += CC(${amount} * A);`,
+        }),
+      ),
+    ];
+    const hashes = compilations.map((compilation) => {
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      const plan = compilation.plan!;
+      const hash = resolvedCircuitPlanFingerprint(plan);
+      expect(canonicalPlanFingerprint(plan)).toBe(hash);
+      expect(canonicalPlanFingerprint(reverseKeys(plan))).toBe(hash);
+      expect(resolvedCircuitPlanFingerprint(reverseKeys(plan) as DirectElaborationPlan)).toBe(hash);
+      expect(
+        record(canonicalResolvedCircuit(compilation.resolvedCircuit, plan)).planFingerprint,
+      ).toBe(hash);
+      return hash;
+    });
+    expect(new Set(hashes).size).toBe(3);
+  });
+
   test('compiles a mixed Entity circuit through one cloneable canonical pipeline', () => {
     const compilation = compileSourceProgram(mixedSource(), canonicalHost());
     expect(compilation.pipelineDiagnostics).toEqual([]);

@@ -86,6 +86,14 @@ invalid associations, and configuration mismatches before hydration.
 simulation, debug, browser, Worker, and CLI previews all use this canonical
 physical result.
 
+When a compiled Plan accompanies a resolved snapshot, web preview validates
+the pair through `executeResolvedDirectPlan`, the same strict replay used by
+resolved tests. It compares complete Network and Producer rows and Entity
+mapping even when the Plan fingerprint matches. Stale or inconsistent pairs
+raise the runtime diagnostic `RT1001`; malformed physical snapshots retain
+their `RSC1001` validation errors. The preview adapter preserves physical
+Network ID, source-name, and alias lookup after this validation.
+
 Synthetic fixtures and automated simulation tests establish CombLang's model
 and transport invariants. They are not native Factorio conformance evidence;
 native import/export and exchange-string claims require separate fixture-backed

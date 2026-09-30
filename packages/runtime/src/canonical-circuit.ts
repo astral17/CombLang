@@ -1,6 +1,9 @@
 import { cloneAndDeepFreeze } from '@comblang/compiler/immutable';
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
-import { parseResolvedCircuit } from '@comblang/compiler/resolved-circuit';
+import {
+  parseResolvedCircuit,
+  resolvedCircuitPlanFingerprint,
+} from '@comblang/compiler/resolved-circuit';
 
 type DataRecord = Record<string, any>;
 
@@ -10,36 +13,8 @@ function dataRecord(value: unknown): DataRecord {
   return value as DataRecord;
 }
 
-function stableJson(value: unknown, seen = new WeakSet<object>()): string {
-  if (value === null || value === undefined) return 'null';
-  if (typeof value !== 'object') return JSON.stringify(value);
-  if (seen.has(value)) throw new TypeError('Cyclic canonical circuit data.');
-  seen.add(value);
-  try {
-    if (Array.isArray(value)) return `[${value.map((entry) => stableJson(entry, seen)).join(',')}]`;
-    const record = value as DataRecord;
-    return `{${Object.keys(record)
-      .filter((key) => record[key] !== undefined)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${stableJson(record[key], seen)}`)
-      .join(',')}}`;
-  } finally {
-    seen.delete(value);
-  }
-}
-
-function fingerprint(value: unknown): string {
-  let hash = 0xcbf29ce484222325n;
-  const serialized = stableJson(value);
-  for (let index = 0; index < serialized.length; index += 1) {
-    hash ^= BigInt(serialized.charCodeAt(index));
-    hash = (hash * 0x100000001b3n) & 0xffffffffffffffffn;
-  }
-  return `plan-fnv1a64:${hash.toString(16).padStart(16, '0')}`;
-}
-
 export function canonicalPlanFingerprint(value: unknown): string {
-  return fingerprint(value);
+  return resolvedCircuitPlanFingerprint(value as DirectElaborationPlan);
 }
 
 export function canonicalDirectPlan(value: unknown): DirectElaborationPlan {
@@ -59,7 +34,7 @@ export function canonicalResolvedCircuit(value: unknown, plan: unknown, ir?: unk
   const physicalIr = ir === undefined ? source?.ir : ir;
   const candidate = {
     format: 'comblang-resolved-circuit',
-    planFingerprint: fingerprint(plan),
+    planFingerprint: canonicalPlanFingerprint(plan),
     ir: canonicalNativeCircuitIr(physicalIr ?? { format: 'comblang-ncir', entities: [] }),
   };
   return physicalIr === undefined ? cloneAndDeepFreeze(candidate) : parseResolvedCircuit(candidate);

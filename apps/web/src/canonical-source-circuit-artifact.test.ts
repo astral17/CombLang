@@ -1,17 +1,30 @@
 import { describe, expect, test } from 'vitest';
 import { transformElaborationModule } from '@comblang/compiler';
+import { generateBlueprintJson } from '@comblang/compiler/blueprint-json';
 import type { EntityProfile } from '@comblang/compiler/entity';
 import { syntheticZeroPortEntityProfile } from '@comblang/compiler/entity-fixtures';
 import { createTrustedEntityReplayContext } from '@comblang/compiler/entity-replay-context';
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
-import type { ResolvedCircuit } from '@comblang/compiler/resolved-circuit';
+import {
+  resolvedCircuitPlanFingerprint,
+  validateResolvedCircuit,
+  type ResolvedCircuit,
+} from '@comblang/compiler/resolved-circuit';
 import { parseFile } from '@comblang/language';
-import { tryElaborateDirectPlan } from '@comblang/runtime';
-import { compileSourceProgram } from '@comblang/runtime/source-compilation';
+import { executeResolvedDirectPlan, tryElaborateDirectPlan } from '@comblang/runtime';
+import {
+  bindSourceCompilationCircuit,
+  compileSourceProgram,
+  listSourceCompilationParameters,
+} from '@comblang/runtime/source-compilation';
+import { signal } from '@comblang/factorio';
 import type { EntityPrototype } from '@comblang/prototypes';
 import { executeElaborationProgramWithParameters } from '../../../packages/runtime/src/elaboration-program.js';
 
 import { createSourceCircuitArtifact } from './source-circuit-artifact.js';
+import { blueprintJsonForArtifact } from './blueprint-demo.js';
+import { SourceSimulationController } from './source-demo.js';
+import { runWebTests } from './web-test-runner.js';
 
 function exactArithmeticEnvironment() {
   const profile: EntityProfile = {
@@ -49,6 +62,131 @@ function exactArithmeticEnvironment() {
 }
 
 describe('canonical source circuit artifact', () => {
+  test.each(['arithmetic', 'decider', 'constant'] as const)(
+    'rejects a correctly fingerprinted pair with a mismatched %s Producer',
+    (kind) => {
+      const compilation = compileSourceProgram({
+        path: 'canonical-mismatched-producer.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output = new Network();
+output += input + 1;
+output += when(input[A] > 0).then(input[A]);
+output += CC(2 * A);`,
+      });
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      if (compilation.plan === undefined || compilation.resolvedCircuit === undefined)
+        throw new Error('Expected a canonical pair.');
+      const { plan, resolvedCircuit } = compilation;
+      const producers = resolvedCircuit.ir.producers.map((producer) => {
+        if (producer.kind !== kind) return producer;
+        switch (producer.kind) {
+          case 'arithmetic':
+            return {
+              ...producer,
+              config: { ...producer.config, right: { kind: 'constant' as const, value: 99 } },
+            };
+          case 'decider':
+            if (producer.config.condition.kind !== 'compare')
+              throw new Error('Expected a comparison.');
+            return {
+              ...producer,
+              config: {
+                ...producer.config,
+                condition: {
+                  ...producer.config.condition,
+                  right: { kind: 'constant' as const, value: 99 },
+                },
+              },
+            };
+          case 'constant':
+            if (producer.config.outputs === undefined)
+              throw new Error('Expected legacy Constant rows.');
+            return {
+              ...producer,
+              config: { outputs: producer.config.outputs.map((row) => ({ ...row, value: 99 })) },
+            };
+        }
+      });
+      const mismatched: ResolvedCircuit = {
+        ...resolvedCircuit,
+        planFingerprint: resolvedCircuitPlanFingerprint(plan),
+        ir: { ...resolvedCircuit.ir, producers },
+      };
+      expect(validateResolvedCircuit(mismatched).diagnostics).toEqual([]);
+      expect(() => executeResolvedDirectPlan(plan, mismatched)).toThrow(/Producer .* differs/i);
+      expect(() => createSourceCircuitArtifact(plan, mismatched)).toThrowError(
+        expect.objectContaining({
+          diagnostic: expect.objectContaining({
+            code: 'RT1001',
+            message: expect.stringMatching(/Producer .* differs/i),
+          }),
+        }),
+      );
+      expect(runWebTests(plan, "test('unreachable', () => {});", mismatched)).toMatchObject({
+        passed: 0,
+        failed: 1,
+        results: [
+          { failureKind: 'runtime', message: expect.stringMatching(/Producer .* differs/i) },
+        ],
+      });
+    },
+  );
+
+  test('rejects a correctly fingerprinted mismatch linked to an Arithmetic Entity', () => {
+    const environment = exactArithmeticEnvironment();
+    const compilation = compileSourceProgram(
+      {
+        path: 'canonical-mismatched-entity.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const output = new Network();
+output += Arithmetic({ left: 2, operation: 'add', right: 4, output: A });`,
+      },
+      {
+        trustedEntityReplayContext: environment.context,
+        entityPrototypeResolver: environment.entityPrototypeResolver,
+      },
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    if (compilation.plan === undefined || compilation.resolvedCircuit === undefined)
+      throw new Error('Expected a linked Arithmetic pair.');
+    const plan: DirectElaborationPlan = {
+      ...compilation.plan,
+      producers: compilation.plan.producers.map((producer) =>
+        producer.kind === 'arithmetic'
+          ? { ...producer, right: { kind: 'constant', value: 9 } }
+          : producer,
+      ),
+      entities: compilation.plan.entities.map((entity) =>
+        entity.configuration?.mode === 'arithmetic'
+          ? {
+              ...entity,
+              configuration: { ...entity.configuration, right: { kind: 'constant', value: 9 } },
+            }
+          : entity,
+      ),
+    };
+    const mismatched: ResolvedCircuit = {
+      ...compilation.resolvedCircuit,
+      planFingerprint: resolvedCircuitPlanFingerprint(plan),
+    };
+    expect(validateResolvedCircuit(mismatched).diagnostics).toEqual([]);
+    expect(() => executeResolvedDirectPlan(plan, mismatched)).toThrow(/Producer .* differs/i);
+    expect(() => createSourceCircuitArtifact(plan, mismatched)).toThrowError(
+      expect.objectContaining({
+        diagnostic: expect.objectContaining({
+          code: 'RT1001',
+          message: expect.stringMatching(/Producer .* differs/i),
+        }),
+      }),
+    );
+    expect(runWebTests(plan, "test('unreachable', () => {});", mismatched)).toMatchObject({
+      passed: 0,
+      failed: 1,
+      results: [{ failureKind: 'runtime', message: expect.stringMatching(/Producer .* differs/i) }],
+    });
+  });
+
   test('hydrates a canonical entity-free compilation for preview and simulation', () => {
     const compilation = compileSourceProgram({
       path: 'canonical-artifact.factorio.ts',
@@ -62,14 +200,106 @@ output += constant;`,
     expect(compilation.plan).toBeDefined();
     expect(compilation.resolvedCircuit).toBeDefined();
 
-    const artifact = createSourceCircuitArtifact(
-      compilation.plan as DirectElaborationPlan,
-      compilation.resolvedCircuit as unknown as ResolvedCircuit,
-    );
+    const pair = { plan: compilation.plan!, resolvedCircuit: compilation.resolvedCircuit! };
+    const artifact = createSourceCircuitArtifact(pair.plan, pair.resolvedCircuit);
     expect(artifact.resolvedCircuit.format).toBe('comblang-resolved-circuit');
     expect(Object.hasOwn(artifact.resolvedCircuit.ir, 'version')).toBe(false);
     expect(artifact.blueprint.blueprint.entities).toHaveLength(1);
     expect(() => artifact.execution.circuit.createSimulation().step()).not.toThrow();
+    expect(createSourceCircuitArtifact(pair.plan).blueprint).toEqual(artifact.blueprint);
+    expect(blueprintJsonForArtifact(artifact)).toEqual(
+      generateBlueprintJson(pair.resolvedCircuit.ir),
+    );
+    expect(
+      runWebTests(
+        pair.plan,
+        `const A = Signal('virtual', 'signal-A');
+test('entity-free pair', ({ network, expectSignal, tick }) => {
+  tick();
+  expectSignal(network('output'), A).toBe(2);
+});`,
+        pair.resolvedCircuit,
+      ),
+    ).toMatchObject({ passed: 1, failed: 0 });
+  });
+
+  test('shares default, override, and reset pairs across preview, tests, and blueprint consumers', () => {
+    const environment = exactArithmeticEnvironment();
+    let sourceExecutions = 0;
+    const compilation = compileSourceProgram(
+      {
+        path: 'canonical-bound-consumers.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 4);
+const output = new Network();
+const outputAlias = output;
+output += Arithmetic({ left: 2, operation: 'add', right: amount, output: A });`,
+      },
+      {
+        trustedEntityReplayContext: environment.context,
+        entityPrototypeResolver: environment.entityPrototypeResolver,
+      },
+      [],
+      (stage) => {
+        if (stage === 'execute') sourceExecutions += 1;
+      },
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const before = structuredClone({
+      plan: compilation.plan,
+      resolvedCircuit: compilation.resolvedCircuit,
+    });
+    const parameter = listSourceCompilationParameters(compilation)[0]!.parameter;
+    const defaults = bindSourceCompilationCircuit(compilation);
+    const overridden = bindSourceCompilationCircuit(compilation, [{ parameter, value: 9 }]);
+    const reset = bindSourceCompilationCircuit(compilation, []);
+    expect(reset).toEqual(defaults);
+
+    for (const [pair, amount] of [
+      [defaults, 4],
+      [overridden, 9],
+      [reset, 4],
+    ] as const) {
+      const artifact = createSourceCircuitArtifact(pair.plan, pair.resolvedCircuit);
+      expect(artifact.plan.entities).toHaveLength(1);
+      const output = artifact.execution.network('output');
+      expect(artifact.execution.network('outputAlias')).toBe(output);
+      expect(artifact.execution.network(output.id)).toBe(output);
+      expect(artifact.execution.debug.scopes.flatMap((scope) => scope.networks)).toContainEqual(
+        expect.objectContaining({ planName: 'output', id: output.id }),
+      );
+      const preview = new SourceSimulationController(artifact);
+      preview.stepFrom(0, 1);
+      expect(preview.signalValueAt(1, 'output', signal('virtual', 'signal-A'))).toBe(2 + amount);
+      const blueprint = blueprintJsonForArtifact(artifact);
+      expect(blueprint).toEqual(generateBlueprintJson(pair.resolvedCircuit.ir));
+      expect(blueprint.blueprint.entities[0]!.control_behavior).toMatchObject({
+        arithmetic_conditions: {
+          first_constant: 2,
+          second_constant: amount,
+          output_signal: { type: 'virtual', name: 'signal-A' },
+        },
+      });
+      expect(
+        runWebTests(
+          pair.plan,
+          `const A = Signal('virtual', 'signal-A');
+test('concrete bound value', ({ network, expectSignal, tick }) => {
+  tick();
+  expectSignal(network('outputAlias'), A).toBe(${2 + amount});
+});`,
+          pair.resolvedCircuit,
+        ),
+      ).toMatchObject({ passed: 1, failed: 0 });
+    }
+    const replay = executeResolvedDirectPlan(defaults.plan, defaults.resolvedCircuit);
+    expect(() => replay.network(defaults.resolvedCircuit.ir.networks[0]!.id)).toThrow(
+      /Unknown Network/i,
+    );
+    expect({ plan: compilation.plan, resolvedCircuit: compilation.resolvedCircuit }).toEqual(
+      before,
+    );
+    expect(sourceExecutions).toBe(1);
   });
 
   test('keeps host-local Arithmetic templates out of the serialized source artifact', () => {
@@ -130,7 +360,14 @@ output += CC(2 * A);`,
     } as ResolvedCircuit;
     expect(() =>
       createSourceCircuitArtifact(compilation.plan as DirectElaborationPlan, stale),
-    ).toThrow(/fingerprint does not match/i);
+    ).toThrowError(
+      expect.objectContaining({
+        diagnostic: expect.objectContaining({
+          code: 'RT1001',
+          message: expect.stringMatching(/fingerprint.*stale/i),
+        }),
+      }),
+    );
   });
 
   test('requires resolved physical data for an Entity-bearing plan', () => {
@@ -162,6 +399,8 @@ output += CC(2 * A);`,
     } as unknown as ResolvedCircuit;
     expect(() =>
       createSourceCircuitArtifact(compilation.plan as DirectElaborationPlan, malformed),
-    ).toThrow(/holes/i);
+    ).toThrowError(
+      expect.objectContaining({ code: 'RSC1001', detail: expect.stringMatching(/holes/i) }),
+    );
   });
 });

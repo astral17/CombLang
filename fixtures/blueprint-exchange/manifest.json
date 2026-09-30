@@ -27,6 +27,55 @@
         "hasEntities": true,
         "hasWires": true
       }
+    },
+    {
+      "id": "user-supplied-factorio-2.1.17-recipe-formulas",
+      "origin": "factorio-export",
+      "factorioVersion": "2.1.17",
+      "environment": "User-supplied exchange string; encoded version verified; installed mods and placement behavior not independently verified",
+      "path": "factorio-2.1.17/recipe-formulas.txt",
+      "encodedExchangeSha256": "dbe66cdc1173c03e4e7e6334bc6122f81cf4746308ee46fbb93b47f4d6a6dadf",
+      "decodedJsonSha256": "0ceaf500670850e0abe8728e4fb0b27ef6ef3bfaaa49fbf73212c60bb47df324",
+      "reviewStatus": "parameter-document-shape-reviewed",
+      "expectedSemanticHeader": {
+        "item": "blueprint",
+        "label": "Generic Assembler",
+        "version": 562954249502720,
+        "hasEntities": true,
+        "hasWires": false
+      }
+    },
+    {
+      "id": "user-supplied-factorio-2.1.17-display-quality",
+      "origin": "factorio-export",
+      "factorioVersion": "2.1.17",
+      "environment": "User-supplied exchange string; encoded version verified; installed mods and placement behavior not independently verified",
+      "path": "factorio-2.1.17/display-quality.txt",
+      "encodedExchangeSha256": "38038fc0dd036b3e3b4e5bb3fe8956eef5727c63ead86f6cec407a3497536006",
+      "decodedJsonSha256": "b3413cc3fbcc7339d8e3e02727c5d9d68f1236b1bb8805df594779d848ebe6dc",
+      "reviewStatus": "parameter-document-shape-reviewed",
+      "expectedSemanticHeader": {
+        "item": "blueprint",
+        "version": 562954249502720,
+        "hasEntities": true,
+        "hasWires": false
+      }
+    },
+    {
+      "id": "user-supplied-factorio-2.1.17-dependency-chain",
+      "origin": "factorio-export",
+      "factorioVersion": "2.1.17",
+      "environment": "User-supplied exchange string; encoded version verified; installed mods and placement behavior not independently verified",
+      "path": "factorio-2.1.17/dependency-chain.txt",
+      "encodedExchangeSha256": "f067336f65a3414125ddc40997c5e07610a2a035de3ce58a81649027692ebd7b",
+      "decodedJsonSha256": "45a2bc06d0810446cb5ca7de9e9e50a99ba7cbda0ef141e6a3ec0e6d8f5ca6d6",
+      "reviewStatus": "parameter-document-shape-reviewed",
+      "expectedSemanticHeader": {
+        "item": "blueprint",
+        "version": 562954249502720,
+        "hasEntities": true,
+        "hasWires": false
+      }
     }
   ],
   "externalEvidence": {
@@ -35,6 +84,6 @@
     "factorioVersion": "2.1.10",
     "environment": "user-reported Factorio export; installed mods not independently verified",
     "receivedPath": "factorio-2.1.10/plain-circuit.txt",
-    "note": "This independent export verifies exchange framing and lossless document round trips. It does not establish Factorio acceptance of re-encoded strings or behavior of specific devices. Newer parameter and formula fields need separate exports from the game version that provides them."
+    "note": "This independent export verifies exchange framing and lossless document round trips. The separately listed 2.1.17 exports establish parameter document shape. None of these exports establishes Factorio acceptance of re-encoded strings or behavior of specific devices or formulas."
   }
 }

@@ -4,9 +4,9 @@ import type { ElaborationGraph, NativeCircuitIr } from '@comblang/compiler/ir';
 import type { ResolvedCircuit } from '@comblang/compiler/resolved-circuit';
 import {
   canonicalDirectPlan,
-  canonicalPlanFingerprint,
   canonicalResolvedCircuit,
   elaborateDirectPlan,
+  executeResolvedDirectPlan,
   hydrateResolvedCircuit,
   type ExecutedDirectPlan,
   type NetworkHandle,
@@ -49,15 +49,11 @@ export function createSourceCircuitArtifact(
   }
 
   if (resolvedCircuit !== undefined) {
-    if (resolvedCircuit.format !== 'comblang-resolved-circuit') {
-      throw new Error('Canonical preview requires a canonical resolved circuit.');
-    }
-    if (resolvedCircuit.planFingerprint !== canonicalPlanFingerprint(plan)) {
-      throw new Error('Canonical resolved circuit fingerprint does not match the compiled plan.');
-    }
-    assertCanonicalCircuitMatchesPlan(plan, resolvedCircuit.ir);
-    const runtime = hydrateResolvedCircuit(resolvedCircuit);
-    const execution = canonicalResolvedExecution(plan, runtime);
+    const validated = executeResolvedDirectPlan(plan, resolvedCircuit);
+    // Preview retains physical-ID lookup and survivor/alias views. Runtime replay
+    // exposes source-name handles, so build the existing adapter only after validation.
+    const runtime = hydrateResolvedCircuit({ ...resolvedCircuit, ir: validated.circuit.ir });
+    const execution = canonicalResolvedExecution(plan, runtime, validated.circuit.graph);
     return Object.freeze({
       plan,
       resolvedCircuit: runtime.artifact,
@@ -80,57 +76,12 @@ export function createSourceCircuitArtifact(
   });
 }
 
-function assertCanonicalCircuitMatchesPlan(plan: DirectElaborationPlan, ir: NativeCircuitIr): void {
-  const sameIdentity = (left: unknown, right: unknown): boolean =>
-    JSON.stringify(left) === JSON.stringify(right);
-  if (!sameIdentity(plan.context, ir.context)) {
-    throw new Error('Resolved circuit context does not match the compiled canonical plan.');
-  }
-  if (plan.producers.length !== ir.producers.length) {
-    throw new Error('Resolved circuit producer count does not match the compiled canonical plan.');
-  }
-  if (plan.entities.length !== ir.entities.length) {
-    throw new Error('Resolved circuit Entity count does not match the compiled canonical plan.');
-  }
-  const physicalById = new Map(ir.entities.map((entity) => [entity.id, entity]));
-  for (const planned of plan.entities) {
-    const physical = physicalById.get(planned.id);
-    if (
-      physical === undefined ||
-      physical.ordinal !== planned.ordinal ||
-      !sameIdentity(physical.profile, planned.profile) ||
-      physical.prototypeName !== planned.profile.prototypeKey.slice('entity:'.length)
-    ) {
-      throw new Error(`Resolved circuit Entity ${planned.id} does not match the compiled plan.`);
-    }
-  }
-}
-
 function canonicalResolvedExecution(
   plan: DirectElaborationPlan,
   runtime: ReturnType<typeof hydrateResolvedCircuit>,
+  graph: ElaborationGraph,
 ): SourceCircuitExecution {
   const { network, debug } = resolvedNetworkViews(plan, runtime);
-  const graph: ElaborationGraph = Object.freeze({
-    format: 'comblang-eg',
-    ...(runtime.ir.context === undefined ? {} : { context: runtime.ir.context }),
-    networks: Object.freeze(
-      runtime.ir.networks.map(({ color: _color, ...candidate }) => Object.freeze(candidate)),
-    ),
-    producers: runtime.ir.producers,
-    attachments: Object.freeze(
-      runtime.ir.producers.flatMap((producer) =>
-        producer.destinations.map((destination) =>
-          Object.freeze({
-            producer: producer.id,
-            network: destination,
-            provenance: producer.provenance,
-          }),
-        ),
-      ),
-    ),
-    entities: runtime.ir.entities,
-  });
   return Object.freeze({
     circuit: Object.freeze({
       graph,
