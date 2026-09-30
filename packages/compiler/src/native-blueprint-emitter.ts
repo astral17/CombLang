@@ -21,6 +21,7 @@ export function emitNativeBlueprintJson(fcir: NativeBlueprintFcir): FactorioBlue
         to.entityNumber,
         to.connector,
       ]),
+      ...(fcir.parameters === undefined ? {} : { parameters: fcir.parameters }),
     },
   };
 }

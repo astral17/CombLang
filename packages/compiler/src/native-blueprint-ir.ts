@@ -46,11 +46,37 @@ export interface NativeBlueprintWire {
   readonly source?: SourceSpan;
 }
 
+/** Native metadata shape only; originals, references and formulas remain opaque strings. */
+export type NativeBlueprintParameter =
+  | {
+      readonly type: 'number';
+      readonly number: string;
+      readonly name?: string;
+      readonly variable?: string;
+      readonly formula?: string;
+      readonly dependent?: boolean;
+    }
+  | {
+      readonly type: 'id';
+      readonly id: string;
+      readonly name?: string;
+      readonly 'ingredient-of'?: string;
+      readonly 'item-ingredient-of'?: string;
+      readonly 'fluid-ingredient-of'?: string;
+      readonly 'product-of'?: string;
+      readonly 'item-product-of'?: string;
+      readonly 'quality-condition'?: {
+        readonly quality: string;
+        readonly comparator: string;
+      };
+    };
+
 /** Immutable native export projection. It is not a simulator or import IR. */
 export interface NativeBlueprintFcir {
   readonly header: NativeBlueprintHeader;
   readonly entities: readonly NativeBlueprintEntity[];
   readonly wires: readonly NativeBlueprintWire[];
+  readonly parameters?: readonly NativeBlueprintParameter[];
 }
 
 type DataRecord = Record<string, unknown>;
@@ -336,10 +362,62 @@ function validateWire(value: unknown, index: number): NativeBlueprintWire {
   return value as NativeBlueprintWire;
 }
 
+function validateParameters(value: unknown, budget: NativeJsonBudget): void {
+  // Charge all metadata through the same immutable JSON boundary as native entity fields.
+  validateJsonValue(value, '$.parameters', undefined, new WeakSet(), budget, 0);
+  const parameters = frozenArray(value, '$.parameters');
+  parameters.forEach((candidate, index) => {
+    const path = `$.parameters[${index}]`;
+    const row = frozenRecord(candidate, path);
+    if (Object.hasOwn(row, 'name') && typeof row.name !== 'string') {
+      fail(`${path}.name: expected a string.`);
+    }
+    if (row.type === 'number') {
+      exactKeys(row, ['type', 'number', 'name', 'variable', 'formula', 'dependent'], path);
+      if (typeof row.number !== 'string' || row.number.length === 0) {
+        fail(`${path}.number: expected a non-empty original string.`);
+      }
+      for (const key of ['variable', 'formula']) {
+        if (Object.hasOwn(row, key) && typeof row[key] !== 'string') {
+          fail(`${path}.${key}: expected a string.`);
+        }
+      }
+      if (Object.hasOwn(row, 'dependent') && typeof row.dependent !== 'boolean') {
+        fail(`${path}.dependent: expected a Boolean.`);
+      }
+    } else if (row.type === 'id') {
+      const dependencies = [
+        'ingredient-of',
+        'item-ingredient-of',
+        'fluid-ingredient-of',
+        'product-of',
+        'item-product-of',
+      ];
+      exactKeys(row, ['type', 'id', 'name', ...dependencies, 'quality-condition'], path);
+      if (typeof row.id !== 'string' || row.id.length === 0) {
+        fail(`${path}.id: expected a non-empty identifier string.`);
+      }
+      for (const key of dependencies) {
+        if (Object.hasOwn(row, key) && typeof row[key] !== 'string') {
+          fail(`${path}.${key}: expected a string.`);
+        }
+      }
+      if (Object.hasOwn(row, 'quality-condition')) {
+        const qualityPath = `${path}.quality-condition`;
+        const quality = frozenRecord(row['quality-condition'], qualityPath);
+        exactKeys(quality, ['quality', 'comparator'], qualityPath);
+        for (const key of ['quality', 'comparator']) {
+          if (typeof quality[key] !== 'string') fail(`${qualityPath}.${key}: expected a string.`);
+        }
+      }
+    } else fail(`${path}.type: expected "id" or "number".`);
+  });
+}
+
 /** Runtime boundary check for internal callers before FCIR reaches a JSON emitter. */
 export function validateNativeBlueprintFcir(value: unknown): asserts value is NativeBlueprintFcir {
   const root = frozenRecord(value, '$');
-  exactKeys(root, ['header', 'entities', 'wires'], '$');
+  exactKeys(root, ['header', 'entities', 'wires', 'parameters'], '$');
   const budget: NativeJsonBudget = { nodes: 0, stringBytes: 0 };
   validateHeader(root.header, budget);
   if (Array.isArray(root.entities) && root.entities.length > maxNativeJsonNodes) {
@@ -371,4 +449,10 @@ export function validateNativeBlueprintFcir(value: unknown): asserts value is Na
       }
     }
   });
+  if (Object.hasOwn(root, 'parameters')) {
+    if (root.parameters === undefined) {
+      fail('$.parameters: omit absent metadata instead of storing undefined.');
+    }
+    validateParameters(root.parameters, budget);
+  }
 }

@@ -1,4 +1,5 @@
 import type { NativeCircuitIr } from './ir.js';
+import type { NativeBlueprintParameter } from './native-blueprint-ir.js';
 import { emitNativeBlueprintJson } from './native-blueprint-emitter.js';
 import { buildNativeBlueprintFcir } from './native-blueprint-projector.js';
 
@@ -15,6 +16,7 @@ export interface FactorioBlueprintJson {
     }[];
     readonly entities: readonly Record<string, unknown>[];
     readonly wires: readonly (readonly [number, number, number, number])[];
+    readonly parameters?: readonly NativeBlueprintParameter[];
   };
 }
 
