@@ -231,11 +231,54 @@ a located diagnostic; valid configuration slots canonicalize it to the original
 host handle. Host-side declaration metadata remains available through the
 host-local API.
 
-This API does not emit Factorio blueprint parameter fields, formulas, recipe or
-property dependencies, and makes no claim about native Factorio placement
-behavior. Simulation and export still consume concrete configuration. Those
-native and Worker/UI workflows require separate implementation and independent
-Factorio-exported fixtures.
+For an internal host-only native export, the same source-compilation module
+provides `exportSourceCompilationNativeBlueprint(compilation, options)`.
+It returns an immutable, validated `NativeBlueprintFcir` for the existing
+`emitNativeBlueprintJson` emitter. Options use the existing
+`NativeBlueprintProjectionOptions`: an explicit `label` and positive
+`maxDeciderConditionRows`. This entry point accepts only the exact owning
+compilation with captured declarations and a successfully lowered circuit;
+copied results and detached transport artifacts have no export authority.
+Missing capture or circuit reports `TypeError`, as in the concrete binding APIs.
+Export performs one default binding and normal native projection, without
+executing source again or changing the original concrete artifacts.
+
+Every declaration in this export subset must be a number parameter used only
+as a direct exact Constant filter count. Its explicit default is also its
+native original and must be an integer in [-2147483648, 2147483647]; it is not
+wrapped, rounded or allocated automatically. A zero count remains an explicit
+filter, and the native original string is `"0"`, including for a default of
+`-0`. Each nominal handle produces one `{ type: 'number', number: String(original),
+name: label }` row in declaration order, even when reused in several filters or
+devices. Labels need not be unique. Distinct handles with the same original
+are rejected at the second declaration, with a reference to the first.
+
+For valid captured compilations, unsupported declarations or uses fail
+atomically with `CP1002`, a declaration or Constant/device-call source span,
+and a semantic path. Signal and unused parameters, parameterized
+Arithmetic/Decider/Selector configurations, symbolic multipliers and expression
+counts are outside this subset. Existing concrete source binding remains
+separate and unchanged. Direct source parameter multipliers already fail
+source normalization before a completed capture is available; registered
+numeric-expression DAGs are internal host APIs, not new source syntax.
+Plain unparameterized devices and concrete section multipliers remain allowed.
+The exporter verifies each marked count survives normal projection unchanged;
+it does not add filters, devices or topology to make an original present.
+
+Local binding is nominal: independently declared handles can be overridden
+independently. Native parameter metadata instead names original values.
+Ordinary literals equal to a parameter original are allowed and remain
+unchanged in the generated document, but native original-value substitution
+may replace those literals too. This exporter does not promise their nominal
+independence in Factorio, infer replacement scope from every JSON number, or
+claim verified native placement behavior.
+
+The CLI and web copy workflow still export concrete configuration without this
+host-only parameter metadata. Existing parameter-free export bytes are
+unchanged. This subset does not add formula strings, native parameter indices,
+recipe/property dependencies, signal placeholders, Worker transport or UI
+integration. Simulation remains concrete; native placement, substitution and
+formula evaluation require independent Factorio evidence.
 
 Known limitation: this is a source-language feature, not a hardened sandbox.
 JavaScript truthiness (`Boolean(parameter)` and `!!parameter`) cannot be trapped

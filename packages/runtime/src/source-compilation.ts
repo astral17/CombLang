@@ -49,10 +49,26 @@ import {
   executeElaborationProgramWithParameters,
   type ExecutedElaborationWithBlueprintParameters,
 } from './elaboration-program.js';
-import type {
-  BlueprintParameterHandle,
-  BlueprintParameterKind,
+import {
+  BlueprintParameterError,
+  canonicalBlueprintParameterHandle,
+  type BlueprintParameterHandle,
+  type BlueprintParameterKind,
 } from '../../compiler/src/blueprint-parameters.js';
+import { inspectConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-template.js';
+import { inspectArithmeticConfigurationTemplate } from '../../compiler/src/arithmetic-configuration-template.js';
+import { inspectDeciderConfigurationTemplate } from '../../compiler/src/decider-configuration-template.js';
+import { inspectSelectorConfigurationTemplate } from '../../compiler/src/selector-configuration-template.js';
+import { isRegisteredBlueprintNumericExpression } from '../../compiler/src/blueprint-numeric-expression-bridge.js';
+import {
+  buildNativeBlueprintFcir,
+  type NativeBlueprintProjectionOptions,
+} from '../../compiler/src/native-blueprint-projector.js';
+import {
+  validateNativeBlueprintFcir,
+  type NativeBlueprintFcir,
+  type NativeBlueprintParameter,
+} from '../../compiler/src/native-blueprint-ir.js';
 import type { SourceSpan } from '@comblang/shared';
 
 export interface SourceCompilationEnvironment {
@@ -289,6 +305,206 @@ export function bindSourceCompilationParameters(
     throw new TypeError('Compilation has no canonical execution available for parameter binding.');
   }
   return bindCapturedSourceConfigurationTemplates(state.source, state.execution, bindings);
+}
+
+function containsNativeUnsupportedExpression(value: unknown): boolean {
+  if (isRegisteredBlueprintNumericExpression(value)) return true;
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    Object.values(value).some(containsNativeUnsupportedExpression)
+  );
+}
+
+/** Projects this exact compilation's direct numeric Constant counts into native metadata. */
+export function exportSourceCompilationNativeBlueprint(
+  compilation: LocalSourceCompilation,
+  options: NativeBlueprintProjectionOptions,
+): NativeBlueprintFcir {
+  const state = capturedParametersByCompilation.get(compilation);
+  if (state === undefined) {
+    throw new TypeError('Compilation has no host-local source parameter declarations.');
+  }
+  if (state.execution === undefined) {
+    throw new TypeError('Compilation has no canonical execution available for parameter binding.');
+  }
+  if (compilation.resolvedCircuit === undefined) {
+    throw new TypeError('Compilation has no resolved circuit available for parameter binding.');
+  }
+  function reject(path: string, message: string, source?: SourceSpan): never {
+    throw new BlueprintParameterError('CP1002', path, message, source);
+  }
+  const declarations = listSourceCompilationParameters(compilation);
+  for (const [index, declaration] of declarations.entries()) {
+    if (declaration.kind !== 'number') {
+      reject(
+        `$.parameters[${index}]`,
+        'native source export supports only number declarations.',
+        declaration.source,
+      );
+    }
+    const original = declaration.defaultValue;
+    if (
+      typeof original !== 'number' ||
+      !Number.isInteger(original) ||
+      original < -2147483648 ||
+      original > 2147483647
+    ) {
+      reject(
+        `$.parameters[${index}].defaultValue`,
+        'native original must be an explicit signed int32 integer.',
+        declaration.source,
+      );
+    }
+  }
+  for (const [family, captures, inspect] of [
+    ['arithmetic', state.source.arithmeticTemplates, inspectArithmeticConfigurationTemplate],
+    ['decider', state.source.deciderTemplates, inspectDeciderConfigurationTemplate],
+    ['selector', state.source.selectorTemplates, inspectSelectorConfigurationTemplate],
+  ] as const) {
+    captures.forEach((capture, index) => {
+      const path = `$.${family}Templates[${index}]`;
+      const registration = inspect(capture.template, path);
+      if (
+        registration.usedParameters.length > 0 ||
+        containsNativeUnsupportedExpression(capture.template)
+      ) {
+        reject(
+          path,
+          'native source parameters support only direct Constant filter counts.',
+          capture.source,
+        );
+      }
+    });
+  }
+  const used = new Set<BlueprintParameterHandle>();
+  const occurrences: {
+    captureId: string;
+    sectionIndex: number;
+    filterIndex: number;
+    parameter: BlueprintParameterHandle;
+    path: string;
+    source: SourceSpan;
+  }[] = [];
+  state.source.constantTemplates.forEach((capture, captureIndex) => {
+    const path = `$.constantTemplates[${captureIndex}]`;
+    inspectConstantConfigurationTemplate(capture.template, path);
+    capture.template.sections.forEach((section, sectionIndex) => {
+      const sectionPath = `${path}.sections[${sectionIndex}]`;
+      if (typeof section.multiplier !== 'number') {
+        reject(
+          `${sectionPath}.multiplier`,
+          'native source export does not support symbolic multipliers.',
+          capture.source,
+        );
+      }
+      section.filters.forEach((filter, filterIndex) => {
+        const filterPath = `${sectionPath}.filters[${filterIndex}]`;
+        if (canonicalBlueprintParameterHandle(filter.signal) !== undefined) {
+          reject(
+            `${filterPath}.signal`,
+            'native source export does not support signal parameters.',
+            capture.source,
+          );
+        }
+        if (isRegisteredBlueprintNumericExpression(filter.value)) {
+          reject(
+            `${filterPath}.value`,
+            'native source export does not support expression counts.',
+            capture.source,
+          );
+        }
+        const parameter = canonicalBlueprintParameterHandle(filter.value);
+        if (parameter === undefined) return;
+        used.add(parameter);
+        occurrences.push({
+          captureId: capture.captureId,
+          sectionIndex,
+          filterIndex,
+          parameter,
+          path: `${filterPath}.value`,
+          source: capture.source,
+        });
+      });
+    });
+  });
+  const originals = new Map<number, SourceCompilationParameter>();
+  const parameters: NativeBlueprintParameter[] = declarations.map((declaration, index) => {
+    if (!used.has(declaration.parameter)) {
+      reject(
+        `$.parameters[${index}]`,
+        'native source export does not support unused declarations.',
+        declaration.source,
+      );
+    }
+    const original = declaration.defaultValue as number;
+    const first = originals.get(original);
+    if (first !== undefined) {
+      reject(
+        `$.parameters[${index}].defaultValue`,
+        `original ${String(original)} is already used by declaration ${JSON.stringify(first.label)} at ${first.source.fileId}:${first.source.start}-${first.source.end}.`,
+        declaration.source,
+      );
+    }
+    originals.set(original, declaration);
+    return Object.freeze({ type: 'number', number: String(original), name: declaration.label });
+  });
+
+  // The binder authenticates templates, their session and their exact physical producer relation.
+  const replacement = bindCapturedSourceConfigurationTemplatesWithRelations(
+    state.source,
+    state.execution,
+  );
+  const projected = buildNativeBlueprintFcir(replacement.circuit, options);
+  const relations = new Map(
+    replacement.captureRelations.map((relation) => [relation.captureId, relation]),
+  );
+  const entities = new Map(projected.entities.map((entity) => [entity.entityNumber, entity]));
+  const defaults = new Map(
+    declarations.map((declaration) => [declaration.parameter, declaration.defaultValue]),
+  );
+  for (const occurrence of occurrences) {
+    const relation = relations.get(occurrence.captureId);
+    if (
+      relation === undefined ||
+      relation.kind !== 'constant' ||
+      replacement.circuit.producers[relation.producerIndex]?.id !== relation.producerId
+    ) {
+      reject(
+        occurrence.path,
+        'missing authenticated Constant producer relation.',
+        occurrence.source,
+      );
+    }
+    // The canonical projector assigns producer entity numbers in NCIR producer order.
+    const entity = entities.get(relation.producerIndex + 1);
+    const behavior = entity?.native.control_behavior as
+      | {
+          readonly sections?: {
+            readonly sections?: readonly {
+              readonly index?: number;
+              readonly filters?: readonly { readonly index?: number; readonly count?: number }[];
+            }[];
+          };
+        }
+      | undefined;
+    const section = behavior?.sections?.sections?.[occurrence.sectionIndex];
+    const filter = section?.filters?.[occurrence.filterIndex];
+    if (
+      section?.index !== occurrence.sectionIndex + 1 ||
+      filter?.index !== occurrence.filterIndex + 1 ||
+      filter.count !== defaults.get(occurrence.parameter)
+    ) {
+      reject(
+        occurrence.path,
+        'marked Constant count did not survive native projection unchanged.',
+        occurrence.source,
+      );
+    }
+  }
+  const native = Object.freeze({ ...projected, parameters: Object.freeze(parameters) });
+  validateNativeBlueprintFcir(native);
+  return native;
 }
 
 /** Immutable host-local pair of one compilation's concrete Plan and physical circuit. */
