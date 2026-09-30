@@ -1,6 +1,7 @@
 import { int32, type SignalId } from '@comblang/factorio';
 import type { SourceSpan } from '@comblang/shared';
 
+import { freezeConfigurationData } from './blueprint-configuration-utils.js';
 import {
   assertBlueprintParameterNumberValue,
   canonicalizeBlueprintParameterSignal,
@@ -26,14 +27,6 @@ function fail(
   code: 'CP1000' | 'CP1001' | 'CP1002' = 'CP1000',
 ): never {
   throw new BlueprintParameterError(code, path, message, span);
-}
-
-function freezeDeep<T>(value: T): T {
-  if (value !== null && typeof value === 'object') {
-    for (const child of Object.values(value as Record<string, unknown>)) freezeDeep(child);
-    if (!Object.isFrozen(value)) Object.freeze(value);
-  }
-  return value;
 }
 
 function cloneNetworkReference(reference: LogicalNetworkRef): LogicalNetworkRef {
@@ -148,5 +141,5 @@ export function bindSelectorConfigurationTemplate(
     }
   }
 
-  return freezeDeep(concrete);
+  return freezeConfigurationData(concrete);
 }

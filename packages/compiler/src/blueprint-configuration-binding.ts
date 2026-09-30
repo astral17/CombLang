@@ -1,5 +1,6 @@
 import type { ProducerId } from '@comblang/shared';
 
+import { freezeConfigurationDataSkippingFrozen } from './blueprint-configuration-utils.js';
 import {
   assertBlueprintParameterExactKeys,
   createBlueprintParameterDataBudget,
@@ -53,14 +54,6 @@ function fail(path: string, message: string, span?: import('@comblang/shared').S
   throw new BlueprintParameterError('CP1001', path, message, span);
 }
 
-function freezeDeep<T>(value: T): T {
-  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
-    for (const child of Object.values(value as Record<string, unknown>)) freezeDeep(child);
-    Object.freeze(value);
-  }
-  return value;
-}
-
 function templateParameters(entry: BlueprintConfigurationSetEntry) {
   switch (entry.kind) {
     case 'constant':
@@ -80,25 +73,25 @@ function bindEntry(
 ): BoundBlueprintConfiguration {
   switch (entry.kind) {
     case 'constant':
-      return freezeDeep({
+      return freezeConfigurationDataSkippingFrozen({
         key: entry.key,
         kind: entry.kind,
         config: bindConstantConfigurationTemplate(entry.template, bindings),
       });
     case 'arithmetic':
-      return freezeDeep({
+      return freezeConfigurationDataSkippingFrozen({
         key: entry.key,
         kind: entry.kind,
         config: bindArithmeticConfigurationTemplate(entry.template, bindings),
       });
     case 'decider':
-      return freezeDeep({
+      return freezeConfigurationDataSkippingFrozen({
         key: entry.key,
         kind: entry.kind,
         config: bindDeciderConfigurationTemplate(entry.template, bindings),
       });
     case 'selector':
-      return freezeDeep({
+      return freezeConfigurationDataSkippingFrozen({
         key: entry.key,
         kind: entry.kind,
         config: bindSelectorConfigurationTemplate(entry.template, bindings),

@@ -1,6 +1,7 @@
 import { constantConfigurationLimits, int32, type SignalId } from '@comblang/factorio';
 import type { NetworkId, SourceSpan } from '@comblang/shared';
 
+import { freezeConfigurationData } from './blueprint-configuration-utils.js';
 import type { LogicalNetworkRef } from './ir.js';
 import {
   assertBlueprintParameterExactKeys,
@@ -117,14 +118,6 @@ function accountParameter(
   if (budget.parameterBytes > constantConfigurationLimits.maxBytes) {
     fail(path, `template exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`);
   }
-}
-
-function freezeDeep<T>(value: T): T {
-  if (value !== null && typeof value === 'object') {
-    for (const child of Object.values(value as Record<string, unknown>)) freezeDeep(child);
-    if (!Object.isFrozen(value)) Object.freeze(value);
-  }
-  return value;
 }
 
 function networkId(value: unknown, path: string): NetworkId {
@@ -286,7 +279,7 @@ export function createSelectorConfigurationTemplate(
   if (templateBytes + budget.parameterBytes > constantConfigurationLimits.maxBytes) {
     fail('$', `template exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`);
   }
-  const template = freezeDeep({ [selectorTemplateBrand]: true as const, ...skeleton });
+  const template = freezeConfigurationData({ [selectorTemplateBrand]: true as const, ...skeleton });
   templateRegistrations.set(
     template,
     Object.freeze({ session, usedParameters: Object.freeze([...budget.usedParameters]) }),

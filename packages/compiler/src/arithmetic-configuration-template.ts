@@ -1,6 +1,7 @@
 import { constantConfigurationLimits, int32, signal, type SignalId } from '@comblang/factorio';
 import type { NetworkId } from '@comblang/shared';
 
+import { freezeConfigurationDataSkippingFrozen } from './blueprint-configuration-utils.js';
 import type { ArithmeticOperation, LogicalNetworkRef } from './ir.js';
 import type { BlueprintNumericExpression } from './blueprint-numeric-expression.js';
 import {
@@ -111,14 +112,6 @@ function addParameterBudget(
   if (budget.parameterBytes > constantConfigurationLimits.maxBytes) {
     fail(path, `template exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`);
   }
-}
-
-function freezeDeep<T>(value: T): T {
-  if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
-    for (const child of Object.values(value as Record<string, unknown>)) freezeDeep(child);
-    Object.freeze(value);
-  }
-  return value;
 }
 
 function networkId(value: unknown, path: string): NetworkId {
@@ -357,7 +350,7 @@ export function createArithmeticConfigurationTemplate(
   ) {
     fail('$', `template exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`);
   }
-  const template = freezeDeep({
+  const template = freezeConfigurationDataSkippingFrozen({
     [arithmeticTemplateBrand]: true as const,
     ...skeleton,
   });
