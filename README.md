@@ -39,7 +39,7 @@ The current repository implements the completed Phase 0–7 foundation, from the
   - [x] Preserve ordered number/id parameter metadata through the existing FCIR validator and native emitter, with immutable shared-budget validation and complete metadata comparisons against the supplied exports. Source-driven native allocation and parameter semantics remain separate work.
   - [x] Add source declarations with required concrete defaults and host-local binding for direct exact Arithmetic operands, Constant filter Signal/count fields, Decider right-number thresholds, and Selector select-index/count-output slots. Binding returns concrete NCIR or a strictly replayable Direct Plan/ResolvedCircuit pair; native Factorio parameter/formula export, Worker/UI binding, and broader source-flow containment remain open.
   - [x] Capture direct number/Signal parameter slots in exact source `Arithmetic({ ... })` and `Constant({ ... })` configurations, a direct number threshold in exact `Decider({ ... })`, and exact Selector `select.index`/`count.output` slots as host-local templates tied to physical producers; bind them into concrete circuits without leaking symbolic values into Direct Plans or Worker artifacts.
-  - [x] Export owning-source number declarations used directly in Constant filter counts and Arithmetic constant operands through the existing FCIR/native emitter, preserving signed-int32 originals, declaration order, repeated nominal uses, qualities and topology. This host-only subset rejects ambiguous equal originals across distinct handles; CLI/web integration and native placement evidence remain open.
+  - [x] Export owning-source number declarations used directly in Constant filter counts, Arithmetic constant operands, Selector select indices and simple Decider right-number thresholds through the existing FCIR/native emitter, preserving signed-int32 originals, declaration order, repeated nominal uses, qualities and topology. This host-only subset rejects ambiguous equal originals across distinct handles and parameterized compound conditions; CLI/web integration and native placement evidence remain open.
   - [ ] Expand beyond the reviewed exact source slots and make binding available across CLI, Worker, and offline browser use without re-executing source or changing topology.
   - [x] Add an internal, bounded typed numeric-expression DAG and pure default/binding evaluator for literals, number-parameter references, negation, addition, subtraction, and multiplication. This is not Factorio formula syntax or native-formula semantics.
   - [x] Use registered numeric expressions only in host-local Arithmetic constant operands, Decider `condition.compare.right` thresholds and `mode: 'constant'` output values (including nested AND/OR thresholds and both output branches), plus Constant section multipliers and filter counts. Arithmetic/Decider/count results require safe integers before their existing int32 normalization; Constant multipliers remain finite doubles. No source syntax or native formula export is added.
@@ -65,7 +65,11 @@ Remaining work covers additional reviewed prototype capabilities, fixture-backed
 
 ## Documentation
 
+Start with the [documentation index](docs/README.md) for task-oriented navigation
+and the distinction between user guides, language reference, and embedding APIs.
+
 - [Getting started](docs/getting-started.md) — install, validate, build, and run the browser workbench.
+- [Circuit basics](docs/circuit-basics.md) — complete runnable examples explaining Signals, Networks, hardware, ticks, connections, functions, and loops.
 - [Current language reference](docs/language-reference.md) — the exact implemented syntax, diagnostics, and known gaps.
 - [Ownership and multi-network contract](docs/ownership-and-multi-network.md) — affine ownership, borrows, consuming transfer, read-only `pair`, and its acceptance matrix.
 - [Native objects, Deciders, and parameters](docs/native-objects-deciders-and-parameters.md) — native-object contracts, semantic domains, and conformance requirements.

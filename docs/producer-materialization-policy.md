@@ -33,8 +33,9 @@ const [primary, secondary] = input + 0;
 Sequential attachment consumes the same pair:
 
 ```ts
-out += input + 0;
-mirror += input + 0;
+const comb = input + 0;
+out += comb;
+mirror += comb;
 ```
 
 ## Binding and container invariants

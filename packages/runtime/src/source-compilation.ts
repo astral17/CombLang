@@ -357,25 +357,6 @@ export function exportSourceCompilationNativeBlueprint(
       );
     }
   }
-  for (const [family, captures, inspect] of [
-    ['decider', state.source.deciderTemplates, inspectDeciderConfigurationTemplate],
-    ['selector', state.source.selectorTemplates, inspectSelectorConfigurationTemplate],
-  ] as const) {
-    captures.forEach((capture, index) => {
-      const path = `$.${family}Templates[${index}]`;
-      const registration = inspect(capture.template, path);
-      if (
-        registration.usedParameters.length > 0 ||
-        containsNativeUnsupportedExpression(capture.template)
-      ) {
-        reject(
-          path,
-          'native source parameters support only direct Constant counts and Arithmetic operands.',
-          capture.source,
-        );
-      }
-    });
-  }
   const used = new Set<BlueprintParameterHandle>();
   const occurrences: ({
     captureId: string;
@@ -385,7 +366,107 @@ export function exportSourceCompilationNativeBlueprint(
   } & (
     | { kind: 'constant-count'; sectionIndex: number; filterIndex: number }
     | { kind: 'arithmetic-operand'; side: 'first' | 'second' }
+    | { kind: 'selector-index' }
+    | { kind: 'decider-threshold' }
   ))[] = [];
+  state.source.selectorTemplates.forEach((capture, captureIndex) => {
+    const path = `$.selectorTemplates[${captureIndex}]`;
+    const registration = inspectSelectorConfigurationTemplate(capture.template, path);
+    const accepted = new Set<BlueprintParameterHandle>();
+    if (containsNativeUnsupportedExpression(capture.template)) {
+      reject(path, 'native source export does not support Selector expressions.', capture.source);
+    }
+    if (capture.template.operation === 'select') {
+      const parameter = canonicalBlueprintParameterHandle(capture.template.index);
+      if (parameter !== undefined && parameter.kind === 'number') {
+        accepted.add(parameter);
+        used.add(parameter);
+        occurrences.push({
+          kind: 'selector-index',
+          captureId: capture.captureId,
+          parameter,
+          path: `${path}.index`,
+          source: capture.source,
+        });
+      }
+    }
+    if (registration.usedParameters.some((parameter) => !accepted.has(parameter))) {
+      reject(
+        `${path}.${capture.template.operation === 'select' ? 'index' : 'output'}`,
+        'native source export supports only direct numeric Selector select indices.',
+        capture.source,
+      );
+    }
+  });
+  state.source.deciderTemplates.forEach((capture, captureIndex) => {
+    const path = `$.deciderTemplates[${captureIndex}]`;
+    const registration = inspectDeciderConfigurationTemplate(capture.template, path);
+    const accepted = new Set<BlueprintParameterHandle>();
+    for (const key of ['outputs', 'elseOutputs'] as const) {
+      capture.template[key]?.forEach((output, index) => {
+        if (
+          output.signal.kind === 'signal' &&
+          canonicalBlueprintParameterHandle(output.signal.signal) !== undefined
+        ) {
+          reject(
+            `${path}.${key}[${index}].signal`,
+            'native source export does not support symbolic Decider outputs.',
+            capture.source,
+          );
+        }
+        if (output.mode === 'constant' && typeof output.value !== 'number') {
+          reject(
+            `${path}.${key}[${index}].value`,
+            'native source export does not support symbolic Decider output constants.',
+            capture.source,
+          );
+        }
+      });
+    }
+    const condition = capture.template.condition;
+    if (condition.kind !== 'compare') {
+      if (
+        registration.usedParameters.length > 0 ||
+        containsNativeUnsupportedExpression(condition)
+      ) {
+        reject(
+          `${path}.condition`,
+          'native source export does not support parameterized compound Decider conditions.',
+          capture.source,
+        );
+      }
+      return;
+    }
+    if (condition.right.kind === 'constant') {
+      const operandPath = `${path}.condition.right.value`;
+      if (isRegisteredBlueprintNumericExpression(condition.right.value)) {
+        reject(
+          operandPath,
+          'native source export does not support expression thresholds.',
+          capture.source,
+        );
+      }
+      const parameter = canonicalBlueprintParameterHandle(condition.right.value);
+      if (parameter !== undefined && parameter.kind === 'number') {
+        accepted.add(parameter);
+        used.add(parameter);
+        occurrences.push({
+          kind: 'decider-threshold',
+          captureId: capture.captureId,
+          parameter,
+          path: operandPath,
+          source: capture.source,
+        });
+      }
+    }
+    if (registration.usedParameters.some((parameter) => !accepted.has(parameter))) {
+      reject(
+        `${path}.condition`,
+        'native source export supports only direct numeric Decider right thresholds.',
+        capture.source,
+      );
+    }
+  });
   state.source.arithmeticTemplates.forEach((capture, captureIndex) => {
     const path = `$.arithmeticTemplates[${captureIndex}]`;
     inspectArithmeticConfigurationTemplate(capture.template, path);
@@ -496,9 +577,17 @@ export function exportSourceCompilationNativeBlueprint(
   );
   for (const occurrence of occurrences) {
     const relation = relations.get(occurrence.captureId);
+    const family =
+      occurrence.kind === 'constant-count'
+        ? 'constant'
+        : occurrence.kind === 'arithmetic-operand'
+          ? 'arithmetic'
+          : occurrence.kind === 'selector-index'
+            ? 'selector'
+            : 'decider';
     if (
       relation === undefined ||
-      relation.kind !== (occurrence.kind === 'constant-count' ? 'constant' : 'arithmetic') ||
+      relation.kind !== family ||
       replacement.circuit.producers[relation.producerIndex]?.id !== relation.producerId
     ) {
       reject(
@@ -509,6 +598,42 @@ export function exportSourceCompilationNativeBlueprint(
     }
     // The canonical projector assigns producer entity numbers in NCIR producer order.
     const entity = entities.get(relation.producerIndex + 1);
+    if (occurrence.kind === 'selector-index') {
+      const behavior = entity?.native.control_behavior as
+        { readonly operation?: string; readonly index_constant?: number } | undefined;
+      if (
+        behavior?.operation !== 'select' ||
+        behavior.index_constant !== defaults.get(occurrence.parameter)
+      ) {
+        reject(
+          occurrence.path,
+          'marked Selector index did not survive native projection unchanged.',
+          occurrence.source,
+        );
+      }
+      continue;
+    }
+    if (occurrence.kind === 'decider-threshold') {
+      const behavior = entity?.native.control_behavior as
+        | {
+            readonly decider_conditions?: {
+              readonly conditions?: readonly { readonly constant?: number }[];
+            };
+          }
+        | undefined;
+      const conditions = behavior?.decider_conditions?.conditions;
+      if (
+        conditions?.length !== 1 ||
+        conditions[0]?.constant !== defaults.get(occurrence.parameter)
+      ) {
+        reject(
+          occurrence.path,
+          'marked Decider threshold did not survive single-row native projection unchanged.',
+          occurrence.source,
+        );
+      }
+      continue;
+    }
     if (occurrence.kind === 'arithmetic-operand') {
       const behavior = entity?.native.control_behavior as
         | {

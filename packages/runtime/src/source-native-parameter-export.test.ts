@@ -6,12 +6,14 @@ import {
 } from '@comblang/compiler';
 import type { EntityProfile } from '@comblang/compiler/entity';
 import type { EntityPrototype } from '@comblang/prototypes';
+import { signal } from '@comblang/factorio';
 import { emitNativeBlueprintJson } from '../../compiler/src/native-blueprint-emitter.js';
 import { buildNativeBlueprintFcir } from '../../compiler/src/native-blueprint-projector.js';
 import { BlueprintParameterError } from '../../compiler/src/blueprint-parameters.js';
 import { validateNativeBlueprintFcir } from '../../compiler/src/native-blueprint-ir.js';
 import * as sourceApi from './source-compilation.js';
 import type { EntityPrototypeResolver } from './entity-registry.js';
+import { executeResolvedDirectPlan } from './direct-plan.js';
 
 const options = { label: 'Source parameter export', maxDeciderConditionRows: 1024 };
 
@@ -80,7 +82,56 @@ const output = new Network();
 const constant = Constant({ sections: [{ filters: [{ signal: A, value: amount }] }] });
 output += constant;`;
 
+const mixedSource = `${exactSource}
+const input = new Network();
+output += Arithmetic({ left: amount, operation: 'add', right: amount, output: A });
+output += Decider({ condition: input[A] > amount, outputs: [input[A]], elseOutputs: [1 * A] });
+output += Selector({ input, operation: 'select', index: amount });`;
+
 describe('owning source native numeric parameter export', () => {
+  test.each(['selector', 'scalar decider', 'wildcard decider'])(
+    'exports a real %s numeric slot without changing concrete artifacts',
+    (family) => {
+      const device =
+        family === 'selector'
+          ? "Selector({ input, operation: 'select', index: amount, selectMax: false })"
+          : `Decider({ condition: ${family === 'scalar decider' ? 'input[A]' : 'Each(input)'} > amount, outputs: [input[A]] })`;
+      const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5);
+const input = new Network();
+const output = new Network();
+output += ${device};`);
+      const before = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+      const concrete = buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options);
+      const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      expect(native.parameters).toEqual([{ type: 'number', number: '5', name: 'Amount' }]);
+      expect(native.entities).toEqual(concrete.entities);
+      expect(native.wires).toEqual(concrete.wires);
+      const json = emitNativeBlueprintJson(native);
+      expect(json.blueprint.parameters).toEqual(native.parameters);
+      expect(json.blueprint.entities[0]).toMatchObject({
+        control_behavior:
+          family === 'selector'
+            ? { operation: 'select', index_constant: 5, select_max: false }
+            : {
+                decider_conditions: {
+                  conditions: [
+                    {
+                      constant: 5,
+                      comparator: '>',
+                      first_signal: {
+                        type: 'virtual',
+                        name: family === 'scalar decider' ? 'signal-A' : 'signal-each',
+                      },
+                    },
+                  ],
+                },
+              },
+      });
+      expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(before);
+    },
+  );
+
   test('exports a real Constant count through the normal emitter without changing concrete artifacts', () => {
     const compilation = compile(exactSource);
     const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
@@ -99,6 +150,137 @@ describe('owning source native numeric parameter export', () => {
     });
     expect(json.blueprint.parameters).toEqual(native.parameters);
     expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
+  });
+
+  test.each([-2147483648, -0, 0, 2147483647])(
+    'exports Selector original %s with either ordering and a concrete Signal index',
+    (original) => {
+      for (const selectMax of [false, true]) {
+        const compilation = compile(`const A = Signal('virtual', 'signal-A', 'legendary');
+const amount = Param.number('Amount', ${Object.is(original, -0) ? '-0' : original});
+const input = new Network();
+const secondary = new Network();
+const output = new Network();
+output += Selector({ input: pair(input, secondary), operation: 'select', index: A, selectMax: false });
+output += Selector({ input: pair(input, secondary), operation: 'select', index: amount, selectMax: ${selectMax} }).at(2, 3);
+output += Selector({ input, operation: 'count', output: A });`);
+        const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+        expect(native.parameters).toEqual([
+          { type: 'number', number: String(original), name: 'Amount' },
+        ]);
+        const baseline = buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options);
+        expect(native.entities).toEqual(baseline.entities);
+        expect(native.wires).toEqual(baseline.wires);
+        const entities = emitNativeBlueprintJson(native).blueprint.entities;
+        expect(entities[0]).toMatchObject({
+          entity_number: 1,
+          control_behavior: {
+            operation: 'select',
+            index_signal: { name: 'signal-A', quality: 'legendary' },
+          },
+        });
+        expect(entities[1]).toMatchObject({
+          entity_number: 2,
+          position: { x: 2, y: 3 },
+          control_behavior: {
+            operation: 'select',
+            select_max: selectMax,
+            index_constant: original === 0 ? 0 : original,
+          },
+        });
+        expect(entities[2]).toMatchObject({
+          entity_number: 3,
+          control_behavior: {
+            operation: 'count',
+            count_signal: { name: 'signal-A', quality: 'legendary' },
+          },
+        });
+      }
+    },
+  );
+
+  test.each([
+    ['>', 0, '>'],
+    ['<', -7, '<'],
+    ['>=', -2147483648, '≥'],
+    ['<=', 2147483647, '≤'],
+    ['==', -0, '='],
+    ['!=', -5, '≠'],
+  ] as const)(
+    'exports Decider comparison %s with original %s and unchanged ordered then/else rows',
+    (operator, original, comparator) => {
+      const compilation = compile(`const A = Signal('virtual', 'signal-A', 'legendary');
+const amount = Param.number('Amount', ${Object.is(original, -0) ? '-0' : original});
+const input = new Network();
+const secondary = new Network();
+const output = new Network();
+output += Decider({ condition: pair(input, secondary)[A] ${operator} amount, outputs: [input[A], 2 * A, 2 * A], elseOutputs: [secondary[A], 3 * A] }).at(4, 5, 2);`);
+      const before = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+      const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      expect(native.parameters).toEqual([
+        { type: 'number', number: String(original), name: 'Amount' },
+      ]);
+      const baseline = buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options);
+      expect(native.entities).toEqual(baseline.entities);
+      expect(native.wires).toEqual(baseline.wires);
+      expect(emitNativeBlueprintJson(native).blueprint.entities[0]).toMatchObject({
+        position: { x: 4, y: 5 },
+        direction: 2,
+        control_behavior: {
+          decider_conditions: {
+            conditions: [
+              {
+                constant: original === 0 ? 0 : original,
+                comparator,
+                first_signal: { name: 'signal-A', quality: 'legendary' },
+                first_signal_networks: { red: true, green: true },
+              },
+            ],
+            outputs: [{ copy_count_from_input: true }, { constant: 2 }, { constant: 2 }],
+            else_outputs: [{ copy_count_from_input: true }, { constant: 3 }],
+          },
+        },
+      });
+      expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(before);
+    },
+  );
+
+  test('shares one nominal handle across four families without allocating extra topology', () => {
+    const compilation = compile(mixedSource);
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    expect(native.parameters).toEqual([{ type: 'number', number: '5', name: 'Amount' }]);
+    expect(native.entities).toHaveLength(4);
+    expect(native.entities).toEqual(
+      buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).entities,
+    );
+    const entities = emitNativeBlueprintJson(native).blueprint.entities;
+    expect(entities[1]).toMatchObject({
+      control_behavior: { arithmetic_conditions: { first_constant: 5, second_constant: 5 } },
+    });
+    expect(entities[2]).toMatchObject({
+      control_behavior: { decider_conditions: { conditions: [{ constant: 5 }] } },
+    });
+    expect(entities[3]).toMatchObject({ control_behavior: { index_constant: 5 } });
+  });
+
+  test('orders distinct metadata by declarations rather than new-family occurrence order', () => {
+    const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const first = Param.number('First', 5);
+const second = Param.number('Second', -9);
+const input = new Network();
+const output = new Network();
+output += Selector({ input, operation: 'select', index: second });
+output += Decider({ condition: input[A] > first, outputs: [input[A]] });
+output += Arithmetic({ left: second, operation: 'add', right: first, output: A });
+output += Constant({ sections: [{ filters: [{ signal: A, value: first }] }] });`);
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '5', name: 'First' },
+      { type: 'number', number: '-9', name: 'Second' },
+    ]);
+    expect(native.entities).toEqual(
+      buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).entities,
+    );
   });
 
   test('retains nominal declaration order, repeated uses, duplicate labels and matching concrete literals', () => {
@@ -246,15 +428,21 @@ output += Arithmetic({ left: ${side === 'left' ? 'amount' : 'input[A]'}, operati
     },
   );
 
-  test('rejects equal originals across Arithmetic and Constant without changing either capture', () => {
+  test.each([
+    "Arithmetic({ left: other, operation: 'add', right: 2, output: A })",
+    'Decider({ condition: input[A] > other, outputs: [input[A]] })',
+    "Selector({ input, operation: 'select', index: other })",
+  ])('rejects equal originals across Constant and %s without changing either capture', (device) => {
     const compilation = compile(`${exactSource}
 const other = Param.number('Other', 5);
-output += Arithmetic({ left: other, operation: 'add', right: 2, output: A });`);
+const input = new Network();
+output += ${device};`);
     const before = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
     expect(exportFailure(compilation)).toMatchObject({
       code: 'CP1002',
       path: '$.parameters[1].defaultValue',
       span: sourceApi.listSourceCompilationParameters(compilation)[1]!.source,
+      message: expect.stringContaining('"Amount" at'),
     });
     expect(sourceApi.bindSourceCompilationParameters(compilation).producers).toHaveLength(2);
     expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(before);
@@ -282,22 +470,34 @@ output += Arithmetic({ left: amount, operation: 'multiply', right: 2, output: A 
       '$.parameters[0]',
     ],
     [
+      'symbolic Selector Signal index',
+      "Param.signal('Channel', A)",
+      "Selector({ input, operation: 'select', index: amount })",
+      '$.parameters[0]',
+    ],
+    [
+      'symbolic Selector count output',
+      "Param.signal('Channel', A)",
+      "Selector({ input, operation: 'count', output: amount })",
+      '$.parameters[0]',
+    ],
+    [
       'unused number',
       "Param.number('Amount', 5)",
       'Constant({ sections: [{ filters: [{ signal: A, value: 3 }] }] })',
       '$.parameters[0]',
     ],
     [
-      'Decider',
+      'compound AND Decider',
       "Param.number('Amount', 5)",
-      'Decider({ condition: input[A] > amount, outputs: [input[A]] })',
-      '$.deciderTemplates[0]',
+      'Decider({ condition: (input[A] > amount) && (input[A] < 9), outputs: [input[A]] })',
+      '$.deciderTemplates[0].condition',
     ],
     [
-      'Selector',
+      'compound OR Decider',
       "Param.number('Amount', 5)",
-      "Selector({ input, operation: 'select', index: amount })",
-      '$.selectorTemplates[0]',
+      'Decider({ condition: (input[A] > amount) || (input[A] < 9), outputs: [input[A]] })',
+      '$.deciderTemplates[0].condition',
     ],
     [
       'above int32',
@@ -347,22 +547,26 @@ output += ${device};`;
 
   test.each([
     [
-      'Decider',
-      'output += Decider({ condition: input[A] > amount, outputs: [input[A]] });',
-      '$.deciderTemplates[0]',
+      'AND condition',
+      'output += Decider({ condition: (input[A] > amount) && (input[A] < 9), outputs: [input[A]] });',
+      '$.deciderTemplates[0].condition',
     ],
     [
-      'Selector',
-      "output += Selector({ input, operation: 'select', index: amount });",
-      '$.selectorTemplates[0]',
+      'OR condition',
+      'output += Decider({ condition: (input[A] > amount) || (input[A] < 9), outputs: [input[A]] });',
+      '$.deciderTemplates[0].condition',
     ],
   ])(
     'rejects a count also used in unsupported %s instead of returning partial metadata',
     (_name, extra, path) => {
-      const compilation = compile(`${exactSource}\nconst input = new Network();\n${extra}`);
+      const compilation = compile(`${mixedSource}\n${extra}`);
       const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
-      expect(exportFailure(compilation)).toMatchObject({ code: 'CP1002', path });
-      expect(sourceApi.bindSourceCompilationParameters(compilation).producers).toHaveLength(2);
+      expect(exportFailure(compilation)).toMatchObject({
+        code: 'CP1002',
+        path: path.replace('[0]', '[1]'),
+        span: { fileId: compilation.fileId },
+      });
+      expect(sourceApi.bindSourceCompilationParameters(compilation).producers).toHaveLength(5);
       expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
     },
   );
@@ -371,7 +575,7 @@ output += ${device};`;
     const compilation = compile(`${exactSource}
 const input = new Network();
 output += Arithmetic({ left: input[A], operation: 'add', right: 2, output: A });
-output += Decider({ condition: input[A] > 3, outputs: [input[A]] });
+output += Decider({ condition: (input[A] > 3) && (input[A] < 9 || input[A] != 0), outputs: [input[A]] });
 output += Selector({ input, operation: 'select', index: 1 });`);
     const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
     expect(native.entities).toHaveLength(4);
@@ -408,8 +612,54 @@ output += Constant({ sections: [{ multiplier: amount, filters: [{ signal: A, val
     },
   );
 
+  test.each([
+    [
+      'Decider({ condition: input[A] > amount, outputs: [amount * A] })',
+      'EX1001',
+      'A typed Signal value must use numericCount * Signal.',
+    ],
+    [
+      'Decider({ condition: input[A] > amount, outputs: [input[A]], elseOutputs: [amount * A] })',
+      'EX1001',
+      'A typed Signal value must use numericCount * Signal.',
+    ],
+    [
+      'Decider({ condition: input[A] > (amount + 1), outputs: [input[A]] })',
+      'CP1001',
+      '$.parameter: Blueprint parameter handles are symbolic configuration slots and cannot be coerced to JavaScript primitives.',
+    ],
+    [
+      "Selector({ input, operation: 'select', index: amount + 1 })",
+      'CP1001',
+      '$.parameter: Blueprint parameter handles are symbolic configuration slots and cannot be coerced to JavaScript primitives.',
+    ],
+  ])(
+    'retains real source diagnostics for unreachable numeric use in %s',
+    (device, code, message) => {
+      const text = `${exactSource}\nconst input = new Network();\noutput += ${device};`;
+      const compilation = sourceApi.compileSourceProgram(
+        { path: 'unreachable-numeric-slot.factorio.ts', text },
+        parameterHost(),
+      );
+      expect(compilation.pipelineDiagnostics).toEqual([
+        expect.objectContaining({
+          code,
+          message,
+          span: expect.objectContaining({ fileId: compilation.fileId }),
+        }),
+      ]);
+      expect(compilation.pipelineDiagnostics[0]!.span!.end).toBeGreaterThan(
+        compilation.pipelineDiagnostics[0]!.span!.start,
+      );
+      expect(compilation.resolvedCircuit).toBeUndefined();
+      expect(() => sourceApi.exportSourceCompilationNativeBlueprint(compilation, options)).toThrow(
+        TypeError,
+      );
+    },
+  );
+
   test('does not grant export authority to copied compilations or transport artifacts', () => {
-    const compilation = compile(exactSource);
+    const compilation = compile(mixedSource);
     expect(() => structuredClone(compilation)).toThrow();
     const { execution, ...cloneable } = compilation;
     for (const copy of [
@@ -430,8 +680,8 @@ output += Constant({ sections: [{ multiplier: amount, filters: [{ signal: A, val
   });
 
   test('keeps two owning compilations independent of concrete overrides and foreign handles', () => {
-    const first = compile(exactSource);
-    const second = compile(exactSource.replace("'Amount', 5", "'Amount', 9"));
+    const first = compile(mixedSource);
+    const second = compile(mixedSource.replace("'Amount', 5", "'Amount', 9"));
     const firstParameter = sourceApi.listSourceCompilationParameters(first)[0]!.parameter;
     const secondParameter = sourceApi.listSourceCompilationParameters(second)[0]!.parameter;
     expect(firstParameter).not.toBe(secondParameter);
@@ -446,82 +696,162 @@ output += Constant({ sections: [{ multiplier: amount, filters: [{ signal: A, val
     expect(sourceApi.exportSourceCompilationNativeBlueprint(second, options).parameters).toEqual([
       { type: 'number', number: '9', name: 'Amount' },
     ]);
+    for (const compilation of [first, second]) {
+      const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      expect(native.entities).toEqual(
+        buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).entities,
+      );
+      expect(native.wires).toEqual(
+        buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).wires,
+      );
+    }
   });
 
-  test('exports repeated loop captures without source re-execution or changes to qualities, sections or bindings', () => {
-    const key = '__comblangSourceNativeExportExecutions';
-    const globalRecord = globalThis as Record<string, unknown>;
-    const had = Object.hasOwn(globalRecord, key);
-    const previous = globalRecord[key];
-    globalRecord[key] = 0;
-    try {
-      const compilation = compile(`globalThis.${key} += 1;
+  test.each([false, true])(
+    'exports repeated mixed loop captures without source re-execution or concrete changes (rich sections: %s)',
+    (richSections) => {
+      const key = '__comblangSourceNativeExportExecutions';
+      const globalRecord = globalThis as Record<string, unknown>;
+      const had = Object.hasOwn(globalRecord, key);
+      const previous = globalRecord[key];
+      globalRecord[key] = 0;
+      try {
+        const compilation = compile(`globalThis.${key} += 1;
 const normal = Signal('item', 'iron-plate', 'normal');
 const legendary = Signal('item', 'iron-plate', 'legendary');
 const amount = Param.number('Amount', 5);
+const input = new Network();
+const arithmeticOutput = new Network();
 const output = new Network();
 for (let i = 0; i < 3; i += 1) {
   output += Constant({ isOn: false, sections: [
-    { active: true, group: 'primary', multiplier: 0.5, filters: [{ signal: normal, value: amount }, { signal: legendary, value: amount }] },
-    { active: false, group: 'backup', multiplier: 3, filters: [{ signal: normal, value: amount }] }
+    { active: true, ${richSections ? "group: 'primary', multiplier: 0.5," : ''} filters: [{ signal: normal, value: amount }, { signal: legendary, value: amount }] },
+    { active: false, ${richSections ? "group: 'backup', multiplier: 3," : ''} filters: [{ signal: normal, value: amount }] }
   ] });
+  arithmeticOutput += Arithmetic({ left: amount, operation: 'add', right: amount, output: normal }).at(i, 4);
+  output += Decider({ condition: input[normal] > amount, outputs: [input[legendary], 2 * normal], elseOutputs: [3 * legendary] }).at(i, 5);
+  output += Selector({ input, operation: 'select', index: amount, selectMax: false }).at(i, 6);
 }`);
-      const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
-      const declarations = sourceApi.listSourceCompilationParameters(compilation);
-      const parameter = declarations[0]!.parameter;
-      const bindings = [{ parameter, value: 13 }];
-      const before = sourceApi.bindSourceCompilationCircuit(compilation, bindings);
-      const baseline = buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options);
-      const first = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
-      const second = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
-      expect(first).toEqual(second);
-      expect(first).not.toBe(second);
-      expect(first.parameters).toEqual([{ type: 'number', number: '5', name: 'Amount' }]);
-      expect(first.entities).toHaveLength(3);
-      expect(first.entities).toEqual(baseline.entities);
-      expect(first.wires).toEqual(baseline.wires);
-      for (const entity of emitNativeBlueprintJson(first).blueprint.entities) {
-        expect(entity).toMatchObject({
-          control_behavior: {
-            is_on: false,
-            sections: {
-              sections: [
-                {
-                  active: true,
-                  group: 'primary',
-                  multiplier: 0.5,
-                  filters: [
-                    { name: 'iron-plate', quality: 'normal', count: 5 },
-                    { name: 'iron-plate', quality: 'legendary', count: 5 },
-                  ],
-                },
-                { active: false, group: 'backup', multiplier: 3, filters: [{ count: 5 }] },
-              ],
+        const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+        const declarations = sourceApi.listSourceCompilationParameters(compilation);
+        const parameter = declarations[0]!.parameter;
+        const bindings = [{ parameter, value: 13 }];
+        const before = sourceApi.bindSourceCompilationCircuit(compilation, bindings);
+        const baseline = buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options);
+        const first = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+        const second = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+        expect(first).toEqual(second);
+        expect(first).not.toBe(second);
+        expect(first.parameters).toEqual([{ type: 'number', number: '5', name: 'Amount' }]);
+        expect(first.entities).toHaveLength(12);
+        expect(first.entities).toEqual(baseline.entities);
+        expect(first.wires).toEqual(baseline.wires);
+        const json = emitNativeBlueprintJson(first);
+        expect(structuredClone(json)).toEqual(json);
+        expect(JSON.parse(JSON.stringify(json))).toEqual(json);
+        for (const entity of json.blueprint.entities.filter(
+          ({ name }) => name === 'constant-combinator',
+        )) {
+          expect(entity).toMatchObject({
+            control_behavior: {
+              is_on: false,
+              sections: {
+                sections: [
+                  {
+                    active: true,
+                    ...(richSections ? { group: 'primary', multiplier: 0.5 } : { multiplier: 1 }),
+                    filters: [
+                      { name: 'iron-plate', quality: 'normal', count: 5 },
+                      { name: 'iron-plate', quality: 'legendary', count: 5 },
+                    ],
+                  },
+                  {
+                    active: false,
+                    ...(richSections ? { group: 'backup', multiplier: 3 } : { multiplier: 1 }),
+                    filters: [{ count: 5 }],
+                  },
+                ],
+              },
             },
-          },
+          });
+        }
+        for (let i = 0; i < 3; i += 1) {
+          expect(json.blueprint.entities[4 * i + 1]).toMatchObject({
+            position: { x: i, y: 4 },
+            control_behavior: { arithmetic_conditions: { first_constant: 5, second_constant: 5 } },
+          });
+          expect(json.blueprint.entities[4 * i + 2]).toMatchObject({
+            position: { x: i, y: 5 },
+            control_behavior: {
+              decider_conditions: {
+                conditions: [{ constant: 5 }],
+                outputs: [{ signal: { quality: 'legendary' } }, { constant: 2 }],
+                else_outputs: [{ signal: { quality: 'legendary' }, constant: 3 }],
+              },
+            },
+          });
+          expect(json.blueprint.entities[4 * i + 3]).toMatchObject({
+            position: { x: i, y: 6 },
+            control_behavior: { operation: 'select', index_constant: 5, select_max: false },
+          });
+        }
+        const after = sourceApi.bindSourceCompilationCircuit(compilation, bindings);
+        expect(after).toEqual(before);
+        const defaultsPair = sourceApi.bindSourceCompilationCircuit(compilation);
+        const simulateArithmetic = (
+          pair: ReturnType<typeof sourceApi.bindSourceCompilationCircuit>,
+        ) => {
+          const replay = executeResolvedDirectPlan(pair.plan, pair.resolvedCircuit);
+          return replay.circuit
+            .createSimulation()
+            .step()
+            .read(replay.network('arithmeticOutput').id)
+            .get(signal('item', 'iron-plate', 'normal'));
+        };
+        if (richSections) {
+          expect(() => simulateArithmetic(defaultsPair)).toThrow(
+            'Constant configuration is unsupported for evaluation: non-unit-multiplier, group.',
+          );
+          expect(() => simulateArithmetic(after)).toThrow(
+            'Constant configuration is unsupported for evaluation: non-unit-multiplier, group.',
+          );
+        } else {
+          expect(simulateArithmetic(defaultsPair)).toBe(30);
+          expect(simulateArithmetic(before)).toBe(78);
+          expect(simulateArithmetic(after)).toBe(78);
+        }
+        const boundNative = buildNativeBlueprintFcir(after.resolvedCircuit.ir, options);
+        expect(boundNative.wires).toEqual(first.wires);
+        const boundJson = emitNativeBlueprintJson(boundNative);
+        expect(boundJson.blueprint.entities[1]).toMatchObject({
+          control_behavior: { arithmetic_conditions: { first_constant: 13, second_constant: 13 } },
         });
+        expect(boundJson.blueprint.entities[2]).toMatchObject({
+          control_behavior: { decider_conditions: { conditions: [{ constant: 13 }] } },
+        });
+        expect(boundJson.blueprint.entities[3]).toMatchObject({
+          control_behavior: { index_constant: 13 },
+        });
+        const overridden = sourceApi.bindSourceCompilationParameters(compilation, [
+          { parameter, value: 17 },
+        ]);
+        expect(overridden.producers.map(({ id }) => id)).toEqual(
+          compilation.resolvedCircuit!.ir.producers.map(({ id }) => id),
+        );
+        expect(overridden.entities.map(({ id }) => id)).toEqual(
+          compilation.resolvedCircuit!.ir.entities.map(({ id }) => id),
+        );
+        expect(overridden.networks).toEqual(compilation.resolvedCircuit!.ir.networks);
+        expect(sourceApi.bindSourceCompilationCircuit(compilation).plan).toEqual(compilation.plan);
+        expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
+        expect(sourceApi.listSourceCompilationParameters(compilation)).toEqual(declarations);
+        expect(globalRecord[key]).toBe(1);
+      } finally {
+        if (had) globalRecord[key] = previous;
+        else delete globalRecord[key];
       }
-      const after = sourceApi.bindSourceCompilationCircuit(compilation, bindings);
-      expect(after).toEqual(before);
-      const overridden = sourceApi.bindSourceCompilationParameters(compilation, [
-        { parameter, value: 17 },
-      ]);
-      expect(overridden.producers.map(({ id }) => id)).toEqual(
-        compilation.resolvedCircuit!.ir.producers.map(({ id }) => id),
-      );
-      expect(overridden.entities.map(({ id }) => id)).toEqual(
-        compilation.resolvedCircuit!.ir.entities.map(({ id }) => id),
-      );
-      expect(overridden.networks).toEqual(compilation.resolvedCircuit!.ir.networks);
-      expect(sourceApi.bindSourceCompilationCircuit(compilation).plan).toEqual(compilation.plan);
-      expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
-      expect(sourceApi.listSourceCompilationParameters(compilation)).toEqual(declarations);
-      expect(globalRecord[key]).toBe(1);
-    } finally {
-      if (had) globalRecord[key] = previous;
-      else delete globalRecord[key];
-    }
-  });
+    },
+  );
 
   test('emits ordinary cloneable JSON without handles, symbols or provenance', () => {
     const json = emitNativeBlueprintJson(

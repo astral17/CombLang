@@ -1,154 +1,118 @@
 # Getting started
 
-CombLang is a browser-first TypeScript-shaped DSL for Factorio 2.1 circuit networks. Its current pipeline executes source, validates ownership/topology and wire colors, lowers supported circuits to canonical physical IR, and can simulate them and generate readable Blueprint JSON. The repository also provides explicit prototype environments, profile-backed Entity construction, a simulator testbench, and a bounded lossless blueprint exchange codec. Checked schema shape, generated JSON, and simulator results do not by themselves establish native Factorio acceptance or behavior.
+[Documentation](README.md) · [Circuit basics](circuit-basics.md) · [Language reference](language-reference.md)
 
-The executable examples include [`examples/scale/main.factorio.ts`](../examples/scale/main.factorio.ts) for ordinary composition, [`examples/take/main.factorio.ts`](../examples/take/main.factorio.ts) for zero-tick network union, [`examples/borrow/main.factorio.ts`](../examples/borrow/main.factorio.ts) for non-owning function capabilities, [`examples/move/main.factorio.ts`](../examples/move/main.factorio.ts) for explicit ownership transfer across a call, [`examples/move-slots/main.factorio.ts`](../examples/move-slots/main.factorio.ts) for replacing moved variable/array/object owners, and [`examples/pair/main.factorio.ts`](../examples/pair/main.factorio.ts) for reading both circuit-wire colors through one immutable input view.
+CombLang builds Factorio circuit hardware from TypeScript-shaped source. The
+workbench compiles locally in your browser, lets you test signal values over
+ticks, and produces blueprint JSON. No backend or project-owned Factorio mod
+is required.
 
-## Requirements
+## Run the workbench
 
-- Node.js 22 or newer
-- npm 11 or newer
+For a local checkout, install Node.js 22+ and npm 11+, then run from the
+repository root:
 
-The repository is an npm workspace. No backend or database is required.
-
-## Install and verify
-
-```text
+```sh
 npm install
-npm run check
-npm run build
-```
-
-`npm run check` runs formatting validation, TypeScript type checking, and the complete test suite. `npm run build` produces the CLI and static web application.
-
-## Browser workbench
-
-```text
 npm run dev:web
 ```
 
-Vite prints the local URL. On desktop, CodeMirror provides TypeScript highlighting, folding, search, DSL snippets, and inline parser/compiler diagnostics. Narrow coarse-pointer devices automatically use a native textarea because browser contenteditable editors remain unreliable with some mobile keyboards and IMEs. The Source header can switch modes manually.
+Installation needs network access unless dependencies are already available;
+you do not need to reinstall them on every run. Open the URL printed by Vite
+(normally `http://localhost:5173/`). The development server listens on `0.0.0.0`
+and uses a fixed port, so another device on your local network can use your
+computer's LAN address with port 5173. Do not start another server when that
+port is already in use.
 
-Source stays in the browser. Every accepted source revision follows the same path: conservative semantic validation, DSL-sensitive transformation, execution in the persistent time-bounded compiler Worker, elaboration, color checking, simulation, and blueprint generation. The bootstrap static lowerer is only a test oracle and is not a browser fallback.
+## Compile your first circuit
 
-The current editor value is saved as a versioned tab-local draft on every change and restored after Vite HMR or a full reload. Each browser tab owns an independent draft, so editing one workbench cannot replace the source open in another. Closing a tab ends that tab's draft session. Compilation requests reuse one Worker; the Worker announces readiness before accepting source work, and edits made while it is booting or busy replace the queued revision rather than downloading and starting another compiler. After readiness, the first compilation in each Worker generation has a 15000 ms execution budget, later warm ordinary or identity-only requests have a 1000 ms budget, and source-profile imports always have 15000 ms; a separate 30000 ms readiness watchdog detects a Worker that never starts.
-
-To test from another device on the same local network:
-
-```text
-npm run dev:web
-```
-
-The production web build uses relative assets so it can later be published under a GitHub Pages project subpath. Each build emits a deterministic shell manifest from the actual Vite output; its Service Worker publishes a build-addressed cache only after fetching `index.html`, CSS, the main JavaScript, and reachable compiler/test Workers successfully. Updates keep the previous build available when the new shell fetch fails, and a successful new Worker waits under the standard Service Worker lifecycle while existing pages may still need their old hashed assets. Only a later activation cleans obsolete caches, and cleanup never crosses an application or sibling Pages path. Unit/build checks cover the deterministic lifecycle, and the production build has also passed a real-browser install, waiting-worker update after closing the old client, controlled reload, and offline reload with compilation and browser-local tests intact. Vite development mode deliberately does not register this production cache; an already open development page can still recompile offline because its compiler Worker is persistent.
-
-## Minimal circuit
+Replace the Source editor contents with this complete program:
 
 ```ts
 const A = Signal('virtual', 'signal-A');
-
-const input = new Network<R>();
-const scaled: Network = Each(input) * 2;
-const output: Network = IF(scaled[A] > 0, scaled[A]);
+const input = CC(5 * A);
+const output = new Network();
+output[A] += input[A] * 2 + 1;
 ```
 
-Every circuit arithmetic operation becomes one physical combinator with an eager primary output Network and one synchronous tick. A `Network` annotation narrows that same value to its primary facet; it creates no extra topology.
+You should get three combinators: one Constant and two arithmetic stages. Source
+changes trigger compilation automatically. Diagnostics link back to the source;
+the generated-JavaScript panel shows how the source is executed, and the
+blueprint panel shows the exported document. **Copy blueprint** copies the
+current readable JSON, not a compressed Factorio exchange string.
 
-## Constant combinator
+In the simulation controls, advance three ticks: A on `output` should be 11.
+All Networks start empty at T0. The Constant emits 5 at T1, multiplication
+emits 10 at T2 and addition emits 11 at T3. Source execution builds the circuit;
+it does not run a simulation tick for each source statement.
 
-```ts
-const IRON = Signal('iron-plate');
-const A = Signal('virtual', 'signal-A');
-const B = Signal('virtual', 'signal-B');
+## Run a first test
 
-const constants: Network = CC(50 * IRON, 5 * A, -2 * B);
+Keep that circuit in Source and put the following in the test editor:
+
+```js
+test('scales A after three ticks', ({ network, tick, expectSignal }) => {
+  const A = Signal('virtual', 'signal-A');
+  const output = network('output');
+  expectSignal(output, A).toBe(0);
+  tick(3);
+  expectSignal(output, A).toBe(11);
+});
 ```
 
-`Signal(name)` uses Factorio's default item type, matching `network[name]`; explicit namespaces still use `Signal(type, name)`. `CC` is a source device with no input connector and repeats its configured values every tick.
+Run the test with the workbench's test controls. Each test gets a fresh
+circuit/session. The test file is ordinary synchronous JavaScript, not the
+operator-transformed circuit DSL. Use the test API to read/write signals;
+do not paste circuit expressions such as `5 * A` into test drives.
+Continue with the [testbench reference](testbench.md#executable-files) for
+external inputs, assertions, traces and failures.
 
-## CLI status
+## Save, reload and use a phone
 
-```text
-npm run cli -- check fixtures/language/scale.ts
-```
+Source and test drafts are independent per browser tab and survive reloads.
+Closing the tab ends its draft session; keep important code in files as well.
+On desktop the workbench uses CodeMirror. Narrow coarse-pointer devices use a
+native textarea to avoid mobile keyboard/IME issues; the Source header can
+switch editor mode manually.
 
-The CLI `check` command validates TypeScript syntax, runs the non-executing DSL semantic pass, executes compile-time elaboration, and validates the resulting circuit topology and color constraints. Use `--json` for structured diagnostics, the generated producer count, and `capabilityUses`: the executed `Readonly`/`Ref`/`Move` function-boundary audit descriptors with their Network, parameter, optional color requirement, source span, and dynamic instance path. The browser result exposes the same descriptors on `result.plan.capabilityUses`; it also retains `networkPairs` and `networkTransfers`.
+A production web build caches the application for offline use after a
+successful initial load. Development mode does not install that production
+cache; an already open development page can recompile offline while its
+compiler Worker remains alive. A page not loaded/cached before going offline
+cannot fetch missing assets. A later deployment can use static hosting such
+as GitHub Pages; no server-side compiler is needed.
 
-The CLI testbench is also available without starting the web workbench:
+## Check a circuit without the browser
+
+Save the circuit as `main.factorio.ts` and the test as `circuit.test.js`:
 
 ```sh
-npm run cli -- test --json main.factorio.ts circuit.test.js
+npm run cli -- check main.factorio.ts
+npm run cli -- test main.factorio.ts circuit.test.js
 ```
 
-`test` first performs the same compiler/runtime validation, then runs every
-`test(name, callback)` against a fresh elaboration and session. JSON contains
-structured assertion, debug-query, and structural failure data plus each test's
-renderer-independent `comblang-trace` document. A compilation error prevents
-the test file from executing. Exit status is `1` when compilation or any test
-fails, and `2` for usage or file-loading errors.
+Add `--json` for machine-readable results. The browser is not required for
+compiler or simulator validation. The current circuit source is one synchronous
+file; imports and multi-file libraries are not supported yet.
 
-The browser workbench adds the live simulation proof and blueprint preview, but
-is not required for compiler/runtime validation or test execution.
+## Prototypes and entities
 
-Runnable three-test examples are provided for a
-[feedback MemoCell and a synthetic external object](testbench-acceptance.md).
-They need no external game data or backend service.
+The browser offers bundled Base + Space Age prototype data. Ordinary circuit
+examples above do not require a custom database. For other modpacks you may
+provide the output of Factorio's `--dump-data` together with matching environment
+metadata. Read [Prototype environment](prototype-environment.md) for exact
+import/normalization steps, CLI selection and metadata requirements.
 
-The browser has a bundled Base + Space Age profile. It loads that profile lazily on
-first run, verifies its database and manifest, and keeps ordinary circuits available
-if the profile is unavailable or disabled.
+Configuring an Entity does not automatically make it callable or simulated.
+Read the [Entity API](language-reference.md#provider--and-host-bound-entities)
+for capability limits. Passing simulator tests or producing JSON is not proof
+that every native Factorio behavior has been verified.
 
-For a custom modpack, run the official Factorio data-stage command with the desired
-mods and startup settings:
+## Next steps
 
-```text
-factorio.exe --dump-data
-```
-
-Take the resulting raw dump from Factorio's `script-output` directory and prepare an
-honest `metadata.json` for that same environment. In the browser, choose **Load
-prototype JSON** and select the raw dump together with its metadata file; parsing and
-normalization happen in the Worker. Authors cannot prebuild every modpack profile.
-
-Alternatively, normalize the dump before browser use:
-
-```sh
-npm run cli -- prototypes normalize data-raw-dump.json metadata.json prototypes.json
-```
-
-The dump omits environment identity data, so the separate metadata file is
-mandatory. Its exact format and the currently reported lossy 2.x fields are
-documented in [Prototype environment](prototype-environment.md).
-
-Use the resulting normalized database during CLI compilation or testing:
-
-```sh
-npm run cli -- check --prototypes prototypes.json --json main.factorio.ts
-npm run cli -- test --prototypes prototypes.json --json main.factorio.ts circuit.test.js
-```
-
-JSON includes the selected `prototypeEnvironment.identity` and capability coverage.
-Add `--prototype-identity "<reported identity>"` to reject a different database.
-Missing, invalid or mismatched profiles stop with exit code `2` before source
-execution; they never fall back to another profile. Browser file selection is
-available in the **Prototype environment** bar above Source. Select one normalized
-JSON file, or a raw dump together with its `metadata.json` companion; raw parsing and
-normalization happen in the Worker. Valid custom data is cached in IndexedDB and
-restored on tab reload with its identity pin. **Disable**
-clears only this tab's selection, without changing code or tests.
-
-For an offline synthetic smoke test, use
-[`examples/prototype-stack`](../examples/prototype-stack/README.md). Its tiny profile
-is test data, not a vanilla/Space Age database or Factorio conformance evidence.
-
-The example also contains a pinned `comblang.json` project, so the same check can
-be run without repeating source, test and database paths:
-
-```sh
-npm run cli -- test --project examples/prototype-stack/comblang.json
-```
-
-`--project` is explicit; no configuration is discovered automatically. Configured
-paths are relative to that JSON file. See [CLI project files](prototype-environment.md#cli-project-files)
-for the schema and pin/override rules.
-
-Continue with the [current language reference](language-reference.md) for the exact supported subset.
+- Learn the circuit-building model in [Circuit basics](circuit-basics.md).
+- Look up exact syntax in [Language reference](language-reference.md).
+- Browse [complete examples](../examples) or the [documentation index](README.md).
+- For repository development, `npm run check` validates formatting, types,
+  catalogs, prototype integrity and tests; `npm run build` builds CLI and static
+  web assets. Neither command is required after every editor change.

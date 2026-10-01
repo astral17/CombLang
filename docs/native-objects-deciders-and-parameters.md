@@ -244,8 +244,9 @@ Export performs one default binding and normal native projection, without
 executing source again or changing the original concrete artifacts.
 
 Every declaration in this export subset must be a number parameter used only
-as a direct exact Constant filter count or Arithmetic constant operand
-(`left` or `right`). Its explicit default is also its
+as a direct exact Constant filter count, Arithmetic constant operand
+(`left` or `right`), Selector `select` numeric index, or simple Decider
+constant-right comparison threshold. Its explicit default is also its
 native original and must be an integer in [-2147483648, 2147483647]; it is not
 wrapped, rounded or allocated automatically. A zero count remains an explicit
 filter, and the native original string is `"0"`, including for a default of
@@ -256,14 +257,19 @@ are rejected at the second declaration, with a reference to the first.
 
 For valid captured compilations, unsupported declarations or uses fail
 atomically with `CP1002`, a declaration or Constant/device-call source span,
-and a semantic path. Signal and unused parameters, parameterized
-Decider/Selector configurations, symbolic multipliers, expression counts and
-expression operands are outside this subset. Existing concrete source binding remains
+and a semantic path. Signal and unused parameters, parameterized compound
+Decider AND/OR conditions, symbolic Decider outputs (including else outputs),
+Selector Signal indices/count outputs, symbolic multipliers and numeric
+expressions are outside this subset. A marked Decider threshold must project
+to exactly one native comparison row; compound threshold mapping is deferred
+because native DNF expansion can duplicate conditions. Existing concrete source binding remains
 separate and unchanged. Direct source parameter multipliers already fail
 source normalization before a completed capture is available; registered
 numeric-expression DAGs are internal host APIs, not new source syntax.
-Plain unparameterized devices and concrete section multipliers remain allowed.
-The exporter verifies each marked count or operand survives normal projection unchanged;
+Plain unparameterized devices, including compound Deciders and Signal-index
+Selectors, and concrete section multipliers remain allowed. Concrete Decider
+then/else outputs, comparators, input lanes and wildcard conditions are preserved.
+The exporter verifies each marked count, operand, index or threshold survives normal projection unchanged;
 it does not add filters, devices or topology to make an original present.
 
 Local binding is nominal: independently declared handles can be overridden
