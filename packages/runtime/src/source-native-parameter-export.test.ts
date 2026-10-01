@@ -187,6 +187,93 @@ output += Constant({ sections: [{ filters: [{ signal: A, value: second }] }] });
     expect(native.parameters![0]).toMatchObject({ number: '5' });
   });
 
+  test('exports both Arithmetic constant operands and shares declarations with Constant counts', () => {
+    const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const first = Param.number('First', 5);
+const second = Param.number('Second', -9);
+const output = new Network();
+output += Arithmetic({ left: second, operation: 'add', right: first, output: A });
+output += Constant({ sections: [{ filters: [{ signal: A, value: first }] }] });
+output += Arithmetic({ left: first, operation: 'multiply', right: first, output: A });`);
+    const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    const concrete = buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options);
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '5', name: 'First' },
+      { type: 'number', number: '-9', name: 'Second' },
+    ]);
+    expect(native.entities).toEqual(concrete.entities);
+    expect(native.wires).toEqual(concrete.wires);
+    const entities = emitNativeBlueprintJson(native).blueprint.entities;
+    expect(entities[0]).toMatchObject({
+      control_behavior: { arithmetic_conditions: { first_constant: -9, second_constant: 5 } },
+    });
+    expect(entities[2]).toMatchObject({
+      control_behavior: { arithmetic_conditions: { first_constant: 5, second_constant: 5 } },
+    });
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
+  });
+
+  test.each([-2147483648, -0, 0, 2147483647])(
+    'exports Arithmetic original %s on either operand without capturing the signal input',
+    (original) => {
+      for (const side of ['left', 'right'] as const) {
+        const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', ${Object.is(original, -0) ? '-0' : original});
+const input = new Network();
+const output = new Network();
+output += Arithmetic({ left: ${side === 'left' ? 'amount' : 'input[A]'}, operation: 'add', right: ${side === 'right' ? 'amount' : 'input[A]'}, output: A });`);
+        const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+        expect(native.parameters).toEqual([
+          { type: 'number', number: String(original), name: 'Amount' },
+        ]);
+        expect(native.entities).toEqual(
+          buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).entities,
+        );
+        expect(emitNativeBlueprintJson(native).blueprint.entities[0]).toMatchObject({
+          control_behavior: {
+            arithmetic_conditions: {
+              [side === 'left' ? 'first_constant' : 'second_constant']:
+                original === 0 ? 0 : original,
+              [side === 'left' ? 'second_signal' : 'first_signal']: {
+                type: 'virtual',
+                name: 'signal-A',
+              },
+            },
+          },
+        });
+      }
+    },
+  );
+
+  test('rejects equal originals across Arithmetic and Constant without changing either capture', () => {
+    const compilation = compile(`${exactSource}
+const other = Param.number('Other', 5);
+output += Arithmetic({ left: other, operation: 'add', right: 2, output: A });`);
+    const before = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+    expect(exportFailure(compilation)).toMatchObject({
+      code: 'CP1002',
+      path: '$.parameters[1].defaultValue',
+      span: sourceApi.listSourceCompilationParameters(compilation)[1]!.source,
+    });
+    expect(sourceApi.bindSourceCompilationParameters(compilation).producers).toHaveLength(2);
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(before);
+  });
+
+  test('exports Arithmetic defaults independently of previous concrete overrides', () => {
+    const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Arithmetic({ left: amount, operation: 'multiply', right: 2, output: A });`);
+    const parameter = sourceApi.listSourceCompilationParameters(compilation)[0]!.parameter;
+    sourceApi.bindSourceCompilationParameters(compilation, [{ parameter, value: 17 }]);
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    expect(native.parameters).toEqual([{ type: 'number', number: '5', name: 'Amount' }]);
+    expect(emitNativeBlueprintJson(native).blueprint.entities[0]).toMatchObject({
+      control_behavior: { arithmetic_conditions: { first_constant: 5, second_constant: 2 } },
+    });
+  });
+
   test.each([
     [
       'signal declaration',
@@ -199,12 +286,6 @@ output += Constant({ sections: [{ filters: [{ signal: A, value: second }] }] });
       "Param.number('Amount', 5)",
       'Constant({ sections: [{ filters: [{ signal: A, value: 3 }] }] })',
       '$.parameters[0]',
-    ],
-    [
-      'Arithmetic',
-      "Param.number('Amount', 5)",
-      "Arithmetic({ left: input[A], operation: 'add', right: amount, output: A })",
-      '$.arithmeticTemplates[0]',
     ],
     [
       'Decider',
@@ -265,11 +346,6 @@ output += ${device};`;
   );
 
   test.each([
-    [
-      'Arithmetic',
-      "output += Arithmetic({ left: input[A], operation: 'add', right: amount, output: A });",
-      '$.arithmeticTemplates[0]',
-    ],
     [
       'Decider',
       'output += Decider({ condition: input[A] > amount, outputs: [input[A]] });',

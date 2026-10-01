@@ -25,7 +25,6 @@ import type {
   EntityPlanDebugValue,
   EntityProfile,
   EntityProfileRef,
-  EntityId,
   EntitySelectorConfiguration,
 } from '@comblang/compiler';
 import { entityFamilyDslNames, type DslParameterContract } from '@comblang/language';
@@ -1007,7 +1006,7 @@ class ElaborationRecorder {
           argument.source,
           rawSpan,
         );
-        if (this.#resolveCanonicalArithmeticProfile(rawSpan) === undefined) {
+        if (this.#resolveCanonicalProfile('Arithmetic', rawSpan) === undefined) {
           throw new ElaborationExecutionError(
             'Exact Arithmetic configuration requires a trusted base entity:arithmetic-combinator Entity profile.',
             this.#span(rawSpan),
@@ -1039,7 +1038,7 @@ class ElaborationRecorder {
             'RT2027',
           );
         }
-        const profile = this.#resolveCanonicalDeciderProfile(rawSpan);
+        const profile = this.#resolveCanonicalProfile('Decider', rawSpan);
         if (profile === undefined) {
           throw new ElaborationExecutionError(
             'Exact Decider configuration requires a trusted base entity:decider-combinator Entity profile.',
@@ -3025,15 +3024,17 @@ class ElaborationRecorder {
     // a modded profile.
     const arithmeticProfile =
       descriptor.kind === 'arithmetic'
-        ? this.#resolveCanonicalArithmeticProfile(rawSpan)
+        ? this.#resolveCanonicalProfile('Arithmetic', rawSpan)
         : undefined;
     const deciderProfile =
       descriptor.kind === 'decider' &&
       ((descriptor.outputs?.length ?? 0) > 0 || (descriptor.elseOutputs?.length ?? 0) > 0)
-        ? this.#resolveCanonicalDeciderProfile(rawSpan)
+        ? this.#resolveCanonicalProfile('Decider', rawSpan)
         : undefined;
     const selectorProfile =
-      descriptor.kind === 'selector' ? this.#resolveCanonicalSelectorProfile(rawSpan) : undefined;
+      descriptor.kind === 'selector'
+        ? this.#resolveCanonicalProfile('Selector', rawSpan)
+        : undefined;
     if (
       descriptor.kind === 'selector' &&
       (this.#entityContext !== undefined || this.#entityPrototypeResolver !== undefined) &&
@@ -3123,7 +3124,7 @@ class ElaborationRecorder {
     rawSpan: RawSpan,
     resolvedProfile?: EntityProfile,
   ): void {
-    const profile = resolvedProfile ?? this.#resolveCanonicalDeciderProfile(rawSpan);
+    const profile = resolvedProfile ?? this.#resolveCanonicalProfile('Decider', rawSpan);
     if (profile === undefined) return;
     const outputs =
       descriptor.outputs ?? (descriptor.output === undefined ? [] : [descriptor.output]);
@@ -3346,10 +3347,6 @@ class ElaborationRecorder {
             : 'Network transfer collapses Networks required to use opposite wire colors.',
       );
     }
-  }
-
-  #attach(network: NetworkValue, value: CombinatorValue, rawSpan: RawSpan): void {
-    this.#attachMany([network], value, rawSpan);
   }
 
   #attachToCombinator(
@@ -4981,25 +4978,28 @@ class ElaborationRecorder {
     }
   }
 
-  #resolveCanonicalArithmeticProfile(rawSpan: RawSpan): EntityProfile | undefined {
+  #resolveCanonicalProfile(
+    family: 'Arithmetic' | 'Decider' | 'Selector' | 'Constant',
+    rawSpan: RawSpan,
+  ): EntityProfile | undefined {
+    const prototypeName = `${family.toLowerCase()}-combinator`;
+    const prototypeKey = `entity:${prototypeName}`;
     const context = this.#entityContext;
     const resolver = this.#entityPrototypeResolver;
     if (context === undefined || resolver === undefined) return undefined;
-    const candidates = context.profiles.filter(
-      ({ ref }) => ref.prototypeKey === 'entity:arithmetic-combinator',
-    );
+    const candidates = context.profiles.filter(({ ref }) => ref.prototypeKey === prototypeKey);
     if (candidates.length === 0) return undefined;
     if (candidates.length > 1) {
       throw new ElaborationExecutionError(
-        'The trusted provider exposes ambiguous base arithmetic-combinator profiles.',
+        `The trusted provider exposes ambiguous base ${prototypeName} profiles.`,
         this.#span(rawSpan),
         'RT2027',
       );
     }
     const profile = candidates[0]!;
-    if (profile.prototypeType !== 'arithmetic-combinator') {
+    if (profile.prototypeType !== prototypeName) {
       throw new ElaborationExecutionError(
-        'The trusted base arithmetic-combinator profile does not assert prototypeType "arithmetic-combinator".',
+        `The trusted base ${prototypeName} profile does not assert prototypeType "${prototypeName}".`,
         this.#span(rawSpan),
         'RT2027',
       );
@@ -5009,7 +5009,7 @@ class ElaborationRecorder {
       prototype = resolver.getEntity(profile.ref.prototypeKey);
     } catch (error) {
       throw new ElaborationExecutionError(
-        error instanceof Error ? error.message : 'Arithmetic prototype lookup failed.',
+        error instanceof Error ? error.message : `${family} prototype lookup failed.`,
         this.#span(rawSpan),
         'RT2027',
         undefined,
@@ -5018,186 +5018,18 @@ class ElaborationRecorder {
     }
     if (prototype === undefined) {
       throw new ElaborationExecutionError(
-        `Trusted Arithmetic profile ${JSON.stringify(profile.ref.prototypeKey)} is not available in the selected provider.`,
+        `Trusted ${family} profile ${JSON.stringify(profile.ref.prototypeKey)} is not available in the selected provider.`,
         this.#span(rawSpan),
         'RT2027',
       );
     }
     if (
       prototype.key !== profile.ref.prototypeKey ||
-      prototype.name !== 'arithmetic-combinator' ||
-      prototype.type !== 'arithmetic-combinator'
+      prototype.name !== prototypeName ||
+      prototype.type !== prototypeName
     ) {
       throw new ElaborationExecutionError(
-        `Trusted Arithmetic profile ${JSON.stringify(profile.ref.prototypeKey)} does not match base provider prototype data.`,
-        this.#span(rawSpan),
-        'RT2027',
-      );
-    }
-    return profile;
-  }
-
-  #resolveCanonicalDeciderProfile(rawSpan: RawSpan): EntityProfile | undefined {
-    const context = this.#entityContext;
-    const resolver = this.#entityPrototypeResolver;
-    if (context === undefined || resolver === undefined) return undefined;
-    const candidates = context.profiles.filter(
-      ({ ref }) => ref.prototypeKey === 'entity:decider-combinator',
-    );
-    if (candidates.length === 0) return undefined;
-    if (candidates.length > 1) {
-      throw new ElaborationExecutionError(
-        'The trusted provider exposes ambiguous base decider-combinator profiles.',
-        this.#span(rawSpan),
-        'RT2027',
-      );
-    }
-    const profile = candidates[0]!;
-    if (profile.prototypeType !== 'decider-combinator') {
-      throw new ElaborationExecutionError(
-        'The trusted base decider-combinator profile does not assert prototypeType "decider-combinator".',
-        this.#span(rawSpan),
-        'RT2027',
-      );
-    }
-    let prototype: EntityPrototype | undefined;
-    try {
-      prototype = resolver.getEntity(profile.ref.prototypeKey);
-    } catch (error) {
-      throw new ElaborationExecutionError(
-        error instanceof Error ? error.message : 'Decider prototype lookup failed.',
-        this.#span(rawSpan),
-        'RT2027',
-        undefined,
-        { cause: error },
-      );
-    }
-    if (prototype === undefined) {
-      throw new ElaborationExecutionError(
-        `Trusted Decider profile ${JSON.stringify(profile.ref.prototypeKey)} is not available in the selected provider.`,
-        this.#span(rawSpan),
-        'RT2027',
-      );
-    }
-    if (
-      prototype.key !== profile.ref.prototypeKey ||
-      prototype.name !== 'decider-combinator' ||
-      prototype.type !== 'decider-combinator'
-    ) {
-      throw new ElaborationExecutionError(
-        `Trusted Decider profile ${JSON.stringify(profile.ref.prototypeKey)} does not match base provider prototype data.`,
-        this.#span(rawSpan),
-        'RT2027',
-      );
-    }
-    return profile;
-  }
-
-  #resolveCanonicalSelectorProfile(rawSpan: RawSpan): EntityProfile | undefined {
-    const context = this.#entityContext;
-    const resolver = this.#entityPrototypeResolver;
-    if (context === undefined || resolver === undefined) return undefined;
-    const candidates = context.profiles.filter(
-      ({ ref }) => ref.prototypeKey === 'entity:selector-combinator',
-    );
-    if (candidates.length === 0) return undefined;
-    if (candidates.length > 1) {
-      throw new ElaborationExecutionError(
-        'The trusted provider exposes ambiguous base selector-combinator profiles.',
-        this.#span(rawSpan),
-        'RT2027',
-      );
-    }
-    const profile = candidates[0]!;
-    if (profile.prototypeType !== 'selector-combinator') {
-      throw new ElaborationExecutionError(
-        'The trusted base selector-combinator profile does not assert prototypeType "selector-combinator".',
-        this.#span(rawSpan),
-        'RT2027',
-      );
-    }
-    let prototype: EntityPrototype | undefined;
-    try {
-      prototype = resolver.getEntity(profile.ref.prototypeKey);
-    } catch (error) {
-      throw new ElaborationExecutionError(
-        error instanceof Error ? error.message : 'Selector prototype lookup failed.',
-        this.#span(rawSpan),
-        'RT2027',
-        undefined,
-        { cause: error },
-      );
-    }
-    if (prototype === undefined) {
-      throw new ElaborationExecutionError(
-        `Trusted Selector profile ${JSON.stringify(profile.ref.prototypeKey)} is not available in the selected provider.`,
-        this.#span(rawSpan),
-        'RT2027',
-      );
-    }
-    if (
-      prototype.key !== profile.ref.prototypeKey ||
-      prototype.name !== 'selector-combinator' ||
-      prototype.type !== 'selector-combinator'
-    ) {
-      throw new ElaborationExecutionError(
-        `Trusted Selector profile ${JSON.stringify(profile.ref.prototypeKey)} does not match base provider prototype data.`,
-        this.#span(rawSpan),
-        'RT2027',
-      );
-    }
-    return profile;
-  }
-
-  #resolveCanonicalConstantProfile(rawSpan: RawSpan): EntityProfile | undefined {
-    const context = this.#entityContext;
-    const resolver = this.#entityPrototypeResolver;
-    if (context === undefined || resolver === undefined) return undefined;
-    const candidates = context.profiles.filter(
-      ({ ref }) => ref.prototypeKey === 'entity:constant-combinator',
-    );
-    if (candidates.length === 0) return undefined;
-    if (candidates.length > 1) {
-      throw new ElaborationExecutionError(
-        'The trusted provider exposes ambiguous base constant-combinator profiles.',
-        this.#span(rawSpan),
-        'RT2027',
-      );
-    }
-    const profile = candidates[0]!;
-    if (profile.prototypeType !== 'constant-combinator') {
-      throw new ElaborationExecutionError(
-        'The trusted base constant-combinator profile does not assert prototypeType "constant-combinator".',
-        this.#span(rawSpan),
-        'RT2027',
-      );
-    }
-    let prototype: EntityPrototype | undefined;
-    try {
-      prototype = resolver.getEntity(profile.ref.prototypeKey);
-    } catch (error) {
-      throw new ElaborationExecutionError(
-        error instanceof Error ? error.message : 'Constant prototype lookup failed.',
-        this.#span(rawSpan),
-        'RT2027',
-        undefined,
-        { cause: error },
-      );
-    }
-    if (prototype === undefined) {
-      throw new ElaborationExecutionError(
-        `Trusted Constant profile ${JSON.stringify(profile.ref.prototypeKey)} is not available in the selected provider.`,
-        this.#span(rawSpan),
-        'RT2027',
-      );
-    }
-    if (
-      prototype.key !== profile.ref.prototypeKey ||
-      prototype.name !== 'constant-combinator' ||
-      prototype.type !== 'constant-combinator'
-    ) {
-      throw new ElaborationExecutionError(
-        `Trusted Constant profile ${JSON.stringify(profile.ref.prototypeKey)} does not match base provider prototype data.`,
+        `Trusted ${family} profile ${JSON.stringify(profile.ref.prototypeKey)} does not match base provider prototype data.`,
         this.#span(rawSpan),
         'RT2027',
       );
@@ -5211,7 +5043,7 @@ class ElaborationRecorder {
     outputs: readonly { readonly signal: SignalId; readonly value: number }[] | undefined,
     exact: boolean,
   ): CombinatorValue {
-    const profile = this.#resolveCanonicalConstantProfile(rawSpan);
+    const profile = this.#resolveCanonicalProfile('Constant', rawSpan);
     if (profile === undefined && exact) {
       throw new ElaborationExecutionError(
         'Exact Constant configuration requires a trusted base entity:constant-combinator Entity profile.',

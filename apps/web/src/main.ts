@@ -31,21 +31,17 @@ import { loadSourceDraft, saveSourceDraft, type SourceDraftStorage } from './sou
 import { formatSourceDiagnostic, sourcePreviewDiagnostic } from './source-diagnostics.js';
 import { sourceNavigationRange, testFailureRange } from './source-navigation.js';
 import {
-  runSourceCircuitDemo,
+  sourceCircuitSummary,
   SourceSimulationController,
   type CircuitTimelineSample,
-  type SourcePlanDemo,
+  type SourceCircuitSummary,
 } from './source-demo.js';
 import { createSourceCircuitArtifact } from './source-circuit-artifact.js';
 import { loadTestDraft, saveTestDraft } from './test-draft.js';
 import { TestTracePanel } from './test-trace-panel.js';
 import type { TestWorkerRequest, TestWorkerResponse } from './test-worker-protocol.js';
 import { buildDetailTimeline, buildOverviewTimeline, signalLabel } from './timeline-view.js';
-import type {
-  CompilerWorkerParsedResponse,
-  CompilerWorkerRequest,
-  CompilerWorkerResponse,
-} from './worker-protocol.js';
+import type { CompilerWorkerRequest, CompilerWorkerResponse } from './worker-protocol.js';
 import './styles.css';
 
 const sampleSource = `const SIGNAL_A = Signal("virtual", "signal-A");
@@ -181,7 +177,11 @@ let copyResetTimer: ReturnType<typeof setTimeout> | undefined;
 let currentBlueprintJson: string | undefined;
 let currentPlan: DirectElaborationPlan | undefined;
 let currentResolvedCircuit: ResolvedCircuit | undefined;
-let currentDemo: SourcePlanDemo | undefined;
+interface SourcePreview extends SourceCircuitSummary {
+  readonly timeline: readonly CircuitTimelineSample[];
+}
+
+let currentDemo: SourcePreview | undefined;
 let sourceSimulation: SourceSimulationController | undefined;
 let selectedSimulationTick = 0;
 let simulationTimer: ReturnType<typeof setInterval> | undefined;
@@ -376,18 +376,7 @@ function refreshSimulationSummary(): void {
   simulationTick.max = String(latest);
   simulationTick.value = String(selectedSimulationTick);
   simulationStatus.textContent = `T${selectedSimulationTick} selected · latest T${latest} · ${simulationTimer === undefined ? 'paused' : 'playing'}`;
-  const output =
-    currentDemo.outputNetwork === undefined
-      ? undefined
-      : controller.signalValueAt(
-          selectedSimulationTick,
-          currentDemo.outputNetwork,
-          signal('virtual', 'signal-A'),
-        );
-  proofTitle.textContent =
-    output === undefined
-      ? `T${selectedSimulationTick} selected`
-      : `T${selectedSimulationTick} · output signal-A = ${output}`;
+  proofTitle.textContent = `T${selectedSimulationTick} selected`;
   proofDescription.textContent =
     selectedSimulationTick === 0
       ? 'Simulation starts paused at T0 with every Network empty; every absent signal reads as zero. Edit this snapshot or advance time.'
@@ -591,7 +580,7 @@ function renderTimeline(): void {
   waveform.replaceChildren(table);
 }
 
-function updateTimelineTargets(demo: SourcePlanDemo): void {
+function updateTimelineTargets(demo: SourcePreview): void {
   const previous = waveformNetwork.value;
   const previousStateNetwork = stateNetwork.value;
   const networks = demo.timeline[0]?.networks ?? [];
@@ -613,7 +602,7 @@ function updateTimelineTargets(demo: SourcePlanDemo): void {
       }),
     ),
   );
-  const stateDefault = networks.find(({ name }) => name === demo.inputNetwork) ?? networks[0];
+  const stateDefault = networks[0];
   stateNetwork.value = networks.some(({ id }) => id === previousStateNetwork)
     ? previousStateNetwork
     : (stateDefault?.id ?? '');
@@ -768,7 +757,7 @@ function renderSourceProof(
   const controller = new SourceSimulationController(artifact);
   sourceSimulation = controller;
   selectedSimulationTick = 0;
-  const demo = { ...runSourceCircuitDemo(artifact, 0, 0), timeline: controller.timeline };
+  const demo = { ...sourceCircuitSummary(artifact), timeline: controller.timeline };
   currentDemo = demo;
   proof.dataset.state = 'valid';
   proof.setAttribute('aria-busy', 'false');

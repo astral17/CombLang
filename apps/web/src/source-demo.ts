@@ -28,16 +28,19 @@ export interface CircuitTimelineSample {
   readonly networks: readonly NetworkTimelineSample[];
 }
 
-export interface SourcePlanDemo {
+export interface SourceCircuitSummary {
   readonly combinators: number;
   readonly attachments: number;
   readonly stages: number;
   readonly graphMetrics: CircuitGraphMetrics;
+  readonly colors: readonly { readonly name: string; readonly color: 'red' | 'green' }[];
+}
+
+export interface SourcePlanDemo extends SourceCircuitSummary {
   readonly inputNetwork?: string;
   readonly outputNetwork?: string;
   readonly inputValue?: number;
   readonly outputValue?: number;
-  readonly colors: readonly { readonly name: string; readonly color: 'red' | 'green' }[];
   readonly waveform: readonly {
     readonly tick: number;
     readonly input: number;
@@ -81,7 +84,7 @@ type ConcreteSimulation = ReturnType<DirectExecution['circuit']['createSimulatio
 function sourceFacingColors(
   plan: DirectElaborationPlan,
   executed: DirectExecution,
-): SourcePlanDemo['colors'] {
+): SourceCircuitSummary['colors'] {
   const aliasesById = new Map<NetworkId, string>();
   for (const alias of plan.networkAliases ?? []) {
     if (alias.instancePath.length !== 0 || alias.moved) continue;
@@ -98,6 +101,19 @@ function sourceFacingColors(
       name: aliasesById.get(network.id) ?? network.name ?? network.id,
       color: network.color,
     }));
+}
+
+/** Pure structural summary, independent of any chosen simulation scenario. */
+export function sourceCircuitSummary(artifact: SourceCircuitArtifact): SourceCircuitSummary {
+  const { plan, execution } = artifact;
+  const graphMetrics = analyzeCircuitGraph(execution.circuit.ir);
+  return {
+    combinators: execution.circuit.graph.producers.length,
+    attachments: execution.circuit.graph.attachments.length,
+    stages: graphMetrics.depth ?? 0,
+    graphMetrics,
+    colors: sourceFacingColors(plan, execution),
+  };
 }
 
 /** Mutable browser-only controller over immutable captured circuit snapshots. */
@@ -255,17 +271,13 @@ export function runSourceCircuitDemo(
   tickCount?: number,
 ): SourcePlanDemo {
   const { plan, execution: executed } = artifact;
-  const graphMetrics = analyzeCircuitGraph(executed.circuit.ir);
+  const summary = sourceCircuitSummary(artifact);
   const firstProducer = plan.producers[0];
   const lastProducer = plan.producers.at(-1);
   if (firstProducer === undefined || lastProducer === undefined) {
     const simulation = executed.circuit.createSimulation();
     return {
-      combinators: 0,
-      attachments: 0,
-      stages: 0,
-      graphMetrics,
-      colors: sourceFacingColors(plan, executed),
+      ...summary,
       waveform: [],
       timeline: [captureTimeline(simulation.snapshot, executed.circuit.ir.networks)],
     };
@@ -327,7 +339,7 @@ export function runSourceCircuitDemo(
     },
   ];
   const timeline = [captureTimeline(simulation.snapshot, executed.circuit.ir.networks)];
-  const stages = graphMetrics.depth ?? 0;
+  const stages = summary.stages;
   const ticks = tickCount ?? stages;
   let snapshot = simulation.snapshot;
   for (let tick = 1; tick <= ticks; tick += 1) {
@@ -341,14 +353,10 @@ export function runSourceCircuitDemo(
   }
 
   return {
-    combinators: executed.circuit.graph.producers.length,
-    attachments: executed.circuit.graph.attachments.length,
-    stages,
-    graphMetrics,
+    ...summary,
     ...(inputName === undefined ? {} : { inputNetwork: inputName, inputValue }),
     outputNetwork: survivingOutputName,
     outputValue: snapshot.read(output.id).get(A),
-    colors: sourceFacingColors(plan, executed),
     waveform,
     timeline,
   };

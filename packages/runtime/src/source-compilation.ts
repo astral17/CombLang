@@ -316,7 +316,7 @@ function containsNativeUnsupportedExpression(value: unknown): boolean {
   );
 }
 
-/** Projects this exact compilation's direct numeric Constant counts into native metadata. */
+/** Projects this exact compilation's direct numeric configuration slots into native metadata. */
 export function exportSourceCompilationNativeBlueprint(
   compilation: LocalSourceCompilation,
   options: NativeBlueprintProjectionOptions,
@@ -358,7 +358,6 @@ export function exportSourceCompilationNativeBlueprint(
     }
   }
   for (const [family, captures, inspect] of [
-    ['arithmetic', state.source.arithmeticTemplates, inspectArithmeticConfigurationTemplate],
     ['decider', state.source.deciderTemplates, inspectDeciderConfigurationTemplate],
     ['selector', state.source.selectorTemplates, inspectSelectorConfigurationTemplate],
   ] as const) {
@@ -371,21 +370,52 @@ export function exportSourceCompilationNativeBlueprint(
       ) {
         reject(
           path,
-          'native source parameters support only direct Constant filter counts.',
+          'native source parameters support only direct Constant counts and Arithmetic operands.',
           capture.source,
         );
       }
     });
   }
   const used = new Set<BlueprintParameterHandle>();
-  const occurrences: {
+  const occurrences: ({
     captureId: string;
-    sectionIndex: number;
-    filterIndex: number;
     parameter: BlueprintParameterHandle;
     path: string;
     source: SourceSpan;
-  }[] = [];
+  } & (
+    | { kind: 'constant-count'; sectionIndex: number; filterIndex: number }
+    | { kind: 'arithmetic-operand'; side: 'first' | 'second' }
+  ))[] = [];
+  state.source.arithmeticTemplates.forEach((capture, captureIndex) => {
+    const path = `$.arithmeticTemplates[${captureIndex}]`;
+    inspectArithmeticConfigurationTemplate(capture.template, path);
+    for (const [key, side] of [
+      ['left', 'first'],
+      ['right', 'second'],
+    ] as const) {
+      const operand = capture.template[key];
+      if (operand.kind !== 'constant') continue;
+      const operandPath = `${path}.${key}.value`;
+      if (isRegisteredBlueprintNumericExpression(operand.value)) {
+        reject(
+          operandPath,
+          'native source export does not support expression operands.',
+          capture.source,
+        );
+      }
+      const parameter = canonicalBlueprintParameterHandle(operand.value);
+      if (parameter === undefined) continue;
+      used.add(parameter);
+      occurrences.push({
+        kind: 'arithmetic-operand',
+        captureId: capture.captureId,
+        side,
+        parameter,
+        path: operandPath,
+        source: capture.source,
+      });
+    }
+  });
   state.source.constantTemplates.forEach((capture, captureIndex) => {
     const path = `$.constantTemplates[${captureIndex}]`;
     inspectConstantConfigurationTemplate(capture.template, path);
@@ -418,6 +448,7 @@ export function exportSourceCompilationNativeBlueprint(
         if (parameter === undefined) return;
         used.add(parameter);
         occurrences.push({
+          kind: 'constant-count',
           captureId: capture.captureId,
           sectionIndex,
           filterIndex,
@@ -467,17 +498,36 @@ export function exportSourceCompilationNativeBlueprint(
     const relation = relations.get(occurrence.captureId);
     if (
       relation === undefined ||
-      relation.kind !== 'constant' ||
+      relation.kind !== (occurrence.kind === 'constant-count' ? 'constant' : 'arithmetic') ||
       replacement.circuit.producers[relation.producerIndex]?.id !== relation.producerId
     ) {
       reject(
         occurrence.path,
-        'missing authenticated Constant producer relation.',
+        'missing authenticated numeric configuration producer relation.',
         occurrence.source,
       );
     }
     // The canonical projector assigns producer entity numbers in NCIR producer order.
     const entity = entities.get(relation.producerIndex + 1);
+    if (occurrence.kind === 'arithmetic-operand') {
+      const behavior = entity?.native.control_behavior as
+        | {
+            readonly arithmetic_conditions?: {
+              readonly first_constant?: number;
+              readonly second_constant?: number;
+            };
+          }
+        | undefined;
+      const field = occurrence.side === 'first' ? 'first_constant' : 'second_constant';
+      if (behavior?.arithmetic_conditions?.[field] !== defaults.get(occurrence.parameter)) {
+        reject(
+          occurrence.path,
+          'marked Arithmetic operand did not survive native projection unchanged.',
+          occurrence.source,
+        );
+      }
+      continue;
+    }
     const behavior = entity?.native.control_behavior as
       | {
           readonly sections?: {
