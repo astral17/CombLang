@@ -245,8 +245,9 @@ executing source again or changing the original concrete artifacts.
 
 Every declaration in this export subset must be a number parameter used only
 as a direct exact Constant filter count, Arithmetic constant operand
-(`left` or `right`), Selector `select` numeric index, or simple Decider
-constant-right comparison threshold. Its explicit default is also its
+(`left` or `right`), Selector `select` numeric index, or Decider
+constant-right comparison threshold, including leaves of nested AND/OR conditions.
+Its explicit default is also its
 native original and must be an integer in [-2147483648, 2147483647]; it is not
 wrapped, rounded or allocated automatically. A zero count remains an explicit
 filter, and the native original string is `"0"`, including for a default of
@@ -257,12 +258,14 @@ are rejected at the second declaration, with a reference to the first.
 
 For valid captured compilations, unsupported declarations or uses fail
 atomically with `CP1002`, a declaration or Constant/device-call source span,
-and a semantic path. Signal and unused parameters, parameterized compound
-Decider AND/OR conditions, symbolic Decider outputs (including else outputs),
+and a semantic path. Signal and unused parameters, symbolic Decider outputs (including else outputs),
 Selector Signal indices/count outputs, symbolic multipliers and numeric
-expressions are outside this subset. A marked Decider threshold must project
-to exactly one native comparison row; compound threshold mapping is deferred
-because native DNF expansion can duplicate conditions. Existing concrete source binding remains
+expressions are outside this subset. A marked Decider threshold is tracked by its
+exact comparison-leaf path in the authenticated capture and concrete producer.
+The existing bounded native condition expansion identifies every emitted row of
+that leaf, including duplicated rows; each must retain the declared original.
+This is not matching parameter occurrences by equal numeric values.
+Existing concrete source binding remains
 separate and unchanged. Direct source parameter multipliers already fail
 source normalization before a completed capture is available; registered
 numeric-expression DAGs are internal host APIs, not new source syntax.

@@ -1,6 +1,6 @@
 import { transformElaborationModule } from '@comblang/compiler/elaboration-transform';
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
-import type { NativeCircuitIr } from '@comblang/compiler/ir';
+import type { LogicalDeciderCondition, NativeCircuitIr } from '@comblang/compiler/ir';
 import type { SignalId } from '@comblang/factorio';
 import {
   cloneEntityReplayContextTransport,
@@ -57,7 +57,11 @@ import {
 } from '../../compiler/src/blueprint-parameters.js';
 import { inspectConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-template.js';
 import { inspectArithmeticConfigurationTemplate } from '../../compiler/src/arithmetic-configuration-template.js';
-import { inspectDeciderConfigurationTemplate } from '../../compiler/src/decider-configuration-template.js';
+import {
+  inspectDeciderConfigurationTemplate,
+  type DeciderTemplateCondition,
+} from '../../compiler/src/decider-configuration-template.js';
+import { nativeDeciderConditionGroups } from '../../compiler/src/native-decider-conditions.js';
 import { inspectSelectorConfigurationTemplate } from '../../compiler/src/selector-configuration-template.js';
 import { isRegisteredBlueprintNumericExpression } from '../../compiler/src/blueprint-numeric-expression-bridge.js';
 import {
@@ -367,7 +371,7 @@ export function exportSourceCompilationNativeBlueprint(
     | { kind: 'constant-count'; sectionIndex: number; filterIndex: number }
     | { kind: 'arithmetic-operand'; side: 'first' | 'second' }
     | { kind: 'selector-index' }
-    | { kind: 'decider-threshold' }
+    | { kind: 'decider-threshold'; conditionPath: readonly number[] }
   ))[] = [];
   state.source.selectorTemplates.forEach((capture, captureIndex) => {
     const path = `$.selectorTemplates[${captureIndex}]`;
@@ -423,22 +427,23 @@ export function exportSourceCompilationNativeBlueprint(
         }
       });
     }
-    const condition = capture.template.condition;
-    if (condition.kind !== 'compare') {
-      if (
-        registration.usedParameters.length > 0 ||
-        containsNativeUnsupportedExpression(condition)
-      ) {
-        reject(
-          `${path}.condition`,
-          'native source export does not support parameterized compound Decider conditions.',
-          capture.source,
+    const collectThresholds = (
+      condition: DeciderTemplateCondition,
+      conditionPath: readonly number[],
+      conditionSourcePath: string,
+    ): void => {
+      if (condition.kind !== 'compare') {
+        condition.conditions.forEach((child, index) =>
+          collectThresholds(
+            child,
+            [...conditionPath, index],
+            `${conditionSourcePath}.conditions[${index}]`,
+          ),
         );
+        return;
       }
-      return;
-    }
-    if (condition.right.kind === 'constant') {
-      const operandPath = `${path}.condition.right.value`;
+      if (condition.right.kind !== 'constant') return;
+      const operandPath = `${conditionSourcePath}.right.value`;
       if (isRegisteredBlueprintNumericExpression(condition.right.value)) {
         reject(
           operandPath,
@@ -452,13 +457,15 @@ export function exportSourceCompilationNativeBlueprint(
         used.add(parameter);
         occurrences.push({
           kind: 'decider-threshold',
+          conditionPath,
           captureId: capture.captureId,
           parameter,
           path: operandPath,
           source: capture.source,
         });
       }
-    }
+    };
+    collectThresholds(capture.template.condition, [], `${path}.condition`);
     if (registration.usedParameters.some((parameter) => !accepted.has(parameter))) {
       reject(
         `${path}.condition`,
@@ -575,6 +582,8 @@ export function exportSourceCompilationNativeBlueprint(
   const defaults = new Map(
     declarations.map((declaration) => [declaration.parameter, declaration.defaultValue]),
   );
+  type Comparison = Extract<LogicalDeciderCondition, { kind: 'compare' }>;
+  const deciderRowIndices = new Map<number, Map<Comparison, number[]>>();
   for (const occurrence of occurrences) {
     const relation = relations.get(occurrence.captureId);
     const family =
@@ -622,13 +631,45 @@ export function exportSourceCompilationNativeBlueprint(
           }
         | undefined;
       const conditions = behavior?.decider_conditions?.conditions;
+      const producer = replacement.circuit.producers[relation.producerIndex];
+      if (producer?.kind !== 'decider') {
+        reject(occurrence.path, 'marked Decider producer is unavailable.', occurrence.source);
+      }
+      let indices = deciderRowIndices.get(relation.producerIndex);
+      if (indices === undefined) {
+        const rowsByLeaf = new Map<Comparison, number[]>();
+        const leaves = nativeDeciderConditionGroups(
+          producer.config.condition,
+          options.maxDeciderConditionRows,
+        ).flat();
+        if (conditions?.length !== leaves.length) {
+          reject(
+            occurrence.path,
+            'marked Decider condition rows changed during native projection.',
+            occurrence.source,
+          );
+        }
+        leaves.forEach((leaf, index) => {
+          const rows = rowsByLeaf.get(leaf) ?? [];
+          rows.push(index);
+          rowsByLeaf.set(leaf, rows);
+        });
+        indices = rowsByLeaf;
+        deciderRowIndices.set(relation.producerIndex, indices);
+      }
+      let leaf: LogicalDeciderCondition | undefined = producer.config.condition;
+      for (const index of occurrence.conditionPath) {
+        leaf = leaf?.kind === 'compare' ? undefined : leaf?.conditions[index];
+      }
+      const rows = leaf?.kind === 'compare' ? indices.get(leaf) : undefined;
       if (
-        conditions?.length !== 1 ||
-        conditions[0]?.constant !== defaults.get(occurrence.parameter)
+        rows === undefined ||
+        rows.length === 0 ||
+        rows.some((index) => conditions?.[index]?.constant !== defaults.get(occurrence.parameter))
       ) {
         reject(
           occurrence.path,
-          'marked Decider threshold did not survive single-row native projection unchanged.',
+          'marked Decider threshold did not survive native row projection unchanged.',
           occurrence.source,
         );
       }

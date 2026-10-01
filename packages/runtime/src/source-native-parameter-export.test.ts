@@ -89,6 +89,100 @@ output += Decider({ condition: input[A] > amount, outputs: [input[A]], elseOutpu
 output += Selector({ input, operation: 'select', index: amount });`;
 
 describe('owning source native numeric parameter export', () => {
+  test.each([
+    ['AND', 'input[A] > amount && input[A] < upper', [5, 19], ['and', 'and']],
+    ['OR', 'input[A] > amount || input[A] < upper', [5, 19], ['and', 'or']],
+    [
+      'distributed AND',
+      '(input[A] > amount || input[A] == 0) && (input[A] < upper || input[A] == 5)',
+      [5, 19, 5, 5, 0, 19, 0, 5],
+      ['and', 'and', 'or', 'and', 'or', 'and', 'or', 'and'],
+    ],
+    [
+      'repeated handle',
+      'input[A] > amount && (input[A] < upper || input[A] != amount)',
+      [5, 19, 5, 5],
+      ['and', 'and', 'or', 'and'],
+    ],
+    [
+      'two repeated handles',
+      '(input[A] > upper || input[A] > amount) && (input[A] <= upper || input[A] != amount)',
+      [19, 19, 19, 5, 5, 19, 5, 5],
+      ['and', 'and', 'or', 'and', 'or', 'and', 'or', 'and'],
+    ],
+  ])(
+    'exports %s leaf occurrences in the existing native row order',
+    (_name, condition, constants, types) => {
+      const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const upper = Param.number('Upper', 19);
+const amount = Param.number('Amount', 5);
+const input = new Network();
+const output = new Network();
+output += Decider({ condition: ${condition}, outputs: [input[A], 2 * A], elseOutputs: [3 * A] });`);
+      const before = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+      const declarations = sourceApi.listSourceCompilationParameters(compilation);
+      sourceApi.bindSourceCompilationParameters(
+        compilation,
+        declarations.map(({ parameter }, index) => ({ parameter, value: 70 + index })),
+      );
+      const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      expect(native.parameters).toEqual([
+        { type: 'number', number: '19', name: 'Upper' },
+        { type: 'number', number: '5', name: 'Amount' },
+      ]);
+      expect(native.entities).toEqual(
+        buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).entities,
+      );
+      expect(native.wires).toEqual(
+        buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).wires,
+      );
+      expect(native.entities).toHaveLength(1);
+      const behavior = emitNativeBlueprintJson(native).blueprint.entities[0]!.control_behavior as {
+        decider_conditions: { conditions: { constant: number; compare_type: string }[] };
+      };
+      expect(behavior.decider_conditions.conditions.map(({ constant }) => constant)).toEqual(
+        constants,
+      );
+      expect(
+        behavior.decider_conditions.conditions.map(({ compare_type }) => compare_type),
+      ).toEqual(types);
+      expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(before);
+    },
+  );
+
+  test('retains row expansion limits and retryability for parameterized compound conditions', () => {
+    const compilation = compile(`${exactSource}
+const input = new Network();
+output += Decider({ condition: (input[A] > amount || input[A] == 0) && (input[A] < 19 || input[A] == 5), outputs: [input[A]] });`);
+    const before = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+    expect(() =>
+      sourceApi.exportSourceCompilationNativeBlueprint(compilation, {
+        ...options,
+        maxDeciderConditionRows: 7,
+      }),
+    ).toThrow(/limit of 7 rows/);
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(before);
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, {
+      ...options,
+      maxDeciderConditionRows: 8,
+    });
+    expect(native.parameters).toEqual([{ type: 'number', number: '5', name: 'Amount' }]);
+    expect(native.entities).toHaveLength(2);
+  });
+
+  test('rejects equal originals across two compound leaves without returning partial metadata', () => {
+    const compilation = compile(`${exactSource}
+const other = Param.number('Other', 5);
+const input = new Network();
+output += Decider({ condition: input[A] > amount || input[A] < other, outputs: [input[A]] });`);
+    const before = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+    expect(exportFailure(compilation)).toMatchObject({
+      code: 'CP1002',
+      path: '$.parameters[1].defaultValue',
+    });
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(before);
+  });
+
   test.each(['selector', 'scalar decider', 'wildcard decider'])(
     'exports a real %s numeric slot without changing concrete artifacts',
     (family) => {
@@ -488,18 +582,6 @@ output += Arithmetic({ left: amount, operation: 'multiply', right: 2, output: A 
       '$.parameters[0]',
     ],
     [
-      'compound AND Decider',
-      "Param.number('Amount', 5)",
-      'Decider({ condition: (input[A] > amount) && (input[A] < 9), outputs: [input[A]] })',
-      '$.deciderTemplates[0].condition',
-    ],
-    [
-      'compound OR Decider',
-      "Param.number('Amount', 5)",
-      'Decider({ condition: (input[A] > amount) || (input[A] < 9), outputs: [input[A]] })',
-      '$.deciderTemplates[0].condition',
-    ],
-    [
       'above int32',
       "Param.number('Amount', 2147483648)",
       'Constant({ sections: [{ filters: [{ signal: A, value: amount }] }] })',
@@ -549,23 +631,21 @@ output += ${device};`;
     [
       'AND condition',
       'output += Decider({ condition: (input[A] > amount) && (input[A] < 9), outputs: [input[A]] });',
-      '$.deciderTemplates[0].condition',
     ],
     [
       'OR condition',
       'output += Decider({ condition: (input[A] > amount) || (input[A] < 9), outputs: [input[A]] });',
-      '$.deciderTemplates[0].condition',
     ],
   ])(
-    'rejects a count also used in unsupported %s instead of returning partial metadata',
-    (_name, extra, path) => {
+    'exports a count also used in compound %s without changing the owning artifact',
+    (_name, extra) => {
       const compilation = compile(`${mixedSource}\n${extra}`);
       const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
-      expect(exportFailure(compilation)).toMatchObject({
-        code: 'CP1002',
-        path: path.replace('[0]', '[1]'),
-        span: { fileId: compilation.fileId },
-      });
+      const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      expect(native.parameters).toEqual([{ type: 'number', number: '5', name: 'Amount' }]);
+      expect(native.entities).toEqual(
+        buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).entities,
+      );
       expect(sourceApi.bindSourceCompilationParameters(compilation).producers).toHaveLength(5);
       expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
     },
@@ -729,7 +809,7 @@ for (let i = 0; i < 3; i += 1) {
     { active: false, ${richSections ? "group: 'backup', multiplier: 3," : ''} filters: [{ signal: normal, value: amount }] }
   ] });
   arithmeticOutput += Arithmetic({ left: amount, operation: 'add', right: amount, output: normal }).at(i, 4);
-  output += Decider({ condition: input[normal] > amount, outputs: [input[legendary], 2 * normal], elseOutputs: [3 * legendary] }).at(i, 5);
+  output += Decider({ condition: input[normal] > amount && (input[normal] < i + 9 || input[normal] != amount), outputs: [input[legendary], 2 * normal], elseOutputs: [3 * legendary] }).at(i, 5);
   output += Selector({ input, operation: 'select', index: amount, selectMax: false }).at(i, 6);
 }`);
         const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
@@ -784,7 +864,12 @@ for (let i = 0; i < 3; i += 1) {
             position: { x: i, y: 5 },
             control_behavior: {
               decider_conditions: {
-                conditions: [{ constant: 5 }],
+                conditions: [
+                  { constant: 5, compare_type: 'and' },
+                  { constant: i + 9, compare_type: 'and' },
+                  { constant: 5, compare_type: 'or' },
+                  { constant: 5, compare_type: 'and' },
+                ],
                 outputs: [{ signal: { quality: 'legendary' } }, { constant: 2 }],
                 else_outputs: [{ signal: { quality: 'legendary' }, constant: 3 }],
               },
@@ -827,7 +912,11 @@ for (let i = 0; i < 3; i += 1) {
           control_behavior: { arithmetic_conditions: { first_constant: 13, second_constant: 13 } },
         });
         expect(boundJson.blueprint.entities[2]).toMatchObject({
-          control_behavior: { decider_conditions: { conditions: [{ constant: 13 }] } },
+          control_behavior: {
+            decider_conditions: {
+              conditions: [{ constant: 13 }, { constant: 9 }, { constant: 13 }, { constant: 13 }],
+            },
+          },
         });
         expect(boundJson.blueprint.entities[3]).toMatchObject({
           control_behavior: { index_constant: 13 },

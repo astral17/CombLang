@@ -27,9 +27,9 @@ current implementation restrictions.
 | Configure Constant sections               | [Constant and Section](api/constant.md)                                                                                                                                    |
 | Select or count input Signals             | [Selector](api/selector.md)                                                                                                                                                |
 | Connect both output wire colors           | [Output connections](language-reference.md#combinators-and-output-connections)                                                                                             |
-| Reuse a circuit-building function         | [Functions](language-reference.md#functions), [ownership and multi-network](ownership-and-multi-network.md)                                                                |
-| Create or configure a game entity         | [Entity source API](language-reference.md#provider--and-host-bound-entities), [Blueprint schema catalog](blueprint-schema-catalog.md)                                      |
-| Use a custom modpack's prototypes         | [Prototype environment](prototype-environment.md)                                                                                                                          |
+| Reuse a circuit-building function         | [Functions](api/functions.md), [ownership and multi-network](ownership-and-multi-network.md)                                                                               |
+| Create or configure a game entity         | [Entity](api/entity.md), [Blueprint schema catalog](blueprint-schema-catalog.md)                                                                                           |
+| Use a custom modpack's prototypes         | [prototypes](api/prototypes.md), [Prototype environment](prototype-environment.md)                                                                                         |
 | Test signal values and delays             | [Testbench](testbench.md#executable-files), [complete test examples](testbench-acceptance.md)                                                                              |
 | Understand an error or warning            | [Diagnostics](diagnostics.md)                                                                                                                                              |
 | Export JSON or process an exchange string | [Blueprint JSON](blueprint-json.md), [exchange codec](blueprint-exchange-codec.md)                                                                                         |
@@ -40,7 +40,8 @@ current implementation restrictions.
 The entity-oriented reference starts with [Signal](api/signal.md),
 [Network](api/network.md), [Combinator](api/combinator.md),
 [Arithmetic](api/arithmetic.md), [Decider](api/decider.md),
-[Constant and Section](api/constant.md), and [Selector](api/selector.md): construction,
+[Constant and Section](api/constant.md), [Selector](api/selector.md),
+[Entity](api/entity.md), [prototypes](api/prototypes.md), and [Functions](api/functions.md): construction,
 operators, methods, return values, capabilities and complete examples.
 Other API entries currently remain in the [language reference](language-reference.md);
 they have not all been converted to this format yet. Guides teach circuit
