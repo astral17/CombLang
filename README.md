@@ -85,6 +85,7 @@ and the distinction between user guides, language reference, and embedding APIs.
 - [Combinator and Entity value policy](docs/producer-materialization-policy.md) — eager combinator output lanes, Network narrowing, and profile-backed Entity identity.
 - [Entity pipeline](docs/entity-pipeline.md) — canonical profiles, replay authority, configuration, linked computation, resolved transport, hydration, and native-evidence limits.
 - [Diagnostics](docs/diagnostics.md) — compiler/runtime code families and the most common actionable errors.
+- [Troubleshooting](docs/troubleshooting.md) — source diagnostics, intent-specific solutions, hardware effects, and current restrictions.
 - [Blueprint JSON preview](docs/blueprint-json.md) — generated structure, wiring model, and current limitations.
 - [Architecture notes](docs/architecture.md) — package boundaries, lowering decisions, runtime invariants, and implementation status.
 - [Direct plan schema](docs/direct-plan-schema.md) — stable elaboration transport, versioning, validation ownership, and dependency direction.

@@ -215,8 +215,10 @@ operations accept common fields only. This is a structural checked-configuration
 surface: it creates one inert Entity and does not create a Producer, Network,
 connector, call projection, simulator device, or native-conformance claim. A
 computation-bearing `Selector({ ... })` constructor is a separate exact
-overload. It requires trusted canonical `entity:selector-combinator` authority
-and returns a `SelectorCombinator` Producer:
+overload and returns a `SelectorCombinator`. When an Entity context or prototype
+resolver is supplied, it requires trusted canonical `entity:selector-combinator`
+authority. Without either provider context, exact select/count also work as
+profile-free computation, without a linked Entity:
 
 ```ts
 const selected: SelectorCombinator = Selector({

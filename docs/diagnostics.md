@@ -1,5 +1,9 @@
 # Diagnostics
 
+For common source problems, start with [Troubleshooting](troubleshooting.md):
+symptoms, runnable examples, intent-specific alternatives and current restrictions.
+This page is the detailed code, policy and diagnostic-data reference.
+
 CombLang diagnostics are structured values with a stable code, semantic severity,
 message, and optional half-open source span. Configurable advisories additionally
 carry a stable `ruleId` and category; executed diagnostics may carry a dynamic

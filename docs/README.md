@@ -16,11 +16,16 @@ replay protocol to write a circuit.
 
 ## Find a task
 
+For a failing example, start with [Troubleshooting](troubleshooting.md).
+It distinguishes intent-preserving corrections, hardware alternatives and
+current implementation restrictions.
+
 | I want to…                                | Read                                                                                                                                                                       |
 | ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Select a signal, quality or wire color    | [Signals](language-reference.md#signals), [Networks and colors](language-reference.md#networks-and-colors), [Network selections](language-reference.md#network-selections) |
-| Add arithmetic or conditions              | [Arithmetic](language-reference.md#arithmetic-combinators), [Deciders](language-reference.md#decider-combinators)                                                          |
-| Configure Constant sections               | [Constant combinator](language-reference.md#constant-combinator)                                                                                                           |
+| Add arithmetic or conditions              | [Arithmetic](api/arithmetic.md), [Decider](api/decider.md)                                                                                                                 |
+| Configure Constant sections               | [Constant and Section](api/constant.md)                                                                                                                                    |
+| Select or count input Signals             | [Selector](api/selector.md)                                                                                                                                                |
 | Connect both output wire colors           | [Output connections](language-reference.md#combinators-and-output-connections)                                                                                             |
 | Reuse a circuit-building function         | [Functions](language-reference.md#functions), [ownership and multi-network](ownership-and-multi-network.md)                                                                |
 | Create or configure a game entity         | [Entity source API](language-reference.md#provider--and-host-bound-entities), [Blueprint schema catalog](blueprint-schema-catalog.md)                                      |
@@ -33,7 +38,9 @@ replay protocol to write a circuit.
 ## API reference
 
 The entity-oriented reference starts with [Signal](api/signal.md),
-[Network](api/network.md) and [Combinator](api/combinator.md): construction,
+[Network](api/network.md), [Combinator](api/combinator.md),
+[Arithmetic](api/arithmetic.md), [Decider](api/decider.md),
+[Constant and Section](api/constant.md), and [Selector](api/selector.md): construction,
 operators, methods, return values, capabilities and complete examples.
 Other API entries currently remain in the [language reference](language-reference.md);
 they have not all been converted to this format yet. Guides teach circuit
