@@ -167,6 +167,23 @@ let [output, mirror]: [Network, Network] = ${call};`,
     expect(parsed.text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe(call);
   });
 
+  test.each(['input', 'alias', 'Alias(input)'])(
+    'allows an explicit readonly alias return of %s without promoting access',
+    (expression) => {
+      const parsed = parseFile({
+        path: 'readonly-alias-return.ts',
+        text: `function Alias(input: Readonly<Network>): Readonly<Network> { return input; }
+function Outer(input: Readonly<Network>): Readonly<Network> {
+  const alias = input;
+  return ${expression};
+}
+const input = new Network();
+const output = Outer(input);`,
+      });
+      expect(validateDslSemantics(parsed)).toEqual([]);
+    },
+  );
+
   test('preserves a Readonly Network function return in an inferred binding', () => {
     const write = 'time += CC(1 * CLOCK)';
     const parsed = parseFile({
@@ -183,6 +200,57 @@ ${write};`,
 
     expect(diagnostic).toMatchObject({ severity: 'error', span: expect.any(Object) });
     expect(parsed.text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe('time');
+  });
+
+  test.each([
+    ['Readonly<Network>', ': Network', 'input'],
+    ['Readonly<Network>', '', 'input'],
+    ['Ref<Network>', ': Readonly<Network>', 'input'],
+    ['Readonly<Network>', ': Readonly<Network>', "input[Signal('virtual', 'signal-A')]"],
+  ])(
+    'keeps static escape rejection for %s -> %s returning %s',
+    (parameter, annotation, expression) => {
+      const statement = `return ${expression};`;
+      const parsed = parseFile({
+        path: 'readonly-return-rejection.ts',
+        text: `function Wrong(input: ${parameter})${annotation} { ${statement} }`,
+      });
+      const diagnostics = validateDslSemantics(parsed);
+      expect(diagnostics).toEqual([expect.objectContaining({ code: 'CL1040' })]);
+      expect(parsed.text.slice(diagnostics[0]!.span!.start, diagnostics[0]!.span!.end)).toBe(
+        statement,
+      );
+    },
+  );
+
+  test('keeps inferred readonly result writes and consumption statically forbidden', () => {
+    const parsed = parseFile({
+      path: 'readonly-alias-access.ts',
+      text: `function Alias(input: Readonly<Network>): Readonly<Network> { return input; }
+const input = new Network();
+const output = Alias(input);
+output += CC();
+input.take(output);`,
+    });
+    expect(validateDslSemantics(parsed).map(({ code }) => code)).toEqual(['CL1038', 'CL1039']);
+  });
+
+  test.each([
+    'const read = (): Readonly<Network> => { return input; };',
+    'const read = function (): Readonly<Network> { return input; };',
+  ])('honors only the nearest explicit return annotation: %s', (inner) => {
+    const parsed = parseFile({
+      path: 'readonly-expression-return.ts',
+      text: `function Outer(input: Readonly<Network>) { ${inner} return read; }`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const unannotated = parseFile({
+      path: parsed.path,
+      text: parsed.text.replace('(): Readonly<Network>', '()'),
+    });
+    expect(validateDslSemantics(unannotated)).toEqual([
+      expect.objectContaining({ code: 'CL1040' }),
+    ]);
   });
 
   test('checks definite Network function arguments at the call site', () => {

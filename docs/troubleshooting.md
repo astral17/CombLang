@@ -152,12 +152,22 @@ before reusing transferred handles in arrays, closures or function calls.
 
 ## A readonly borrow cannot be returned as an owned Network
 
-For an alias function that returns its input for reading, the natural contract
-preserves readonly access:
+**Rejected — `CL1040`:**
 
-**Intended signature — currently rejected with `CL1040`, not a working fix:**
+```ts
+function Alias(input: Readonly<Network>): Network {
+  return input;
+}
+const input = new Network();
+const output = Alias(input);
+```
 
-```text
+For an alias function that returns its input for reading, preserve readonly
+access in the return annotation:
+
+**Corrected — readonly alias, no new hardware or tick:**
+
+```ts
 function Alias(input: Readonly<Network>): Readonly<Network> {
   return input;
 }
@@ -165,16 +175,24 @@ const input = new Network();
 const output = Alias(input);
 ```
 
-Current checks prohibit returning a call-scoped borrow even with a readonly
-return annotation. This is a current implementation restriction, not a reason
-to add hardware to an alias function. Returning `input + 0` would add an
-Arithmetic stage and a tick; it does not preserve the function's intent.
+The corrected program has one logical Network and zero devices. `output` is a
+fresh readonly view of the same Network, not an owned return, a copy or a delay.
+The call-scoped parameter borrow ends normally; the original owner `input` may
+still receive producer attachments afterward. Reads through `output` see that
+same Network. Writing or consuming through `output` remains forbidden; moving
+or consuming `input` invalidates old aliases, including `output`.
+
+This exception requires a single explicitly annotated readonly return and live
+ownership outside the returning function. Ref parameters, borrowed selections,
+unannotated/array/object returns and closures retaining expired parameters do
+not gain escape permission. Returning `input + 0` instead would add an Arithmetic
+stage and a tick; it does not preserve an alias function's intent.
 
 Changing the parameter to a writable shared reference or transferring ownership
 with `Move<Network>` also changes the access contract. Do not apply either just
 to silence this diagnostic. See the
-[function reference](language-reference.md#functions) for the currently
-implemented capabilities. A readonly alias return needs separate support.
+[function reference](language-reference.md#functions) for the capability and
+return lifetime rules.
 
 ## Unused output is a warning, not removed hardware
 

@@ -13,6 +13,8 @@ import {
   type NetworkReturnDescriptor,
   type NetworkReturnPolicyContext,
 } from './network-return-policy.js';
+import { RuntimeValueRegistry } from './elaboration-values.js';
+import { createElaborationOwnershipPolicy } from './elaboration-ownership.js';
 
 const fileId = 'file:return-network.ts' as SourceFileId;
 const source = { fileId, start: 20, end: 30 };
@@ -58,6 +60,80 @@ function makeContext(state: NetworkRuntimeState = { ownership }): NetworkReturnP
 }
 
 describe('typed Network return policy', () => {
+  test('brands a distinct session-nominal alias without transferring or retaining a finished borrow', () => {
+    const registry = new RuntimeValueRegistry();
+    const owner: NetworkOwnershipState = {
+      ...ownership,
+      generation: 0,
+      readonlyBorrows: new Set(),
+    };
+    const original = registry.brandNetwork({ ...network }, { ownership: owner });
+    const stateFor = (value: NetworkValue) => registry.networkState(value)!;
+    const policy = createElaborationOwnershipPolicy(stateFor);
+    const frame = { owner: Symbol('Alias'), source, borrows: [], moves: [] };
+    const borrow = policy.borrow(original, 'readonly', 'input', source, frame);
+    const input = registry.brandNetwork(
+      { ...original, capability: 'readonly' },
+      { ownership: owner, borrow, callArgument: declaration },
+    );
+    const context: NetworkReturnPolicyContext = {
+      ...makeContext(),
+      networkFacet: () => input,
+      assertReadable: (value, span) => policy.assertReadable(value, span),
+      readonlyAliasState: vi.fn(() => ({ ownership: owner, callArgument: declaration })),
+      stateFor,
+      brandNetwork: (value, state) => registry.brandNetwork(value, state),
+    };
+    const alias = returnNetworkValue(input, descriptor('readonly', undefined), context);
+    policy.releaseFrame(frame, source);
+
+    expect(alias).not.toBe(input);
+    expect(Object.isFrozen(alias)).toBe(true);
+    expect(registry.networkState({ ...alias })).toBeUndefined();
+    expect(stateFor(alias)).toEqual({ ownership: owner, callArgument: declaration });
+    expect(stateFor(alias).ownership).toBe(stateFor(input).ownership);
+    expect(alias).toMatchObject({ name: input.name, generation: 0, declaration });
+    expect(owner).toMatchObject({ owner: 'top-level', generation: 0 });
+    expect(owner.readonlyBorrows.size).toBe(0);
+    expect(borrow.active).toBe(false);
+    expect(context.transferToCaller).not.toHaveBeenCalled();
+    expect(() => policy.assertReadable(alias, source)).not.toThrow();
+    expect(() => policy.assertWritable(original, source)).not.toThrow();
+    expect(() => policy.assertWritable(alias, source)).toThrowError(
+      expect.objectContaining({ code: 'RT2015' }),
+    );
+    expect(() => policy.assertReadable(input, source)).toThrowError(
+      expect.objectContaining({ code: 'RT2017' }),
+    );
+  });
+
+  test('validates before considering an alias and never takes the seam for an owned return', () => {
+    const context = makeContext();
+    context.readonlyAliasState = vi.fn(() => ({ ownership }));
+    returnNetworkValue(network, descriptor('owned'), context);
+    expect(context.readonlyAliasState).not.toHaveBeenCalled();
+    vi.mocked(context.assertReadable).mockImplementation(() => {
+      throw new Error('expired');
+    });
+    expect(() => returnNetworkValue(network, descriptor('readonly'), context)).toThrow('expired');
+    expect(context.readonlyAliasState).not.toHaveBeenCalled();
+    expect(context.brandNetwork).not.toHaveBeenCalled();
+  });
+
+  test('checks the readonly return color before creating an alias', () => {
+    const context = makeContext();
+    context.readonlyAliasState = vi.fn(() => ({ ownership }));
+    vi.mocked(context.requireColor).mockImplementation(() => {
+      throw new Error('color conflict');
+    });
+    expect(() => returnNetworkValue(network, descriptor('readonly'), context)).toThrow(
+      'color conflict',
+    );
+    expect(context.requireColor).toHaveBeenCalledWith(network, 'readonly', 'green', source);
+    expect(context.readonlyAliasState).not.toHaveBeenCalled();
+    expect(context.brandNetwork).not.toHaveBeenCalled();
+  });
+
   test('projects a Combinator primary facet before transferring its output Network', () => {
     const context = makeContext();
 

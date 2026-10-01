@@ -9,6 +9,35 @@ import type { NetworkHandle } from './elaboration.js';
 import { executeElaborationProgram } from './elaboration-program.js';
 
 describe('executed debug index', () => {
+  it('keeps readonly caller aliases on the original Network with no hidden output or hardware', () => {
+    const parsed = parseFile({
+      path: 'debug-readonly-alias.factorio.ts',
+      text: `function Alias(input: Readonly<Network>): Readonly<Network> { return input; }
+const input = new Network();
+const output = Alias(input);
+const second = Alias(output);`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const execution = elaborateDirectPlan(plan);
+    const input = execution.debug.root.network('input');
+    for (const name of ['output', 'second']) {
+      const alias = execution.debug.root.network(name);
+      expect(alias).toMatchObject({
+        id: input.id,
+        planName: 'input',
+        instancePath: [],
+        moved: false,
+        internal: false,
+      });
+      expect(parsed.text.slice(alias.source.start, alias.source.end)).toContain(name);
+    }
+    expect(plan.networks).toHaveLength(1);
+    expect(plan.producers).toEqual([]);
+    expect(plan.networkTransfers).toEqual([]);
+    expect(execution.circuit.graph.networks).toHaveLength(1);
+    expect(execution.circuit.graph.producers).toEqual([]);
+  });
+
   it('retains caller aliases for existing function returns without creating hardware', () => {
     const parsed = parseFile({
       path: 'debug-return-alias.factorio.ts',

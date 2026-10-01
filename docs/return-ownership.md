@@ -20,9 +20,13 @@ The ordering is intentional. A caught validation or budget failure cannot leave 
 
 ## Explicitly typed Network returns
 
-An explicit `Network` or `Readonly<Network>` return uses a narrower front-end policy before the same ownership transfer. An executed Network is checked against an optional `R`/`G` requirement; an executed Combinator supplies its existing primary Network facet. No reserved return Network or extra topology is created. Every other value reports `RT2022` at the return expression.
+An explicit `Network` or `Readonly<Network>` return uses a narrower single-value policy. An executed Network is checked against an optional `R`/`G` requirement; an executed Combinator supplies its existing primary Network facet. No reserved return Network or extra topology is created. Every other value reports `RT2022` at the return expression.
 
-The ownership layer transfers a Network created or moved into the current function to the caller with a fresh generation. A transparent alias from a bare `Network` parameter is returned at its existing generation without a transfer; `Readonly<Network>` still creates a read-only caller view after an owned transfer succeeds. This single-value path does not recursively traverse containers; unannotated graph returns use the algorithm below.
+The ownership layer transfers a Network created or moved into the current function to the caller with a fresh generation. A transparent alias from a bare `Network` parameter is returned at its existing generation without a transfer; `Readonly<Network>` also creates a read-only caller view after an owned transfer succeeds.
+
+An explicit `Readonly<Network>` return of a live readonly Network owned at top level or by an active ancestor function instead creates a fresh nominal readonly view with the same ownership, generation, color, name and declaration. The source view is validated before creating the alias. Only the returning frame's borrow linkage is omitted from the new view; the parameter itself still expires, and an ancestor's borrow linkage remains until that ancestor's own return boundary. No ownership move, permanent owner lock, logical Network, hardware or tick is added. The original owner may write after the call's borrows end; consuming or moving it invalidates old returned aliases at later use.
+
+This is not a general escape rule: owned `Network` returns cannot promote readonly inputs; Ref views, pair/selection values, unannotated/array/object returns and expired parameter closures retain their existing checks. An existing readonly Network projection such as `selection.network` may satisfy the explicit single readonly return contract; this returns only its Network, not the selection. The single-value path does not recursively traverse containers; graph returns use the algorithm above.
 
 ## Traversal boundary
 

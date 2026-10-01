@@ -21,13 +21,15 @@ export interface NetworkReturnPolicyContext {
   ): void;
   transferToCaller(network: NetworkValue): NetworkValue;
   assertReadable(network: NetworkValue, source: SourceSpan): void;
+  /** State for a live readonly alias owned outside this return frame; no transfer. */
+  readonlyAliasState?(network: NetworkValue): NetworkRuntimeState | undefined;
   isTransparentAlias?(network: NetworkValue): boolean;
   returnTransparent?(network: NetworkValue): NetworkValue;
   stateFor(network: NetworkValue): NetworkRuntimeState;
   brandNetwork(value: NetworkValue, state: NetworkRuntimeState): NetworkValue;
 }
 
-/** Projects and transfers one explicitly typed Network function return. */
+/** Projects one explicitly typed Network return, transferring only owned outputs. */
 export function returnNetworkValue(
   value: unknown,
   descriptor: NetworkReturnDescriptor,
@@ -50,8 +52,15 @@ export function returnNetworkValue(
       descriptor.source,
     );
   }
+  const aliasState =
+    descriptor.capability === 'readonly' ? context.readonlyAliasState?.(network) : undefined;
+  if (aliasState !== undefined) {
+    return context.brandNetwork({ ...network, capability: 'readonly' }, aliasState);
+  }
 
   const returned =
+    network.capability !== 'readonly' &&
+    network.capability !== 'ref' &&
     context.isTransparentAlias?.(network) === true
       ? (context.returnTransparent?.(network) ?? network)
       : context.transferToCaller(network);

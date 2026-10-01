@@ -641,6 +641,12 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     }
     return undefined;
   };
+  const enclosingFunctionReturnType = (node: ts.Node): ts.TypeNode | undefined => {
+    for (let parent = node.parent; parent !== undefined; parent = parent.parent) {
+      if (ts.isFunctionLike(parent)) return parent.type;
+    }
+    return undefined;
+  };
   const producerTypeAcceptsKind = (
     type: string,
     kind: 'arithmetic' | 'decider' | 'constant' | 'selector' | undefined,
@@ -1096,7 +1102,16 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       const capability = capabilityOfNetworkExpression(node.expression);
       const returnsPhysicalCombinator =
         producerType !== undefined && isProducerExpression(node.expression);
-      if ((capability === 'readonly' || capability === 'ref') && !returnsPhysicalCombinator) {
+      const returnsReadonlyNetwork =
+        capability === 'readonly' &&
+        !isNetworkSignalExpression(node.expression) &&
+        networkTypeFromAnnotation(enclosingFunctionReturnType(node), file.ast)?.capability ===
+          'readonly';
+      if (
+        (capability === 'readonly' || capability === 'ref') &&
+        !returnsPhysicalCombinator &&
+        !returnsReadonlyNetwork
+      ) {
         report(
           'CL1040',
           `A ${capability === 'readonly' ? 'Readonly<Network>' : 'Ref<Network>'} borrow cannot escape its function.`,

@@ -21,6 +21,8 @@ import {
   validateCanonicalDirectPlan,
 } from './direct-plan.js';
 import { RuntimeDiagnosticError } from './elaboration.js';
+import { compileSourceProgram } from './source-compilation.js';
+import { runExecutedDirectPlanTests } from './test-runner.js';
 import {
   ElaborationExecutionError,
   ElaborationOperationLimitError,
@@ -67,6 +69,353 @@ function syntheticEntityResolver(type = 'container') {
 }
 
 describe('executed elaboration program', () => {
+  test('compiles the exact readonly Alias contract without adding topology', () => {
+    const result = compileSourceProgram({
+      path: 'readonly-alias.factorio.ts',
+      text: `function Alias(input: Readonly<Network>): Readonly<Network> {
+  return input;
+}
+const input = new Network();
+const output = Alias(input);`,
+    });
+    expect(result.pipelineDiagnostics).toEqual([]);
+    expect(result.plan?.networks).toHaveLength(1);
+    expect(result.plan?.producers).toEqual([]);
+    expect(result.plan?.networkTransfers).toEqual([]);
+    expect(result.execution!.network('output').id).toBe(result.execution!.network('input').id);
+  });
+
+  test('returns a live readonly alias when static validation is bypassed', () => {
+    const parsed = parseFile({
+      path: 'readonly-alias-runtime.factorio.ts',
+      text: `function Alias(input: Readonly<Network>): Readonly<Network> { return input; }
+const input = new Network();
+const output = Alias(input);`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    expect(plan.networks).toHaveLength(1);
+    expect(plan.producers).toEqual([]);
+    expect(plan.networkTransfers).toEqual([]);
+    const execution = elaborateDirectPlan(plan);
+    expect(execution.network('output').id).toBe(execution.network('input').id);
+  });
+
+  test.each([
+    'const alias = input; return alias;',
+    'return Alias(input);',
+    'function Inner(): Readonly<Network> { return input; } return Inner();',
+  ])('keeps the readonly alias live through %s', (body) => {
+    const result = compileSourceProgram({
+      path: 'readonly-nested-alias.factorio.ts',
+      text: `function Alias(input: Readonly<Network>): Readonly<Network> { return input; }
+function Outer(input: Readonly<Network>): Readonly<Network> { ${body} }
+const input = new Network();
+const output = Outer(input);
+const sink = new Network();
+sink += output + 0;`,
+    });
+    expect(result.pipelineDiagnostics).toEqual([]);
+    expect(result.plan!.networks).toHaveLength(3); // input, sink, actual Arithmetic output
+    expect(result.plan!.producers).toHaveLength(1);
+    expect(result.plan!.producers[0]).toMatchObject({
+      kind: 'arithmetic',
+      left: { network: 'input' },
+    });
+    expect(result.execution!.network('output').id).toBe(result.execution!.network('input').id);
+  });
+
+  test('lets the owner write after returning an alias and reads the same electrical Network', () => {
+    const result = compileSourceProgram({
+      path: 'readonly-alias-owner-write.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+function Alias(input: Readonly<Network>): Readonly<Network> { return input; }
+const input = new Network();
+const alias = Alias(input);
+input += CC(5 * A);
+const output = new Network();
+output[A] += alias[A] * 2;`,
+    });
+    expect(result.pipelineDiagnostics).toEqual([]);
+    expect(result.plan!.networks).toHaveLength(4); // two declared Networks + two producer outputs
+    expect(result.plan!.producers).toHaveLength(2);
+    expect(result.plan!.networkTransfers).toMatchObject([
+      { source: '$combinator:1:primary', destination: 'input' },
+      { source: '$combinator:2:primary', destination: 'output' },
+    ]);
+    expect(
+      runExecutedDirectPlanTests(
+        result.execution!,
+        `test('alias reads', ({ network, tick, expectSignal }) => {
+      const A = Signal('virtual', 'signal-A');
+      tick(2);
+      expectSignal(network('alias'), A).toBe(5);
+      expectSignal(network('output'), A).toBe(10);
+    });`,
+      ),
+    ).toMatchObject({ passed: 1, failed: 0 });
+  });
+
+  test.each([
+    'const read = (): Readonly<Network> => { return input; };',
+    'const read = function (): Readonly<Network> { return input; };',
+  ])('returns an ancestor readonly alias through an explicit function expression: %s', (inner) => {
+    const result = compileSourceProgram({
+      path: 'readonly-expression-alias.factorio.ts',
+      text: `function Outer(input: Readonly<Network>): Readonly<Network> {
+  ${inner}
+  return read();
+}
+const input = new Network();
+const alias = Outer(input);
+input += CC();`,
+    });
+    expect(result.pipelineDiagnostics).toEqual([]);
+    expect(result.execution!.network('alias').id).toBe(result.execution!.network('input').id);
+    expect(result.plan!.producers).toHaveLength(1);
+  });
+
+  test('a closure may retain an explicitly returned readonly alias, not its expired parameter', () => {
+    const result = compileSourceProgram({
+      path: 'readonly-returned-alias-closure.factorio.ts',
+      text: `function Alias(input: Readonly<Network>): Readonly<Network> { return input; }
+function Capture(input: Readonly<Network>) {
+  const alias = Alias(input);
+  return () => alias + 0;
+}
+const input = new Network();
+const read = Capture(input);
+const output = new Network();
+output += read();`,
+    });
+    expect(result.pipelineDiagnostics).toEqual([]);
+    expect(result.plan!.producers).toHaveLength(1);
+    expect(result.plan!.producers[0]).toMatchObject({
+      kind: 'arithmetic',
+      left: { network: 'input' },
+    });
+  });
+
+  test.each([
+    ['write', '', 'alias += CC(1 * A)', 'alias += CC(1 * A)', 'RT2015'],
+    ['take destination', '', 'alias.take(destination)', 'alias.take(destination)', 'RT2015'],
+    ['take source', '', 'destination.take(alias)', 'destination.take(alias)', 'RT2015'],
+    ['Move argument', '', 'Advance(alias)', 'alias', 'RT2015'],
+    ['consumed owner', 'destination.take(input);', 'alias + 0', 'alias + 0', 'RT2012'],
+    ['moved owner', 'const moved = Advance(input);', 'alias + 0', 'alias + 0', 'RT2012'],
+    ['lost owner', 'Drop(input);', 'alias + 0', 'alias + 0', 'RT2019'],
+    [
+      'stale return source',
+      'destination.take(input);',
+      'Dynamic(alias)',
+      'return value;',
+      'RT2012',
+    ],
+  ])(
+    'rejects %s through a returned readonly alias at its use span',
+    (_name, preparation, use, expectedSpan, code) => {
+      const parsed = parseFile({
+        path: 'readonly-alias-invalid-use.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+function Alias(input: Readonly<Network>): Readonly<Network> { return input; }
+function Dynamic(value: any): Readonly<Network> { return value; }
+function Advance(input: Move<Network>): Network { return input; }
+function Drop(input: Move<Network>): void {}
+const input = new Network();
+const destination = new Network();
+const alias = Alias(input);
+${preparation}
+${use};`,
+      });
+      try {
+        executeElaborationProgram(transformElaborationModule(parsed));
+        expect.fail('Expected invalid readonly alias use.');
+      } catch (error) {
+        expect(error).toBeInstanceOf(ElaborationExecutionError);
+        const failure = error as ElaborationExecutionError;
+        expect(failure.code).toBe(code);
+        expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(expectedSpan);
+        if (code === 'RT2012' || code === 'RT2019')
+          expect(failure.related!.length).toBeGreaterThan(0);
+      }
+    },
+  );
+
+  test.each([
+    ['owned', 'Readonly<Network>', ': Network', 'return input;', 'RT2017'],
+    ['unannotated', 'Readonly<Network>', '', 'return input;', 'RT2017'],
+    ['array', 'Readonly<Network>', '', 'return [input];', 'RT2017'],
+    ['object', 'Readonly<Network>', '', 'return { input };', 'RT2017'],
+    ['Ref', 'Ref<Network>', ': Readonly<Network>', 'return input;', 'RT2017'],
+    [
+      'Ref readonly projection',
+      'Ref<Network>',
+      ': Readonly<Network>',
+      "return input[Signal('virtual', 'signal-A')].network;",
+      'RT2017',
+    ],
+    [
+      'pair',
+      'Readonly<Network>',
+      ': Readonly<Network>',
+      'return pair(input, new Network());',
+      'RT2022',
+    ],
+  ])(
+    'keeps %s escapes outside the readonly alias exception',
+    (_name, parameter, annotation, statement, code) => {
+      const parsed = parseFile({
+        path: 'readonly-alias-boundary.factorio.ts',
+        text: `function Leak(input: ${parameter})${annotation} { ${statement} }
+const input = new Network();
+const escaped = Leak(input);`,
+      });
+      expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+        expect.objectContaining({ code }),
+      );
+    },
+  );
+
+  test('cannot promote a readonly result through an unrestricted parameter and owned return', () => {
+    const parsed = parseFile({
+      path: 'readonly-alias-bare-return.factorio.ts',
+      text: `function Alias(input: Readonly<Network>): Readonly<Network> { return input; }
+function Wrong(input: Network): Network { return Alias(input); }
+const input = new Network();
+const output = Wrong(input);`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([expect.objectContaining({ code: 'CL1040' })]);
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+      expect.objectContaining({ code: 'RT2017' }),
+    );
+  });
+
+  test.each([
+    'return function Delayed(): Readonly<Network> { return input; };',
+    'function Inner(): Readonly<Network> { return input; } const alias = Inner(); return () => alias + 0;',
+  ])('does not refresh an expired parameter retained by a closure: %s', (body) => {
+    const parsed = parseFile({
+      path: 'readonly-alias-expired.factorio.ts',
+      text: `function Capture(input: Readonly<Network>) { ${body} }
+const input = new Network();
+const delayed = Capture(input);
+const output = delayed();`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+      expect.objectContaining({ code: 'RT2017' }),
+    );
+  });
+
+  test('supports ancestor-owned aliases within the ancestor but rejects re-exporting its local readonly view', () => {
+    const source = `function Alias(input: Readonly<Network>): Readonly<Network> { return input; }
+function Outer(): Network {
+  const input = new Network();
+  const alias = Alias(input);
+  input += CC();
+  const output = new Network();
+  output += alias + 0;
+  return output;
+}
+const output = Outer();`;
+    const result = compileSourceProgram({ path: 'ancestor-owned-alias.factorio.ts', text: source });
+    expect(result.pipelineDiagnostics).toEqual([]);
+    expect(result.plan!.networks).toHaveLength(4);
+    expect(result.plan!.producers).toHaveLength(2);
+    const parsed = parseFile({
+      path: 'local-readonly-view.factorio.ts',
+      text: source
+        .replace('Outer(): Network', 'Outer(): Readonly<Network>')
+        .replace('return output;', 'return alias;'),
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+      expect.objectContaining({ code: 'RT2017' }),
+    );
+  });
+
+  test.each(['red', 'green'] as const)(
+    'preserves return color requirements on the same %s alias',
+    (color) => {
+      const parsed = parseFile({
+        path: 'readonly-alias-color.factorio.ts',
+        text: `function Alias(input: Readonly<Network>): Readonly<Network<R>> { return input; }
+const input = new Network<${color === 'red' ? 'R' : 'G'}>();
+const alias = Alias(input);`,
+      });
+      if (color === 'green') {
+        expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+          expect.objectContaining({ code: 'RT2018' }),
+        );
+      } else {
+        const plan = executeElaborationProgram(transformElaborationModule(parsed));
+        expect(plan.networks).toMatchObject([{ name: 'input', fixedColor: 'red' }]);
+        expect(plan.producers).toEqual([]);
+        expect(plan.networkAliases).toContainEqual(
+          expect.objectContaining({ name: 'alias', network: 'input', moved: false }),
+        );
+      }
+    },
+  );
+
+  test('retains the owned transfer for a fresh callee-created readonly output', () => {
+    const result = compileSourceProgram({
+      path: 'fresh-readonly-output.factorio.ts',
+      text: `function Build(): Readonly<Network> {
+  const local = new Network();
+  return local;
+}
+const output = Build();`,
+    });
+    expect(result.pipelineDiagnostics).toEqual([]);
+    expect(result.plan!.networks).toHaveLength(1);
+    expect(result.plan!.producers).toEqual([]);
+    expect(result.plan!.networkAliases).toContainEqual(
+      expect.objectContaining({ name: 'output', network: 'local', moved: false }),
+    );
+    expect(result.execution!.network('output').id).toBe(
+      result.execution!.debug.root.child('function Build').network('local').id,
+    );
+  });
+
+  test('does not promote a readonly alias through a local owned annotation', () => {
+    const parsed = parseFile({
+      path: 'readonly-alias-annotation.factorio.ts',
+      text: `function Alias(input: Readonly<Network>): Readonly<Network> { return input; }
+const input = new Network();
+const alias: Network = Alias(input);
+alias += CC();`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+      expect.objectContaining({ code: 'RT2015' }),
+    );
+  });
+
+  test('a returned readonly alias cannot read while a later Ref borrow is active', () => {
+    const parsed = parseFile({
+      path: 'readonly-alias-ref-exclusivity.factorio.ts',
+      text: `function Alias(input: Readonly<Network>): Readonly<Network> { return input; }
+const input = new Network();
+const alias = Alias(input);
+function Write(output: Ref<Network>): void { const read = alias + 0; }
+Write(input);`,
+    });
+    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
+      expect.objectContaining({ code: 'RT2016' }),
+    );
+  });
+
+  test('keeps a successful green readonly return on the original Network', () => {
+    const result = compileSourceProgram({
+      path: 'green-readonly-alias.factorio.ts',
+      text: `function Alias(input: Readonly<Network<G>>): Readonly<Network<G>> { return input; }
+const input = new Network();
+const alias = Alias(input);`,
+    });
+    expect(result.pipelineDiagnostics).toEqual([]);
+    expect(result.plan!.networks).toMatchObject([{ name: 'input', fixedColor: 'green' }]);
+    expect(result.plan!.producers).toEqual([]);
+    expect(result.execution!.network('alias').id).toBe(result.execution!.network('input').id);
+  });
+
   test('executes DSL parameter and destructuring defaults through the runtime bridge', () => {
     const parsed = parseFile({
       path: 'binding-defaults.factorio.ts',
@@ -5603,16 +5952,18 @@ const escaped = Leak(input[Signal('virtual', 'signal-A')]);`,
     },
   );
 
-  test('rejects returning the readonly Network member of a NetworkSignal parameter', () => {
+  test('returns only the readonly Network projection, not a NetworkSignal selection', () => {
     const parsed = parseFile({
       path: 'network-signal-network-return.factorio.ts',
       text: `function Leak(value: NetworkSignal): Readonly<Network> { return value.network; }
 const input = new Network();
 const escaped = Leak(input[Signal('virtual', 'signal-A')]);`,
     });
-    expect(() => executeElaborationProgram(transformElaborationModule(parsed))).toThrowError(
-      expect.objectContaining({ code: 'RT2017' }),
-    );
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    expect(plan.networks).toHaveLength(1);
+    expect(plan.producers).toEqual([]);
+    const execution = elaborateDirectPlan(plan);
+    expect(execution.network('escaped').id).toBe(execution.network('input').id);
   });
 
   test('reports an expired NetworkSignal selection at a delayed closure use', () => {

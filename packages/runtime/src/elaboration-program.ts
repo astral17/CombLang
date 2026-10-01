@@ -1410,6 +1410,28 @@ class ElaborationRecorder {
             this.#requireNetworkColor(network, requiredCapability, color, rawSpan),
           transferToCaller: (network) => this.#returnOwnedNetwork(network, rawSpan),
           assertReadable: (network, source) => this.#ownership.assertReadable(network, source),
+          readonlyAliasState: (network) => {
+            const frame = this.#currentFunctionFrame();
+            const state = this.#networkState(network);
+            if (
+              frame === undefined ||
+              network.capability !== 'readonly' ||
+              state.borrow?.capability === 'ref' ||
+              state.ownership.owner === frame.owner ||
+              (state.ownership.owner !== 'top-level' &&
+                !this.#ownershipFrames.some(
+                  (ancestor) => ancestor?.owner === state.ownership.owner,
+                ))
+            ) {
+              return undefined;
+            }
+            // The source was validated before this seam. Do not alter its borrow token:
+            // closures retain the original view and still expire on frame release.
+            const { borrow, ...aliasState } = state;
+            return borrow !== undefined && !frame.borrows.includes(borrow)
+              ? { ...aliasState, borrow }
+              : aliasState;
+          },
           isTransparentAlias: (network) => this.#isTransparentNetwork(network),
           returnTransparent: (network) => network,
           stateFor: (network) => this.#networkState(network),

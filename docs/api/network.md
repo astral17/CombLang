@@ -108,7 +108,12 @@ at T1 and output carries A = 10 at T2.
 | `Move<Network>`      | Transfer ownership; caller's old aliases become invalid.                             |
 | `Network`            | Transparent reference with shared ownership checks; unrestricted capability warning. |
 
-Readonly/Ref views expire when the call ends and must not escape. The
+Call-scoped Readonly/Ref parameter views expire when the call ends. A single
+explicit `Readonly<Network>` return may create a fresh readonly alias of a live
+Network owned outside the returning function: no new Network, device, tick or
+ownership transfer. The original owner can write after the call; the alias
+cannot write or consume, and becomes invalid if its owner is moved or consumed.
+This does not permit Ref, unannotated/array/object or expired-parameter escapes. The
 [function reference](../language-reference.md#functions) defines aliasing,
 returns, color-qualified capabilities and untyped parameter behavior.
 

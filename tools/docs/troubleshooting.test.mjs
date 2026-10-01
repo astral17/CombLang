@@ -13,6 +13,7 @@ const cases = [
   ['third output', 'RT2028', 'error', 3],
   ['fixed color union', 'RT2014', 'error', 0],
   ['consumed alias', 'RT2012', 'error', 2],
+  ['readonly alias return', 'CL1040', 'error', 0],
   ['unused output', 'CL2001', 'warning', 1],
 ];
 const compile = (text) => compileSourceProgram({ path: 'troubleshooting.factorio.ts', text });
@@ -48,7 +49,7 @@ describe('runnable troubleshooting examples', () => {
       [0, ['output'], 1, 5],
       [1, ['first', 'second', 'third'], 2, 10],
       [3, ['output'], 2, 5],
-      [4, ['output'], 1, 5],
+      [5, ['output'], 1, 5],
     ]) {
       const result = compile(examples[2 * index + 1]);
       expect(
@@ -65,14 +66,48 @@ describe('runnable troubleshooting examples', () => {
       ).toMatchObject({ passed: 1, failed: 0 });
     }
   });
-  test('labels the readonly alias contract as currently unsupported, not corrected', () => {
-    const source = page.match(/```text\r?\n([\s\S]*?)```/)[1];
+  test('corrects the readonly alias only by its return annotation, with no delay or hardware', () => {
+    const source = examples[9];
     expect(source).toContain('function Alias(input: Readonly<Network>): Readonly<Network>');
+    expect(source).toBe(examples[8].replace('): Network', '): Readonly<Network>'));
     const result = compile(source);
-    expect(result.pipelineDiagnostics).toEqual([
-      expect.objectContaining({ code: 'CL1040', severity: 'error' }),
-    ]);
-    expect(result.resolvedCircuit).toBeUndefined();
+    expect(result.pipelineDiagnostics).toEqual([]);
+    expect(result.plan.networks).toHaveLength(1);
+    expect(result.plan.producers).toEqual([]);
+    expect(result.plan.networkTransfers).toEqual([]);
+    expect(result.execution.network('output').id).toBe(result.execution.network('input').id);
+  });
+  test('keeps owner writes and shared reads but forbids writes or consumption through the result', () => {
+    const source = examples[9];
+    for (const [use, code] of [
+      ['output += CC();', 'CL1038'],
+      ['input.take(output);', 'CL1039'],
+    ]) {
+      expect(compile(`${source}\n${use}`).pipelineDiagnostics).toEqual([
+        expect.objectContaining({ code, severity: 'error' }),
+      ]);
+    }
+    const result = compile(`${source}
+const A = Signal('virtual', 'signal-A');
+input += CC(5 * A);
+const doubled = new Network();
+doubled[A] += output[A] * 2;`);
+    expect(result.pipelineDiagnostics).toEqual([]);
+    expect(result.resolvedCircuit.ir.producers).toHaveLength(2);
+    expect(
+      runExecutedDirectPlanTests(
+        result.execution,
+        `test('same wire, no alias delay', ({ network, tick, expectSignal }) => {
+      const A = Signal('virtual', 'signal-A');
+      tick(1);
+      expectSignal(network('input'), A).toBe(5);
+      expectSignal(network('output'), A).toBe(5);
+      expectSignal(network('doubled'), A).toBe(0);
+      tick(1);
+      expectSignal(network('doubled'), A).toBe(10);
+    });`,
+      ),
+    ).toMatchObject({ passed: 1, failed: 0 });
   });
   test('keeps local links and section anchors valid', () => {
     for (const [, href] of page.matchAll(/\]\(([^)]+)\)/g)) {
