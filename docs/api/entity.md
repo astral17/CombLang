@@ -106,9 +106,12 @@ Network access still follows ownership/capability rules.
 A callable profile declares one input and one output endpoint. `entity(input)`
 accepts exactly **one** readable Network (or primary Combinator output), binds
 the input, and returns the same Entity. `output += entity` binds the declared
-output. Bind the input once and reuse the returned handle. The current compiler
-rejects a second call with a different Network but still accepts a repeated call
-with the same Network; the single-invocation restriction is not yet enforced.
+output. Only one successful invocation is allowed per physical Entity, including
+through aliases, containers and returned views. A second call reports `RT2030`
+at that invocation with a related location for the first, even with the same
+Network. A failed first call does not consume the allowance or leave binding
+changes; JavaScript argument evaluation is not undone. Reuse the returned handle
+for outputs. A compatible manual input `.bind` does not consume the call allowance.
 Explicit identical `.bind` operations are idempotent; a different Network/direction
 on the same endpoint conflicts. Reuse the same output handle, not another Entity
 construction. A second independent output is not implicitly a free lane.

@@ -324,7 +324,7 @@ interface NetworkOwnershipSnapshot {
 }
 
 interface TopologySnapshot {
-  readonly networksLength: number;
+  readonly networks: DirectElaborationPlan['networks'];
   readonly networkStates: ReadonlyMap<string, NetworkRuntimeState>;
   readonly networkNameCounts: ReadonlyMap<string, number>;
   readonly networkAliases: ReadonlyMap<string, PendingNetworkAlias>;
@@ -343,6 +343,13 @@ interface TopologySnapshot {
   readonly entityRegistry?: EntityRegistrySnapshot;
   readonly entityRevision: number;
   readonly entityAuthoritiesLength: number;
+  readonly entityFacets: readonly {
+    readonly authority: EntityAuthorityView;
+    readonly facets: ReadonlyMap<string, EntityFacetAuthority>;
+    readonly bindings: ReturnType<EntityRegistry['record']>['connectorBindings'];
+  }[];
+  readonly entityOperationOrdinal: number;
+  readonly entityInvocations: ReadonlyMap<EntityValue['id'], SourceSpan>;
   readonly linkedProducersLength: number;
 }
 
@@ -519,6 +526,7 @@ class ElaborationRecorder {
   }[] = [];
   #entityRevision = 0;
   #entityOperationOrdinal = 0;
+  readonly #entityInvocations = new Map<EntityValue['id'], SourceSpan>();
   #dslCalls = 0;
   readonly #operatorContext: ElaborationOperatorDispatchContext<RawSpan> = {
     isCircuitDslValue: (value): value is DslValue => this.#isCircuitDslValue(value),
@@ -2650,37 +2658,50 @@ class ElaborationRecorder {
   #invokeEntity(entity: EntityValue, args: readonly CallArgument[], rawSpan: RawSpan): EntityValue {
     const source = this.#span(rawSpan);
     const profile = this.#entityProfile(entity, source);
-    if (profile.callProjection === undefined) {
-      throw new ElaborationExecutionError(
-        `Entity profile ${JSON.stringify(profile.ref.prototypeKey)} has no callable projection.`,
-        source,
-        'RT2027',
+    return this.#withTopologyTransaction(rawSpan, () => {
+      const firstInvocation = this.#entityInvocations.get(entity.id);
+      if (firstInvocation !== undefined) {
+        throw new ElaborationExecutionError(
+          'A physical Entity may be invoked only once; reuse its returned view for outputs.',
+          source,
+          'RT2030',
+          [{ message: 'The first Entity invocation originates here.', span: firstInvocation }],
+        );
+      }
+      if (profile.callProjection === undefined) {
+        throw new ElaborationExecutionError(
+          `Entity profile ${JSON.stringify(profile.ref.prototypeKey)} has no callable projection.`,
+          source,
+          'RT2027',
+        );
+      }
+      if (args.length !== 1) {
+        throw new ElaborationExecutionError(
+          'Callable Entity invocation requires exactly one argument.',
+          source,
+          'RT2027',
+        );
+      }
+      const argument = args[0]!;
+      const readable = this.#readableNetworkFacet(argument.value, argument.source);
+      if (readable === undefined) {
+        throw new ElaborationExecutionError(
+          'Callable Entity input requires a readable Network or Producer output.',
+          this.#span(argument.source),
+          'RT2015',
+        );
+      }
+      const result = this.#bindEntity(
+        entity,
+        profile.callProjection.input.connector,
+        profile.callProjection.input.lane,
+        readable,
+        'input',
+        rawSpan,
       );
-    }
-    if (args.length !== 1) {
-      throw new ElaborationExecutionError(
-        'Callable Entity invocation requires exactly one argument.',
-        source,
-        'RT2027',
-      );
-    }
-    const argument = args[0]!;
-    const readable = this.#readableNetworkFacet(argument.value, argument.source);
-    if (readable === undefined) {
-      throw new ElaborationExecutionError(
-        'Callable Entity input requires a readable Network or Producer output.',
-        this.#span(argument.source),
-        'RT2015',
-      );
-    }
-    return this.#bindEntity(
-      entity,
-      profile.callProjection.input.connector,
-      profile.callProjection.input.lane,
-      readable,
-      'input',
-      rawSpan,
-    );
+      this.#entityInvocations.set(entity.id, source);
+      return result;
+    });
   }
 
   #entityProfile(entity: EntityValue, source: SourceSpan): EntityProfile {
@@ -3585,7 +3606,8 @@ class ElaborationRecorder {
       });
     }
     return {
-      networksLength: this.#networks.length,
+      // Color requirements replace existing declarations as well as adding Networks.
+      networks: [...this.#networks],
       networkStates: new Map(this.#networkStates),
       networkNameCounts: new Map(this.#networkNameCounts),
       networkAliases: new Map(this.#networkAliases),
@@ -3606,12 +3628,20 @@ class ElaborationRecorder {
         : { entityRegistry: this.#entityRegistry.snapshot() }),
       entityRevision: this.#entityRevision,
       entityAuthoritiesLength: this.#entityAuthorityList.length,
+      entityFacets: this.#entityAuthorityList.map((authority) => ({
+        authority,
+        facets: new Map([...authority.facets].map(([key, facet]) => [key, { ...facet }])),
+        bindings: this.#entityRegistry!.record(authority.entity).connectorBindings,
+      })),
+      entityOperationOrdinal: this.#entityOperationOrdinal,
+      entityInvocations: new Map(this.#entityInvocations),
       linkedProducersLength: this.#linkedProducers.length,
     };
   }
 
   #restoreTopology(snapshot: TopologySnapshot): void {
-    this.#networks.length = snapshot.networksLength;
+    this.#networks.length = 0;
+    for (const network of snapshot.networks) this.#networks.push(network);
     this.#networkTransfers.length = snapshot.networkTransfersLength;
     this.#networkStates.clear();
     for (const [name, state] of snapshot.networkStates) this.#networkStates.set(name, state);
@@ -3655,6 +3685,14 @@ class ElaborationRecorder {
     }
     this.#entityRevision = snapshot.entityRevision;
     this.#entityAuthorityList.length = snapshot.entityAuthoritiesLength;
+    for (const saved of snapshot.entityFacets) {
+      saved.authority.facets.clear();
+      for (const [key, facet] of saved.facets) saved.authority.facets.set(key, facet);
+      this.#entityRegistry!.replaceConnectorBindings(saved.authority.entity, saved.bindings);
+    }
+    this.#entityOperationOrdinal = snapshot.entityOperationOrdinal;
+    this.#entityInvocations.clear();
+    for (const [id, source] of snapshot.entityInvocations) this.#entityInvocations.set(id, source);
     while (this.#linkedProducers.length > snapshot.linkedProducersLength) {
       const removed = this.#linkedProducers.pop();
       if (removed !== undefined) this.#linkedProducerByIdentity.delete(removed.producer.identity);

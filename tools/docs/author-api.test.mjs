@@ -351,16 +351,36 @@ Attach(input);`);
     'machine(new Network());',
     'const other = new Network(); other += machine;',
   ])('keeps callable restrictions: %s', (suffix) => {
-    const code = suffix.includes('new Network') ? 'RT2030' : 'RT2027';
+    const code = 'RT2030';
     expect(result(`${blocks('entity')[2]}\n${suffix}`, syntheticHost).pipelineDiagnostics).toEqual([
       expect.objectContaining({ code, severity: 'error' }),
     ]);
   });
-  test('pins the documented unchecked repeated call with an identical input', () => {
-    const compilation = compile(`${blocks('entity')[2]}\nmachine(input);`, syntheticHost);
-    expect(compilation.plan.entities).toHaveLength(1);
-    expect(compilation.plan.networks).toHaveLength(2);
-    expect(compilation.plan.entities[0].connectorBindings).toHaveLength(2);
+  test('rejects the documented repeated call with an identical input at the second invocation', () => {
+    const text = `${blocks('entity')[2]}\nmachine(input);`;
+    const first = text.indexOf('machine(input)');
+    const second = text.lastIndexOf('machine(input)');
+    expect(result(text, syntheticHost).pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'RT2030',
+        severity: 'error',
+        span: {
+          fileId: 'file:author-api.factorio.ts',
+          start: second,
+          end: second + 'machine(input)'.length,
+        },
+        related: [
+          {
+            message: 'The first Entity invocation originates here.',
+            span: {
+              fileId: 'file:author-api.factorio.ts',
+              start: first,
+              end: first + 'machine(input)'.length,
+            },
+          },
+        ],
+      }),
+    ]);
   });
   test('validates local links, anchors and index navigation without another docs framework', () => {
     for (const name of pages) {

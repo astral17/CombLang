@@ -277,7 +277,13 @@ The call accepts exactly one readable Network argument, including a
 Combinator's readable primary output, binds it to the declared input endpoint,
 and returns the same live Entity handle. `Network += entity` binds the declared
 output endpoint, so the inline form creates one physical Entity and no hidden
-Producer, Network, or tick. Identical repeat bindings are idempotent; conflicts,
+Producer, Network, or tick. Only one successful call is allowed per physical
+Entity, including through aliases and returned views. A second call reports
+`RT2030` at that invocation, related to the first, even with identical input.
+A failed first call leaves its allowance available and rolls back call binding
+changes, not JavaScript argument evaluation. Reuse the returned handle for
+outputs. Explicit identical `.bind` and same-output attachment remain idempotent;
+a compatible manual input binding does not consume the call allowance. Conflicts,
 stale handles, profiles without a call projection, and invalid destinations are
 source-aware errors. Ordinary objects and structural lookalikes keep normal
 JavaScript call behavior. Native import/export conformance remains separate

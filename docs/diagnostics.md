@@ -195,8 +195,16 @@ available. This is an export failure, not an error in source execution; see
 | `RT2024` | circuit Condition was used as a JavaScript control-flow test                                                |
 | `RT2025` | a delayed asynchronous DSL call reached a sealed elaboration plan                                           |
 | `RT2026` | test instantiation received a non-function, uninstrumented factory, or unsupported cyclic/host return value |
-| `RT2027` | final executed Decider configuration has an incompatible `Each`/`Everything` output mode                    |
+| `RT2027` | incompatible executed Decider output mode, or unavailable Entity capability / invalid configuration         |
 | `RT2028` | a third distinct output connection was requested from one physical combinator                               |
+| `RT2030` | repeated invocation of one physical Entity, or conflicting Entity connector binding                         |
+
+For a repeated callable Entity invocation, `RT2030` points at the second call and
+relates the first successful invocation, even through aliases or returned views.
+Reuse that Entity handle for output attachments; do not call it again. A failed
+first call does not consume the allowance. Connector conflicts instead relate
+the first binding; explicit identical `.bind` and same-output attachment stay
+idempotent.
 
 `tryElaborateDirectPlan()` returns these runtime diagnostics without throwing. `elaborateDirectPlan()` throws `RuntimeDiagnosticError` carrying the same structured value.
 
