@@ -7,8 +7,15 @@ import {
 } from '@comblang/runtime/source-compilation';
 import type { SourceFileSnapshot } from '@comblang/language';
 import type { Diagnostic } from '@comblang/shared';
+import {
+  exportCompiledSourceBlueprint,
+  type BlueprintExportOptions,
+  type BlueprintExportResult,
+} from './blueprint-export.js';
 
-export type CompiledSourceResult = SourceCompilationArtifact;
+export type CompiledSourceResult = SourceCompilationArtifact & {
+  readonly blueprintExport?: BlueprintExportResult;
+};
 export type { SourceCompilationEnvironment };
 export type { SourceCompilationObserver };
 
@@ -17,8 +24,10 @@ export function compileSource(
   environment: SourceCompilationEnvironment = {},
   preflightDiagnostics: readonly Diagnostic[] = [],
   observe?: SourceCompilationObserver,
+  blueprintExport?: BlueprintExportOptions,
 ): CompiledSourceResult {
-  return sourceCompilationArtifact(
-    compileSourceProgram(file, environment, preflightDiagnostics, observe),
-  );
+  const compilation = compileSourceProgram(file, environment, preflightDiagnostics, observe);
+  if (blueprintExport === undefined) return sourceCompilationArtifact(compilation);
+  const exported = exportCompiledSourceBlueprint(compilation, blueprintExport);
+  return { ...sourceCompilationArtifact(compilation), blueprintExport: exported };
 }

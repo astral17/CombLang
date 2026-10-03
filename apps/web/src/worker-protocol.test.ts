@@ -1,12 +1,36 @@
 import { describe, expect, test } from 'vitest';
 
 import type { CompilerWorkerRequest, CompilerWorkerResponse } from './worker-protocol.js';
+import { CompilerWorkerRuntime } from './compiler-worker-request.js';
 
 function parsedRevision(response: CompilerWorkerResponse): number | undefined {
   return response.kind === 'parsed' ? response.revision : undefined;
 }
 
 describe('compiler Worker protocol', () => {
+  test('opt-in concrete export is cloneable application data on the existing parsed response', async () => {
+    const request: CompilerWorkerRequest = {
+      kind: 'parse',
+      revision: 13,
+      file: { path: 'worker-export.factorio.ts', text: 'const output = new Network();' },
+      blueprintExport: {},
+    };
+    const response: CompilerWorkerResponse = await new CompilerWorkerRuntime().handle(
+      structuredClone(request),
+    );
+    expect(structuredClone(response)).toEqual(response);
+    expect(response).toMatchObject({
+      kind: 'parsed',
+      revision: 13,
+      result: {
+        blueprintExport: {
+          ok: true,
+          document: { blueprint: { label: 'CombLang generated circuit', entities: [], wires: [] } },
+        },
+      },
+    });
+  });
+
   test('keeps readiness as a payload-free control response', () => {
     const ready: CompilerWorkerResponse = { kind: 'ready' };
 

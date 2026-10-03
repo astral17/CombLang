@@ -98,8 +98,8 @@ Compiler/export codes such as `CP1002` are retained. Arguments are validated
 before source execution. Exactly one source is accepted; `--` ends option parsing
 for literal filenames beginning with `-`. Project linking, parameter overrides,
 `--project`, `--format`, and `--exchange` are unsupported here. Exchange encoding
-is a separate command. Worker/web export remains concrete without metadata
-transport or parameter UI.
+is a separate command. The web copy/preview controls remain concrete; optional
+Worker result export is described below, without parameter UI or overrides.
 
 ## Mapping
 
@@ -140,6 +140,67 @@ comparisons with a default 1024-row export allocation limit. A missing resolved
 operand color, unsupported native field, malformed physical Entity, or excessive
 condition expansion fails with a source-aware `BlueprintJsonError`; the
 generator never truncates or changes the circuit silently.
+
+## Optional Worker result export
+
+The existing compiler Worker `parse` request accepts optional cloneable
+`blueprintExport: { parameters?: boolean; label?: string }` data. Omitting it
+preserves the previous response shape and performs no extra native projection.
+An empty record requests concrete JSON; `parameters: true` requests the same
+supported numeric metadata as the CLI, from the exact Worker-local compilation.
+With no declarations, both requested modes return an ordinary concrete document.
+The default label is `CombLang generated circuit` and the expansion bound remains
+1024 rows. Explicit `false` and an empty label are accepted.
+
+```ts
+const request = {
+  kind: 'parse',
+  revision: 7,
+  file: { path: 'simple.factorio.ts', text: 'const output = new Network();' },
+  blueprintExport: { parameters: true, label: 'My circuit' },
+};
+// Post this ordinary data to the existing compiler Worker.
+```
+
+The existing `parsed` response echoes the revision and adds only an optional
+`result.blueprintExport` union:
+
+```ts
+type BlueprintExportResult =
+  { ok: true; document: FactorioBlueprintJson } | { ok: false; diagnostics: readonly Diagnostic[] };
+```
+
+`FactorioBlueprintJson` is the readable native document type from
+`@comblang/compiler/blueprint-json`; `Diagnostic` is from `@comblang/shared`.
+The field belongs to the web application result, not to the canonical source
+artifact, Direct Plan or NCIR schema. The whole response is cloneable: it contains
+no local execution, parameter handles, registrations, symbolic templates, callbacks
+or trusted replay authority. Opaque native formula strings are ordinary document
+data, not executable expressions.
+
+Export happens before local capture is stripped, with a single source execution.
+Failure of an explicit numeric/native export returns diagnostics and no fallback
+document, without adding errors to an otherwise successful compilation pipeline.
+Its concrete Plan/ResolvedCircuit remains usable for tests and simulation.
+Compile/preflight errors produce a failed requested export using the existing
+error diagnostics and do not attempt projection. Warnings remain in the compile
+pipeline and do not prevent export. Codes, source spans and related information
+are retained; semantic paths appear in diagnostic messages.
+
+Options are checked before provider loading or source execution. Only plain or
+null-prototype enumerable data records with boolean `parameters` and string
+`label` fields are accepted; present `undefined` fields, accessors, symbols,
+unknown keys and wrong types produce a source-independent `WP1005` preflight
+error. Labels use the codec's existing 4,194,304-byte UTF-8 limit. Options are
+snapshotted immutably without invoking getters. Provider/profile validation,
+Worker cache selection and revision/progress behavior remain unchanged; options
+do not grant Entity authority or infer a provider. Exact combinators still need
+the existing selected profile or trusted Worker-local host environment.
+
+This provides an opt-in result transport, not UI/copy-button integration,
+parameter overrides or a binding protocol. Native formula evaluation,
+original-value substitution, recipe dependencies and placement validity remain
+unverified. Default preview/copy and simulation continue to use concrete defaults.
 
 ## Generated lookup evidence
 

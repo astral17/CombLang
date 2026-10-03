@@ -7,6 +7,7 @@ import type {
   PrototypeEnvironment,
 } from '@comblang/prototypes';
 import type { DiagnosticPolicy } from '@comblang/shared';
+import type { BlueprintExportOptions } from './blueprint-export.js';
 
 export interface BrowserPrototypeProfileSource {
   /** Normalized or raw Factorio Prototype JSON. It is parsed only inside the Worker. */
@@ -37,6 +38,7 @@ export interface CompilerWorkerRequest {
   readonly diagnosticPolicy?: DiagnosticPolicy;
   readonly prototypeProfile?: BrowserPrototypeProfile;
   readonly entityReplayContext?: EntityReplayContextTransport;
+  readonly blueprintExport?: BlueprintExportOptions;
 }
 
 export interface BrowserPrototypeEnvironmentReport {

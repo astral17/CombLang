@@ -23,6 +23,11 @@ import {
 } from '@comblang/runtime/entity-provisioning';
 
 import { compileSource } from './compile-source.js';
+import {
+  BrowserBlueprintExportRequestError,
+  readBlueprintExportOptions,
+  type BlueprintExportOptions,
+} from './blueprint-export.js';
 import type {
   BrowserPrototypeEnvironmentReport,
   CompilerWorkerProgressStage,
@@ -69,9 +74,11 @@ function profileFailure(error: unknown): Diagnostic {
               ? error.code
               : error instanceof BrowserDiagnosticPolicyError
                 ? error.code
-                : error instanceof EntityReplayContextError
+                : error instanceof BrowserBlueprintExportRequestError
                   ? error.code
-                  : 'WP1003',
+                  : error instanceof EntityReplayContextError
+                    ? error.code
+                    : 'WP1003',
     severity: 'error',
     message: error instanceof Error ? error.message : 'Unable to load the prototype profile.',
   };
@@ -93,6 +100,16 @@ export class CompilerWorkerRuntime {
     observe?: (stage: CompilerWorkerProgressStage) => void,
   ): Promise<CompilerWorkerParsedResponse> {
     observe?.('receive');
+    let blueprintExport: BlueprintExportOptions | undefined;
+    try {
+      blueprintExport = readBlueprintExportOptions(request);
+    } catch (error) {
+      return {
+        kind: 'parsed',
+        revision: request.revision,
+        result: compileSource(request.file, {}, [profileFailure(error)], observe, {}),
+      };
+    }
     let diagnosticPolicy: DiagnosticPolicy | undefined;
     try {
       diagnosticPolicy =
@@ -114,6 +131,7 @@ export class CompilerWorkerRuntime {
             ),
           ],
           observe,
+          blueprintExport,
         ),
       };
     }
@@ -146,7 +164,7 @@ export class CompilerWorkerRuntime {
       return {
         kind: 'parsed',
         revision: request.revision,
-        result: compileSource(request.file, {}, [profileFailure(error)], observe),
+        result: compileSource(request.file, {}, [profileFailure(error)], observe, blueprintExport),
       };
     }
     if (request.prototypeProfile === undefined) {
@@ -170,13 +188,20 @@ export class CompilerWorkerRuntime {
             },
             [],
             observe,
+            blueprintExport,
           ),
         };
       } catch (error) {
         return {
           kind: 'parsed',
           revision: request.revision,
-          result: compileSource(request.file, {}, [profileFailure(error)], observe),
+          result: compileSource(
+            request.file,
+            {},
+            [profileFailure(error)],
+            observe,
+            blueprintExport,
+          ),
         };
       }
     }
@@ -291,6 +316,7 @@ export class CompilerWorkerRuntime {
           },
           [],
           observe,
+          blueprintExport,
         ),
         prototypeEnvironment: environment,
       };
@@ -298,7 +324,7 @@ export class CompilerWorkerRuntime {
       return {
         kind: 'parsed',
         revision: request.revision,
-        result: compileSource(request.file, {}, [profileFailure(error)], observe),
+        result: compileSource(request.file, {}, [profileFailure(error)], observe, blueprintExport),
       };
     }
   }

@@ -330,13 +330,17 @@ independence in Factorio, infer replacement scope from every JSON number, or
 claim verified native placement behavior.
 
 The CLI `blueprint export --parameters` exposes this host-local numeric metadata
-export; ordinary CLI export and web copy still emit concrete configuration.
+export; the compiler Worker can request the same document via opt-in
+`blueprintExport: { parameters: true }` result data. Worker-local capture/authority
+is not transported, and export diagnostics are separate from successful concrete
+compilation. Ordinary CLI export and web preview/copy still emit concrete configuration.
 See [source export CLI](blueprint-json.md#source-export-cli) for prototype selection
 and file/stdout conventions. Existing parameter-free export bytes are
 unchanged. This subset preserves explicit numeric formula strings but does not
 add native parameter indices,
-recipe/property dependencies, signal placeholders, Worker transport or UI
-integration. Simulation remains concrete; native placement, substitution and
+recipe/property dependencies, signal placeholders, Worker binding/override
+transport or UI integration. See [optional Worker result export](blueprint-json.md#optional-worker-result-export)
+for the request/result contract. Simulation remains concrete; native placement, substitution and
 formula evaluation require independent Factorio evidence.
 
 Known limitation: this is a source-language feature, not a hardened sandbox.

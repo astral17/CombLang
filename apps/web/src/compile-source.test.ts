@@ -1,8 +1,47 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import * as sourceApi from '@comblang/runtime/source-compilation';
+import * as blueprintJson from '@comblang/compiler/blueprint-json';
 import { loadPrototypeDatabase, syntheticPrototypeDatabase } from '@comblang/prototypes';
 import { sourceFileId, sourceSpan, type Diagnostic } from '@comblang/shared';
 
 import { compileSource } from './compile-source.js';
+
+afterEach(() => vi.restoreAllMocks());
+
+describe('optional browser blueprint export', () => {
+  const file = {
+    path: 'export.factorio.ts',
+    text: "const A = Signal('virtual', 'signal-A'); const output = new Network(); output += CC(5 * A);",
+  };
+
+  test('absent options retain the exact old artifact and do no projection work', () => {
+    const expected = sourceApi.sourceCompilationArtifact(sourceApi.compileSourceProgram(file));
+    const generator = vi.spyOn(blueprintJson, 'generateBlueprintJson');
+    const exporter = vi.spyOn(sourceApi, 'exportSourceCompilationNativeBlueprint');
+    const result = compileSource(file);
+    expect(result).toEqual(expected);
+    expect(result).not.toHaveProperty('blueprintExport');
+    expect(generator).not.toHaveBeenCalled();
+    expect(exporter).not.toHaveBeenCalled();
+  });
+
+  test('concrete opt-in and no-declaration parameter mode preserve the same concrete pair', () => {
+    const legacy = compileSource(file);
+    const concrete = compileSource(file, {}, [], undefined, {});
+    const parameterMode = compileSource(file, {}, [], undefined, { parameters: true });
+    expect(concrete.blueprintExport).toMatchObject({
+      ok: true,
+      document: { blueprint: { label: 'CombLang generated circuit' } },
+    });
+    expect(parameterMode.blueprintExport).toEqual(concrete.blueprintExport);
+    const { blueprintExport: _export, ...artifact } = concrete;
+    expect(artifact).toEqual(legacy);
+    expect(
+      compileSource(file, {}, [], undefined, { parameters: false, label: '' }).blueprintExport,
+    ).toMatchObject({ ok: true, document: { blueprint: { label: '' } } });
+    expect(structuredClone(concrete)).toEqual(concrete);
+  });
+});
 
 describe('browser source compilation', () => {
   test('retains an environment warning and its source information after successful lowering', () => {

@@ -1,4 +1,6 @@
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
+import * as prototypeApi from '@comblang/prototypes';
+import { DEFAULT_BLUEPRINT_CODEC_LIMITS } from '@comblang/blueprint';
 import {
   generatePrototypeAsset,
   loadPrototypeDatabase,
@@ -184,6 +186,130 @@ function exactSelectorHostContext() {
     },
   };
 }
+
+afterEach(() => vi.restoreAllMocks());
+
+describe('Worker blueprint export ingress', () => {
+  test.each([
+    null,
+    [],
+    1,
+    true,
+    'json',
+    new Date(0),
+    Object.create({ parameters: true }),
+    { parameters: undefined },
+    { label: undefined },
+    { parameters: 1 },
+    { label: false },
+    { parameters: 'true' },
+    { label: null },
+    { unknown: true },
+    { bindings: [] },
+    { [Symbol('hidden')]: true },
+    Object.defineProperty({}, 'label', { value: 'hidden' }),
+  ])('rejects invalid options before loading profiles or executing source: %j', async (options) => {
+    const load = vi.spyOn(prototypeApi, 'loadPrototypeInputJson');
+    const stages: string[] = [];
+    const response = await new CompilerWorkerRuntime().handle(
+      {
+        kind: 'parse',
+        revision: 79,
+        file: { path: 'invalid-options.factorio.ts', text: "throw new Error('source executed');" },
+        prototypeProfile: { source: '{' },
+        blueprintExport: options as never,
+      },
+      (stage) => stages.push(stage),
+    );
+    expect(response.revision).toBe(79);
+    expect(response.result.pipelineDiagnostics).toEqual([
+      expect.objectContaining({ code: 'WP1005', severity: 'error' }),
+    ]);
+    expect(response.result.plan).toBeUndefined();
+    expect(response.result.blueprintExport).toMatchObject({
+      ok: false,
+      diagnostics: [{ code: 'WP1005' }],
+    });
+    expect(JSON.stringify(response.result.pipelineDiagnostics)).not.toContain('source executed');
+    expect(stages).not.toContain('execute');
+    expect(stages).not.toContain('profile');
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  test('uses descriptors without invoking getters on options or request property', async () => {
+    const getter = vi.fn(() => {
+      throw new Error('getter executed');
+    });
+    const options = Object.defineProperty({}, 'parameters', { enumerable: true, get: getter });
+    const request = {
+      kind: 'parse' as const,
+      revision: 3,
+      file: { path: 'getters.ts', text: "throw new Error('source executed');" },
+    };
+    const runtime = new CompilerWorkerRuntime();
+    for (const input of [
+      { ...request, blueprintExport: options },
+      Object.defineProperty({ ...request }, 'blueprintExport', { enumerable: true, get: getter }),
+    ]) {
+      const response = await runtime.handle(input as never);
+      expect(response.result.pipelineDiagnostics[0]?.code).toBe('WP1005');
+      expect(JSON.stringify(response.result.pipelineDiagnostics)).not.toMatch(
+        /getter executed|source executed/,
+      );
+    }
+    expect(getter).not.toHaveBeenCalled();
+  });
+
+  test('accepts absent/undefined and plain/null-prototype records, snapshots before awaits', async () => {
+    const runtime = new CompilerWorkerRuntime();
+    const file = { path: 'options.ts', text: 'const output = new Network();' };
+    const request = { kind: 'parse' as const, revision: 4, file };
+    const legacy = await runtime.handle(request);
+    expect(await runtime.handle({ ...request, blueprintExport: undefined } as never)).toEqual(
+      legacy,
+    );
+    const options = Object.assign(Object.create(null), { label: '', parameters: false });
+    const response = await runtime.handle({ ...request, blueprintExport: options });
+    expect(response.result.blueprintExport).toMatchObject({
+      ok: true,
+      document: { blueprint: { label: '' } },
+    });
+    const mutable = { label: 'before', parameters: false };
+    const pending = runtime.handle({
+      ...request,
+      prototypeProfile: { source: JSON.stringify(syntheticPrototypeDatabase()) },
+      blueprintExport: mutable,
+    });
+    mutable.label = 'after';
+    mutable.parameters = true;
+    expect((await pending).result.blueprintExport).toMatchObject({
+      ok: true,
+      document: { blueprint: { label: 'before' } },
+    });
+  });
+
+  test('uses the existing codec UTF-8 label bound, including multibyte boundary', async () => {
+    const runtime = new CompilerWorkerRuntime();
+    const request = {
+      kind: 'parse' as const,
+      revision: 5,
+      file: { path: 'label.ts', text: 'const output = new Network();' },
+    };
+    const max = DEFAULT_BLUEPRINT_CODEC_LIMITS.maxStringBytes;
+    const boundary = '界'.repeat(Math.floor(max / 3)) + 'x'.repeat(max % 3);
+    const accepted = await runtime.handle({ ...request, blueprintExport: { label: boundary } });
+    // Ingress accepts the boundary; the emitter may reject its aggregate header budget.
+    expect(accepted.result.plan).toBeDefined();
+    expect(accepted.result.pipelineDiagnostics).toEqual([]);
+    const rejected = await runtime.handle({
+      ...request,
+      blueprintExport: { label: boundary + 'x' },
+      prototypeProfile: { source: '{' },
+    });
+    expect(rejected.result.pipelineDiagnostics[0]?.code).toBe('WP1005');
+    expect(rejected.result.plan).toBeUndefined();
+  });
+});
 
 describe('browser compiler Worker prototype profile', () => {
   test('compiles the generated lookup fixture through the Worker boundary', async () => {
