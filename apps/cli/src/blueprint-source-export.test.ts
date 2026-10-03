@@ -292,6 +292,16 @@ describe('source blueprint export CLI', () => {
       '$.parameters[0]',
     ],
     [
+      "const amount = Param.signal('Channel', A);",
+      "Arithmetic({ left: 2, operation: 'add', right: 5, output: amount })",
+      '$.parameters[0]',
+    ],
+    [
+      "const amount = Param.signal('Channel', A); const count = Param.number('Amount', 5);",
+      "Arithmetic({ left: 2, operation: 'add', right: count, output: amount })",
+      '$.parameters[0]',
+    ],
+    [
       "const amount = Param.number('Unused', 5);",
       'Constant({ sections: [{ filters: [{ signal: A, value: 3 }] }] })',
       '$.parameters[0]',

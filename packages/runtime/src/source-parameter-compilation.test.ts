@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 
 import {
@@ -126,6 +127,422 @@ function expectConcreteDataTree(value: unknown, active = new WeakSet<object>()):
 }
 
 describe('ordinary source parameter declarations', () => {
+  test.each([false, true])(
+    'captures exact Arithmetic Signal output with numeric operand: %s',
+    (numeric) => {
+      const text = `const channel = Param.signal('Result', Signal('virtual', 'signal-B'));
+${numeric ? "const amount = Param.number('Amount', 5);" : ''}
+const output = new Network();
+output += Arithmetic({ left: 2, operation: 'add', right: ${numeric ? 'amount' : '5'}, output: channel });`;
+      const parsed = parseFile({ path: 'arithmetic-signal-output.factorio.ts', text });
+      expect(validateDslSemantics(parsed)).toEqual([]);
+      const compilation = compileSourceProgram(
+        { path: 'arithmetic-signal-output.factorio.ts', text },
+        parameterHost(),
+      );
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      expect(compilation.plan!.producers).toHaveLength(1);
+      expect(compilation.plan!.entities).toHaveLength(1);
+      expect(compilation.plan!.producers[0]).toMatchObject({
+        kind: 'arithmetic',
+        output: { kind: 'signal', signal: signal('virtual', 'signal-B') },
+        right: { kind: 'constant', value: 5 },
+      });
+      const captured = executeElaborationProgramWithParameters(
+        transformElaborationModule(parsed),
+        parameterHost(),
+      );
+      expect(captured.arithmeticTemplates).toHaveLength(1);
+      expect(captured.arithmeticTemplates[0]!.template.output).toMatchObject({
+        kind: 'signal',
+        signal: captured.parameters[0]!.handle,
+      });
+      const pair = bindSourceCompilationCircuit(compilation);
+      const replay = executeResolvedDirectPlan(pair.plan, pair.resolvedCircuit);
+      expect(
+        replay.circuit
+          .createSimulation()
+          .step()
+          .read(replay.network('output').id)
+          .get(signal('virtual', 'signal-B')),
+      ).toBe(7);
+    },
+  );
+
+  test.each(['concrete', 'each', 'parameter'] as const)(
+    'retains exact Arithmetic wildcard input rules for %s output',
+    (mode) => {
+      const text = `const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const channel = Param.signal('Result', Signal('virtual', 'signal-C'));
+const input = CC(2 * A, 4 * B);
+const output = new Network();
+output += Arithmetic({ left: Each(input), operation: 'add', right: 5,
+  output: ${mode === 'parameter' ? 'channel' : mode === 'each' ? 'Each' : "Signal('virtual', 'signal-C')"} });`;
+      const compilation = compileSourceProgram(
+        { path: 'each-arithmetic-output.factorio.ts', text },
+        parameterHost(),
+      );
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      const pair = bindSourceCompilationCircuit(compilation);
+      const replay = executeResolvedDirectPlan(pair.plan, pair.resolvedCircuit);
+      const simulation = replay.circuit.createSimulation();
+      simulation.step();
+      const result = simulation.step().read(replay.network('output').id);
+      if (mode === 'each') {
+        expect(result.get(signal('virtual', 'signal-A'))).toBe(7);
+        expect(result.get(signal('virtual', 'signal-B'))).toBe(9);
+      } else {
+        expect(result.get(signal('virtual', 'signal-C'))).toBe(16);
+      }
+      expect(pair.plan.producers).toHaveLength(2);
+      if (mode === 'parameter') {
+        const bound = bindSourceCompilationCircuit(compilation, [
+          {
+            parameter: listSourceCompilationParameters(compilation)[0]!.parameter,
+            value: signal('item', 'iron-plate', 'uncommon'),
+          },
+        ]);
+        const rebound = executeResolvedDirectPlan(bound.plan, bound.resolvedCircuit);
+        const next = rebound.circuit.createSimulation();
+        next.step();
+        expect(
+          next
+            .step()
+            .read(rebound.network('output').id)
+            .get(signal('item', 'iron-plate', 'uncommon')),
+        ).toBe(16);
+      }
+    },
+  );
+
+  test('executes the literal documented Arithmetic output program and host binding example', () => {
+    const page = readFileSync(
+      new URL('../../../docs/native-objects-deciders-and-parameters.md', import.meta.url),
+      'utf8',
+    );
+    const section = page.match(
+      /### Arithmetic output Signal parameters([\s\S]*?)### Numeric metadata/,
+    )?.[1];
+    const examples = [...section!.matchAll(/```ts\r?\n([\s\S]*?)```/g)].map((match) => match[1]!);
+    expect(examples).toHaveLength(2);
+    const compilation = compileSourceProgram(
+      { path: 'documented-output.factorio.ts', text: examples[0]! },
+      parameterHost(),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const bound = Function(
+      'compilation',
+      'listSourceCompilationParameters',
+      'bindSourceCompilationCircuit',
+      `${examples[1]}\nreturn bound;`,
+    )(compilation, listSourceCompilationParameters, bindSourceCompilationCircuit) as ReturnType<
+      typeof bindSourceCompilationCircuit
+    >;
+    const replay = executeResolvedDirectPlan(bound.plan, bound.resolvedCircuit);
+    expect(
+      replay.circuit
+        .createSimulation()
+        .step()
+        .read(replay.network('output').id)
+        .get(signal('item', 'iron-plate', 'uncommon')),
+    ).toBe(13);
+  });
+
+  test.each([
+    ["Param.number('Wrong', 5)", 'left: 2, right: 5, output: slot'],
+    [
+      "Param.signal('Result', Signal('virtual', 'signal-B'))",
+      "left: slot, right: 5, output: Signal('virtual', 'signal-A')",
+    ],
+    [
+      "Param.signal('Result', Signal('virtual', 'signal-B'))",
+      "left: 2, right: slot, output: Signal('virtual', 'signal-A')",
+    ],
+  ])('rejects wrong-kind output or bare Signal operand: %s / %s', (declaration, fields) => {
+    const text = `const slot = ${declaration};\nArithmetic({ ${fields}, operation: 'add' });`;
+    const compilation = compileSourceProgram(
+      { path: 'arithmetic-wrong-slot.factorio.ts', text },
+      parameterHost(),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'RT2027',
+        span: {
+          fileId: compilation.fileId,
+          start: text.indexOf('Arithmetic'),
+          end: text.length - 1,
+        },
+      }),
+    ]);
+    expect(compilation.plan).toBeUndefined();
+  });
+
+  test('binds Arithmetic output and numeric override atomically without rerun or physical/provenance changes', () => {
+    const key = '__comblang_arithmetic_output_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const had = Object.hasOwn(globals, key);
+    const before = globals[key];
+    globals[key] = 0;
+    const text = `globalThis.${key} += 1;
+const channel = Param.signal('Result', Signal('virtual', 'signal-B'));
+const amount = Param.number('Amount', 5);
+function Make() { return Arithmetic({ left: 2, operation: 'add', right: amount, output: channel }).at(2, 3, 4); }
+const device = Make();
+const output = new Network<R>();
+const mirror = new Network<G>();
+device.to(output, mirror);`;
+    try {
+      const compilation = compileSourceProgram(
+        { path: 'paired-arithmetic-output.factorio.ts', text },
+        parameterHost(),
+      );
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      const original = structuredClone(sourceCompilationArtifact(compilation));
+      const [channel, amount] = listSourceCompilationParameters(compilation);
+      const replacement = signal('item', 'iron-plate', 'uncommon');
+      const bindings = [
+        { parameter: channel!.parameter, value: replacement },
+        { parameter: amount!.parameter, value: 11 },
+      ];
+      const defaults = bindSourceCompilationCircuit(compilation);
+      const bound = bindSourceCompilationCircuit(compilation, bindings);
+      const foreignCompilation = compileSourceProgram(
+        { path: 'foreign-binding.factorio.ts', text: text.replace(`globalThis.${key} += 1;`, '') },
+        parameterHost(),
+      );
+      const foreignParameter = listSourceCompilationParameters(foreignCompilation)[0]!.parameter;
+      expect(() =>
+        bindSourceCompilationCircuit(compilation, [
+          { parameter: foreignParameter, value: replacement },
+        ]),
+      ).toThrow('different parameter session');
+      expect(() =>
+        bindSourceCompilationCircuit(compilation, [
+          { parameter: { ...channel!.parameter } as never, value: replacement },
+        ]),
+      ).toThrow('registered parameter handle');
+      expect(() => bindSourceCompilationCircuit({ ...compilation }, bindings)).toThrow(
+        'no host-local source parameter declarations',
+      );
+      expect(bindSourceCompilationCircuit(compilation, bindings)).toEqual(bound);
+      expect(bindSourceCompilationCircuit(compilation)).toEqual(defaults);
+      expect(Object.isFrozen(bound.plan)).toBe(true);
+      expect(Object.isFrozen(bound.resolvedCircuit)).toBe(true);
+      expect(bound.plan.producers).toHaveLength(1);
+      expect(bound.plan.entities).toHaveLength(1);
+      expect(bound.plan.producers[0]).toEqual({
+        ...defaults.plan.producers[0],
+        right: { kind: 'constant', value: 11 },
+        output: { kind: 'signal', signal: replacement },
+      });
+      expect(bound.plan.entities[0]).toEqual({
+        ...defaults.plan.entities[0],
+        configuration: {
+          ...defaults.plan.entities[0]!.configuration,
+          right: { kind: 'constant', value: 11 },
+          output: { kind: 'signal', signal: replacement },
+        },
+      });
+      const { producers: _dp, entities: _de, ...defaultPlanData } = defaults.plan;
+      const { producers: _bp, entities: _be, ...boundPlanData } = bound.plan;
+      expect(boundPlanData).toEqual(defaultPlanData);
+      const { producers: _dirp, entities: _dire, ...defaultIrData } = defaults.resolvedCircuit.ir;
+      const { producers: _birp, entities: _bire, ...boundIrData } = bound.resolvedCircuit.ir;
+      expect(boundIrData).toEqual(defaultIrData);
+      expect(bound.resolvedCircuit.ir.producers[0]).toEqual({
+        ...defaults.resolvedCircuit.ir.producers[0],
+        config: {
+          ...defaults.resolvedCircuit.ir.producers[0]!.config,
+          right: { kind: 'constant', value: 11 },
+          output: { kind: 'signal', signal: replacement },
+        },
+      });
+      expect(bound.resolvedCircuit.ir.entities[0]).toEqual({
+        ...defaults.resolvedCircuit.ir.entities[0],
+        configuration: {
+          ...defaults.resolvedCircuit.ir.entities[0]!.configuration,
+          right: { kind: 'constant', value: 11 },
+          output: { kind: 'signal', signal: replacement },
+        },
+      });
+      const defaultJson = generateBlueprintJson(defaults.resolvedCircuit.ir);
+      const boundJson = generateBlueprintJson(bound.resolvedCircuit.ir);
+      expect(boundJson.blueprint.wires).toEqual(defaultJson.blueprint.wires);
+      expect(boundJson.blueprint.entities[0]).toEqual({
+        ...defaultJson.blueprint.entities[0],
+        control_behavior: {
+          arithmetic_conditions: {
+            first_constant: 2,
+            operation: '+',
+            second_constant: 11,
+            output_signal: { name: 'iron-plate', quality: 'uncommon' },
+          },
+        },
+      });
+      for (const [pair, outputSignal, expected] of [
+        [defaults, signal('virtual', 'signal-B'), 7],
+        [bound, replacement, 13],
+      ] as const) {
+        const replay = executeResolvedDirectPlan(pair.plan, pair.resolvedCircuit);
+        const snapshot = replay.circuit.createSimulation().step();
+        for (const network of ['output', 'mirror'])
+          expect(snapshot.read(replay.network(network).id).get(outputSignal)).toBe(expected);
+      }
+      expect(() => executeResolvedDirectPlan(defaults.plan, bound.resolvedCircuit)).toThrow();
+      for (const invalid of [
+        11,
+        null,
+        { type: 'invalid', name: 'x' },
+        { type: 'item', name: '' },
+        { type: 'item', name: 'iron-plate', quality: 3 },
+      ]) {
+        let failure: unknown;
+        try {
+          bindSourceCompilationCircuit(compilation, [
+            { parameter: amount!.parameter, value: 12 },
+            { parameter: channel!.parameter, value: invalid },
+          ]);
+        } catch (error) {
+          failure = error;
+        }
+        expect(failure).toMatchObject({ code: 'CP1000', span: channel!.source });
+        expect(sourceCompilationArtifact(compilation)).toEqual(original);
+        expect(bindSourceCompilationCircuit(compilation, bindings)).toEqual(bound);
+      }
+      const cloned = structuredClone(sourceCompilationArtifact(compilation));
+      expectConcreteDataTree([cloned.plan, cloned.resolvedCircuit]);
+      expect(cloned.plan).toEqual(original.plan);
+      expect(cloned.resolvedCircuit).toEqual(original.resolvedCircuit);
+      expect(globals[key]).toBe(1);
+    } finally {
+      if (had) globals[key] = before;
+      else delete globals[key];
+    }
+  });
+
+  test('rejects foreign, copied and structural Signal output handles at the exact Arithmetic use', () => {
+    const key = '__comblang_arithmetic_output_handle';
+    const globals = globalThis as Record<string, unknown>;
+    const had = Object.hasOwn(globals, key);
+    const before = globals[key];
+    const foreign = createBlueprintParameterSession().signal('foreign', {
+      defaultValue: signal('virtual', 'signal-B'),
+    });
+    try {
+      for (const candidate of [
+        foreign,
+        { ...foreign },
+        { kind: 'signal', label: 'lookalike', defaultValue: signal('virtual', 'signal-B') },
+      ]) {
+        globals[key] = candidate;
+        const text = `const local = Param.signal('Local', Signal('virtual', 'signal-A'));
+Arithmetic({ left: 2, operation: 'add', right: 5, output: globalThis.${key} });`;
+        const compilation = compileSourceProgram(
+          { path: 'foreign-output.factorio.ts', text },
+          parameterHost(),
+        );
+        expect(compilation.pipelineDiagnostics).toEqual([
+          expect.objectContaining({
+            code: 'RT2027',
+            message: expect.stringContaining(
+              candidate === foreign
+                ? 'different parameter session'
+                : 'unregistered parameter-like object',
+            ),
+            span: {
+              fileId: compilation.fileId,
+              start: text.indexOf('Arithmetic'),
+              end: text.length - 1,
+            },
+          }),
+        ]);
+        expect(compilation.plan).toBeUndefined();
+      }
+    } finally {
+      if (had) globals[key] = before;
+      else delete globals[key];
+    }
+  });
+
+  test('rolls back Signal-output templates and hardware after caught construction and failed instance', () => {
+    const text = `const channel = Param.signal('Result', Signal('virtual', 'signal-B'));
+const wrong = Param.number('Wrong', 5);
+function Broken() {
+  const device = Arithmetic({ left: 2, operation: 'add', right: 5, output: channel });
+  const sink = new Network(); sink += device;
+  Arithmetic({ left: 2, operation: 'add', right: 5, output: wrong });
+}
+try { t.instantiate(Broken); } catch {}
+try { Arithmetic({ left: 2, operation: 'add', right: 5, output: wrong }); } catch {}
+const device = Arithmetic({ left: 2, operation: 'add', right: 5, output: channel });
+const output = new Network(); output += device;`;
+    const environment = parameterHost();
+    const captured = executeElaborationProgramWithParameters(
+      transformElaborationModule(
+        parseFile({ path: 'arithmetic-output-rollback.factorio.ts', text }),
+        { testContextName: 't' },
+      ),
+      environment,
+    );
+    expect(captured.plan.producers).toHaveLength(1);
+    expect(captured.plan.entities).toHaveLength(1);
+    expect(captured.plan.entities[0]!.ordinal).toBe(1);
+    expect(captured.plan.debugInstances).toEqual([]);
+    expect(captured.arithmeticTemplates).toHaveLength(1);
+    const execution = tryElaborateDirectPlan(
+      captured.plan,
+      environment.trustedEntityReplayContext,
+    ).execution!;
+    const bound = bindCapturedSourceConfigurationTemplates(captured, execution, [
+      { parameter: captured.parameters[0]!.handle, value: signal('item', 'iron-plate') },
+    ]);
+    expect(bound.producers[0]!.config).toMatchObject({
+      output: { kind: 'signal', signal: signal('item', 'iron-plate') },
+    });
+  });
+
+  test.each([
+    "Param.signal('Bad', { type: 'virtual', name: '' })",
+    "Param.signal('Bad', { type: 'bad', name: 'x' })",
+  ])('invalid Signal default retains declaration context: %s', (declaration) => {
+    const text = `const channel = ${declaration};\nArithmetic({ left: 2, operation: 'add', right: 5, output: channel });`;
+    const compilation = compileSourceProgram(
+      { path: 'invalid-output-default.factorio.ts', text },
+      parameterHost(),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'EX1001',
+        span: {
+          fileId: compilation.fileId,
+          start: text.indexOf('Param.signal'),
+          end: text.indexOf(';'),
+        },
+      }),
+    ]);
+    expect(compilation.plan).toBeUndefined();
+  });
+
+  test.each([
+    'const input = new Network(); input[channel] += CC(1 * A);',
+    'const input = new Network(); input + channel;',
+    'const input = new Network(); IF(input[A] > 0, channel);',
+    'const input = new Network(); when(input[A] > 0).then(channel);',
+  ])('does not widen unrelated source Signal parameter use: %s', (use) => {
+    const text = `const A = Signal('virtual', 'signal-A');
+const channel = Param.signal('Result', Signal('virtual', 'signal-B'));
+${use}`;
+    const compilation = compileSourceProgram(
+      { path: 'unsupported-output-context.factorio.ts', text },
+      parameterHost(),
+    );
+    const errors = compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.span).toMatchObject({ fileId: compilation.fileId });
+    expect(compilation.plan).toBeUndefined();
+  });
+
   test('evaluates metadata once after label/default and keeps formulas independent of concrete binding', () => {
     const text = `const order = [];
 function label() { order.push('label'); return 'Amount'; }

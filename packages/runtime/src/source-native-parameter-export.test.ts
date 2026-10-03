@@ -90,6 +90,50 @@ output += Decider({ condition: input[A] > amount, outputs: [input[A]], elseOutpu
 output += Selector({ input, operation: 'select', index: amount });`;
 
 describe('owning source native numeric parameter export', () => {
+  test.each([false, true])(
+    'Arithmetic Signal output still rejects native metadata (mixed numeric: %s) without losing concrete defaults',
+    (mixed) => {
+      const text = `${mixed ? "const amount = Param.number('Amount', 5);\n" : ''}const channel = Param.signal('Result', Signal('virtual', 'signal-B'));
+const output = new Network();
+output += Arithmetic({ left: 2, operation: 'add', right: ${mixed ? 'amount' : '5'}, output: channel });`;
+      const compilation = compile(text);
+      const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+      const error = exportFailure(compilation);
+      expect(error).toMatchObject({
+        code: 'CP1002',
+        path: `$.parameters[${mixed ? 1 : 0}]`,
+        span: sourceApi
+          .listSourceCompilationParameters(compilation)
+          .find(({ label }) => label === 'Result')!.source,
+      });
+      expect(text.slice(error.span!.start, error.span!.end)).toBe(
+        "Param.signal('Result', Signal('virtual', 'signal-B'))",
+      );
+      const concrete = generateBlueprintJson(compilation.resolvedCircuit!.ir);
+      expect(concrete.blueprint).not.toHaveProperty('parameters');
+      expect(concrete.blueprint.entities).toHaveLength(1);
+      expect(concrete.blueprint.entities[0]).toMatchObject({
+        control_behavior: {
+          arithmetic_conditions: {
+            first_constant: 2,
+            second_constant: 5,
+            output_signal: { name: 'signal-B' },
+          },
+        },
+      });
+      const bound = sourceApi.bindSourceCompilationCircuit(compilation);
+      const replay = executeResolvedDirectPlan(bound.plan, bound.resolvedCircuit);
+      expect(
+        replay.circuit
+          .createSimulation()
+          .step()
+          .read(replay.network('output').id)
+          .get(signal('virtual', 'signal-B')),
+      ).toBe(7);
+      expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
+    },
+  );
+
   test('compiles the complete documented numeric metadata example and exports its exact rows', () => {
     const page = readFileSync(
       new URL('../../../docs/native-objects-deciders-and-parameters.md', import.meta.url),

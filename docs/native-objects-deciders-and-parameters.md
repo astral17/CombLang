@@ -195,7 +195,7 @@ const limit = Param.number('Limit', 100);
 ```
 
 `Param` is reserved. Supported slots are an exact Arithmetic configuration's
-direct numeric operand, an exact Constant filter's direct Signal or count, an
+direct numeric operand or direct Signal output, an exact Constant filter's direct Signal or count, an
 exact Decider condition's direct right-hand numeric threshold, and exact
 Selector `select`'s `index` (number or Signal) or `count`'s `output` (Signal).
 Selector `selectMax` remains concrete; other Selector operations and slots are
@@ -204,6 +204,51 @@ and NCIR. Parameters are not JavaScript numbers, booleans, or loop bounds;
 arithmetic on a handle, control-flow use, coercion, and arbitrary function calls
 are rejected. Unsupported declaration forms report a source diagnostic
 (`CL1050` for malformed syntax; `CP1000` for an invalid concrete default or metadata).
+
+### Arithmetic output Signal parameters
+
+Exact `Arithmetic` accepts a Signal parameter directly in `output`, alongside
+the existing direct numeric parameter operands. This complete source program
+requires the trusted exact-Arithmetic host profile:
+
+```ts
+const A = Signal('virtual', 'signal-A');
+const channel = Param.signal('Result', Signal('virtual', 'signal-B'));
+const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Arithmetic({ left: 2, operation: 'add', right: amount, output: channel });
+```
+
+The default emits 7 under Signal B after one tick, using one physical Arithmetic
+and its linked Entity. A host-local override may change the output SignalID and
+numeric operand without adding hardware, Networks, wires or ticks, and without
+re-executing source. For the owning `compilation` above, using the existing
+`listSourceCompilationParameters` and `bindSourceCompilationCircuit` APIs:
+
+```ts
+const declarations = listSourceCompilationParameters(compilation);
+const result = declarations.find(({ label }) => label === 'Result');
+const amount = declarations.find(({ label }) => label === 'Amount');
+if (result === undefined || amount === undefined) throw new Error('Missing declarations');
+const bound = bindSourceCompilationCircuit(compilation, [
+  { parameter: result.parameter, value: { type: 'item', name: 'iron-plate', quality: 'uncommon' } },
+  { parameter: amount.parameter, value: 11 },
+]);
+```
+
+Strict replay uses `bound.plan` together with `bound.resolvedCircuit`; this pair
+emits 13 under the overridden item Signal after one tick. The original compilation
+continues to emit 7 under B. Bare Signal parameters remain invalid as `left` or
+`right` inputs; they are not Network selections. Network property keys, ordinary
+arithmetic, compact `IF`/`when` outputs, dynamic operations and coercion are not
+enabled by this slot. Concrete Signal and `Each` output behavior is unchanged.
+
+This is host-local concrete binding, not native ID replacement or binding UI.
+Ordinary concrete export uses defaults. Explicit native parameter metadata export
+still rejects Signal declarations with located `CP1002`, including compilations
+with otherwise valid numeric parameters; there is no concrete fallback in that
+explicit mode. Worker compilation/simulation/tests remain usable after this
+separate export failure.
 
 ### Numeric metadata
 

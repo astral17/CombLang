@@ -42,6 +42,15 @@ concrete Combinator type when callers need physical methods or both outputs.
 
 ## Output connections
 
+Exact `Arithmetic({ left, operation, right, output })` accepts a concrete Signal,
+`Each` or a direct current-session Signal parameter in `output`. Numeric parameter
+operands and that output compile to concrete defaults on the same physical device.
+Host-local binding can override them without new hardware or source execution;
+bare Signal parameters are not valid input operands or Network property keys.
+Native Signal metadata export remains unsupported (`CP1002`); ordinary concrete
+preview/export and simulation still work. There is no binding UI. See the
+[complete source and host example](../native-objects-deciders-and-parameters.md#arithmetic-output-signal-parameters).
+
 | Form                                         | Effect                                                 |
 | -------------------------------------------- | ------------------------------------------------------ |
 | `output += comb`                             | Attach the next available output lane.                 |

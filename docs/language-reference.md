@@ -640,7 +640,16 @@ canonical `add`, `subtract`, `multiply`, `divide`, `modulo`, `power`,
 `left-shift`, `right-shift`, `bit-and`, `bit-or`, and `bit-xor` names. Operands
 are safe integer constants or readable concrete-signal/Network/Pair/Combinator
 and `Each` sources; `Anything` and `Everything` are rejected. The output is a
-concrete Signal or `Each`/`EACH`. Numeric values use the same signed-int32
+concrete Signal, a direct current-session `Param.signal(...)` handle, or
+`Each`/`EACH`. Direct numeric operands also accept `Param.number(...)`. Parameter
+defaults are normalized immediately into the concrete configuration; host-local
+binding may override the output SignalID and numeric operands without changing
+hardware or topology. A bare Signal parameter is not a Network selection and
+remains invalid as `left` or `right`. Parameter keys, ordinary arithmetic and
+compact Decider outputs are not enabled. Explicit native metadata export still
+rejects Signal declarations with located `CP1002`; concrete preview/export and
+simulation use defaults. See the [complete output and binding example](native-objects-deciders-and-parameters.md#arithmetic-output-signal-parameters).
+Numeric values use the same signed-int32
 normalization as ordinary arithmetic. Exact Arithmetic requires the trusted
 base `entity:arithmetic-combinator` profile and creates one linked physical
 Entity; provider-backed ergonomic arithmetic also links when that base

@@ -221,6 +221,7 @@ interface NormalizedArithmeticConfiguration {
     | {
         readonly left?: BlueprintNumberParameterHandle;
         readonly right?: BlueprintNumberParameterHandle;
+        readonly output?: BlueprintSignalParameterHandle;
       }
     | undefined;
 }
@@ -2829,6 +2830,7 @@ class ElaborationRecorder {
     parameterSlots: {
       readonly left?: BlueprintNumberParameterHandle;
       readonly right?: BlueprintNumberParameterHandle;
+      readonly output?: BlueprintSignalParameterHandle;
     },
   ): void {
     if (this.#parameterCapture === undefined) return;
@@ -2851,7 +2853,7 @@ class ElaborationRecorder {
       right: templateOperand(descriptor.right, parameterSlots.right),
       output:
         descriptor.output.kind === 'signal'
-          ? { kind: 'signal', signal: descriptor.output.signal }
+          ? { kind: 'signal', signal: parameterSlots.output ?? descriptor.output.signal }
           : { kind: 'each' },
     });
     this.#arithmeticTemplates.push(
@@ -4279,7 +4281,43 @@ class ElaborationRecorder {
     }
     const outputValue = value.output;
     let output: LogicalArithmeticOutput;
-    if (this.#isSignal(outputValue)) {
+    let outputParameter: BlueprintSignalParameterHandle | undefined;
+    let outputSlot;
+    if (this.#parameterCapture !== undefined) {
+      try {
+        outputSlot = lookupBlueprintParameterSlot(
+          outputValue,
+          'signal',
+          this.#parameterCapture.session,
+          '$.output',
+        );
+      } catch (error) {
+        throw new ElaborationExecutionError(
+          error instanceof Error ? error.message : 'Invalid Arithmetic output parameter slot.',
+          this.#span(useSite),
+          'RT2027',
+          undefined,
+          { cause: error },
+        );
+      }
+    }
+    if (outputSlot !== undefined) {
+      if (
+        outputSlot.registration.defaultValue === null ||
+        typeof outputSlot.registration.defaultValue !== 'object'
+      ) {
+        throw new ElaborationExecutionError(
+          'Arithmetic output Signal parameter requires a Signal default value.',
+          this.#span(useSite),
+          'RT2027',
+        );
+      }
+      output = {
+        kind: 'signal',
+        signal: this.#signalSnapshot(outputSlot.registration.defaultValue as SignalId),
+      };
+      outputParameter = outputSlot.handle as BlueprintSignalParameterHandle;
+    } else if (this.#isSignal(outputValue)) {
       output = { kind: 'signal', signal: this.#signalSnapshot(outputValue) };
     } else if (this.#isWildcardToken(outputValue) && outputValue.value === 'each') {
       output = { kind: 'each' };
@@ -4291,11 +4329,12 @@ class ElaborationRecorder {
       );
     }
     const parameterSlots =
-      leftParameter === undefined && rightParameter === undefined
+      leftParameter === undefined && rightParameter === undefined && outputParameter === undefined
         ? undefined
         : {
             ...(leftParameter === undefined ? {} : { left: leftParameter }),
             ...(rightParameter === undefined ? {} : { right: rightParameter }),
+            ...(outputParameter === undefined ? {} : { output: outputParameter }),
           };
     return {
       configuration: { left, operation: operation as ArithmeticOperation, right, output },

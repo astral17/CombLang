@@ -195,42 +195,83 @@ output += Constant({ sections: [{ filters: [{ signal: A, value: amount }] }] });
     expect(JSON.parse(onPanel.copyPayload!)).not.toHaveProperty('diagnostics');
   });
 
-  test('unsupported Signal export stays located and unavailable for copy, with working concrete simulation/tests', async () => {
-    const text = `const A = Signal('virtual', 'signal-A');
+  test.each([
+    [
+      'Constant filter',
+      '',
+      'Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] })',
+      5,
+    ],
+    [
+      'Arithmetic output',
+      '',
+      "Arithmetic({ left: 2, operation: 'add', right: 5, output: channel })",
+      7,
+    ],
+    [
+      'mixed Arithmetic output',
+      "const amount = Param.number('Amount', 5);",
+      "Arithmetic({ left: 2, operation: 'add', right: amount, output: channel })",
+      7,
+    ],
+  ] as const)(
+    'unsupported Signal export at %s stays located and unavailable for copy, with working concrete simulation/tests',
+    async (_name, declaration, device, count) => {
+      const text = `const A = Signal('virtual', 'signal-A');
 const channel = Param.signal('Channel', A);
+${declaration}
 const output = new Network();
-output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });`;
-    const response = await new CompilerWorkerRuntime().handle({
-      kind: 'parse',
-      revision: 1,
-      file: { path: 'main.factorio.ts', text },
-      prototypeProfile: profile,
-      ...blueprintExportRequest(true),
-    });
-    expect(response.result.pipelineDiagnostics).toEqual([]);
-    const artifact = createSourceCircuitArtifact(
-      response.result.plan!,
-      response.result.resolvedCircuit!,
-    );
-    const panel = selectBlueprintPanel(
-      { parameters: true, concrete: artifact.blueprint, exported: response.result.blueprintExport },
-      (diagnostic) => formatSourceDiagnostic(diagnostic, text),
-    );
-    expect(panel.copyPayload).toBeUndefined();
-    expect(panel.text).toContain('CP1002 error at 2:');
-    const controller = new SourceSimulationController(artifact);
-    controller.stepFrom(0);
-    expect(controller.signalValueAt(1, 'output', A)).toBe(5);
-    expect(
-      runWebTests(
+output += ${device};`;
+      const runtime = new CompilerWorkerRuntime();
+      const response = await runtime.handle({
+        kind: 'parse',
+        revision: 1,
+        file: { path: 'main.factorio.ts', text },
+        prototypeProfile: profile,
+        ...blueprintExportRequest(true),
+      });
+      expect(response.result.pipelineDiagnostics).toEqual([]);
+      const artifact = createSourceCircuitArtifact(
         response.result.plan!,
-        `test('default', ({ network, tick, expectSignal }) => {
-      tick(1); expectSignal(network('output'), Signal('virtual', 'signal-A')).toBe(5);
-    });`,
         response.result.resolvedCircuit!,
-      ),
-    ).toMatchObject({ passed: 1, failed: 0 });
-  });
+      );
+      const panel = selectBlueprintPanel(
+        {
+          parameters: true,
+          concrete: artifact.blueprint,
+          exported: response.result.blueprintExport,
+        },
+        (diagnostic) => formatSourceDiagnostic(diagnostic, text),
+      );
+      expect(panel.copyPayload).toBeUndefined();
+      expect(panel.text).toContain('CP1002 error at 2:');
+      const controller = new SourceSimulationController(artifact);
+      controller.stepFrom(0);
+      expect(controller.signalValueAt(1, 'output', A)).toBe(count);
+      const off = await runtime.handle({
+        kind: 'parse',
+        revision: 2,
+        file: { path: 'main.factorio.ts', text },
+        prototypeProfile: { kind: 'builtin', identity: response.prototypeEnvironment!.identity },
+        ...blueprintExportRequest(false),
+      });
+      expect(off.result).not.toHaveProperty('blueprintExport');
+      expect(off.result.plan).toEqual(response.result.plan);
+      expect(off.result.resolvedCircuit).toEqual(response.result.resolvedCircuit);
+      expect(
+        selectBlueprintPanel({ parameters: false, concrete: artifact.blueprint }).copyPayload,
+      ).toBe(JSON.stringify(artifact.blueprint, null, 2));
+      expect(
+        runWebTests(
+          response.result.plan!,
+          `test('default', ({ network, tick, expectSignal }) => {
+      tick(1); expectSignal(network('output'), Signal('virtual', 'signal-A')).toBe(${count});
+    });`,
+          response.result.resolvedCircuit!,
+        ),
+      ).toMatchObject({ passed: 1, failed: 0 });
+    },
+  );
 
   test('no declarations and warning-only source allow copy; bad source/profile clears it', async () => {
     const runtime = new CompilerWorkerRuntime();
