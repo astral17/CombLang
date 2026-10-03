@@ -74,6 +74,23 @@ factorio-dsl blueprint decode [--json] [--input-file <exchange.txt> | <exchange-
 factorio-dsl blueprint encode [--json] [--output <exchange.txt>] <document.json>
 ```
 
+For a source circuit, first create native JSON with the separate
+[source export command](blueprint-json.md#source-export-cli), then encode that
+document:
+
+```sh
+node apps/cli/dist/main.js blueprint export --output simple.json simple.factorio.ts
+node apps/cli/dist/main.js blueprint encode --output simple.txt simple.json
+node apps/cli/dist/main.js blueprint export --prototypes database.json --parameters --output numeric.json numeric.factorio.ts
+node apps/cli/dist/main.js blueprint encode --output numeric.txt numeric.json
+```
+
+The source examples and provider requirements are in the linked guide. Default
+source export is concrete; `--parameters` explicitly requests supported numeric
+metadata, including opaque formula fields, without promising native validity.
+Source export does not implement compression or alter encode/decode semantics.
+Use a plain output file for encode, not a `--json` success envelope.
+
 Decode output is lossless JSON. Under `--json`, stdout is one JSON object with
 the raw document embedded as a JSON value, so unsafe number lexemes are retained.
 Encode `--json` wraps the exchange string in a JSON object. File outputs are

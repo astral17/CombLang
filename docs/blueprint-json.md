@@ -16,6 +16,91 @@ The separate bounded, lossless exchange codec is documented in
 [`blueprint-exchange-codec.md`](blueprint-exchange-codec.md). Its round trips and
 self-generated fixtures are not native Factorio conformance evidence.
 
+## Source export CLI
+
+```text
+factorio-dsl blueprint export [--json] [--parameters] [--label <text>] [--output <document.json>] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts>
+```
+
+Save this parameter-free source as `simple.factorio.ts`:
+
+```ts
+const A = Signal('virtual', 'signal-A');
+const output = new Network();
+output += CC(5 * A);
+```
+
+After building, run from the repository root:
+
+```sh
+node apps/cli/dist/main.js blueprint export simple.factorio.ts
+node apps/cli/dist/main.js blueprint export --label "My circuit" --output simple.json simple.factorio.ts
+```
+
+Default export uses concrete defaults and emits no parameter metadata, even
+when the source declares parameters. The label defaults to `CombLang generated
+circuit`; Decider expansion retains the 1024-row limit. Explicit `--parameters`
+requests numeric native metadata from that same owning compilation; it never
+falls back to concrete output after rejection. Without declarations, both modes
+produce an ordinary document without empty parameter rows.
+
+Save this numeric example as `numeric.factorio.ts`:
+
+```ts
+const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const limit = Param.number('Limit', 111, { formula: 'x * 2', dependent: true });
+const output = new Network();
+output += Constant({
+  sections: [
+    {
+      filters: [
+        { signal: A, value: amount },
+        { signal: Signal('virtual', 'signal-B'), value: limit },
+      ],
+    },
+  ],
+});
+```
+
+Exact combinators require a matching Entity-capable prototype environment.
+There is no implicit provider or synthetic profile in the CLI. Replace
+`database.json` below with your normalized database containing the selected
+combinator prototypes and the capabilities required by existing provisioning:
+
+```sh
+node apps/cli/dist/main.js blueprint export --prototypes database.json --parameters --output numeric.json numeric.factorio.ts
+node apps/cli/dist/main.js blueprint encode --output numeric.txt numeric.json
+```
+
+The optional `--prototype-identity <id>` pins the provider identity, with the
+same validation as `check`/`test`. Source executes once; local simulation and
+concrete export use defaults, not formula results. Numeric `variable`, `formula`
+and `dependent` fields are preserved opaquely. Native formula validity,
+original-value substitution and placement are not verified. Signal declarations,
+unsupported slots/expressions, unused parameters, ambiguous equal originals and
+non-int32 originals fail explicitly. See the precise supported slots and native
+limitations in [the parameter guide](native-objects-deciders-and-parameters.md).
+
+Without `--output`, plain stdout contains only native JSON; warnings go to stderr.
+With `--json`, stdout contains `{ "ok": true, "document": ... }`, with
+`diagnostics` only when nonempty. File output contains only the native document;
+stdout reports `Wrote <absolute path>` or `{ "ok": true, "output": ... }`.
+Existing files, including the source itself, are never overwritten. The bounded
+UTF-8 reader and output byte guard reuse the codec defaults. JSON is prepared
+before exclusive file creation; a later I/O error can leave a partial file.
+
+Failures exit with code 2, without publishing a document. Plain errors retain
+source locations on stderr; `--json` uses
+`{ "ok": false, "error": { "code": ..., "message": ..., "path": ..., "span": ..., "related": ... } }`
+with optional error fields and a nonempty diagnostic list for compile errors.
+Compiler/export codes such as `CP1002` are retained. Arguments are validated
+before source execution. Exactly one source is accepted; `--` ends option parsing
+for literal filenames beginning with `-`. Project linking, parameter overrides,
+`--project`, `--format`, and `--exchange` are unsupported here. Exchange encoding
+is a separate command. Worker/web export remains concrete without metadata
+transport or parameter UI.
+
 ## Mapping
 
 - arithmetic, decider, constant, and selector producers map to their native

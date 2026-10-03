@@ -237,7 +237,8 @@ exactly, as is explicit `dependent: false`. No trimming, parsing, rewriting or
 formula evaluation occurs. Unknown references, duplicate variables and apparent
 cycles are preserved, not validated; such strings may be invalid in Factorio.
 Local binding and simulation still use the explicit default (here `5` and `111`)
-or a host override, not the formula result. Native metadata export is host-only;
+or a host override, not the formula result. Native metadata export is host-local,
+also available through `blueprint export --parameters` in the CLI;
 native formula evaluation, substitution and placement validity remain unverified.
 
 Empty metadata `{}` normalizes to absence. Present fields with `undefined`, wrong
@@ -328,8 +329,10 @@ may replace those literals too. This exporter does not promise their nominal
 independence in Factorio, infer replacement scope from every JSON number, or
 claim verified native placement behavior.
 
-The CLI and web copy workflow still export concrete configuration without this
-host-only parameter metadata. Existing parameter-free export bytes are
+The CLI `blueprint export --parameters` exposes this host-local numeric metadata
+export; ordinary CLI export and web copy still emit concrete configuration.
+See [source export CLI](blueprint-json.md#source-export-cli) for prototype selection
+and file/stdout conventions. Existing parameter-free export bytes are
 unchanged. This subset preserves explicit numeric formula strings but does not
 add native parameter indices,
 recipe/property dependencies, signal placeholders, Worker transport or UI

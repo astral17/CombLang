@@ -12,6 +12,7 @@ import {
 } from '@comblang/blueprint';
 
 const blueprintUsage = `Usage:
+  factorio-dsl blueprint export [--json] [--parameters] [--label <text>] [--output <document.json>] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts>
   factorio-dsl blueprint decode [--json] [--input-file <exchange.txt> | <exchange-string>] [--output <document.json>]
   factorio-dsl blueprint encode [--json] [--output <exchange.txt>] <document.json>`;
 
@@ -101,7 +102,7 @@ export async function readBoundedUtf8File(path: string, maxBytes: number): Promi
   }
 }
 
-async function writeExclusiveText(path: string, text: string): Promise<string> {
+export async function writeExclusiveText(path: string, text: string): Promise<string> {
   const absolutePath = resolve(path);
   let handle;
   try {

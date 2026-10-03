@@ -45,6 +45,13 @@ import { compileParsedSourceProgram } from '@comblang/runtime/source-compilation
 import { offsetToPosition, type Diagnostic, type DiagnosticPolicy } from '@comblang/shared';
 import { resolveProjectOptions } from './project-profile.js';
 import { runBlueprintCommand } from './blueprint-command.js';
+import {
+  parseSourceExportOptions,
+  reportSourceExportFailure,
+  runSourceBlueprintExport,
+  sourceExportJsonHint,
+  sourceExportUsage,
+} from './blueprint-source-export.js';
 
 import {
   CliInputError,
@@ -66,6 +73,7 @@ Usage:
   factorio-dsl prototypes evidence [--json] <database.json> <evidence.json>
   factorio-dsl blueprint decode [--json] [--input-file <exchange.txt> | <exchange-string>] [--output <document.json>]
   factorio-dsl blueprint encode [--json] [--output <exchange.txt>] <document.json>
+  factorio-dsl blueprint export [--json] [--parameters] [--label <text>] [--output <document.json>] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts>
 
 Checks circuits, executes browser/Node-neutral JavaScript test files, and processes prototype dumps, circuit supplements, or evidence manifests.`;
 
@@ -559,7 +567,24 @@ export async function run(
     console.log(usage);
     return 0;
   }
-  if (command === 'blueprint') return runBlueprintCommand(rest);
+  if (command === 'blueprint') {
+    if (rest[0] !== 'export') return runBlueprintCommand(rest);
+    const exportArgs = rest.slice(1);
+    if (exportArgs.length === 1 && (exportArgs[0] === '--help' || exportArgs[0] === '-h')) {
+      console.log(sourceExportUsage);
+      return 0;
+    }
+    try {
+      const options = parseSourceExportOptions(exportArgs);
+      const prototypes = await selectPrototypeProvider(options, environment.prototypes);
+      const selected = provisionCliEnvironment(environment, prototypes);
+      return await runSourceBlueprintExport(options, selected, (diagnostic, source) =>
+        formatDiagnostic(diagnostic, new Map([[source.fileId, source]])),
+      );
+    } catch (error) {
+      return reportSourceExportFailure(error, sourceExportJsonHint(exportArgs));
+    }
+  }
   if (command !== 'check' && command !== 'test' && command !== 'prototypes') {
     console.error(`Unknown command: ${command}\n\n${usage}`);
     return 2;
