@@ -250,6 +250,23 @@ configuration remains concrete, and host-local binding changes the paired
 Selector Producer and Entity without re-executing source or changing topology.
 This does not parameterize `selectMax` or add native Factorio parameter fields.
 
+Numeric declarations also accept `Param.number(label, default, metadata?)`, with
+only `variable?: string`, `formula?: string` and `dependent?: boolean` in an
+optional plain/null-prototype enumerable data record. The third argument is
+evaluated once, after the label and default. Metadata is validated, snapshotted
+and frozen; `{}` is absence, explicit false/empty strings survive, and present
+undefined, accessors, symbols, wrong types and unknown fields report `CP1000`.
+`Param.signal` remains exactly two arguments. Source parameter views expose no
+metadata properties or reflection; the owning host can list numeric `metadata`.
+
+Native formula strings are opaque, distinct from internal host numeric DAGs.
+Local binding/simulation use explicit defaults or host overrides, never formulas.
+Host-only numeric export adds the present validated metadata to the existing
+default/original number rows without changing topology or re-executing source.
+Unknown references, duplicate variables and apparent cycles are not checked and
+may be invalid in Factorio. Native evaluation, replacement and placement validity
+remain unverified. See [numeric metadata and complete example](native-objects-deciders-and-parameters.md#numeric-metadata).
+
 Exact `random`, `quality`, `rocket-capacity`, `stack-size`, and `time` remain
 unsupported operation values. Use the structural checked/raw Entity overload
 for those native-shaped configurations; it remains inert and does not acquire

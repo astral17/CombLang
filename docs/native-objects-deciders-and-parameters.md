@@ -203,10 +203,54 @@ not parameterized. The defaults compile once into an ordinary concrete Plan
 and NCIR. Parameters are not JavaScript numbers, booleans, or loop bounds;
 arithmetic on a handle, control-flow use, coercion, and arbitrary function calls
 are rejected. Unsupported declaration forms report a source diagnostic
-(`CL1050` for malformed syntax; `CP1000` for an invalid concrete default).
+(`CL1050` for malformed syntax; `CP1000` for an invalid concrete default or metadata).
+
+### Numeric metadata
+
+`Param.number(label, default, metadata?)` accepts an optional plain or
+null-prototype data record containing only `variable?: string`, `formula?: string`
+and `dependent?: boolean`. This complete example uses both parameters in
+supported Constant count slots (with trusted exact-Constant host authority):
+
+```ts
+const multiplier = Param.number('Multiplier', 5, { variable: 'x' });
+const limit = Param.number('Limit', 111, {
+  formula: 'x * 2',
+  dependent: true,
+});
+const device = Constant({
+  sections: [
+    {
+      filters: [
+        { signal: Signal('virtual', 'signal-A'), value: multiplier },
+        { signal: Signal('virtual', 'signal-B'), value: limit },
+      ],
+    },
+  ],
+});
+const output = new Network();
+output += device;
+```
+
+Strings are opaque native metadata: whitespace and empty strings are preserved
+exactly, as is explicit `dependent: false`. No trimming, parsing, rewriting or
+formula evaluation occurs. Unknown references, duplicate variables and apparent
+cycles are preserved, not validated; such strings may be invalid in Factorio.
+Local binding and simulation still use the explicit default (here `5` and `111`)
+or a host override, not the formula result. Native metadata export is host-only;
+native formula evaluation, substitution and placement validity remain unverified.
+
+Empty metadata `{}` normalizes to absence. Present fields with `undefined`, wrong
+types, unknown keys, symbols, accessors, non-enumerable fields, arrays, null or
+custom inherited prototypes are rejected with `CP1000` and a field path.
+Inspection does not execute getters, and registrations snapshot/freeze metadata
+under the same node/UTF-8 byte limits as source capture. Later caller mutation
+cannot change the declaration. `Param.signal(label, default)` remains a
+two-argument declaration and does not support numeric metadata.
 
 In a host-local compilation, `listSourceCompilationParameters(compilation)`
-returns declaration labels, defaults, spans, and nominal handles. The host may
+returns declaration labels, defaults, spans, nominal handles and optional numeric
+`metadata`. The host may
 pass `{ parameter, value }` overrides to
 `bindSourceCompilationParameters(compilation, bindings)`, which returns a fresh
 concrete NCIR using the exact paired execution. Omitted overrides use the
@@ -252,7 +296,8 @@ native original and must be an integer in [-2147483648, 2147483647]; it is not
 wrapped, rounded or allocated automatically. A zero count remains an explicit
 filter, and the native original string is `"0"`, including for a default of
 `-0`. Each nominal handle produces one `{ type: 'number', number: String(original),
-name: label }` row in declaration order, even when reused in several filters or
+name: label }` row plus only the present validated `variable`, `formula`, and
+`dependent` fields, in declaration order, even when reused in several filters or
 devices. Labels need not be unique. Distinct handles with the same original
 are rejected at the second declaration, with a reference to the first.
 
@@ -285,7 +330,8 @@ claim verified native placement behavior.
 
 The CLI and web copy workflow still export concrete configuration without this
 host-only parameter metadata. Existing parameter-free export bytes are
-unchanged. This subset does not add formula strings, native parameter indices,
+unchanged. This subset preserves explicit numeric formula strings but does not
+add native parameter indices,
 recipe/property dependencies, signal placeholders, Worker transport or UI
 integration. Simulation remains concrete; native placement, substitution and
 formula evaluation require independent Factorio evidence.
@@ -312,19 +358,19 @@ multiple ordered output rows; binding evaluates it to concrete values without
 coalescing duplicate rows. Arithmetic/Decider results and filter-count
 expressions require a safe integer before the existing int32 normalization; a
 Constant multiplier is only required to be finite and remains a double in
-concrete configuration. This does not add source formula syntax or native
-formula fields, establish placement-time Factorio semantics, or imply simulator
+concrete configuration. This DAG integration does not itself add source formula
+operators or translate DAGs into native strings, establish placement-time
+Factorio semantics, or imply simulator
 support for non-unit multipliers.
 
-Native formula variables and dependent parameters remain future work. Recipe
-ingredients, recipe products, native numeric formulas, and parameter properties
-will require typed dependency nodes; users should not manage native parameter
-indices. A future backend will need to assign ordering and reject cycles.
-
-Native formula expressions should be stored as an AST, not an opaque string.
-The final set of operators, functions, parameter properties, and dependency
-kinds must follow captured capabilities from the target Factorio version and
-independently reviewed Factorio fixtures.
+Explicit native `variable`, `formula` and `dependent` metadata is preserved by
+the numeric declarations described above, separately from the internal typed DAG.
+It does not create or validate recipe/property dependency nodes, assign native
+parameter indices or evaluate cycles. Recipe ingredients/products and parameter
+properties remain future dependency work. A future operator syntax/backend may
+use typed expression/dependency nodes and compile them to native strings; it
+must follow independently reviewed target-version capabilities. Raw native
+formula strings are not required to be an AST and are never treated as host DAGs.
 
 ## Conformance boundary
 

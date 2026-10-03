@@ -1,4 +1,4 @@
-import { signal, type SignalId } from '@comblang/factorio';
+import { constantConfigurationLimits, signal, type SignalId } from '@comblang/factorio';
 import type { SourceFileId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
@@ -19,6 +19,27 @@ const source = {
 };
 
 describe('nominal blueprint parameter declarations', () => {
+  test('snapshots opaque number metadata without adding it to handle properties', () => {
+    const session = createBlueprintParameterSession();
+    const metadata = { variable: '', formula: ' неизвестно * ( \n', dependent: false };
+    const handle = session.number('N', { defaultValue: 5, source, metadata });
+    metadata.formula = 'mutated';
+    const registration = inspectBlueprintParameterHandle(handle, '$.parameter');
+    expect(registration.metadata).toEqual({
+      variable: '',
+      formula: ' неизвестно * ( \n',
+      dependent: false,
+    });
+    expect(Object.isFrozen(registration.metadata)).toBe(true);
+    expect(handle).not.toHaveProperty('metadata');
+    expect(inspectBlueprintParameterHandle(session.number('Plain'), '$')).not.toHaveProperty(
+      'metadata',
+    );
+    expect(
+      inspectBlueprintParameterHandle(session.number('Empty', { metadata: {} }), '$'),
+    ).not.toHaveProperty('metadata');
+  });
+
   test('uses registration identity rather than display labels', () => {
     const session = createBlueprintParameterSession();
     const first = session.number('items', { defaultValue: 0 });
@@ -36,6 +57,68 @@ describe('nominal blueprint parameter declarations', () => {
     expect(assertBlueprintParameterFromSession(session, second, '$.second')).not.toBe(
       inspectBlueprintParameterHandle(first, '$.first'),
     );
+  });
+
+  test.each([
+    [null, '$.metadata'],
+    [[], '$.metadata'],
+    [1, '$.metadata'],
+    [Object.create({ variable: 'inherited' }), '$.metadata'],
+    [{ variable: 1 }, '$.metadata.variable'],
+    [{ formula: null }, '$.metadata.formula'],
+    [{ dependent: 'false' }, '$.metadata.dependent'],
+    [{ variable: undefined }, '$.metadata.variable'],
+    [{ formula: undefined }, '$.metadata.formula'],
+    [{ dependent: undefined }, '$.metadata.dependent'],
+    [{ future: true }, '$.metadata.future'],
+    [{ [Symbol('field')]: 'x' }, '$.metadata'],
+    [Object.defineProperty({}, 'formula', { value: 'x' }), '$.metadata.formula'],
+  ])('rejects invalid number metadata at its path: %j', (metadata, path) => {
+    expect(() =>
+      createBlueprintParameterSession().number('N', { source, metadata: metadata as never }),
+    ).toThrowError(expect.objectContaining({ code: 'CP1000', path, span: source }));
+  });
+
+  test('does not run metadata getters and accepts null-prototype data only', () => {
+    const session = createBlueprintParameterSession();
+    let reads = 0;
+    const accessor = Object.defineProperty({}, 'formula', {
+      enumerable: true,
+      get() {
+        reads += 1;
+        return 'x';
+      },
+    });
+    expect(() => session.number('N', { metadata: accessor, source })).toThrowError(
+      expect.objectContaining({ code: 'CP1000', path: '$.metadata.formula', span: source }),
+    );
+    const options = Object.defineProperty({ source }, 'metadata', {
+      get() {
+        reads += 1;
+        return {};
+      },
+    });
+    expect(() => session.number('N', options)).toThrowError(
+      expect.objectContaining({ path: '$.metadata' }),
+    );
+    expect(reads).toBe(0);
+    const metadata = Object.assign(Object.create(null), {
+      dependent: true,
+      formula: 'missing+',
+      variable: 'x',
+    });
+    const registration = inspectBlueprintParameterHandle(session.number('N', { metadata }), '$');
+    expect(registration.metadata).toEqual({ variable: 'x', formula: 'missing+', dependent: true });
+    expect(Object.keys(registration.metadata!)).toEqual(['variable', 'formula', 'dependent']);
+    expect(() =>
+      session.signal('S', { metadata: { variable: 'x' }, source } as never),
+    ).toThrowError(expect.objectContaining({ code: 'CP1000', path: '$.metadata', span: source }));
+    expect(() =>
+      session.number('Huge', {
+        source,
+        metadata: { formula: '界'.repeat(constantConfigurationLimits.maxBytes) },
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'CP1000', path: '$.metadata', span: source }));
   });
 
   test('creates immutable declarations and copies optional source spans', () => {

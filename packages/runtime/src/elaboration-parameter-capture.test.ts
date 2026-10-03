@@ -24,6 +24,67 @@ function parameterProgram(code: string) {
 }
 
 describe('host-local source parameter capture', () => {
+  test('snapshots numeric metadata and never adds it to the concrete plan', () => {
+    const result = executeElaborationProgramWithParameters(
+      parameterProgram(`
+const metadata = { variable: 'x', formula: ' missing + ', dependent: false };
+__runtime.declareBlueprintNumberParameter('N', 5, metadata, { start: 1, end: 2 });
+metadata.formula = 'changed';`),
+    );
+    expect(result.parameters[0]!.registration.metadata).toEqual({
+      variable: 'x',
+      formula: ' missing + ',
+      dependent: false,
+    });
+    expect(Object.isFrozen(result.parameters[0]!.registration.metadata)).toBe(true);
+    expect(JSON.stringify(result.plan)).not.toContain('missing');
+    expect(JSON.stringify(result.plan)).not.toContain('metadata');
+  });
+
+  test('shares capture UTF-8 byte limits with metadata, including exact boundary and retry', () => {
+    const source = { fileId: sourceFileId('metadata-budget.ts'), start: 1, end: 2 };
+    const max = constantConfigurationLimits.maxBytes;
+    const overhead = new TextEncoder().encode(
+      JSON.stringify({
+        kind: 'number',
+        label: 'N',
+        defaultValue: 1,
+        source,
+        metadata: { formula: '' },
+      }),
+    ).byteLength;
+    const payload = max - overhead;
+    const formula = '界'.repeat(Math.floor(payload / 3)) + 'x'.repeat(payload % 3);
+    const capture = new BlueprintParameterCapture();
+    expect(() => capture.number('N', 1, { formula: formula + 'x' }, source)).toThrowError(
+      expect.objectContaining({ code: 'CP1000', path: '$.parameters', span: source }),
+    );
+    expect(capture.declarations()).toEqual([]);
+    capture.number('N', 1, { formula }, source);
+    expect(capture.declarations()).toHaveLength(1);
+    expect(() => capture.number('Extra', 2, {}, source)).toThrowError(
+      expect.objectContaining({ path: '$.parameters' }),
+    );
+    expect(capture.declarations()).toHaveLength(1);
+  });
+
+  test('shares node limits with metadata and does not charge a failed registration', () => {
+    const source = { fileId: sourceFileId('metadata-nodes.ts'), start: 1, end: 2 };
+    const capture = new BlueprintParameterCapture();
+    // A declaration, a metadata record and its string consume three nodes.
+    const count = Math.floor(constantConfigurationLimits.maxNodes / 3);
+    for (let i = 0; i < count; i++) capture.number('N', 1, { variable: 'x' }, source);
+    expect(() => capture.number('N', 1, { variable: 'x' }, source)).toThrowError(
+      expect.objectContaining({ code: 'CP1000', path: '$.parameters', span: source }),
+    );
+    capture.number('Last', 2, {}, source);
+    expect(capture.declarations()).toHaveLength(count + 1);
+    expect(capture.declarations().at(-1)!.registration).not.toHaveProperty('metadata');
+    expect(() => capture.number('Overflow', 3, undefined, source)).toThrowError(
+      expect.objectContaining({ path: '$.parameters' }),
+    );
+  });
+
   test('captures positional number and nominal Signal defaults with declaration spans', () => {
     const result = executeElaborationProgramWithParameters(
       parameterProgram(`

@@ -619,6 +619,29 @@ const prototypes = {};`,
     ).toEqual([`Param.number('missing')`, `Param.unknown('bad', 1)`, 'Param']);
   });
 
+  test('accepts dynamic numeric metadata but keeps the closed Param declaration syntax', () => {
+    const valid = parseFile({
+      path: 'numeric-metadata.ts',
+      text: `const metadata = { formula: 'x' };
+Param.number('N', 1, metadata); Param.number('Empty', 2, {}); Param.number('Plain', 3);`,
+    });
+    expect(validateDslSemantics(valid)).toEqual([]);
+    for (const call of [
+      "Param.number('N', 1, {}, 4)",
+      'Param.number(...values)',
+      "Param.signal('S', Signal('signal-A'), {})",
+      "Param.number?.('N', 1, {})",
+      "const alias = Param.number; alias('N', 1, {})",
+      "Param.unknown('N', 1, {})",
+    ]) {
+      const parsed = parseFile({ path: 'invalid-metadata.ts', text: `${call};` });
+      expect(
+        validateDslSemantics(parsed).some(({ code }) => code === 'CL1050'),
+        call,
+      ).toBe(true);
+    }
+  });
+
   test('validates join arity and rejects borrowed or pair inputs statically', () => {
     const parsed = parseFile({
       path: 'join-validation.ts',

@@ -54,6 +54,7 @@ import {
   canonicalBlueprintParameterHandle,
   type BlueprintParameterHandle,
   type BlueprintParameterKind,
+  type BlueprintNumberParameterMetadata,
 } from '../../compiler/src/blueprint-parameters.js';
 import { inspectConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-template.js';
 import { inspectArithmeticConfigurationTemplate } from '../../compiler/src/arithmetic-configuration-template.js';
@@ -116,6 +117,7 @@ export interface SourceCompilationParameter {
   readonly label: string;
   readonly defaultValue: number | SignalId;
   readonly source: SourceSpan;
+  readonly metadata?: BlueprintNumberParameterMetadata;
 }
 
 const capturedParametersByCompilation = new WeakMap<
@@ -291,6 +293,7 @@ export function listSourceCompilationParameters(
         label: registration.label,
         defaultValue,
         source,
+        ...(registration.metadata === undefined ? {} : { metadata: registration.metadata }),
       });
     }),
   );
@@ -566,7 +569,12 @@ export function exportSourceCompilationNativeBlueprint(
       );
     }
     originals.set(original, declaration);
-    return Object.freeze({ type: 'number', number: String(original), name: declaration.label });
+    return Object.freeze({
+      type: 'number',
+      number: String(original),
+      name: declaration.label,
+      ...declaration.metadata,
+    });
   });
 
   // The binder authenticates templates, their session and their exact physical producer relation.

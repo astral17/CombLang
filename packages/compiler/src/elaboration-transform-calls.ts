@@ -267,7 +267,9 @@ export function transformCallOrElementNode(
         ...(node.arguments[1] === undefined
           ? [factory.createVoidZero()]
           : [ts.visitNode(node.arguments[1], visit) as ts.Expression]),
-        factory.createVoidZero(),
+        node.arguments[2] === undefined
+          ? factory.createVoidZero()
+          : (ts.visitNode(node.arguments[2], visit) as ts.Expression),
         context.spanLiteral(node),
       ],
     );

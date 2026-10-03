@@ -126,6 +126,117 @@ function expectConcreteDataTree(value: unknown, active = new WeakSet<object>()):
 }
 
 describe('ordinary source parameter declarations', () => {
+  test('evaluates metadata once after label/default and keeps formulas independent of concrete binding', () => {
+    const text = `const order = [];
+function label() { order.push('label'); return 'Amount'; }
+function value() { order.push('default'); return 5; }
+const options = { formula: ' unknown(x) + ( ', variable: 'x', dependent: true };
+function metadata() { order.push('metadata'); return options; }
+const amount = Param.number(label(), value(), metadata());
+if (order.join(',') !== 'label,default,metadata') throw new Error('wrong evaluation order');
+options.formula = 'mutated';
+const output = new Network();
+output += Arithmetic({ left: 2, operation: 'add', right: amount, output: Signal('virtual', 'signal-A') });`;
+    const compilation = compileSourceProgram(
+      { path: 'numeric-metadata.factorio.ts', text },
+      parameterHost(),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const declarations = listSourceCompilationParameters(compilation);
+    expect(declarations[0]).toMatchObject({
+      defaultValue: 5,
+      metadata: { variable: 'x', formula: ' unknown(x) + ( ', dependent: true },
+    });
+    expect(Object.isFrozen(declarations[0]!.metadata)).toBe(true);
+    const start = text.indexOf('Param.number');
+    expect(declarations[0]!.source).toEqual({
+      fileId: compilation.fileId,
+      start,
+      end: start + 'Param.number(label(), value(), metadata())'.length,
+    });
+    const defaults = bindSourceCompilationCircuit(compilation);
+    const override = bindSourceCompilationCircuit(compilation, [
+      { parameter: declarations[0]!.parameter, value: 12 },
+    ]);
+    for (const [pair, expected] of [
+      [defaults, 7],
+      [override, 14],
+    ] as const) {
+      const replay = executeResolvedDirectPlan(pair.plan, pair.resolvedCircuit);
+      expect(
+        replay.circuit
+          .createSimulation()
+          .step()
+          .read(replay.network('output').id)
+          .get(signal('virtual', 'signal-A')),
+      ).toBe(expected);
+      expect(pair.plan.networks).toEqual(defaults.plan.networks);
+      expect(pair.plan.entities.map(({ id }) => id)).toEqual(
+        defaults.plan.entities.map(({ id }) => id),
+      );
+    }
+    const artifact = sourceCompilationArtifact(compilation);
+    expect(artifact).not.toHaveProperty('parameters');
+    expect(JSON.stringify([artifact.plan, artifact.resolvedCircuit])).not.toContain('unknown(x)');
+  });
+
+  test.each([
+    ['{ variable: undefined }', '$.metadata.variable'],
+    ['{ formula: 7 }', '$.metadata.formula'],
+    ['{ dependent: null }', '$.metadata.dependent'],
+    ['{ future: true }', '$.metadata.future'],
+    ['null', '$.metadata'],
+    ['[]', '$.metadata'],
+  ])('reports invalid numeric metadata at the declaration: %s', (metadata, path) => {
+    const text = `const amount = Param.number('Amount', 5, ${metadata});`;
+    const compilation = compileSourceProgram({ path: 'invalid-numeric-metadata.ts', text });
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'CP1000',
+        message: expect.stringContaining(path),
+        span: {
+          fileId: compilation.fileId,
+          start: text.indexOf('Param.number'),
+          end: text.length - 1,
+        },
+      }),
+    ]);
+  });
+
+  test('rejects metadata accessors without executing them and retains opaque parameter views', () => {
+    const text = `let reads = 0;
+const metadata = Object.defineProperty({}, 'formula', { enumerable: true, get() { reads += 1; return 'x'; } });
+try { Param.number('N', 5, metadata); } catch {}
+if (reads !== 0) throw new Error('getter executed');`;
+    const compilation = compileSourceProgram({ path: 'metadata-getter.ts', text });
+    expect(compilation.pipelineDiagnostics[0]).toMatchObject({
+      code: 'CP1000',
+      message: expect.stringContaining('$.metadata.formula'),
+    });
+    for (const read of [
+      'amount.metadata;',
+      "amount['formula'];",
+      "Object.getOwnPropertyDescriptor(amount, 'metadata');",
+      'Reflect.ownKeys(amount);',
+      '({ ...amount });',
+    ]) {
+      const escaped = compileSourceProgram({
+        path: 'metadata-escape.ts',
+        text: `const amount = Param.number('N', 5, { formula: 'x' }); ${read}`,
+      });
+      expect(escaped.pipelineDiagnostics[0]?.code, read).toMatch(/^(CP1001|RT2029)$/);
+    }
+    const bypass = transformElaborationModule(
+      parseFile({
+        path: 'signal-metadata-bypass.ts',
+        text: "Param.signal('S', Signal('signal-A'), { formula: 'x' });",
+      }),
+    );
+    expect(() => executeElaborationProgramWithParameters(bypass)).toThrowError(
+      expect.objectContaining({ code: 'CP1000' }),
+    );
+  });
+
   test('keeps a bound circuit paired with a replayable concrete plan', () => {
     const compilation = compileSourceProgram(
       {

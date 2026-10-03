@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 import {
   createTrustedEntityReplayContext,
@@ -89,6 +90,164 @@ output += Decider({ condition: input[A] > amount, outputs: [input[A]], elseOutpu
 output += Selector({ input, operation: 'select', index: amount });`;
 
 describe('owning source native numeric parameter export', () => {
+  test('compiles the complete documented numeric metadata example and exports its exact rows', () => {
+    const page = readFileSync(
+      new URL('../../../docs/native-objects-deciders-and-parameters.md', import.meta.url),
+      'utf8',
+    );
+    const example = page.match(/### Numeric metadata[\s\S]*?```ts\r?\n([\s\S]*?)```/)?.[1];
+    expect(example).toBeDefined();
+    const compilation = compile(example!);
+    expect(
+      sourceApi.exportSourceCompilationNativeBlueprint(compilation, options).parameters,
+    ).toEqual([
+      { type: 'number', number: '5', name: 'Multiplier', variable: 'x' },
+      { type: 'number', number: '111', name: 'Limit', formula: 'x * 2', dependent: true },
+    ]);
+  });
+
+  test.each([
+    { variable: '', formula: '', dependent: false },
+    { formula: ' 未知(x) + ( \n', dependent: true },
+    { variable: 'x', formula: 'x + missing', dependent: false },
+    { variable: 'same', formula: 'other + 1' },
+  ])('copies opaque metadata and keeps exact declaration order: %j', (metadata) => {
+    const compilation =
+      compile(`const first = Param.number('First', 5, ${JSON.stringify(metadata)});
+const second = Param.number('Second', 111, { variable: 'same', formula: 'same + (', dependent: true });
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: Signal('virtual', 'signal-A'), value: first },
+  { signal: Signal('virtual', 'signal-B'), value: second },
+  { signal: Signal('virtual', 'signal-C'), value: first },
+] }] });`);
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '5', name: 'First', ...metadata },
+      {
+        type: 'number',
+        number: '111',
+        name: 'Second',
+        variable: 'same',
+        formula: 'same + (',
+        dependent: true,
+      },
+    ]);
+    expect(native.entities).toHaveLength(1);
+    expect(native.parameters!.every(Object.isFrozen)).toBe(true);
+    validateNativeBlueprintFcir(native);
+    expect(
+      JSON.parse(JSON.stringify(emitNativeBlueprintJson(native))).blueprint.parameters,
+    ).toEqual(native.parameters);
+  });
+
+  test.each(['', ', {}', ', undefined'])(
+    'keeps absent and empty metadata native shapes unchanged: %s',
+    (suffix) => {
+      const compilation = compile(
+        exactSource.replace("Param.number('Amount', 5)", `Param.number('Amount', 5${suffix})`),
+      );
+      const declarations = sourceApi.listSourceCompilationParameters(compilation);
+      expect(declarations[0]).not.toHaveProperty('metadata');
+      expect(
+        sourceApi.exportSourceCompilationNativeBlueprint(compilation, options).parameters,
+      ).toEqual([{ type: 'number', number: '5', name: 'Amount' }]);
+    },
+  );
+
+  test('exports repeated metadata handles across families without source rerun or artifact mutation', () => {
+    const key = '__comblang_formula_metadata_executions';
+    const globals = globalThis as Record<string, unknown>;
+    const existed = Object.hasOwn(globals, key);
+    const previous = globals[key];
+    globals[key] = 0;
+    try {
+      const compilation = compile(
+        `globalThis.${key} += 1;\n${mixedSource.replace("Param.number('Amount', 5)", "Param.number('Amount', 5, { variable: 'x', formula: 'unknown(x)', dependent: false })")}`,
+      );
+      const before = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+      const plan = compilation.plan;
+      const circuit = compilation.resolvedCircuit;
+      const parameter = sourceApi.listSourceCompilationParameters(compilation)[0]!.parameter;
+      sourceApi.bindSourceCompilationCircuit(compilation, [{ parameter, value: 41 }]);
+      const first = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      const second = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      expect(second).toEqual(first);
+      expect(first.parameters).toEqual([
+        {
+          type: 'number',
+          number: '5',
+          name: 'Amount',
+          variable: 'x',
+          formula: 'unknown(x)',
+          dependent: false,
+        },
+      ]);
+      expect(first.entities).toEqual(buildNativeBlueprintFcir(circuit!.ir, options).entities);
+      expect(first.wires).toEqual(buildNativeBlueprintFcir(circuit!.ir, options).wires);
+      expect(globals[key]).toBe(1);
+      expect(compilation.plan).toBe(plan);
+      expect(compilation.resolvedCircuit).toBe(circuit);
+      expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(before);
+    } finally {
+      if (existed) globals[key] = previous;
+      else delete globals[key];
+    }
+  });
+
+  test.each([
+    {
+      declarations:
+        "const amount = Param.number('Unused formula', 5, { formula: 'x + 1', dependent: true });",
+      value: '3',
+      path: '$.parameters[0]',
+    },
+    {
+      declarations: "const amount = Param.number('Out of range', 2147483648, { formula: '0' });",
+      value: 'amount',
+      path: '$.parameters[0].defaultValue',
+    },
+    {
+      declarations:
+        "const amount = Param.number('First', 5, { variable: 'x' }); const duplicate = Param.number('Second', 5, { variable: 'y', formula: 'x' });",
+      value: 'amount',
+      path: '$.parameters[1].defaultValue',
+    },
+  ])(
+    'metadata does not relax unused/int32/original constraints: $path',
+    ({ declarations, value, path }) => {
+      const compilation = compile(`${declarations}
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: Signal('virtual', 'signal-A'), value: ${value} },
+  ${declarations.includes('duplicate') ? "{ signal: Signal('virtual', 'signal-B'), value: duplicate }," : ''}
+] }] });`);
+      expect(exportFailure(compilation)).toMatchObject({ code: 'CP1002', path });
+    },
+  );
+
+  test('preserves positional numeric formula metadata with defaults in actual Constant slots', () => {
+    const compilation =
+      compile(`const multiplier = Param.number('Multiplier', 5, { variable: 'x' });
+const limit = Param.number('Limit', 111, { formula: ${JSON.stringify(' x * 2\n')}, dependent: true });
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: Signal('virtual', 'signal-A'), value: multiplier },
+  { signal: Signal('virtual', 'signal-B'), value: limit },
+] }] });`);
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '5', name: 'Multiplier', variable: 'x' },
+      { type: 'number', number: '111', name: 'Limit', formula: ' x * 2\n', dependent: true },
+    ]);
+    expect(emitNativeBlueprintJson(native).blueprint.parameters).toEqual(native.parameters);
+    expect(
+      sourceApi
+        .listSourceCompilationParameters(compilation)
+        .map(({ defaultValue }) => defaultValue),
+    ).toEqual([5, 111]);
+  });
+
   test.each([
     ['AND', 'input[A] > amount && input[A] < upper', [5, 19], ['and', 'and']],
     ['OR', 'input[A] > amount || input[A] < upper', [5, 19], ['and', 'or']],

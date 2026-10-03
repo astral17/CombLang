@@ -1,4 +1,8 @@
-import { canonicalizeConstantConfiguration, type SignalId } from '@comblang/factorio';
+import {
+  canonicalizeConstantConfiguration,
+  constantConfigurationLimits,
+  type SignalId,
+} from '@comblang/factorio';
 import type { SourceFileId, SourceSpan } from '@comblang/shared';
 
 const parameterBrand: unique symbol = Symbol('blueprint-parameter');
@@ -29,11 +33,22 @@ export interface BlueprintParameterDeclarationOptions<T> {
   readonly source?: SourceSpan;
 }
 
+/** Native numeric strings are opaque metadata, not local expression nodes. */
+export interface BlueprintNumberParameterMetadata {
+  readonly variable?: string;
+  readonly formula?: string;
+  readonly dependent?: boolean;
+}
+
+export interface BlueprintNumberParameterDeclarationOptions extends BlueprintParameterDeclarationOptions<number> {
+  readonly metadata?: BlueprintNumberParameterMetadata;
+}
+
 export interface BlueprintParameterSession {
   readonly [sessionBrand]: true;
   number(
     label: string,
-    options?: BlueprintParameterDeclarationOptions<number>,
+    options?: BlueprintNumberParameterDeclarationOptions,
   ): BlueprintNumberParameterHandle;
   signal(
     label: string,
@@ -46,6 +61,7 @@ export interface BlueprintParameterRegistration {
   readonly label: string;
   readonly defaultValue?: number | SignalId;
   readonly source?: SourceSpan;
+  readonly metadata?: BlueprintNumberParameterMetadata;
 }
 
 export type BlueprintParameterErrorCode = 'CP1000' | 'CP1001' | 'CP1002';
@@ -94,6 +110,78 @@ function fail(
 
 function isObject(value: unknown): value is object {
   return (typeof value === 'object' && value !== null) || typeof value === 'function';
+}
+
+/** Descriptor-only validation and immutable snapshot under existing data limits. */
+export function canonicalizeBlueprintNumberParameterMetadata(
+  value: unknown,
+  source?: SourceSpan,
+): BlueprintNumberParameterMetadata | undefined {
+  if (value === undefined) return undefined;
+  const path = '$.metadata';
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    fail('CP1000', path, 'expected an optional plain metadata record.', source);
+  }
+  const prototype = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) {
+    fail('CP1000', path, 'expected an optional plain metadata record.', source);
+  }
+  const fields = new Map<string, string | boolean>();
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string')
+      fail('CP1000', path, 'metadata cannot contain symbol fields.', source);
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+    if (descriptor === undefined || !('value' in descriptor) || !descriptor.enumerable) {
+      fail(
+        'CP1000',
+        `${path}.${key}`,
+        'metadata fields must be enumerable data properties.',
+        source,
+      );
+    }
+    if (key !== 'variable' && key !== 'formula' && key !== 'dependent') {
+      fail('CP1000', `${path}.${key}`, 'unknown numeric metadata field.', source);
+    }
+    if (typeof descriptor.value !== (key === 'dependent' ? 'boolean' : 'string')) {
+      fail(
+        'CP1000',
+        `${path}.${key}`,
+        `expected a ${key === 'dependent' ? 'boolean' : 'string'}.`,
+        source,
+      );
+    }
+    fields.set(key, descriptor.value as string | boolean);
+  }
+  if (fields.size === 0) return undefined;
+  const metadata = Object.freeze(
+    Object.fromEntries(
+      ['variable', 'formula', 'dependent']
+        .filter((key) => fields.has(key))
+        .map((key) => [key, fields.get(key)]),
+    ),
+  ) as BlueprintNumberParameterMetadata;
+  if (
+    new TextEncoder().encode(JSON.stringify(metadata)).byteLength >
+    constantConfigurationLimits.maxBytes
+  ) {
+    fail(
+      'CP1000',
+      path,
+      `metadata exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`,
+      source,
+    );
+  }
+  return metadata;
+}
+
+function optionMetadata(
+  options: object,
+  source?: SourceSpan,
+): BlueprintNumberParameterMetadata | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(options, 'metadata');
+  if (descriptor === undefined) return undefined;
+  if (!('value' in descriptor)) fail('CP1000', '$.metadata', 'accessors are not allowed.', source);
+  return canonicalizeBlueprintNumberParameterMetadata(descriptor.value, source);
 }
 
 function canonicalSourceSpan(value: unknown): SourceSpan | undefined {
@@ -165,6 +253,7 @@ function registerParameter<K extends BlueprintParameterKind>(
   label: string,
   defaultValue: number | SignalId | undefined,
   source: SourceSpan | undefined,
+  metadata?: BlueprintNumberParameterMetadata,
 ): BlueprintParameterHandleBase<K> & { readonly defaultValue?: number | SignalId } {
   if (authority.sealed) {
     fail('CP1001', '$.session', 'parameter session is sealed and cannot accept declarations.');
@@ -174,6 +263,7 @@ function registerParameter<K extends BlueprintParameterKind>(
     label,
     ...(defaultValue === undefined ? {} : { defaultValue }),
     ...(source === undefined ? {} : { source }),
+    ...(metadata === undefined ? {} : { metadata }),
   }) as BlueprintParameterRegistration;
   const handle = {
     [parameterBrand]: kind,
@@ -203,7 +293,7 @@ export function createBlueprintParameterSession(): BlueprintParameterSession {
   const authority: SessionAuthority = { identity: Object.freeze({}), sealed: false };
   const session = Object.freeze({
     [sessionBrand]: true as const,
-    number: (label: string, options: BlueprintParameterDeclarationOptions<number> = {}) => {
+    number: (label: string, options: BlueprintNumberParameterDeclarationOptions = {}) => {
       assertLabel(label);
       const source = canonicalSourceSpan(options.source);
       if (options.defaultValue !== undefined && !Number.isFinite(options.defaultValue)) {
@@ -215,11 +305,15 @@ export function createBlueprintParameterSession(): BlueprintParameterSession {
         label,
         options.defaultValue,
         source,
+        optionMetadata(options, source),
       ) as BlueprintNumberParameterHandle;
     },
     signal: (label: string, options: BlueprintParameterDeclarationOptions<SignalId> = {}) => {
       assertLabel(label);
       const source = canonicalSourceSpan(options.source);
+      if (optionMetadata(options, source) !== undefined) {
+        fail('CP1000', '$.metadata', 'Signal declarations do not support metadata fields.', source);
+      }
       const defaultValue =
         options.defaultValue === undefined
           ? undefined

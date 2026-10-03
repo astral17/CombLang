@@ -1,6 +1,7 @@
 import { constantConfigurationLimits, type SignalId } from '@comblang/factorio';
 import {
   BlueprintParameterError,
+  canonicalizeBlueprintNumberParameterMetadata,
   createBlueprintParameterSession,
   inspectBlueprintParameterHandle,
   sealBlueprintParameterSession,
@@ -20,6 +21,7 @@ export class BlueprintParameterCapture {
   readonly session: BlueprintParameterSession = createBlueprintParameterSession();
   readonly #entries: CapturedBlueprintParameter[] = [];
   #bytes = 0;
+  #nodes = 0;
   #sealed = false;
 
   number(
@@ -30,7 +32,7 @@ export class BlueprintParameterCapture {
   ): BlueprintParameterHandle {
     this.#assertOpen(source);
     this.#assertLabel(label, source);
-    this.#assertMetadata(metadata, source);
+    const canonicalMetadata = canonicalizeBlueprintNumberParameterMetadata(metadata, source);
     if (typeof defaultValue !== 'number' || !Number.isFinite(defaultValue)) {
       this.#fail(
         '$.defaultValue',
@@ -38,7 +40,14 @@ export class BlueprintParameterCapture {
         source,
       );
     }
-    return this.#register(this.session.number(label, { defaultValue, source }), source);
+    return this.#register(
+      this.session.number(label, {
+        defaultValue,
+        source,
+        ...(canonicalMetadata === undefined ? {} : { metadata: canonicalMetadata }),
+      }),
+      source,
+    );
   }
 
   signal(
@@ -63,14 +72,16 @@ export class BlueprintParameterCapture {
   }
 
   #register(handle: BlueprintParameterHandle, source: SourceSpan): BlueprintParameterHandle {
-    if (this.#entries.length >= constantConfigurationLimits.maxNodes) {
+    const registration = inspectBlueprintParameterHandle(handle, '$.parameter');
+    const nodes =
+      1 + (registration.metadata === undefined ? 0 : 1 + Object.keys(registration.metadata).length);
+    if (nodes > constantConfigurationLimits.maxNodes - this.#nodes) {
       this.#fail(
         '$.parameters',
         `declarations exceed the node limit of ${constantConfigurationLimits.maxNodes}.`,
         source,
       );
     }
-    const registration = inspectBlueprintParameterHandle(handle, '$.parameter');
     const bytes = new TextEncoder().encode(JSON.stringify(registration)).byteLength;
     if (bytes > constantConfigurationLimits.maxBytes - this.#bytes) {
       this.#fail(
@@ -80,6 +91,7 @@ export class BlueprintParameterCapture {
       );
     }
     this.#bytes += bytes;
+    this.#nodes += nodes;
     this.#entries.push(Object.freeze({ handle, registration }));
     return handle;
   }
@@ -105,27 +117,9 @@ export class BlueprintParameterCapture {
   }
 
   #assertMetadata(value: unknown, source: SourceSpan): void {
-    if (value === undefined) return;
-    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
-      this.#fail('$.metadata', 'expected an optional plain metadata record.', source);
-    }
-    const prototype = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null) {
-      this.#fail('$.metadata', 'expected an optional plain metadata record.', source);
-    }
-    for (const key of Reflect.ownKeys(value)) {
-      if (typeof key !== 'string') {
-        this.#fail('$.metadata', 'metadata cannot contain symbol fields.', source);
-      }
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (descriptor === undefined || !('value' in descriptor) || !descriptor.enumerable) {
-        this.#fail(
-          `$.metadata.${key}`,
-          'metadata fields must be enumerable data properties.',
-          source,
-        );
-      }
-      this.#fail(`$.metadata.${key}`, 'parameter metadata fields are not supported yet.', source);
+    const metadata = canonicalizeBlueprintNumberParameterMetadata(value, source);
+    if (metadata !== undefined) {
+      this.#fail('$.metadata', 'Signal declarations do not support metadata fields.', source);
     }
   }
 
