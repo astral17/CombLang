@@ -98,8 +98,8 @@ Compiler/export codes such as `CP1002` are retained. Arguments are validated
 before source execution. Exactly one source is accepted; `--` ends option parsing
 for literal filenames beginning with `-`. Project linking, parameter overrides,
 `--project`, `--format`, and `--exchange` are unsupported here. Exchange encoding
-is a separate command. The web copy/preview controls remain concrete; optional
-Worker result export is described below, without parameter UI or overrides.
+is a separate command. The web panel also offers an optional numeric-parameter
+export mode, described below; it does not provide parameter overrides.
 
 ## Mapping
 
@@ -197,10 +197,33 @@ Worker cache selection and revision/progress behavior remain unchanged; options
 do not grant Entity authority or infer a provider. Exact combinators still need
 the existing selected profile or trusted Worker-local host environment.
 
-This provides an opt-in result transport, not UI/copy-button integration,
-parameter overrides or a binding protocol. Native formula evaluation,
+This provides an opt-in result transport, not parameter overrides or a binding
+protocol. Native formula evaluation,
 original-value substitution, recipe dependencies and placement validity remain
 unverified. Default preview/copy and simulation continue to use concrete defaults.
+
+### Web blueprint panel
+
+The labelled **Include numeric parameters** checkbox is off by default and is
+not saved across reloads. Turning it on recompiles the current source through
+the existing Worker and displays its exact native export document. **Copy
+blueprint** copies that displayed readable JSON, not an exchange string or an
+export-result envelope. With no declarations, the result is ordinary concrete
+JSON in either mode. Turning the checkbox off restores concrete artifact export.
+
+Only the supported numeric slots described above are exported. Unsupported
+Signal parameters or other export failures show located diagnostics in the
+blueprint panel and disable copy; a missing Worker export result is also an
+explicit unavailable error, never a concrete fallback. Successful compilation
+still permits concrete simulation and circuit tests. Pending recompilation,
+source/profile errors and mode changes immediately clear the previous copy
+payload. Changing the checkbox does not edit source or test drafts; recompilation
+uses the existing fresh-simulation behavior rather than migrating tick state.
+
+There is no parameter editor or override UI. Native formula strings are preserved
+as metadata, not evaluated locally: simulation uses the declared defaults.
+Showing or copying a document is not evidence of native placement or formula
+validity.
 
 ## Generated lookup evidence
 

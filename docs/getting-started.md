@@ -41,6 +41,16 @@ the generated-JavaScript panel shows how the source is executed, and the
 blueprint panel shows the exported document. **Copy blueprint** copies the
 current readable JSON, not a compressed Factorio exchange string.
 
+For supported numeric parameter declarations, enable **Include numeric
+parameters** in the blueprint panel to recompile and include their metadata in
+the displayed/copied JSON. It defaults off and is not saved across reloads.
+Unsupported Signal parameters or other export errors disable copy and appear
+in that panel; successful compilation still allows simulation and tests.
+Simulation uses concrete defaults, not native formula strings. This checkbox
+does not edit drafts or offer parameter overrides, and a mode-triggered compile
+starts a fresh simulation. See [blueprint export](blueprint-json.md#web-blueprint-panel)
+for the supported subset and native-evidence limits.
+
 In the simulation controls, advance three ticks: A on `output` should be 11.
 All Networks start empty at T0. The Constant emits 5 at T1, multiplication
 emits 10 at T2 and addition emits 11 at T3. Source execution builds the circuit;

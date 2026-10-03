@@ -855,6 +855,8 @@ code {
 
 .blueprint-panel .result-header {
   min-height: 72px;
+  flex-wrap: wrap;
+  gap: 12px;
 }
 
 .blueprint-panel .section-kicker {
@@ -868,8 +870,32 @@ code {
 
 .blueprint-actions {
   display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
   align-items: center;
   gap: 12px;
+}
+
+.blueprint-parameter-option {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  max-width: 100%;
+  color: #d7dfda;
+  font-size: 0.75rem;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.blueprint-parameter-option input {
+  flex-shrink: 0;
+  accent-color: #c59770;
+}
+
+.blueprint-parameter-option input:focus-visible {
+  outline: 2px solid #c59770;
+  outline-offset: 2px;
 }
 
 .blueprint-actions button {

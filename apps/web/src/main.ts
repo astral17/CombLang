@@ -1,9 +1,16 @@
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
+import type { FactorioBlueprintJson } from '@comblang/compiler/blueprint-json';
 import { signal, type SignalId, type SignalType } from '@comblang/factorio';
 import type { ResolvedCircuit } from '@comblang/compiler/resolved-circuit';
 import { offsetToPosition, sourceFileId, sourceSpan, type Diagnostic } from '@comblang/shared';
 
 import { blueprintJsonForArtifact } from './blueprint-demo.js';
+import {
+  blueprintExportRequest,
+  selectBlueprintPanel,
+  blueprintCopyIsCurrent,
+  type BlueprintPanelView,
+} from './blueprint-panel.js';
 import './blueprint-schema-catalog.js';
 import { builtinPrototypeAsset, fetchBuiltinPrototypeAsset } from './builtin-prototype-asset.js';
 import { createSourceEditor, type SourceEditorKind } from './code-editor.js';
@@ -148,6 +155,7 @@ const networkColors = requiredElement<HTMLElement>('#network-colors');
 const blueprintStatus = requiredElement<HTMLOutputElement>('#blueprint-status');
 const blueprintResult = requiredElement<HTMLPreElement>('#blueprint-result');
 const copyBlueprint = requiredElement<HTMLButtonElement>('#copy-blueprint');
+const includeNumericParameters = requiredElement<HTMLInputElement>('#blueprint-parameters');
 const testHost = requiredElement<HTMLElement>('#test-editor');
 const testEditorMode = requiredElement<HTMLButtonElement>('#test-editor-mode');
 const testEditorLabel = requiredElement<HTMLElement>('#test-editor-label');
@@ -680,6 +688,15 @@ stateClearNetwork.addEventListener('click', () => {
   }
 });
 
+function renderBlueprintPanel(view: BlueprintPanelView): void {
+  blueprintStatus.textContent = view.status;
+  blueprintStatus.dataset.state = view.state;
+  blueprintResult.textContent = view.text;
+  currentBlueprintJson = view.copyPayload;
+  copyBlueprint.disabled = view.copyPayload === undefined;
+  resetCopyButton();
+}
+
 function renderProofPending(): void {
   pauseSimulation();
   setSimulationEnabled(false);
@@ -689,11 +706,9 @@ function renderProofPending(): void {
   terminateTestWorker();
   proof.dataset.state = 'pending';
   proof.setAttribute('aria-busy', 'true');
-  blueprintStatus.textContent = 'Waiting for compiler…';
-  blueprintStatus.dataset.state = 'pending';
-  currentBlueprintJson = undefined;
-  copyBlueprint.disabled = true;
-  resetCopyButton();
+  renderBlueprintPanel(
+    selectBlueprintPanel({ parameters: includeNumericParameters.checked, pending: true }),
+  );
 }
 
 function renderProofError(
@@ -736,19 +751,16 @@ function renderProofError(
   waveformViewLabel.textContent = 'Networks overview';
   instancePaths.replaceChildren();
   networkColors.replaceChildren();
-  blueprintStatus.textContent = 'No blueprint JSON';
-  blueprintStatus.dataset.state = 'invalid';
-  blueprintResult.textContent = JSON.stringify({ error: message }, null, 2);
-  currentBlueprintJson = undefined;
-  copyBlueprint.disabled = true;
-  resetCopyButton();
+  renderBlueprintPanel(
+    selectBlueprintPanel({ parameters: includeNumericParameters.checked, error: message }),
+  );
 }
 
 function renderSourceProof(
   plan: DirectElaborationPlan,
   foldedOperations: number,
   resolvedCircuit?: ResolvedCircuit,
-): void {
+): FactorioBlueprintJson {
   pauseSimulation();
   const artifact =
     resolvedCircuit === undefined
@@ -799,28 +811,39 @@ function renderSourceProof(
       return item;
     }),
   );
-  const generated = blueprintJsonForArtifact(artifact);
-  blueprintStatus.textContent = `${generated.blueprint.entities.length} entities · ${generated.blueprint.wires.length} wires`;
-  blueprintStatus.dataset.state = 'valid';
-  currentBlueprintJson = JSON.stringify(generated, null, 2);
-  blueprintResult.textContent = currentBlueprintJson;
-  copyBlueprint.disabled = false;
-  resetCopyButton();
+  return blueprintJsonForArtifact(artifact);
 }
 
 copyBlueprint.addEventListener('click', () => {
   if (currentBlueprintJson === undefined) return;
-  void copyText(currentBlueprintJson)
+  const captured = {
+    revision: currentRevision,
+    parameters: includeNumericParameters.checked,
+    json: currentBlueprintJson,
+  };
+  const isCurrentCopy = () =>
+    blueprintCopyIsCurrent(captured, {
+      revision: currentRevision,
+      parameters: includeNumericParameters.checked,
+      json: currentBlueprintJson,
+    });
+  resetCopyButton();
+  void copyText(captured.json)
     .then(() => {
+      if (!isCurrentCopy()) return;
       copyBlueprint.textContent = 'Copied';
       copyBlueprint.dataset.state = 'copied';
     })
     .catch(() => {
+      if (!isCurrentCopy()) return;
       copyBlueprint.textContent = 'Copy failed';
       copyBlueprint.dataset.state = 'failed';
     })
     .finally(() => {
-      copyResetTimer = setTimeout(resetCopyButton, 1800);
+      if (!isCurrentCopy()) return;
+      copyResetTimer = setTimeout(() => {
+        if (isCurrentCopy()) resetCopyButton();
+      }, 1800);
     });
 });
 
@@ -998,6 +1021,7 @@ function render(): void {
     kind: 'parse',
     revision: currentRevision,
     file: { path: 'main.factorio.ts', text: sourceEditor.getValue() },
+    ...blueprintExportRequest(includeNumericParameters.checked),
     ...(activePrototypeProfile === undefined
       ? {}
       : {
@@ -1029,8 +1053,8 @@ function render(): void {
   startCompilerWorker(request);
 }
 
-function scheduleRender(): void {
-  saveSourceDraft(draftStorage, sourceEditor.getValue());
+function scheduleRender(saveDraft = true): void {
+  if (saveDraft) saveSourceDraft(draftStorage, sourceEditor.getValue());
   currentRevision += 1;
   testRevision += 1;
   terminateTestWorker();
@@ -1047,6 +1071,10 @@ function scheduleRender(): void {
     render();
   }, 180);
 }
+
+includeNumericParameters.addEventListener('change', () => {
+  scheduleRender(false);
+});
 
 function handleWorkerMessage(
   event: MessageEvent<CompilerWorkerResponse>,
@@ -1222,10 +1250,11 @@ function handleWorkerMessage(
   } else {
     const previewPlan = parsed.plan;
     const previewResolvedCircuit = parsed.resolvedCircuit;
+    let concrete: FactorioBlueprintJson | undefined;
     try {
       currentPlan = previewPlan;
       currentResolvedCircuit = previewResolvedCircuit;
-      renderSourceProof(previewPlan, foldedOperations, previewResolvedCircuit);
+      concrete = renderSourceProof(previewPlan, foldedOperations, previewResolvedCircuit);
       scheduleTestRender();
     } catch (error) {
       const diagnostic = sourcePreviewDiagnostic(error);
@@ -1239,6 +1268,18 @@ function handleWorkerMessage(
       );
       // Preview failures do not turn a successfully compiled circuit into invalid source.
       scheduleTestRender();
+    }
+    if (includeNumericParameters.checked || concrete !== undefined) {
+      renderBlueprintPanel(
+        selectBlueprintPanel(
+          {
+            parameters: includeNumericParameters.checked,
+            ...(concrete === undefined ? {} : { concrete }),
+            exported: parsed.blueprintExport,
+          },
+          (diagnostic) => formatSourceDiagnostic(diagnostic, sourceEditor.getValue()),
+        ),
+      );
     }
   }
   result.textContent =

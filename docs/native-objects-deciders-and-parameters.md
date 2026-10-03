@@ -333,13 +333,17 @@ The CLI `blueprint export --parameters` exposes this host-local numeric metadata
 export; the compiler Worker can request the same document via opt-in
 `blueprintExport: { parameters: true }` result data. Worker-local capture/authority
 is not transported, and export diagnostics are separate from successful concrete
-compilation. Ordinary CLI export and web preview/copy still emit concrete configuration.
+compilation. Ordinary CLI export and default web preview/copy emit concrete
+configuration. The web blueprint panel's **Include numeric parameters** checkbox
+opts into that Worker document; export failures disable copy without invalidating
+successful concrete simulation or tests. The checkbox defaults off and is not
+persisted. It does not change source/test drafts or provide overrides.
 See [source export CLI](blueprint-json.md#source-export-cli) for prototype selection
 and file/stdout conventions. Existing parameter-free export bytes are
 unchanged. This subset preserves explicit numeric formula strings but does not
 add native parameter indices,
 recipe/property dependencies, signal placeholders, Worker binding/override
-transport or UI integration. See [optional Worker result export](blueprint-json.md#optional-worker-result-export)
+transport or parameter-editor UI. See [optional Worker result export](blueprint-json.md#optional-worker-result-export)
 for the request/result contract. Simulation remains concrete; native placement, substitution and
 formula evaluation require independent Factorio evidence.
 
