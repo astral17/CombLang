@@ -266,7 +266,7 @@ export function normalizeConstantConfigurationSource(
     .configuration;
 }
 
-/** Normalizes defaults and retains only direct filter parameter slots for host-local capture. */
+/** Normalizes defaults and retains direct filter/multiplier slots for host-local capture. */
 export function normalizeConstantConfigurationSourceWithParameters(
   value: unknown,
   context: ConstantConfigurationSourceContext,
@@ -277,10 +277,42 @@ export function normalizeConstantConfigurationSourceWithParameters(
   const sectionsValue =
     'sections' in record ? ownDataArray(record.sections, `${path}.sections`) : [];
   const parameterSlots: (readonly ConstantFilterParameterSlots[])[] = [];
+  const multiplierSlots: (BlueprintNumberParameterHandle | undefined)[] = [];
   let hasParameterSlots = false;
   const sections = sectionsValue.map((section, index) => {
     const sectionPath = `${path}.sections[${index}]`;
     const source = ownDataRecord(section, sectionPath);
+    let multiplierSlot: BlueprintNumberParameterHandle | undefined;
+    let multiplier = source.multiplier;
+    if (Object.hasOwn(source, 'multiplier') && session !== undefined) {
+      try {
+        const slot = lookupBlueprintParameterSlot(
+          multiplier,
+          'number',
+          session,
+          `${sectionPath}.multiplier`,
+        );
+        if (slot !== undefined) {
+          if (typeof slot.registration.defaultValue !== 'number') {
+            fail(`${sectionPath}.multiplier`, 'number parameter requires a numeric default value.');
+          }
+          multiplierSlot = slot.handle as BlueprintNumberParameterHandle;
+          multiplier = slot.registration.defaultValue;
+        }
+      } catch (error) {
+        if (error instanceof BlueprintParameterError) {
+          fail(
+            error.path,
+            error.message.startsWith(`${error.path}: `)
+              ? error.message.slice(error.path.length + 2)
+              : error.message,
+          );
+        }
+        throw error;
+      }
+    }
+    multiplierSlots.push(multiplierSlot);
+    hasParameterSlots ||= multiplierSlot !== undefined;
     const normalizedFilters = Object.hasOwn(source, 'filters')
       ? normalizeFilters(source.filters, `${sectionPath}.filters`, context, session)
       : undefined;
@@ -288,6 +320,7 @@ export function normalizeConstantConfigurationSourceWithParameters(
     hasParameterSlots ||= normalizedFilters?.hasParameterSlots ?? false;
     return {
       ...source,
+      ...(multiplierSlot === undefined ? {} : { multiplier }),
       ...(normalizedFilters !== undefined ? { filters: normalizedFilters.filters } : {}),
     };
   });
@@ -313,7 +346,7 @@ export function normalizeConstantConfigurationSourceWithParameters(
     sections: configuration.sections.map((section, sectionIndex) => ({
       active: section.active,
       ...(section.group === undefined ? {} : { group: section.group }),
-      multiplier: section.multiplier,
+      multiplier: multiplierSlots[sectionIndex] ?? section.multiplier,
       filters: section.filters.map((filter, filterIndex) => {
         const slots = parameterSlots[sectionIndex]?.[filterIndex];
         return {

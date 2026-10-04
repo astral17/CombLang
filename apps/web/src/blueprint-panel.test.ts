@@ -195,6 +195,60 @@ output += Constant({ sections: [{ filters: [{ signal: A, value: amount }] }] });
     expect(JSON.parse(onPanel.copyPayload!)).not.toHaveProperty('diagnostics');
   });
 
+  test('Constant multiplier compiles and simulates defaults while native export fails independently without copy fallback', async () => {
+    const text = `const A = Signal('virtual', 'signal-A');
+const scale = Param.number('Scale', 1);
+const output = new Network();
+output += Constant({ sections: [{ multiplier: scale, filters: [{ signal: A, value: 5 }] }] });`;
+    const runtime = new CompilerWorkerRuntime();
+    const on = await runtime.handle({
+      kind: 'parse',
+      revision: 1,
+      file: { path: 'main.factorio.ts', text },
+      prototypeProfile: profile,
+      ...blueprintExportRequest(true),
+    });
+    expect(on.result.pipelineDiagnostics).toEqual([]);
+    expect(on.result.blueprintExport).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          code: 'CP1002',
+          message: expect.stringContaining('$.constantTemplates[0].sections[0].multiplier'),
+          span: { start: text.indexOf('Constant('), end: text.lastIndexOf(';') },
+        },
+      ],
+    });
+    const artifact = createSourceCircuitArtifact(on.result.plan!, on.result.resolvedCircuit!);
+    expect(artifact.blueprint.blueprint.entities[0]).toMatchObject({
+      control_behavior: { sections: { sections: [{ multiplier: 1, filters: [{ count: 5 }] }] } },
+    });
+    const controller = new SourceSimulationController(artifact);
+    controller.stepFrom(0);
+    expect(controller.signalValueAt(1, 'output', A)).toBe(5);
+    const panel = selectBlueprintPanel({
+      parameters: true,
+      concrete: artifact.blueprint,
+      exported: on.result.blueprintExport,
+    });
+    expect(panel.state).toBe('invalid');
+    expect(panel.copyPayload).toBeUndefined();
+    const off = await runtime.handle({
+      kind: 'parse',
+      revision: 2,
+      file: { path: 'main.factorio.ts', text },
+      prototypeProfile: { kind: 'builtin', identity: on.prototypeEnvironment!.identity },
+      ...blueprintExportRequest(false),
+    });
+    expect(off.result).not.toHaveProperty('blueprintExport');
+    expect(off.result.plan).toEqual(on.result.plan);
+    expect(off.result.resolvedCircuit).toEqual(on.result.resolvedCircuit);
+    expect(
+      selectBlueprintPanel({ parameters: false, concrete: artifact.blueprint }).copyPayload,
+    ).toBe(JSON.stringify(artifact.blueprint, null, 2));
+    expect(structuredClone(on)).toEqual(on);
+  });
+
   test.each([
     [
       'Constant filter',

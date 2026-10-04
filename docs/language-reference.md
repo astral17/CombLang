@@ -592,6 +592,18 @@ canonical base `entity:constant-combinator` Entity authority, one linked physica
 constant-combinator Entity. Other same-type modded prototypes do not make this
 selection ambiguous.
 
+Exact `Constant` sections also accept a direct current-session `Param.number`
+handle in `multiplier`, alongside direct filter Signal/count parameters. Its
+required explicit default and host-local overrides are finite doubles, not int32
+counts; one handle used in both multiplier and count must satisfy each slot's
+rules. Binding preserves the same physical Constant and linked Entity without
+source execution or topology changes. This does not allow symbolic `isOn`,
+`active`, `group`, `Param * Section(...)` or `CC` scaling. Native parameter export
+still rejects symbolic multipliers (`CP1002`), even with default `1`; ordinary
+concrete export retains the default. Non-unit bound values retain the simulator
+boundary below, not a modeled numeric output. See the
+[complete source and host example](native-objects-deciders-and-parameters.md#constant-multiplier-parameters).
+
 `Section(...)` is the ergonomic data-only fragment for assembling several exact
 Constant sections through `CC`:
 

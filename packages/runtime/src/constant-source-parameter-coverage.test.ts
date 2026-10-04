@@ -19,6 +19,12 @@ import {
 import { bindCapturedSourceConfigurationTemplates } from './executed-blueprint-configuration-binding.js';
 import { tryElaborateDirectPlan } from './direct-plan.js';
 import { executeElaborationProgramWithParameters } from './elaboration-program.js';
+import {
+  compileSourceProgram,
+  bindSourceCompilationCircuit,
+  listSourceCompilationParameters,
+  sourceCompilationArtifact,
+} from './source-compilation.js';
 
 const sourceFile = sourceFileId('constant-source-parameter-coverage.ts');
 
@@ -97,6 +103,191 @@ function execute(
 }
 
 describe('exact Constant source parameter capture', () => {
+  test.each([1, 0.5])(
+    'normal source compilation captures multiplier-only default %s on one linked Constant',
+    (defaultValue) => {
+      const text = `const A = Signal('virtual', 'signal-A');
+const scale = Param.number('Scale', ${defaultValue});
+const output = new Network();
+output += Constant({ sections: [{ multiplier: scale, filters: [{ signal: A, value: 5 }] }] });`;
+      const compilation = compileSourceProgram(
+        { path: 'source-multiplier.factorio.ts', text },
+        environment(),
+      );
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      expect(compilation.plan!.producers).toHaveLength(1);
+      expect(compilation.plan!.entities).toHaveLength(1);
+      expect(compilation.plan!.producers[0]).toMatchObject({
+        configuration: { sections: [{ multiplier: defaultValue }] },
+      });
+      expect(compilation.plan!.entities[0]).toMatchObject({
+        configuration: { mode: 'constant', value: { sections: [{ multiplier: defaultValue }] } },
+      });
+      const captured = execute(text);
+      expect(captured.constantTemplates).toHaveLength(1);
+      expect(captured.constantTemplates[0]!.template.sections[0]!.multiplier).toBe(
+        captured.parameters[0]!.handle,
+      );
+      expect(bindSourceCompilationCircuit(compilation).plan).toEqual(compilation.plan);
+    },
+  );
+
+  test('shared multiplier/count and Signal slots retain ordered metadata and independent numeric domains', () => {
+    const text = `const A = Signal('virtual', 'signal-A');
+const shared = Param.number('Shared', 1);
+const channel = Param.signal('Channel', A);
+const output = new Network();
+output += Constant({ isOn: false, sections: [
+  { group: 'backup', active: false, multiplier: shared, filters: [{ signal: channel, value: shared }, { signal: A, value: 0 }, { signal: channel, value: shared }] },
+  { multiplier: shared, filters: [] }, {}, { multiplier: 2, filters: [] },
+] }).at(4, 5);`;
+    const compilation = compileSourceProgram(
+      { path: 'shared-multiplier.factorio.ts', text },
+      environment(),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const original = structuredClone(sourceCompilationArtifact(compilation));
+    const [shared, channel] = listSourceCompilationParameters(compilation);
+    const bound = bindSourceCompilationCircuit(compilation, [
+      { parameter: shared!.parameter, value: 2147483648 },
+      { parameter: channel!.parameter, value: signal('virtual', 'signal-B', 'excellent') },
+    ]);
+    const configuration = {
+      isOn: false,
+      sections: [
+        {
+          active: false,
+          group: 'backup',
+          multiplier: 2147483648,
+          filters: [
+            { signal: signal('virtual', 'signal-B', 'excellent'), value: -2147483648 },
+            { signal: signal('virtual', 'signal-A'), value: 0 },
+            { signal: signal('virtual', 'signal-B', 'excellent'), value: -2147483648 },
+          ],
+        },
+        { active: true, multiplier: 2147483648, filters: [] },
+        { active: true, multiplier: 1, filters: [] },
+        { active: true, multiplier: 2, filters: [] },
+      ],
+    };
+    expect(bound.plan.producers[0]).toEqual({ ...compilation.plan!.producers[0], configuration });
+    expect(bound.plan.entities[0]).toEqual({
+      ...compilation.plan!.entities[0],
+      configuration: { mode: 'constant', value: configuration },
+    });
+    expect(bound.resolvedCircuit.ir.producers[0]).toMatchObject({ config: { configuration } });
+    expect(bound.resolvedCircuit.ir.entities[0]).toMatchObject({
+      configuration: { mode: 'constant', value: configuration },
+    });
+    expect(bound.plan.producers).toHaveLength(1);
+    expect(bound.plan.entities).toHaveLength(1);
+    for (const value of [0.5, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(() =>
+        bindSourceCompilationCircuit(compilation, [{ parameter: shared!.parameter, value }]),
+      ).toThrowError(expect.objectContaining({ code: 'CP1000', span: shared!.source }));
+    }
+    expect(bindSourceCompilationCircuit(compilation).plan).toEqual(compilation.plan);
+    expect(sourceCompilationArtifact(compilation)).toEqual(original);
+  });
+
+  test.each([
+    [
+      "Param.signal('Wrong', A)",
+      'Constant({ sections: [{ multiplier: scale }] })',
+      '$.configuration.sections[0].multiplier',
+    ],
+    [
+      "Param.number('Scale', 1)",
+      "Constant({ sections: [{ multiplier: { kind: 'number', label: 'Scale', defaultValue: 1 } }] })",
+      '$.configuration.sections[0].multiplier',
+    ],
+    [
+      "Param.number('Scale', 1)",
+      'Constant({ sections: [{ active: scale }] })',
+      '$.configuration.sections[0].active',
+    ],
+    [
+      "Param.number('Scale', 1)",
+      'Constant({ sections: [{ group: scale }] })',
+      '$.configuration.sections[0].group',
+    ],
+    ["Param.number('Scale', 1)", 'Constant({ isOn: scale })', '$.configuration.isOn'],
+  ])('locates unsupported direct configuration use: %s / %s', (declaration, device, path) => {
+    const text = `const A = Signal('virtual', 'signal-A'); const scale = ${declaration};
+const output = new Network(); output += ${device};`;
+    const compilation = compileSourceProgram(
+      { path: 'invalid-multiplier.factorio.ts', text },
+      environment(),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'RT2027',
+        message: expect.stringContaining(path),
+        span: expect.objectContaining({
+          start: text.indexOf('Constant('),
+          end: text.lastIndexOf(';'),
+        }),
+      }),
+    ]);
+    expect(compilation.resolvedCircuit).toBeUndefined();
+  });
+
+  test.each(['CC(scale * Section([A, 5]))', 'CC(scale * A)'])(
+    'does not enable convenience scaling: %s',
+    (device) => {
+      const text = `const A = Signal('virtual', 'signal-A'); const scale = Param.number('Scale', 1);
+const output = new Network(); output += ${device};`;
+      const compilation = compileSourceProgram(
+        { path: 'bare-scaling.factorio.ts', text },
+        environment(),
+      );
+      expect(compilation.pipelineDiagnostics).toEqual([
+        expect.objectContaining({
+          severity: 'error',
+          span: expect.objectContaining({ fileId: compilation.fileId }),
+        }),
+      ]);
+      expect(compilation.resolvedCircuit).toBeUndefined();
+    },
+  );
+
+  test('source view copy remains a located reflection rejection before multiplier normalization', () => {
+    const text = `const scale = Param.number('Scale', 1);
+const output = new Network(); output += Constant({ sections: [{ multiplier: { ...scale } }] });`;
+    const compilation = compileSourceProgram(
+      { path: 'copied-multiplier.factorio.ts', text },
+      environment(),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'CP1001',
+        message: expect.stringContaining('$.parameter'),
+        span: expect.objectContaining({
+          start: text.indexOf('Param.number('),
+          end: text.indexOf(';'),
+        }),
+      }),
+    ]);
+    expect(compilation.resolvedCircuit).toBeUndefined();
+  });
+
+  test('failed multiplier construction leaves no ghost capture or hardware before a valid retry', () => {
+    const execution = execute(`const A = Signal('virtual', 'signal-A');
+const scale = Param.number('Scale', 1);
+try { Constant({ sections: [{ multiplier: scale, active: scale }] }); } catch (error) { const caught = true; }
+const output = new Network();
+output += Constant({ sections: [{ multiplier: scale, filters: [{ signal: A, value: 5 }] }] });`);
+    expect(execution.constantTemplates).toHaveLength(1);
+    expect(execution.plan.producers).toHaveLength(1);
+    expect(execution.plan.entities).toHaveLength(1);
+    expect(execution.constantTemplates[0]!.captureId).toBe(
+      execution.plan.producers[0]!.debugCaptureIds![0],
+    );
+    expect(execution.constantTemplates[0]!.template.sections[0]!.multiplier).toBe(
+      execution.parameters[0]!.handle,
+    );
+  });
+
   test('uses declared defaults in the concrete producer and captures the exact filter slots', () => {
     const execution = execute(
       `
@@ -190,11 +381,6 @@ const exact = Constant({ sections: [{ filters: [{ signal: amount, value: 1 }] }]
       `const A = Signal('virtual', 'signal-A');
 const exact = Constant({ sections: [{ filters: [[A, amount]] }] });`,
     ],
-    [
-      'non-filter multiplier slot',
-      `const A = Signal('virtual', 'signal-A');
-const exact = Constant({ sections: [{ multiplier: amount, filters: [[A, 1]] }] });`,
-    ],
   ])('rejects %s instead of capturing it', (_label, text) => {
     const parsed = parseFile({ path: sourceFile, text });
     const callStart = text.indexOf('Constant(');
@@ -215,43 +401,57 @@ const exact = Constant({ sections: [{ multiplier: amount, filters: [[A, 1]] }] }
     });
   });
 
-  test('rejects foreign and forged parameter handles in direct filter slots', () => {
-    const foreignKey = Symbol.for('comblang.test.foreign-constant-number');
-    const forgedKey = Symbol.for('comblang.test.forged-constant-number');
-    const globalRecord = globalThis as Record<PropertyKey, unknown>;
-    const previous = new Map<PropertyKey, { readonly had: boolean; readonly value: unknown }>([
-      [
-        foreignKey,
-        { had: Object.hasOwn(globalRecord, foreignKey), value: globalRecord[foreignKey] },
-      ],
-      [forgedKey, { had: Object.hasOwn(globalRecord, forgedKey), value: globalRecord[forgedKey] }],
-    ]);
-    globalRecord[foreignKey] = createBlueprintParameterSession().number('foreign', {
-      defaultValue: 5,
-    });
-    globalRecord[forgedKey] = { kind: 'number', label: 'forged', defaultValue: 5 };
-    try {
-      for (const [key, symbolKey, message] of [
+  test.each(['filter', 'multiplier'] as const)(
+    'rejects foreign and forged parameter handles in direct %s slots',
+    (field) => {
+      const foreignKey = Symbol.for('comblang.test.foreign-constant-number');
+      const forgedKey = Symbol.for('comblang.test.forged-constant-number');
+      const globalRecord = globalThis as Record<PropertyKey, unknown>;
+      const previous = new Map<PropertyKey, { readonly had: boolean; readonly value: unknown }>([
         [
           foreignKey,
-          'comblang.test.foreign-constant-number',
-          'parameter belongs to a different parameter session',
+          { had: Object.hasOwn(globalRecord, foreignKey), value: globalRecord[foreignKey] },
         ],
-        [forgedKey, 'comblang.test.forged-constant-number', 'unregistered parameter-like object'],
-      ] as const) {
-        const text = `const A = Signal('virtual', 'signal-A');
-const exact = Constant({ sections: [{ filters: [{ signal: A, value: globalThis[Symbol.for('${symbolKey}')] }] }] });`;
-        expect(() => execute(text)).toThrowError(
-          expect.objectContaining({ message: expect.stringContaining(message) }),
-        );
+        [
+          forgedKey,
+          { had: Object.hasOwn(globalRecord, forgedKey), value: globalRecord[forgedKey] },
+        ],
+      ]);
+      globalRecord[foreignKey] = createBlueprintParameterSession().number('foreign', {
+        defaultValue: 5,
+      });
+      globalRecord[forgedKey] = { kind: 'number', label: 'forged', defaultValue: 5 };
+      try {
+        for (const [key, symbolKey, message] of [
+          [
+            foreignKey,
+            'comblang.test.foreign-constant-number',
+            'parameter belongs to a different parameter session',
+          ],
+          [forgedKey, 'comblang.test.forged-constant-number', 'unregistered parameter-like object'],
+        ] as const) {
+          const text = `const A = Signal('virtual', 'signal-A');
+const exact = Constant({ sections: [{ ${field === 'filter' ? `filters: [{ signal: A, value: globalThis[Symbol.for('${symbolKey}')] }]` : `multiplier: globalThis[Symbol.for('${symbolKey}')]`} }] });`;
+          expect(() => execute(text)).toThrowError(
+            expect.objectContaining({
+              code: 'RT2027',
+              message: expect.stringContaining(message),
+              span: {
+                fileId: parseFile({ path: sourceFile, text }).id,
+                start: text.indexOf('Constant('),
+                end: text.lastIndexOf(';'),
+              },
+            }),
+          );
+        }
+      } finally {
+        for (const [key, value] of previous) {
+          if (value.had) globalRecord[key] = value.value;
+          else delete globalRecord[key];
+        }
       }
-    } finally {
-      for (const [key, value] of previous) {
-        if (value.had) globalRecord[key] = value.value;
-        else delete globalRecord[key];
-      }
-    }
-  });
+    },
+  );
 
   test('rejects missing defaults at either direct filter slot', () => {
     const session = createBlueprintParameterSession();
@@ -288,19 +488,21 @@ const exact = Constant({ sections: [{ filters: [{ signal: A, value: globalThis[S
     );
   });
 
-  test('captures distinct dynamic producers and rolls back a failed enclosing instance', () => {
-    const host = environment();
-    const execution = execute(
-      `
+  test.each(['filter', 'multiplier'] as const)(
+    'captures distinct dynamic producers and rolls back a failed enclosing instance with %s parameter',
+    (field) => {
+      const host = environment();
+      const execution = execute(
+        `
 const A = Signal('virtual', 'signal-A');
 function Make() {
-  const exact = Constant({ sections: [{ filters: [{ signal: A, value: amount }] }] });
+  const exact = Constant({ sections: [{ ${field === 'filter' ? 'filters: [{ signal: A, value: amount }]' : 'multiplier: amount, filters: [{ signal: A, value: 5 }]'} }] });
   const sink = new Network();
   sink += exact;
   return exact;
 }
 function Broken() {
-  const exact = Constant({ sections: [{ filters: [{ signal: A, value: amount }] }] });
+  const exact = Constant({ sections: [{ ${field === 'filter' ? 'filters: [{ signal: A, value: amount }]' : 'multiplier: amount, filters: [{ signal: A, value: 5 }]'} }] });
   const sink = new Network();
   sink += exact;
   return [exact, () => {}];
@@ -308,28 +510,29 @@ function Broken() {
 try { t.instantiate(Broken); } catch (error) { const caught = true; }
 const first = t.instantiate(Make);
 const second = t.instantiate(Make);`,
-      (runtime) =>
-        `const amount = ${runtime}.declareBlueprintNumberParameter('amount', 5, undefined, { start: 0, end: 1 });`,
-      't',
-    );
+        (runtime) =>
+          `const amount = ${runtime}.declareBlueprintNumberParameter('amount', 5, undefined, { start: 0, end: 1 });`,
+        't',
+      );
 
-    expect(execution.plan.producers).toHaveLength(2);
-    expect(execution.plan.entities).toHaveLength(2);
-    expect(execution.constantTemplates).toHaveLength(2);
-    expect(execution.constantTemplates.map(({ captureId }) => captureId)).toEqual([
-      'producer:1',
-      'producer:3',
-    ]);
-    expect(execution.plan.producers.map(({ debugCaptureIds }) => debugCaptureIds)).toEqual([
-      ['producer:1', 'producer:2'],
-      ['producer:3', 'producer:4'],
-    ]);
-    expect(new Set(execution.constantTemplates.map(({ captureId }) => captureId)).size).toBe(2);
-    expect(execution.plan.debugInstances).toHaveLength(2);
-    expect(
-      tryElaborateDirectPlan(execution.plan, host.trustedEntityReplayContext).diagnostics,
-    ).toEqual([]);
-  });
+      expect(execution.plan.producers).toHaveLength(2);
+      expect(execution.plan.entities).toHaveLength(2);
+      expect(execution.constantTemplates).toHaveLength(2);
+      expect(execution.constantTemplates.map(({ captureId }) => captureId)).toEqual([
+        'producer:1',
+        'producer:3',
+      ]);
+      expect(execution.plan.producers.map(({ debugCaptureIds }) => debugCaptureIds)).toEqual([
+        ['producer:1', 'producer:2'],
+        ['producer:3', 'producer:4'],
+      ]);
+      expect(new Set(execution.constantTemplates.map(({ captureId }) => captureId)).size).toBe(2);
+      expect(execution.plan.debugInstances).toHaveLength(2);
+      expect(
+        tryElaborateDirectPlan(execution.plan, host.trustedEntityReplayContext).diagnostics,
+      ).toEqual([]);
+    },
+  );
 
   test('binds mixed Arithmetic and Constant captures atomically without changing topology', () => {
     const host = environment();

@@ -195,7 +195,8 @@ const limit = Param.number('Limit', 100);
 ```
 
 `Param` is reserved. Supported slots are an exact Arithmetic configuration's
-direct numeric operand or direct Signal output, an exact Constant filter's direct Signal or count, an
+direct numeric operand or direct Signal output, an exact Constant filter's direct
+Signal or count and a section's direct numeric multiplier, an
 exact Decider condition's direct right-hand numeric threshold, and exact
 Selector `select`'s `index` (number or Signal) or `count`'s `output` (Signal).
 Selector `selectMax` remains concrete; other Selector operations and slots are
@@ -204,6 +205,62 @@ and NCIR. Parameters are not JavaScript numbers, booleans, or loop bounds;
 arithmetic on a handle, control-flow use, coercion, and arbitrary function calls
 are rejected. Unsupported declaration forms report a source diagnostic
 (`CL1050` for malformed syntax; `CP1000` for an invalid concrete default or metadata).
+
+### Constant multiplier parameters
+
+A number parameter may appear directly in an exact `Constant` section's
+`multiplier`. This complete source example needs the trusted exact-Constant host
+profile. Defaults compile to concrete configuration on one physical Constant:
+
+```ts
+const A = Signal('virtual', 'signal-A');
+const scale = Param.number('Scale', 1);
+const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Constant({
+  sections: [
+    {
+      multiplier: scale,
+      filters: [{ signal: A, value: amount }],
+    },
+  ],
+});
+```
+
+The unit default emits A = 5 at T1. For the owning host-local `compilation`, the
+existing declaration and binding APIs can return a fresh matching concrete pair:
+
+```ts
+const declarations = listSourceCompilationParameters(compilation);
+const scale = declarations.find(({ label }) => label === 'Scale');
+const amount = declarations.find(({ label }) => label === 'Amount');
+if (scale === undefined || amount === undefined) throw new Error('Missing declarations');
+const bound = bindSourceCompilationCircuit(compilation, [
+  { parameter: scale.parameter, value: 0.5 },
+  { parameter: amount.parameter, value: 11 },
+]);
+```
+
+Use `bound.plan` with `bound.resolvedCircuit` for strict replay. Multiplier defaults
+and overrides are finite doubles, not int32; counts independently require safe
+integers and use their existing signed-int32 normalization. A handle shared by a
+multiplier and count must satisfy both slot rules. Binding does not rerun source,
+add hardware or mutate the original compilation; section order, flags and groups
+are retained. Omitted multiplier still defaults to 1.
+
+The pair above preserves multiplier 0.5 and count 11; it does not promise a rounded
+numeric simulation result. Non-unit multipliers retain the existing sparse-bus
+`FC1003` unsupported-configuration boundary and Known/Unknown model Unknown origin.
+This does not implement Factorio multiplier/group semantics, native substitution
+or rounding. `parameter * Section(...)`, CC convenience scaling, symbolic
+`isOn`/`active`/`group`, parameter keys and source formula arithmetic remain unsupported.
+
+Explicit native parameter metadata export rejects symbolic multipliers with
+located `CP1002`, even at default 1 or when the same handle is a supported filter
+count. A fractional declaration can fail the existing native original-int32 check
+first. Ordinary concrete CLI/Worker export retains the default multiplier;
+native-export failure is separate from successful compilation. No binding UI is
+provided. Signal parameters cannot be multipliers.
 
 ### Arithmetic output Signal parameters
 
@@ -357,8 +414,8 @@ The existing bounded native condition expansion identifies every emitted row of
 that leaf, including duplicated rows; each must retain the declared original.
 This is not matching parameter occurrences by equal numeric values.
 Existing concrete source binding remains
-separate and unchanged. Direct source parameter multipliers already fail
-source normalization before a completed capture is available; registered
+separate. Direct source parameter multipliers support local finite-double binding,
+but remain unsupported by native metadata export; registered
 numeric-expression DAGs are internal host APIs, not new source syntax.
 Plain unparameterized devices, including compound Deciders and Signal-index
 Selectors, and concrete section multipliers remain allowed. Concrete Decider

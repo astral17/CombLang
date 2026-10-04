@@ -127,6 +127,126 @@ function expectConcreteDataTree(value: unknown, active = new WeakSet<object>()):
 }
 
 describe('ordinary source parameter declarations', () => {
+  test('executes the documented Constant multiplier source/binding and preserves non-unit simulator boundaries', () => {
+    const page = readFileSync(
+      new URL('../../../docs/native-objects-deciders-and-parameters.md', import.meta.url),
+      'utf8',
+    );
+    const section = page.match(
+      /### Constant multiplier parameters([\s\S]*?)### Arithmetic output/,
+    )?.[1];
+    const examples = [...section!.matchAll(/```ts\r?\n([\s\S]*?)```/g)].map((match) => match[1]!);
+    expect(examples).toHaveLength(2);
+    const key = '__comblang_constant_multiplier_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const had = Object.hasOwn(globals, key);
+    const before = globals[key];
+    globals[key] = 0;
+    try {
+      const compilation = compileSourceProgram(
+        {
+          path: 'documented-multiplier.factorio.ts',
+          text: `globalThis.${key} += 1;\n${examples[0]}`,
+        },
+        parameterHost(),
+      );
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      const original = structuredClone(sourceCompilationArtifact(compilation));
+      const defaults = bindSourceCompilationCircuit(compilation);
+      const replay = executeResolvedDirectPlan(defaults.plan, defaults.resolvedCircuit);
+      expect(
+        replay.circuit
+          .createSimulation()
+          .step()
+          .read(replay.network('output').id)
+          .get(signal('virtual', 'signal-A')),
+      ).toBe(5);
+      const override = () =>
+        Function(
+          'compilation',
+          'listSourceCompilationParameters',
+          'bindSourceCompilationCircuit',
+          `${examples[1]}\nreturn bound;`,
+        )(compilation, listSourceCompilationParameters, bindSourceCompilationCircuit) as ReturnType<
+          typeof bindSourceCompilationCircuit
+        >;
+      const bound = override();
+      expect(override()).toEqual(bound);
+      expect(bindSourceCompilationCircuit(compilation)).toEqual(defaults);
+      const concrete = {
+        isOn: true,
+        sections: [
+          {
+            active: true,
+            multiplier: 0.5,
+            filters: [{ signal: signal('virtual', 'signal-A'), value: 11 }],
+          },
+        ],
+      };
+      expect(bound.plan.producers[0]).toEqual({
+        ...defaults.plan.producers[0],
+        configuration: concrete,
+      });
+      expect(bound.plan.entities[0]).toEqual({
+        ...defaults.plan.entities[0],
+        configuration: { mode: 'constant', value: concrete },
+      });
+      expect(bound.resolvedCircuit.ir.producers[0]).toEqual({
+        ...defaults.resolvedCircuit.ir.producers[0],
+        config: { configuration: concrete },
+      });
+      expect(bound.resolvedCircuit.ir.entities[0]).toEqual({
+        ...defaults.resolvedCircuit.ir.entities[0],
+        configuration: { mode: 'constant', value: concrete },
+      });
+      const { producers: _dp, entities: _de, ...defaultPlan } = defaults.plan;
+      const { producers: _bp, entities: _be, ...boundPlan } = bound.plan;
+      expect(boundPlan).toEqual(defaultPlan);
+      const { producers: _di, entities: _die, ...defaultIr } = defaults.resolvedCircuit.ir;
+      const { producers: _bi, entities: _bie, ...boundIr } = bound.resolvedCircuit.ir;
+      expect(boundIr).toEqual(defaultIr);
+      expect(Object.isFrozen(bound.plan)).toBe(true);
+      expect(Object.isFrozen(bound.resolvedCircuit)).toBe(true);
+      const boundReplay = executeResolvedDirectPlan(bound.plan, bound.resolvedCircuit);
+      expect(() => boundReplay.circuit.createSimulation().step()).toThrowError(
+        expect.objectContaining({ code: 'FC1003', reasons: ['non-unit-multiplier'] }),
+      );
+      const session = boundReplay.createTestSession();
+      session.tick();
+      expect(session.readValue(boundReplay.network('output'))).toEqual({
+        kind: 'unknown',
+        origins: [
+          {
+            id: 'unmodeled:producer:1:constant-configuration',
+            path: [],
+            description: 'Unmodeled Constant configuration for producer:1: non-unit-multiplier.',
+          },
+        ],
+      });
+      expect(generateBlueprintJson(bound.resolvedCircuit.ir).blueprint.entities[0]).toMatchObject({
+        control_behavior: {
+          sections: { sections: [{ multiplier: 0.5, filters: [{ count: 11 }] }] },
+        },
+      });
+      const [scale] = listSourceCompilationParameters(compilation);
+      for (const invalid of [Infinity, -Infinity, NaN, '0.5', undefined]) {
+        expect(() =>
+          bindSourceCompilationCircuit(compilation, [
+            { parameter: scale!.parameter, value: invalid },
+          ]),
+        ).toThrowError(expect.objectContaining({ code: 'CP1000', span: scale!.source }));
+        expect(override()).toEqual(bound);
+      }
+      expect(sourceCompilationArtifact(compilation)).toEqual(original);
+      const cloned = structuredClone(sourceCompilationArtifact(compilation));
+      expectConcreteDataTree([cloned.plan, cloned.resolvedCircuit]);
+      expect(globals[key]).toBe(1);
+    } finally {
+      if (had) globals[key] = before;
+      else delete globals[key];
+    }
+  });
+
   test.each([false, true])(
     'captures exact Arithmetic Signal output with numeric operand: %s',
     (numeric) => {

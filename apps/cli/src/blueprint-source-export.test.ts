@@ -287,6 +287,11 @@ describe('source blueprint export CLI', () => {
 
   test.each([
     [
+      "const amount = Param.number('Scale', 1);",
+      'Constant({ sections: [{ multiplier: amount, filters: [{ signal: A, value: 3 }] }] })',
+      '$.constantTemplates[0].sections[0].multiplier',
+    ],
+    [
       "const amount = Param.signal('Channel', A);",
       'Constant({ sections: [{ filters: [{ signal: amount, value: 5 }] }] })',
       '$.parameters[0]',
@@ -344,27 +349,36 @@ describe('source blueprint export CLI', () => {
           span: { fileId: expect.any(String), start: expect.any(Number), end: expect.any(Number) },
         },
       });
-      expect(text.slice(report.error.span.start, report.error.span.end)).toContain('Param.');
+      const multiplier = semanticPath.startsWith('$.constantTemplates');
+      expect(text.slice(report.error.span.start, report.error.span.end)).toContain(
+        multiplier ? 'Constant(' : 'Param.',
+      );
       expect(report).not.toHaveProperty('document');
       await expect(stat(output)).rejects.toMatchObject({ code: 'ENOENT' });
       expect(await run(['blueprint', 'export', '--parameters', path], environment)).toBe(2);
       expect(log).toHaveBeenCalledTimes(1);
-      expect(String(error.mock.calls.at(-1)?.[0])).toContain(`${path}:2:`);
+      expect(String(error.mock.calls.at(-1)?.[0])).toContain(`${path}:${multiplier ? 4 : 2}:`);
       expect(String(error.mock.calls.at(-1)?.[0])).toContain(semanticPath);
       expect(await run(['blueprint', 'export', '--json', path], environment)).toBe(0);
       expect(JSON.parse(String(log.mock.calls[1]?.[0])).document.blueprint).not.toHaveProperty(
         'parameters',
       );
+      if (multiplier) {
+        expect(
+          JSON.parse(String(log.mock.calls[1]?.[0])).document.blueprint.entities[0],
+        ).toMatchObject({
+          control_behavior: {
+            sections: { sections: [{ multiplier: 1, filters: [{ count: 3 }] }] },
+          },
+        });
+      }
     },
   );
 
-  test('unsupported numeric slot or symbolic expression remains a located compilation failure without output', async () => {
+  test('symbolic numeric expression remains a located compilation failure without output', async () => {
     const { environment } = await parameterHost();
     const { log } = capture();
-    for (const device of [
-      'Constant({ sections: [{ multiplier: amount, filters: [{ signal: A, value: 3 }] }] })',
-      "Selector({ input, operation: 'select', index: amount + 1 })",
-    ]) {
+    for (const device of ["Selector({ input, operation: 'select', index: amount + 1 })"]) {
       const path = await sourceFile(`const A = Signal('virtual', 'signal-A');
 const amount = Param.number('Amount', 5);
 const input = new Network(); const output = new Network(); output += ${device};`);

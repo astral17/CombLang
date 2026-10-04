@@ -20,6 +20,17 @@ Exact constructors and their provider requirements are described in the
 [language reference](../language-reference.md). A generic Entity with a matching
 prototype name does not automatically acquire computation or this output API.
 
+Exact `Constant({ sections: [...] })` accepts a direct current-session number
+parameter in a section's `multiplier`, with a required finite-double default.
+Host-local binding updates the same Constant Producer and linked Entity, including
+fractional multipliers, without source execution or hardware changes. Count slots
+still require safe integers and normalize to int32. Default `1` remains ordinarily
+simulatable; non-unit values keep the existing `FC1003`/Unknown model boundary.
+Native symbolic multiplier export remains unsupported (`CP1002`), while ordinary
+concrete export works. No binding UI, formula syntax or `CC`/Section parameter
+scaling is added. See the
+[complete source and host example](../native-objects-deciders-and-parameters.md#constant-multiplier-parameters).
+
 ## Network context
 
 Ordinary reads and signal selections on a Combinator use its primary output

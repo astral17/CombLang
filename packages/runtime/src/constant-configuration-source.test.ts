@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'vitest';
 import { signal, type SignalId } from '@comblang/factorio';
+import { createBlueprintParameterSession } from '../../compiler/src/blueprint-parameters.js';
 
 import {
   normalizeConstantConfigurationSource,
+  normalizeConstantConfigurationSourceWithParameters,
   ConstantConfigurationSourceError,
 } from './constant-configuration-source.js';
 
@@ -14,6 +16,113 @@ const context = {
 };
 
 describe('exact Constant source configuration', () => {
+  test.each([1, 0.5, -0, 2147483648, 1e100])(
+    'retains parameter multiplier default %s as finite double, including multiplier-only capture',
+    (value) => {
+      const session = createBlueprintParameterSession();
+      const scale = session.number('Scale', { defaultValue: value });
+      const normalized = normalizeConstantConfigurationSourceWithParameters(
+        {
+          sections: [
+            { multiplier: scale, filters: [] },
+            { multiplier: scale, filters: [[A, 2]] },
+            {},
+          ],
+        },
+        context,
+        session,
+      );
+      expect(normalized.configuration.sections.map(({ multiplier }) => multiplier)).toEqual([
+        value,
+        value,
+        1,
+      ]);
+      expect(normalized.templateConfiguration).toMatchObject({
+        sections: [
+          { multiplier: scale, filters: [] },
+          { multiplier: scale, filters: [{ signal: A, value: 2 }] },
+          { multiplier: 1, filters: [] },
+        ],
+      });
+    },
+  );
+
+  test.each(['signal', 'foreign', 'copied', 'forged', 'missing-default'] as const)(
+    'authenticates multiplier slot and rejects %s without coercion',
+    (kind) => {
+      const session = createBlueprintParameterSession();
+      const scale = session.number('Scale', { defaultValue: 1 });
+      const candidates = {
+        signal: session.signal('Wrong', { defaultValue: A }),
+        foreign: createBlueprintParameterSession().number('Foreign', { defaultValue: 1 }),
+        copied: { ...scale },
+        forged: { kind: 'number', label: 'Scale', defaultValue: 1 },
+        'missing-default': session.number('Missing'),
+      };
+      expect(() =>
+        normalizeConstantConfigurationSourceWithParameters(
+          { sections: [{ multiplier: candidates[kind] }] },
+          context,
+          session,
+        ),
+      ).toThrowError(
+        expect.objectContaining({
+          name: 'ConstantConfigurationSourceError',
+          path: '$.sections[0].multiplier',
+        }),
+      );
+      expect(
+        normalizeConstantConfigurationSourceWithParameters(
+          { sections: [{ multiplier: scale }] },
+          context,
+          session,
+        ).configuration.sections[0]!.multiplier,
+      ).toBe(1);
+    },
+  );
+
+  test('rejects object multiplier without invoking primitive conversion', () => {
+    let calls = 0;
+    const multiplier = {
+      valueOf() {
+        calls += 1;
+        return 1;
+      },
+      [Symbol.toPrimitive]() {
+        calls += 1;
+        return 1;
+      },
+    };
+    expect(() =>
+      normalizeConstantConfigurationSourceWithParameters(
+        { sections: [{ multiplier }] },
+        context,
+        createBlueprintParameterSession(),
+      ),
+    ).toThrowError(expect.objectContaining({ path: '$.sections[0].multiplier' }));
+    expect(calls).toBe(0);
+  });
+
+  test('rejects multiplier accessor without executing getter or mutating the caller', () => {
+    let calls = 0;
+    const section = Object.defineProperty({}, 'multiplier', {
+      enumerable: true,
+      get: () => {
+        calls += 1;
+        return 1;
+      },
+    });
+    expect(() =>
+      normalizeConstantConfigurationSourceWithParameters(
+        { sections: [section] },
+        context,
+        createBlueprintParameterSession(),
+      ),
+    ).toThrowError(expect.objectContaining({ path: '$.sections[0].multiplier' }));
+    expect(calls).toBe(0);
+    expect(Object.getOwnPropertyDescriptor(section, 'multiplier')?.get).toBeDefined();
+  });
+
   test('normalizes ordered nested sources without merging duplicate or zero rows', () => {
     const configuration = normalizeConstantConfigurationSource(
       {

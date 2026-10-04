@@ -869,31 +869,49 @@ output += Selector({ input, operation: 'select', index: 1 });`);
   });
 
   test.each([false, true])(
-    'retains the existing source rejection of a direct parameter multiplier (count use: %s)',
+    'rejects native multiplier metadata after successful source compilation (count use: %s)',
     (alsoCount) => {
       const text = `const A = Signal('virtual', 'signal-A');
-const amount = Param.number('Amount', 5);
+const amount = Param.number('Amount', 1);
 const output = new Network();
-${alsoCount ? 'output += Constant({ sections: [{ filters: [{ signal: A, value: amount }] }] });' : ''}
-output += Constant({ sections: [{ multiplier: amount, filters: [{ signal: A, value: 3 }] }] });`;
-      const compilation = sourceApi.compileSourceProgram(
-        { path: 'unreachable-parameter-multiplier.factorio.ts', text },
-        parameterHost(),
-      );
-      expect(compilation.pipelineDiagnostics).toEqual([
-        expect.objectContaining({
-          code: 'RT2027',
-          message: '$.configuration.sections[0].multiplier: expected a finite number.',
-          span: expect.objectContaining({ start: text.lastIndexOf('Constant(') }),
+output += Constant({ sections: [{ multiplier: amount, filters: [{ signal: A, value: ${alsoCount ? 'amount' : '3'} }] }] });`;
+      const compilation = compile(text);
+      const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+      const error = exportFailure(compilation);
+      expect(error).toMatchObject({
+        code: 'CP1002',
+        path: '$.constantTemplates[0].sections[0].multiplier',
+        span: expect.objectContaining({
+          start: text.indexOf('Constant('),
+          end: text.lastIndexOf(';'),
         }),
-      ]);
-      expect(compilation.resolvedCircuit).toBeUndefined();
-      expect(() => sourceApi.exportSourceCompilationNativeBlueprint(compilation, options)).toThrow(
-        TypeError,
-      );
-      expect(() => sourceApi.bindSourceCompilationParameters(compilation)).toThrow(TypeError);
+      });
+      expect(error.message).toContain('symbolic multipliers');
+      const concrete = generateBlueprintJson(compilation.resolvedCircuit!.ir);
+      expect(concrete.blueprint).not.toHaveProperty('parameters');
+      expect(concrete.blueprint.entities[0]).toMatchObject({
+        control_behavior: {
+          sections: { sections: [{ multiplier: 1, filters: [{ count: alsoCount ? 1 : 3 }] }] },
+        },
+      });
+      expect(sourceApi.bindSourceCompilationCircuit(compilation).plan).toEqual(compilation.plan);
+      expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
     },
   );
+
+  test('fractional multiplier declaration retains native original-int32 preflight precedence', () => {
+    const compilation = compile(`const scale = Param.number('Scale', 0.5);
+const output = new Network();
+output += Constant({ sections: [{ multiplier: scale, filters: [] }] });`);
+    expect(exportFailure(compilation)).toMatchObject({
+      code: 'CP1002',
+      path: '$.parameters[0].defaultValue',
+      span: sourceApi.listSourceCompilationParameters(compilation)[0]!.source,
+    });
+    expect(compilation.plan!.producers[0]).toMatchObject({
+      configuration: { sections: [{ multiplier: 0.5 }] },
+    });
+  });
 
   test.each([
     [
