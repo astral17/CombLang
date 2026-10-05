@@ -74,6 +74,7 @@ Usage:
   factorio-dsl blueprint decode [--json] [--input-file <exchange.txt> | <exchange-string>] [--output <document.json>]
   factorio-dsl blueprint encode [--json] [--output <exchange.txt>] <document.json>
   factorio-dsl blueprint export [--json] [--parameters] [--label <text>] [--output <document.json>] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts>
+  factorio-dsl blueprint export [--json] [--parameters] [--label <text>] [--output <document.json>] --project <comblang.json> [source.factorio.ts]
 
 Checks circuits, executes browser/Node-neutral JavaScript test files, and processes prototype dumps, circuit supplements, or evidence manifests.`;
 
@@ -575,9 +576,19 @@ export async function run(
       return 0;
     }
     try {
-      const options = parseSourceExportOptions(exportArgs);
+      const parsed = parseSourceExportOptions(exportArgs);
+      const resolved = await resolveProjectOptions(parsed, 'export');
+      const options = { ...parsed, ...resolved };
+      if (options.files.length !== 1 || options.files[0]!.trim().length === 0) {
+        throw new CliInputError('CLI1001', 'export requires one resolved source file.');
+      }
       const prototypes = await selectPrototypeProvider(options, environment.prototypes);
-      const selected = provisionCliEnvironment(environment, prototypes);
+      const selected = provisionCliEnvironment(
+        options.diagnosticPolicy === undefined
+          ? environment
+          : { ...environment, diagnosticPolicy: options.diagnosticPolicy },
+        prototypes,
+      );
       return await runSourceBlueprintExport(options, selected, (diagnostic, source) =>
         formatDiagnostic(diagnostic, new Map([[source.fileId, source]])),
       );

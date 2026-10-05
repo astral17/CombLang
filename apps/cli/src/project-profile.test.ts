@@ -1,9 +1,10 @@
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { loadPrototypeDatabase, syntheticPrototypeDatabase } from '@comblang/prototypes';
+import * as sourceApi from '@comblang/runtime/source-compilation';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 
 import { run } from './main.js';
@@ -78,6 +79,365 @@ describe('CLI project profile', () => {
       'test',
     );
     expect(override.files).toEqual(['elsewhere.ts', 'tests.js']);
+  });
+
+  test('resolves source export without adding or reading configured tests', async () => {
+    const path = await projectFile({
+      ...profile,
+      tests: 'tests/missing-or-throwing.test.js',
+      diagnostics: { rules: { 'producer.unused-output': { enabled: false } } },
+      prototypes: { path: 'data/profile.json', identity: 'pinned' },
+    });
+    const options = await resolveProjectOptions(
+      parseCompilationOptions(['--project', path]),
+      'export',
+    );
+    expect(options.files).toEqual([join(dirname(path), 'source/main.factorio.ts')]);
+    expect(options.prototypePath).toBe(join(dirname(path), 'data/profile.json'));
+    expect(options.prototypeIdentity).toBe('pinned');
+    expect(options.diagnosticPolicy?.rules).toEqual({
+      'producer.unused-output': { enabled: false },
+    });
+  });
+
+  test('exports the checked-in pinned project with no positional source and no stdout banner', async () => {
+    const path = fileURLToPath(
+      new URL('../../../examples/prototype-stack/comblang.json', import.meta.url),
+    );
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect(await run(['blueprint', 'export', '--json', '--project', path])).toBe(0);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      ok: true,
+      document: { blueprint: { entities: [{ name: 'constant-combinator' }] } },
+      diagnostics: [expect.objectContaining({ code: 'CL2001', severity: 'warning' })],
+    });
+    expect(error).not.toHaveBeenCalled();
+    log.mockClear();
+    expect(await run(['blueprint', 'export', '--project', path])).toBe(0);
+    expect(log).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      blueprint: { entities: [{ name: 'constant-combinator' }] },
+    });
+    expect(String(log.mock.calls[0]?.[0])).not.toContain('Prototype environment:');
+    expect(error).toHaveBeenCalledTimes(1);
+    expect(String(error.mock.calls[0]?.[0])).toContain('warning CL2001');
+  });
+
+  test('exports a project that has no configured test file', async () => {
+    const source = fileURLToPath(
+      new URL('../../../examples/prototype-stack/main.factorio.ts', import.meta.url),
+    );
+    const prototypesPath = fileURLToPath(
+      new URL('../../../packages/prototypes/generated/space-age-2.1.17.json', import.meta.url),
+    );
+    const database = await readFile(prototypesPath, 'utf8');
+    const { prototypes } = await loadPrototypeDatabase(JSON.parse(database));
+    const path = await projectFile({
+      schemaVersion: 1,
+      source,
+      prototypes: { path: prototypesPath, identity: prototypes.identity },
+    });
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    expect(await run(['blueprint', 'export', '--json', '--project', path])).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      ok: true,
+      document: { blueprint: { entities: [{ name: 'constant-combinator' }] } },
+    });
+  });
+
+  test('source export rejects project/provider failures before compiling any source', async () => {
+    const missing = join(tmpdir(), 'comblang-project-that-does-not-exist.json');
+    const malformed = await projectFile(null);
+    const missingDatabase = await projectFile({
+      schemaVersion: 1,
+      source: 'missing.ts',
+      prototypes: { path: 'missing-database.json' },
+    });
+    const conflictingPin = await projectFile({
+      ...profile,
+      prototypes: { path: 'missing-database.json', identity: 'project-pin' },
+    });
+    const projectAndInjected = await projectFile({
+      schemaVersion: 1,
+      source: 'missing.ts',
+      prototypes: { path: 'missing-database.json' },
+    });
+    const databasePath = fileURLToPath(
+      new URL('../../../packages/prototypes/generated/space-age-2.1.17.json', import.meta.url),
+    );
+    const database = await readFile(databasePath, 'utf8');
+    const loaded = await loadPrototypeDatabase(JSON.parse(database));
+    const wrongLoadedPin = await projectFile({
+      schemaVersion: 1,
+      source: 'missing.ts',
+      prototypes: { path: databasePath, identity: `${loaded.prototypes.identity}-wrong` },
+    });
+    const injected = (await loadPrototypeDatabase(syntheticPrototypeDatabase())).prototypes;
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const compile = vi.spyOn(sourceApi, 'compileSourceProgram');
+    const cases: Array<{
+      readonly args: string[];
+      readonly code: string;
+      readonly environment?: Parameters<typeof run>[1];
+    }> = [
+      { args: ['--project', missing], code: 'CLI1005' },
+      { args: ['--project', malformed], code: 'CLI1005' },
+      { args: ['--project', missingDatabase], code: 'CLI1002' },
+      { args: ['--project', conflictingPin, '--prototype-identity', 'different'], code: 'CLI1003' },
+      {
+        args: ['--project', missing, '--prototypes', join(tmpdir(), 'absent-db.json')],
+        code: 'CLI1001',
+      },
+      {
+        args: ['--project', projectAndInjected],
+        code: 'CLI1001',
+        environment: { prototypes: injected },
+      },
+      { args: ['--project', wrongLoadedPin], code: 'CLI1003' },
+    ];
+    const noWrite = join(dirname(projectAndInjected), 'must-not-write.json');
+    for (const { args, code, environment } of cases) {
+      log.mockClear();
+      expect(
+        await run(['blueprint', 'export', '--json', ...args, '--output', noWrite], environment),
+      ).toBe(2);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+        ok: false,
+        error: { code },
+      });
+      await expect(readFile(noWrite)).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+    expect(compile).not.toHaveBeenCalled();
+  });
+
+  test('uses project-relative data, ignores configured tests, and applies source export overrides and policy', async () => {
+    const directory = await mkdtemp(join(process.cwd(), 'tmp CLI project with spaces-'));
+    directories.push(directory);
+    await mkdir(join(directory, 'source'));
+    await mkdir(join(directory, 'data'));
+    await mkdir(join(directory, 'tests'));
+    const projectPath = join(directory, 'comblang.json');
+    const databasePath = fileURLToPath(
+      new URL('../../../packages/prototypes/generated/space-age-2.1.17.json', import.meta.url),
+    );
+    const database = await readFile(databasePath, 'utf8');
+    const { prototypes } = await loadPrototypeDatabase(JSON.parse(database));
+    const key = '__comblang_project_export_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const previous = globals[key];
+    globals[key] = 0;
+    const source = `globalThis.${key} += 1;
+const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5);
+const output = Constant({ sections: [{ filters: [{ signal: A, value: amount }] }] });`;
+    const alternate = `globalThis.${key} += 1;
+const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Override', 7);
+const output = Constant({ sections: [{ filters: [{ signal: A, value: amount }] }] });`;
+    const symbolicMultiplier = `globalThis.${key} += 1;
+const A = Signal('virtual', 'signal-A');
+const scale = Param.number('Scale', 1);
+const output = Constant({ sections: [{ multiplier: scale, filters: [{ signal: A, value: 5 }] }] });`;
+    const config = (
+      diagnostics?: unknown,
+      sourcePath = 'source/main.factorio.ts',
+      includePin = true,
+    ) => ({
+      schemaVersion: 1,
+      source: sourcePath,
+      tests: 'tests/throwing.test.js',
+      prototypes: {
+        path: 'data/profile.json',
+        ...(includePin ? { identity: prototypes.identity } : {}),
+      },
+      ...(diagnostics === undefined ? {} : { diagnostics }),
+    });
+    try {
+      await writeFile(join(directory, 'data/profile.json'), database);
+      await writeFile(
+        join(directory, 'tests/throwing.test.js'),
+        "throw new Error('must not execute test file');",
+      );
+      await writeFile(join(directory, 'source/main.factorio.ts'), source);
+      await writeFile(projectPath, JSON.stringify(config()));
+      const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+      const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      expect(await run(['check', '--json', '--project', projectPath])).toBe(0);
+      const checkReport = JSON.parse(String(log.mock.calls[0]?.[0]));
+      expect(checkReport.diagnostics).toEqual([
+        expect.objectContaining({ code: 'CL2001', severity: 'warning', span: expect.any(Object) }),
+      ]);
+      expect(globals[key]).toBe(1);
+      const defaultCode = await run(['blueprint', 'export', '--json', '--project', projectPath]);
+      expect(defaultCode, String(log.mock.calls[1]?.[0])).toBe(0);
+      const ordinary = JSON.parse(String(log.mock.calls[1]?.[0]));
+      expect(ordinary).toMatchObject({
+        ok: true,
+        document: {
+          blueprint: {
+            entities: [
+              { control_behavior: { sections: { sections: [{ filters: [{ count: 5 }] }] } } },
+            ],
+          },
+        },
+        diagnostics: [expect.objectContaining({ code: 'CL2001', severity: 'warning' })],
+      });
+      expect(ordinary.document.blueprint).not.toHaveProperty('parameters');
+      const checkWarning = checkReport.diagnostics[0];
+      expect(ordinary.diagnostics).toHaveLength(checkReport.diagnostics.length);
+      expect(ordinary.diagnostics[0]).toMatchObject({
+        code: checkWarning.code,
+        message: checkWarning.message,
+        severity: checkWarning.severity,
+        ruleId: checkWarning.ruleId,
+        span: { start: checkWarning.span.start, end: checkWarning.span.end },
+      });
+      expect(globals[key]).toBe(2);
+      expect(String(log.mock.calls[1]?.[0])).not.toContain('Prototype environment:');
+
+      log.mockClear();
+      expect(
+        await run([
+          'blueprint',
+          'export',
+          '--json',
+          '--parameters',
+          '--project',
+          projectPath,
+          '--prototype-identity',
+          prototypes.identity,
+        ]),
+      ).toBe(0);
+      const parameterized = JSON.parse(String(log.mock.calls[0]?.[0]));
+      expect(parameterized.document.blueprint.parameters).toEqual([
+        { type: 'number', number: '5', name: 'Amount' },
+      ]);
+      expect(
+        parameterized.document.blueprint.entities[0].control_behavior.sections.sections[0]
+          .filters[0].count,
+      ).toBe(5);
+      expect(globals[key]).toBe(3);
+
+      await writeFile(
+        projectPath,
+        JSON.stringify(config({ rules: { 'producer.unused-output': { severity: 'error' } } })),
+      );
+      const rejectedOutput = join(relative(process.cwd(), directory), 'rejected.json');
+      log.mockClear();
+      expect(
+        await run([
+          'blueprint',
+          'export',
+          '--json',
+          '--project',
+          projectPath,
+          '--output',
+          rejectedOutput,
+        ]),
+      ).toBe(2);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+        ok: false,
+        error: { code: 'CL2001', span: expect.any(Object) },
+      });
+      await expect(readFile(join(directory, 'rejected.json'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      expect(globals[key]).toBe(4);
+
+      await writeFile(
+        projectPath,
+        JSON.stringify(
+          config(
+            { rules: { 'producer.unused-output': { enabled: false } } },
+            'source/missing-configured.factorio.ts',
+            false,
+          ),
+        ),
+      );
+      const alternatePath = join(directory, 'alternate.factorio.ts');
+      await writeFile(alternatePath, alternate);
+      const output = join(relative(process.cwd(), directory), 'custom-output.json');
+      log.mockClear();
+      expect(
+        await run([
+          'blueprint',
+          'export',
+          '--json',
+          '--parameters',
+          '--project',
+          projectPath,
+          '--prototype-identity',
+          prototypes.identity,
+          '--label',
+          'Project override',
+          '--output',
+          output,
+          relative(process.cwd(), alternatePath),
+        ]),
+      ).toBe(0);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+        ok: true,
+        output: join(directory, 'custom-output.json'),
+      });
+      const native = JSON.parse(await readFile(join(directory, 'custom-output.json'), 'utf8'));
+      expect(native.blueprint).toMatchObject({
+        label: 'Project override',
+        entities: [{ control_behavior: { sections: { sections: [{ filters: [{ count: 7 }] }] } } }],
+      });
+      expect(native.blueprint.parameters).toEqual([
+        { type: 'number', number: '7', name: 'Override' },
+      ]);
+      expect(globals[key]).toBe(5);
+
+      const symbolicPath = join(directory, 'symbolic-multiplier.factorio.ts');
+      await writeFile(symbolicPath, symbolicMultiplier);
+      const symbolicRelative = relative(process.cwd(), symbolicPath);
+      log.mockClear();
+      expect(
+        await run(['blueprint', 'export', '--json', '--project', projectPath, symbolicRelative]),
+      ).toBe(0);
+      const concrete = JSON.parse(String(log.mock.calls[0]?.[0]));
+      expect(concrete.document.blueprint).not.toHaveProperty('parameters');
+      expect(
+        concrete.document.blueprint.entities[0].control_behavior.sections.sections[0],
+      ).toMatchObject({
+        multiplier: 1,
+        filters: [{ count: 5 }],
+      });
+      expect(globals[key]).toBe(6);
+
+      const rejectedNative = join(relative(process.cwd(), directory), 'native-rejected.json');
+      log.mockClear();
+      expect(
+        await run([
+          'blueprint',
+          'export',
+          '--json',
+          '--parameters',
+          '--project',
+          projectPath,
+          '--output',
+          rejectedNative,
+          symbolicRelative,
+        ]),
+      ).toBe(2);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0])).error).toMatchObject({
+        code: 'CP1002',
+        path: '$.constantTemplates[0].sections[0].multiplier',
+        span: { start: expect.any(Number), end: expect.any(Number) },
+      });
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).not.toHaveProperty('document');
+      await expect(readFile(join(directory, 'native-rejected.json'))).rejects.toMatchObject({
+        code: 'ENOENT',
+      });
+      expect(globals[key]).toBe(7);
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete globals[key];
+      else globals[key] = previous;
+    }
   });
 
   test('normalizes the optional diagnostic policy without searching for another config', async () => {

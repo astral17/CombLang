@@ -12,7 +12,7 @@ import * as blueprintJson from '@comblang/compiler/blueprint-json';
 import { loadPrototypeDatabase, syntheticPrototypeDatabase } from '@comblang/prototypes';
 import * as sourceApi from '@comblang/runtime/source-compilation';
 import { run, type CliCompilationEnvironment } from './main.js';
-import { reportSourceExportFailure } from './blueprint-source-export.js';
+import { parseSourceExportOptions, reportSourceExportFailure } from './blueprint-source-export.js';
 
 const directories: string[] = [];
 const simpleSource = `const A = Signal('virtual', 'signal-A');
@@ -107,6 +107,51 @@ afterEach(async () => {
 });
 
 describe('source blueprint export CLI', () => {
+  test('parses project export with optional source and validates the project source arity', () => {
+    expect(parseSourceExportOptions(['--project', 'comblang.json'])).toMatchObject({
+      projectPath: 'comblang.json',
+      files: [],
+    });
+    expect(
+      parseSourceExportOptions([
+        '--project',
+        'comblang.json',
+        'alternate.factorio.ts',
+        '--parameters',
+        '--label',
+        'Kept label',
+        '--output',
+        'output.json',
+        '--json',
+      ]),
+    ).toMatchObject({
+      projectPath: 'comblang.json',
+      files: ['alternate.factorio.ts'],
+      parameters: true,
+      label: 'Kept label',
+      output: 'output.json',
+      json: true,
+    });
+    for (const args of [
+      ['--project', 'comblang.json', 'one.ts', 'two.ts'],
+      ['--project', 'comblang.json', ''],
+      ['--project'],
+      ['--project', ''],
+      ['--project', '--json'],
+      ['--project', 'a.json', '--project', 'b.json'],
+    ]) {
+      expect(() => parseSourceExportOptions(args)).toThrowError(
+        expect.objectContaining({ code: 'CLIBP1001' }),
+      );
+    }
+    expect(() =>
+      parseSourceExportOptions(['--project', 'a.json', '--prototypes', 'db.json']),
+    ).toThrowError(expect.objectContaining({ code: 'CLI1001' }));
+    expect(
+      parseSourceExportOptions(['--project', 'comblang.json', '--', '--source.ts']).files,
+    ).toEqual(['--source.ts']);
+  });
+
   test('dispatches source export with clean native stdout and both help entry points', async () => {
     const path = await sourceFile();
     const { log, error, warn } = capture();
@@ -124,6 +169,9 @@ describe('source blueprint export CLI', () => {
       log.mockClear();
       expect(await run(args)).toBe(0);
       expect(String(log.mock.calls[0]?.[0])).toContain('blueprint export');
+      if (args[0] === '--help' || (args[1] === 'export' && args[2] === '--help')) {
+        expect(String(log.mock.calls[0]?.[0])).toContain('--project');
+      }
     }
   });
 
@@ -144,7 +192,6 @@ describe('source blueprint export CLI', () => {
   test.each([
     [],
     ['other.ts'],
-    ['--project', 'project.json'],
     ['--format', 'json'],
     ['--exchange'],
     ['--input-file', 'source.ts'],

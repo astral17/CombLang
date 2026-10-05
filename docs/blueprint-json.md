@@ -20,6 +20,7 @@ self-generated fixtures are not native Factorio conformance evidence.
 
 ```text
 factorio-dsl blueprint export [--json] [--parameters] [--label <text>] [--output <document.json>] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts>
+factorio-dsl blueprint export [--json] [--parameters] [--label <text>] [--output <document.json>] --project <comblang.json> [source.factorio.ts]
 ```
 
 Save this parameter-free source as `simple.factorio.ts`:
@@ -35,6 +36,7 @@ After building, run from the repository root:
 ```sh
 node apps/cli/dist/main.js blueprint export simple.factorio.ts
 node apps/cli/dist/main.js blueprint export --label "My circuit" --output simple.json simple.factorio.ts
+node apps/cli/dist/main.js blueprint export --project examples/prototype-stack/comblang.json
 ```
 
 Default export uses concrete defaults and emits no parameter metadata, even
@@ -43,6 +45,18 @@ circuit`; Decider expansion retains the 1024-row limit. Explicit `--parameters`
 requests numeric native metadata from that same owning compilation; it never
 falls back to concrete output after rejection. Without declarations, both modes
 produce an ordinary document without empty parameter rows.
+
+`--project` reuses a CLI project profile's one configured source and prototype
+database. Omitting the positional source selects the configured source; one
+explicit source replaces it. The `--project` filename resolves from the current
+working directory; paths configured inside that file resolve from its directory.
+An explicit source and `--output` resolve from the current working directory.
+Export ignores the configured test path entirely and
+does not read, compile or execute that file. Project diagnostics and prototype
+identity selection follow the same rules as `check` and `test`; an explicit
+`--prototype-identity` may repeat a project pin or pin an unpinned project.
+Malformed export arguments are rejected before project or provider loading.
+This remains one source compilation, not multi-file project linking.
 
 Save this numeric example as `numeric.factorio.ts`:
 
@@ -95,11 +109,12 @@ source locations on stderr; `--json` uses
 `{ "ok": false, "error": { "code": ..., "message": ..., "path": ..., "span": ..., "related": ... } }`
 with optional error fields and a nonempty diagnostic list for compile errors.
 Compiler/export codes such as `CP1002` are retained. Arguments are validated
-before source execution. Exactly one source is accepted; `--` ends option parsing
-for literal filenames beginning with `-`. Project linking, parameter overrides,
-`--project`, `--format`, and `--exchange` are unsupported here. Exchange encoding
-is a separate command. The web panel also offers an optional numeric-parameter
-export mode, described below; it does not provide parameter overrides.
+before source execution. Exactly one source is accepted without `--project`; a
+project accepts zero or one explicit source. `--` ends option parsing for literal
+filenames beginning with `-`. Project linking, parameter overrides, `--format`,
+and `--exchange` are unsupported here. Exchange encoding is a separate command.
+The web panel also offers an optional numeric-parameter export mode, described
+below; it does not provide parameter overrides.
 
 ## Mapping
 

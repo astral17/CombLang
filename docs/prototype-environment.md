@@ -700,6 +700,7 @@ and one optional test file; it is not yet a multi-module build manifest.
 ```sh
 npm run cli -- check --project comblang.json
 npm run cli -- test --project comblang.json --json
+npm run cli -- blueprint export --project comblang.json
 ```
 
 All configured paths are resolved relative to the configuration file, never to
@@ -707,6 +708,15 @@ the shell's working directory. Explicit positional filenames replace the configu
 source/test filenames and retain their usual working-directory-relative meaning.
 This lets the same profile check several independent files. `test` still requires
 exactly two resolved filenames; without explicit filenames it requires `tests`.
+
+`blueprint export --project comblang.json` resolves only the configured source and
+prototype database. Export never reads or runs the configured test file. One
+explicit source filename overrides the project's configured source; it resolves
+from the shell's working directory, as do `--output` and the `--project` filename.
+Configured source and prototype paths resolve from the directory containing the
+project file. Export uses the project's prototype identity and diagnostic policy
+like `check` and `test`, and accepts zero or one explicit source. This does not
+link project files or add module imports.
 
 There is no automatic parent-directory search, executable config, or import/eval
 step. A project cannot be combined with `--prototypes` or an injected provider.

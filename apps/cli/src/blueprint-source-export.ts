@@ -10,10 +10,15 @@ import type { Diagnostic, SourceSpan } from '@comblang/shared';
 import { emitNativeBlueprintJson } from '../../../packages/compiler/src/native-blueprint-emitter.js';
 import { BlueprintCliError, readBoundedUtf8File, writeExclusiveText } from './blueprint-command.js';
 import type { CliCompilationEnvironment } from './main.js';
-import { parseCompilationOptions, type CompilationOptions } from './prototype-options.js';
+import {
+  CliInputError,
+  parseCompilationOptions,
+  type CompilationOptions,
+} from './prototype-options.js';
 
 export const sourceExportUsage = `Usage:
-  factorio-dsl blueprint export [--json] [--parameters] [--label <text>] [--output <document.json>] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts>`;
+  factorio-dsl blueprint export [--json] [--parameters] [--label <text>] [--output <document.json>] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts>
+  factorio-dsl blueprint export [--json] [--parameters] [--label <text>] [--output <document.json>] --project <comblang.json> [source.factorio.ts]`;
 
 export interface SourceExportOptions extends CompilationOptions {
   readonly parameters: boolean;
@@ -42,7 +47,8 @@ export function parseSourceExportOptions(args: readonly string[]): SourceExportO
       argument === '--label' ||
       argument === '--output' ||
       argument === '--prototypes' ||
-      argument === '--prototype-identity'
+      argument === '--prototype-identity' ||
+      argument === '--project'
     ) {
       if (seen.has(argument))
         throw new BlueprintCliError('CLIBP1001', `Duplicate option: ${argument}.`);
@@ -57,7 +63,11 @@ export function parseSourceExportOptions(args: readonly string[]): SourceExportO
         ) {
           throw new BlueprintCliError('CLIBP1001', `${argument} requires a value.`);
         }
-        if (argument === '--prototypes' || argument === '--prototype-identity')
+        if (
+          argument === '--prototypes' ||
+          argument === '--prototype-identity' ||
+          argument === '--project'
+        )
           common.push(argument, value);
         else values.set(argument, value);
       }
@@ -68,8 +78,20 @@ export function parseSourceExportOptions(args: readonly string[]): SourceExportO
     }
   }
   const options = parseCompilationOptions(common);
-  if (options.files.length !== 1 || options.files[0]!.trim().length === 0) {
-    throw new BlueprintCliError('CLIBP1001', 'export requires exactly one source file.');
+  if (options.projectPath !== undefined && options.prototypePath !== undefined) {
+    throw new CliInputError('CLI1001', 'Choose either --project or --prototypes, not both.');
+  }
+  if (
+    options.files.length > 1 ||
+    (options.files.length === 1 && options.files[0]!.trim().length === 0) ||
+    (options.files.length === 0 && options.projectPath === undefined)
+  ) {
+    throw new BlueprintCliError(
+      'CLIBP1001',
+      options.projectPath === undefined
+        ? 'export requires exactly one source file.'
+        : 'export accepts at most one source file with --project.',
+    );
   }
   const label = values.get('--label');
   const output = values.get('--output');
