@@ -2,9 +2,17 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import * as sourceApi from '@comblang/runtime/source-compilation';
 import * as blueprintJson from '@comblang/compiler/blueprint-json';
 import { loadPrototypeDatabase, syntheticPrototypeDatabase } from '@comblang/prototypes';
+import {
+  createTrustedEntityReplayContext,
+  syntheticZeroPortEntityProfile,
+} from '@comblang/compiler';
+import type { EntityProfile } from '@comblang/compiler/entity';
+import type { EntityPrototype } from '@comblang/prototypes';
+import type { EntityPrototypeResolver } from '@comblang/runtime/entity-registry';
 import { sourceFileId, sourceSpan, type Diagnostic } from '@comblang/shared';
 
-import { compileSource } from './compile-source.js';
+import { compileOwnedSource, compileSource } from './compile-source.js';
+import { createSourceParameterBindingSession } from '@comblang/runtime/source-parameter-binding';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -40,6 +48,79 @@ describe('optional browser blueprint export', () => {
       compileSource(file, {}, [], undefined, { parameters: false, label: '' }).blueprintExport,
     ).toMatchObject({ ok: true, document: { blueprint: { label: '' } } });
     expect(structuredClone(concrete)).toEqual(concrete);
+  });
+});
+
+describe('owning browser source compilation', () => {
+  test('returns one authentic local owner and the unchanged cloneable numeric export result', () => {
+    const profile: EntityProfile = {
+      ...structuredClone(syntheticZeroPortEntityProfile),
+      ref: {
+        ...syntheticZeroPortEntityProfile.ref,
+        prototypeKey: 'entity:constant-combinator' as EntityProfile['ref']['prototypeKey'],
+        profileId: 'profile:web-owned-source-constant' as EntityProfile['ref']['profileId'],
+      },
+      prototypeType: 'constant-combinator',
+    };
+    const trustedEntityReplayContext = createTrustedEntityReplayContext({
+      database: profile.ref.database,
+      source: 'synthetic',
+      evidenceIdentity: 'web-owned-source-evidence',
+      policyIdentity: 'web-owned-source-policy',
+      profiles: [profile],
+    });
+    const prototype: EntityPrototype = {
+      key: 'entity:constant-combinator' as EntityPrototype['key'],
+      name: 'constant-combinator',
+      type: 'constant-combinator',
+      tileWidth: 1,
+      tileHeight: 1,
+    };
+    const entityPrototypeResolver: EntityPrototypeResolver = {
+      database: trustedEntityReplayContext.database,
+      getEntity(nameOrKey) {
+        return nameOrKey === prototype.key || nameOrKey === prototype.name ? prototype : undefined;
+      },
+    };
+    const environment = { trustedEntityReplayContext, entityPrototypeResolver };
+    const countKey = '__comblang_web_owned_compile_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const had = Object.hasOwn(globals, countKey);
+    const previous = globals[countKey];
+    globals[countKey] = 0;
+    const file = {
+      path: 'worker-owned-parameter.factorio.ts',
+      text: `globalThis.${countKey} = Number(globalThis.${countKey} ?? 0) + 1;
+const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-A'), value: amount }] }] });`,
+    };
+    try {
+      const owned = compileOwnedSource(file, environment, [], undefined, { parameters: true });
+      expect(globals[countKey]).toBe(1);
+      expect(owned.compilation.pipelineDiagnostics).toEqual([]);
+      expect(owned.compilation.plan).toBeDefined();
+      expect(owned.compilation.resolvedCircuit).toBeDefined();
+      expect(owned.result.blueprintExport).toMatchObject({ ok: true });
+      expect(owned.result).toEqual(
+        compileSource(file, environment, [], undefined, { parameters: true }),
+      );
+      expect(globals[countKey]).toBe(2);
+      expect(structuredClone(owned.result)).toEqual(owned.result);
+      expect(owned.result).not.toHaveProperty('compilation');
+      expect(createSourceParameterBindingSession(owned.compilation).parameters).toMatchObject([
+        { id: 0, kind: 'number', label: 'Amount', defaultValue: 5 },
+      ]);
+
+      globals[countKey] = 0;
+      const legacy = compileSource(file, environment);
+      expect(globals[countKey]).toBe(1);
+      expect(legacy).not.toHaveProperty('blueprintExport');
+      expect(structuredClone(legacy)).toEqual(legacy);
+    } finally {
+      if (had) globals[countKey] = previous;
+      else delete globals[countKey];
+    }
   });
 });
 

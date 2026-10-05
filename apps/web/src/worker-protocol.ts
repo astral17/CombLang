@@ -6,8 +6,9 @@ import type {
   PrototypeDatabaseCapabilities,
   PrototypeEnvironment,
 } from '@comblang/prototypes';
-import type { DiagnosticPolicy } from '@comblang/shared';
+import type { Diagnostic, DiagnosticPolicy } from '@comblang/shared';
 import type { BlueprintExportOptions } from './blueprint-export.js';
+import type { SourceParameterDescriptor } from '@comblang/runtime/source-parameter-binding';
 
 export interface BrowserPrototypeProfileSource {
   /** Normalized or raw Factorio Prototype JSON. It is parsed only inside the Worker. */
@@ -39,6 +40,7 @@ export interface CompilerWorkerRequest {
   readonly prototypeProfile?: BrowserPrototypeProfile;
   readonly entityReplayContext?: EntityReplayContextTransport;
   readonly blueprintExport?: BlueprintExportOptions;
+  readonly parameterBinding?: boolean;
 }
 
 export interface BrowserPrototypeEnvironmentReport {
@@ -69,7 +71,16 @@ export interface CompilerWorkerParsedResponse {
   readonly revision: number;
   readonly result: CompiledSourceResult;
   readonly prototypeEnvironment?: BrowserPrototypeEnvironmentReport;
+  readonly parameterBinding?: CompilerWorkerParameterBindingResult;
 }
+
+export type CompilerWorkerParameterBindingResult =
+  | {
+      readonly ok: true;
+      readonly parameters: readonly SourceParameterDescriptor[];
+      readonly token?: string;
+    }
+  | { readonly ok: false; readonly diagnostics: readonly Diagnostic[] };
 
 export type CompilerWorkerResponse =
   CompilerWorkerReadyResponse | CompilerWorkerProgressResponse | CompilerWorkerParsedResponse;

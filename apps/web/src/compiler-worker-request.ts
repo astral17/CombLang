@@ -17,12 +17,18 @@ import {
 } from '@comblang/prototypes';
 import { parseDiagnosticPolicy, type Diagnostic, type DiagnosticPolicy } from '@comblang/shared';
 import type { EntityPrototypeResolver } from '@comblang/runtime/entity-registry';
+import type { SourceCompilationEnvironment } from '@comblang/runtime/source-compilation';
+import { listSourceCompilationParameters } from '@comblang/runtime/source-compilation';
+import {
+  createSourceParameterBindingSession,
+  type SourceParameterBindingSession,
+} from '@comblang/runtime/source-parameter-binding';
 import {
   conservativeEntityProvisioningPolicy,
   EntityProvisioningService,
 } from '@comblang/runtime/entity-provisioning';
 
-import { compileSource } from './compile-source.js';
+import { compileOwnedSource } from './compile-source.js';
 import {
   BrowserBlueprintExportRequestError,
   readBlueprintExportOptions,
@@ -33,6 +39,7 @@ import type {
   CompilerWorkerProgressStage,
   CompilerWorkerRequest,
   CompilerWorkerParsedResponse,
+  CompilerWorkerParameterBindingResult,
 } from './worker-protocol.js';
 
 class BrowserPrototypeSelectionError extends Error {
@@ -45,6 +52,14 @@ class BrowserPrototypeCacheMissError extends Error {
 
 class BrowserDiagnosticPolicyError extends Error {
   readonly code = 'WP1004';
+}
+
+class BrowserParameterBindingRequestError extends Error {
+  readonly code = 'WP1006';
+}
+
+export class CompilerWorkerParameterBindingError extends Error {
+  readonly code = 'WP1007';
 }
 
 /** Host-local authority supplied after the cloneable replay envelope is checked. */
@@ -76,17 +91,56 @@ function profileFailure(error: unknown): Diagnostic {
                 ? error.code
                 : error instanceof BrowserBlueprintExportRequestError
                   ? error.code
-                  : error instanceof EntityReplayContextError
+                  : error instanceof BrowserParameterBindingRequestError
                     ? error.code
-                    : 'WP1003',
+                    : error instanceof EntityReplayContextError
+                      ? error.code
+                      : 'WP1003',
     severity: 'error',
     message: error instanceof Error ? error.message : 'Unable to load the prototype profile.',
   };
 }
 
+function readParameterBindingFlag(request: CompilerWorkerRequest): boolean {
+  const descriptor = Object.getOwnPropertyDescriptor(request, 'parameterBinding');
+  if (descriptor === undefined) return false;
+  if (!('value' in descriptor) || !descriptor.enumerable) {
+    throw new BrowserParameterBindingRequestError(
+      '$.parameterBinding: expected an enumerable data property.',
+    );
+  }
+  if (descriptor.value === undefined) return false;
+  if (typeof descriptor.value !== 'boolean') {
+    throw new BrowserParameterBindingRequestError('$.parameterBinding: expected a boolean.');
+  }
+  return descriptor.value;
+}
+
+interface WorkerCompileOptions {
+  readonly epoch: number;
+  readonly revision: number;
+  readonly file: { readonly path: string; readonly text: string };
+  readonly parameterBinding: boolean;
+  readonly environment?: SourceCompilationEnvironment;
+  readonly preflightDiagnostics?: readonly Diagnostic[];
+  readonly observe: ((stage: CompilerWorkerProgressStage) => void) | undefined;
+  readonly blueprintExport: BlueprintExportOptions | undefined;
+  readonly prototypeEnvironment?: BrowserPrototypeEnvironmentReport;
+}
+
 export class CompilerWorkerRuntime {
   readonly #profiles = new Map<string, LoadedPrototypeInput>();
   readonly #entityProvisioning = new EntityProvisioningService();
+  #parameterSession:
+    | {
+        readonly token: string;
+        readonly revision: number;
+        readonly session: SourceParameterBindingSession;
+      }
+    | undefined;
+  #parseEpoch = 0;
+  #tokenNonce: string | undefined;
+  #tokenSequence = 0;
   readonly #resolveEntityReplayContext:
     | ((transport: EntityReplayContextTransport) => CompilerWorkerEntityHostContext | undefined)
     | undefined;
@@ -99,16 +153,38 @@ export class CompilerWorkerRuntime {
     request: CompilerWorkerRequest,
     observe?: (stage: CompilerWorkerProgressStage) => void,
   ): Promise<CompilerWorkerParsedResponse> {
+    const epoch = ++this.#parseEpoch;
+    this.#parameterSession = undefined;
+    const revision = request.revision;
+    const file = Object.freeze({ path: request.file.path, text: request.file.text });
     observe?.('receive');
+    let parameterBinding: boolean;
+    try {
+      parameterBinding = readParameterBindingFlag(request);
+    } catch (error) {
+      return this.#compileResponse({
+        epoch,
+        revision,
+        file,
+        parameterBinding: false,
+        preflightDiagnostics: [profileFailure(error)],
+        observe,
+        blueprintExport: {},
+      });
+    }
     let blueprintExport: BlueprintExportOptions | undefined;
     try {
       blueprintExport = readBlueprintExportOptions(request);
     } catch (error) {
-      return {
-        kind: 'parsed',
-        revision: request.revision,
-        result: compileSource(request.file, {}, [profileFailure(error)], observe, {}),
-      };
+      return this.#compileResponse({
+        epoch,
+        revision,
+        file,
+        parameterBinding,
+        preflightDiagnostics: [profileFailure(error)],
+        observe,
+        blueprintExport: {},
+      });
     }
     let diagnosticPolicy: DiagnosticPolicy | undefined;
     try {
@@ -117,23 +193,21 @@ export class CompilerWorkerRuntime {
           ? undefined
           : parseDiagnosticPolicy(request.diagnosticPolicy);
     } catch (error) {
-      return {
-        kind: 'parsed',
-        revision: request.revision,
-        result: compileSource(
-          request.file,
-          {},
-          [
-            profileFailure(
-              new BrowserDiagnosticPolicyError(
-                error instanceof Error ? error.message : 'Invalid diagnostic policy.',
-              ),
+      return this.#compileResponse({
+        epoch,
+        revision,
+        file,
+        parameterBinding,
+        preflightDiagnostics: [
+          profileFailure(
+            new BrowserDiagnosticPolicyError(
+              error instanceof Error ? error.message : 'Invalid diagnostic policy.',
             ),
-          ],
-          observe,
-          blueprintExport,
-        ),
-      };
+          ),
+        ],
+        observe,
+        blueprintExport,
+      });
     }
     let entityReplayContext: EntityReplayContextTransport | undefined;
     let entityHostContext: CompilerWorkerEntityHostContext | undefined;
@@ -161,50 +235,40 @@ export class CompilerWorkerRuntime {
         }
       }
     } catch (error) {
-      return {
-        kind: 'parsed',
-        revision: request.revision,
-        result: compileSource(request.file, {}, [profileFailure(error)], observe, blueprintExport),
-      };
+      return this.#compileResponse({
+        epoch,
+        revision,
+        file,
+        parameterBinding,
+        preflightDiagnostics: [profileFailure(error)],
+        observe,
+        blueprintExport,
+      });
     }
     if (request.prototypeProfile === undefined) {
-      try {
-        return {
-          kind: 'parsed',
-          revision: request.revision,
-          result: compileSource(
-            request.file,
-            {
-              ...(diagnosticPolicy === undefined ? {} : { diagnosticPolicy }),
-              ...(entityReplayContext === undefined ? {} : { entityReplayContext }),
-              ...(entityHostContext === undefined
-                ? {}
-                : {
-                    trustedEntityReplayContext: entityHostContext.trustedEntityReplayContext,
-                    ...(entityHostContext.entityPrototypeResolver === undefined
-                      ? {}
-                      : { entityPrototypeResolver: entityHostContext.entityPrototypeResolver }),
-                  }),
-            },
-            [],
-            observe,
-            blueprintExport,
-          ),
-        };
-      } catch (error) {
-        return {
-          kind: 'parsed',
-          revision: request.revision,
-          result: compileSource(
-            request.file,
-            {},
-            [profileFailure(error)],
-            observe,
-            blueprintExport,
-          ),
-        };
-      }
+      return this.#compileResponse({
+        epoch,
+        revision,
+        file,
+        parameterBinding,
+        environment: {
+          ...(diagnosticPolicy === undefined ? {} : { diagnosticPolicy }),
+          ...(entityReplayContext === undefined ? {} : { entityReplayContext }),
+          ...(entityHostContext === undefined
+            ? {}
+            : {
+                trustedEntityReplayContext: entityHostContext.trustedEntityReplayContext,
+                ...(entityHostContext.entityPrototypeResolver === undefined
+                  ? {}
+                  : { entityPrototypeResolver: entityHostContext.entityPrototypeResolver }),
+              }),
+        },
+        observe,
+        blueprintExport,
+      });
     }
+    let compileEnvironment: SourceCompilationEnvironment;
+    let prototypeEnvironment: BrowserPrototypeEnvironmentReport;
     try {
       const profile = request.prototypeProfile;
       observe?.('profile');
@@ -296,36 +360,115 @@ export class CompilerWorkerRuntime {
           entityPrototypeResolver: provisioned.entityPrototypeResolver,
         };
       }
-      return {
-        kind: 'parsed',
-        revision: request.revision,
-        result: compileSource(
-          request.file,
-          {
-            prototypes: loaded.prototypes,
-            ...(diagnosticPolicy === undefined ? {} : { diagnosticPolicy }),
-            ...(entityReplayContext === undefined ? {} : { entityReplayContext }),
-            ...(entityHostContext === undefined
-              ? {}
-              : {
-                  trustedEntityReplayContext: entityHostContext.trustedEntityReplayContext,
-                  ...(entityHostContext.entityPrototypeResolver === undefined
-                    ? {}
-                    : { entityPrototypeResolver: entityHostContext.entityPrototypeResolver }),
-                }),
-          },
-          [],
-          observe,
-          blueprintExport,
-        ),
-        prototypeEnvironment: environment,
+      prototypeEnvironment = environment;
+      compileEnvironment = {
+        prototypes: loaded.prototypes,
+        ...(diagnosticPolicy === undefined ? {} : { diagnosticPolicy }),
+        ...(entityReplayContext === undefined ? {} : { entityReplayContext }),
+        ...(entityHostContext === undefined
+          ? {}
+          : {
+              trustedEntityReplayContext: entityHostContext.trustedEntityReplayContext,
+              ...(entityHostContext.entityPrototypeResolver === undefined
+                ? {}
+                : { entityPrototypeResolver: entityHostContext.entityPrototypeResolver }),
+            }),
       };
     } catch (error) {
+      return this.#compileResponse({
+        epoch,
+        revision,
+        file,
+        parameterBinding,
+        preflightDiagnostics: [profileFailure(error)],
+        observe,
+        blueprintExport,
+      });
+    }
+    return this.#compileResponse({
+      epoch,
+      revision,
+      file,
+      parameterBinding,
+      environment: compileEnvironment,
+      observe,
+      blueprintExport,
+      prototypeEnvironment,
+    });
+  }
+
+  bindParameters(token: string, sourceRevision: number, overrides?: unknown) {
+    const retained = this.#parameterSession;
+    if (
+      retained === undefined ||
+      retained.token !== token ||
+      retained.revision !== sourceRevision
+    ) {
+      throw new CompilerWorkerParameterBindingError(
+        'WP1007: parameter binding token is missing, expired, or belongs to another source revision.',
+      );
+    }
+    return retained.session.bind(overrides);
+  }
+
+  #issueToken(): string {
+    if (this.#tokenNonce === undefined) {
+      const cryptoApi = globalThis.crypto;
+      if (cryptoApi === undefined || typeof cryptoApi.getRandomValues !== 'function') {
+        throw new CompilerWorkerParameterBindingError(
+          'WP1007: this runtime cannot allocate a parameter binding token.',
+        );
+      }
+      const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+      this.#tokenNonce = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+    }
+    this.#tokenSequence += 1;
+    return `${this.#tokenNonce}.${this.#tokenSequence.toString(36)}`;
+  }
+
+  #compileResponse(options: WorkerCompileOptions): CompilerWorkerParsedResponse {
+    const owned = compileOwnedSource(
+      options.file,
+      options.environment,
+      options.preflightDiagnostics,
+      options.observe,
+      options.blueprintExport,
+    );
+    const response: CompilerWorkerParsedResponse = {
+      kind: 'parsed',
+      revision: options.revision,
+      result: owned.result,
+      ...(options.prototypeEnvironment === undefined
+        ? {}
+        : { prototypeEnvironment: options.prototypeEnvironment }),
+    };
+    if (!options.parameterBinding || options.epoch !== this.#parseEpoch) return response;
+
+    const errors = owned.compilation.pipelineDiagnostics.filter(
+      ({ severity }) => severity === 'error',
+    );
+    if (errors.length > 0) {
+      return { ...response, parameterBinding: { ok: false, diagnostics: errors } };
+    }
+
+    try {
+      if (listSourceCompilationParameters(owned.compilation).length === 0) {
+        return { ...response, parameterBinding: { ok: true, parameters: [] } };
+      }
+      const session = createSourceParameterBindingSession(owned.compilation);
+      const token = this.#issueToken();
+      this.#parameterSession = { token, revision: options.revision, session };
       return {
-        kind: 'parsed',
-        revision: request.revision,
-        result: compileSource(request.file, {}, [profileFailure(error)], observe, blueprintExport),
+        ...response,
+        parameterBinding: { ok: true, parameters: session.parameters, token },
       };
+    } catch (error) {
+      const diagnostic: Diagnostic = {
+        code: 'WP1007',
+        severity: 'error',
+        message: error instanceof Error ? error.message : 'Unable to retain parameter bindings.',
+      };
+      return { ...response, parameterBinding: { ok: false, diagnostics: [diagnostic] } };
     }
   }
 }

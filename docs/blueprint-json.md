@@ -217,6 +217,46 @@ protocol. Native formula evaluation,
 original-value substitution, recipe dependencies and placement validity remain
 unverified. Default preview/copy and simulation continue to use concrete defaults.
 
+## Optional Worker-local parameter binding
+
+An in-process owner of a `CompilerWorkerRuntime` can opt in to a detached
+parameter listing while retaining the exact successful compilation locally:
+
+```ts
+import { CompilerWorkerRuntime } from '../apps/web/src/compiler-worker-request.js';
+
+const runtime = new CompilerWorkerRuntime();
+const response = await runtime.handle({ ...request, parameterBinding: true });
+const listing = response.parameterBinding;
+if (listing?.ok && listing.token !== undefined) {
+  const bound = runtime.bindParameters(listing.token, response.revision, [{ id: 0, value: 9 }]);
+}
+```
+
+`parameterBinding` is an optional parse-request boolean. The optional
+`parsed.parameterBinding` response is outside `result`: successful compilation
+returns detached, cloneable declaration descriptors and an opaque token when
+there are parameters; a parameter-free compilation returns an empty listing
+without a token. Compile errors return their existing error diagnostics and do
+not retain a session. A failure of optional native blueprint export does not
+prevent binding a successful compilation. Invalid flag data is rejected as
+`WP1006` before profile loading or source execution.
+
+The token routes only to one in-memory session in that runtime instance. It is
+not an authorization credential or persistent identifier. Starting any later
+`handle` call expires that slot immediately, even if the later request omits or
+disables binding or eventually fails. `bindParameters` accepts a full override
+snapshot: omitting an override resets all declarations to their source defaults.
+Binding reuses the retained compilation and does not execute source again.
+Invalid or expired tokens and revision mismatches produce `WP1007`; valid-token
+override validation keeps the adapter's `CP1000`/`CP1001` diagnostics and source
+spans.
+
+This host-local method is not a Worker message operation: the browser Worker
+protocol, scheduler, UI and CLI do not route bind requests or expose override
+controls. No source is persisted, and binding does not evaluate native formula
+metadata or establish Factorio behavior.
+
 ### Web blueprint panel
 
 The labelled **Include numeric parameters** checkbox is off by default and is

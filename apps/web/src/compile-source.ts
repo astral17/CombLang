@@ -1,6 +1,7 @@
 import {
   compileSourceProgram,
   sourceCompilationArtifact,
+  type LocalSourceCompilation,
   type SourceCompilationArtifact,
   type SourceCompilationEnvironment,
   type SourceCompilationObserver,
@@ -16,6 +17,10 @@ import {
 export type CompiledSourceResult = SourceCompilationArtifact & {
   readonly blueprintExport?: BlueprintExportResult;
 };
+export interface OwnedCompiledSource {
+  readonly compilation: LocalSourceCompilation;
+  readonly result: CompiledSourceResult;
+}
 export type { SourceCompilationEnvironment };
 export type { SourceCompilationObserver };
 
@@ -26,8 +31,23 @@ export function compileSource(
   observe?: SourceCompilationObserver,
   blueprintExport?: BlueprintExportOptions,
 ): CompiledSourceResult {
+  return compileOwnedSource(file, environment, preflightDiagnostics, observe, blueprintExport)
+    .result;
+}
+
+export function compileOwnedSource(
+  file: SourceFileSnapshot,
+  environment: SourceCompilationEnvironment = {},
+  preflightDiagnostics: readonly Diagnostic[] = [],
+  observe?: SourceCompilationObserver,
+  blueprintExport?: BlueprintExportOptions,
+): OwnedCompiledSource {
   const compilation = compileSourceProgram(file, environment, preflightDiagnostics, observe);
-  if (blueprintExport === undefined) return sourceCompilationArtifact(compilation);
-  const exported = exportCompiledSourceBlueprint(compilation, blueprintExport);
-  return { ...sourceCompilationArtifact(compilation), blueprintExport: exported };
+  const exported =
+    blueprintExport === undefined
+      ? undefined
+      : exportCompiledSourceBlueprint(compilation, blueprintExport);
+  const artifact = sourceCompilationArtifact(compilation);
+  const result = exported === undefined ? artifact : { ...artifact, blueprintExport: exported };
+  return { compilation, result };
 }
