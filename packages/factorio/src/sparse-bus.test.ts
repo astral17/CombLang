@@ -38,6 +38,24 @@ describe('Factorio circuit value primitives', () => {
     expect(new SparseBus([[normalA, 0]]).size).toBe(0);
   });
 
+  it('rejects NUL-containing structural Signals at every bus boundary without mutating state', () => {
+    const bus = new SparseBus([[normalA, 7]]);
+    const byName = { type: 'virtual', name: 'signal-A\u0000rare' } as const;
+    const byQuality = { type: 'virtual', name: 'signal-A', quality: 'rare\u0000' } as const;
+
+    expect(() => bus.get(byName)).toThrow(/Signal name.*NUL/i);
+    expect(() => bus.set(byName, 9)).toThrow(/Signal name.*NUL/i);
+    expect(() => bus.add(byName, 2)).toThrow(/Signal name.*NUL/i);
+    expect(() => new SparseBus([[byName, 9]])).toThrow(/Signal name.*NUL/i);
+    expect(() => bus.get(byQuality)).toThrow(/Signal quality.*NUL/i);
+    expect(() => bus.set(byQuality, 9)).toThrow(/Signal quality.*NUL/i);
+    expect(() => bus.add(byQuality, 2)).toThrow(/Signal quality.*NUL/i);
+
+    expect(bus.size).toBe(1);
+    expect(bus.get(normalA)).toBe(7);
+    expect(bus.entries()).toEqual([[normalA, 7]]);
+  });
+
   it('uses Factorio-style truncating division and signed remainder', () => {
     expect(divideInt32(-19, 10)).toBe(-1);
     expect(divideInt32(19, -10)).toBe(-1);

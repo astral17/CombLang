@@ -4,10 +4,12 @@ import {
   formatSignalRef,
   parseSignalRef,
   Signal,
+  compareSignalIds,
   sameSignal,
   signal,
   signalKey,
   signalTypes,
+  type SignalId,
 } from './signal.js';
 
 describe('SignalID', () => {
@@ -37,6 +39,51 @@ describe('SignalID', () => {
     expect(sameSignal(normal, legendary)).toBe(false);
     expect(sameSignal(normal, item)).toBe(false);
     expect(new Set([signalKey(normal), signalKey(legendary), signalKey(item)]).size).toBe(3);
+  });
+
+  test.each([
+    ['Signal(name)', () => Signal('plate\u0000rare')],
+    ['Signal(type, name)', () => Signal('item', 'plate\u0000rare')],
+    ['Signal(type, name, quality)', () => Signal('item', 'plate', 'rare\u0000')],
+    ['signal alias name', () => signal('plate\u0000rare')],
+    ['signal alias quality', () => signal('item', 'plate', 'rare\u0000')],
+  ])('rejects NUL in %s', (_label, create) => {
+    expect(create).toThrow(/Signal (name|quality).*NUL/i);
+  });
+
+  test('rejects NUL in raw structural keys instead of aliasing distinct SignalRefs', () => {
+    const byName: SignalId = { type: 'item', name: 'plate\u0000rare' };
+    const byQuality: SignalId = { type: 'item', name: 'plate', quality: 'rare\u0000' };
+
+    const legacyKey = (id: SignalId) =>
+      `${id.type}\u0000${id.name}\u0000${id.quality === undefined || id.quality === 'normal' ? '' : id.quality}`;
+    expect(legacyKey(byName)).toBe(legacyKey(byQuality));
+    expect(() => signalKey(byName)).toThrow(/Signal name.*NUL/i);
+    expect(() => signalKey(byQuality)).toThrow(/Signal quality.*NUL/i);
+    expect(() => sameSignal(byName, byQuality)).toThrow(/NUL/i);
+    expect(() => compareSignalIds(byName, byQuality)).toThrow(/NUL/i);
+  });
+
+  test('rejects NUL in formatted and parsed SignalRefs', () => {
+    expect(() => formatSignalRef({ type: 'item', name: 'plate\u0000rare' })).toThrow(
+      /Signal name.*NUL/i,
+    );
+    expect(() => formatSignalRef({ type: 'item', name: 'plate', quality: 'rare\u0000' })).toThrow(
+      /Signal quality.*NUL/i,
+    );
+    expect(() => parseSignalRef('item/plate%00rare')).toThrow(/Signal name.*NUL/i);
+    expect(() => parseSignalRef('item/plate/rare%00')).toThrow(/Signal quality.*NUL/i);
+  });
+
+  test('retains ordinary key format and accepts other Unicode and literal backslash-u0000', () => {
+    const ordinary = Signal('virtual', 'signal-A');
+    expect(signalKey(ordinary)).toBe('virtual\u0000signal-A\u0000');
+    expect(signalKey(Signal('item', 'iron-plate', 'normal'))).toBe(
+      signalKey(Signal('item', 'iron-plate')),
+    );
+    const literalBackslash = 'literal\\u0000';
+    expect(formatSignalRef(Signal('item', literalBackslash))).toBe('literal%5Cu0000');
+    expect(formatSignalRef(Signal('virtual', 'name/with%delimiters 🛰'))).toContain('%2F');
   });
 
   test('rejects incomplete and invalid structures at runtime', () => {

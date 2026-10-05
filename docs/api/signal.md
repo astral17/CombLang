@@ -15,6 +15,9 @@ A Signal is a name/type/quality, not a count and not a Network.
 
 Arguments are strings. One argument does not infer a namespace from the name:
 `Signal('signal-A')` means an item, not a virtual Signal.
+Names and explicitly supplied qualities must be non-empty and cannot contain
+NUL (U+0000); this is an identity-format constraint, not a claim about every
+name accepted by Factorio itself.
 
 ```ts
 const IRON = Signal('iron-plate');

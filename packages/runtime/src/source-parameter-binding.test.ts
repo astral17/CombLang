@@ -297,6 +297,36 @@ Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-A'), value
     }
   });
 
+  test.each([
+    ['name', { type: 'virtual', name: 'signal-B\u0000bad' }, '$.overrides[1].value.name'],
+    [
+      'quality',
+      { type: 'virtual', name: 'signal-B', quality: 'rare\u0000' },
+      '$.overrides[1].value.quality',
+    ],
+  ])('rejects NUL in signal override %s with its declaration span', (_field, value, path) => {
+    const session = createSourceParameterBindingSession(compile());
+    const firstSnapshot = session.bind([{ id: 1, value: signal('virtual', 'signal-C') }]);
+
+    expect(
+      expectParameterError(() =>
+        session.bind([
+          { id: 0, value: 9 },
+          { id: 1, value },
+        ]),
+      ),
+    ).toMatchObject({
+      code: 'CP1000',
+      path,
+      span: session.parameters[1]!.source,
+    });
+    expect(firstSnapshot.resolvedCircuit.ir.entities[0]!.configuration).toMatchObject({
+      mode: 'constant',
+      value: { sections: [{ filters: [{ signal: { name: 'signal-C' }, value: 5 }] }] },
+    });
+    expect(session.bind([{ id: 1, value: signal('virtual', 'signal-B') }])).toBeDefined();
+  });
+
   test('validates override records, IDs and values with exact paths and declaration spans', () => {
     const session = createSourceParameterBindingSession(compile());
     const amountSpan = session.parameters[0]!.source;

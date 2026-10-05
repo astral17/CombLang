@@ -645,6 +645,29 @@ const output = new Network(); output += device;`;
   });
 
   test.each([
+    "Signal('virtual', 'signal-A\\u0000bad')",
+    "Signal('virtual', 'signal-A', 'rare\\u0000bad')",
+  ])('rejects NUL in a Signal parameter default at the failing call: %s', (expression) => {
+    const text = `const channel = Param.signal('Bad', ${expression});`;
+    const compilation = compileSourceProgram(
+      { path: 'nul-output-default.factorio.ts', text },
+      parameterHost(),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'EX1001',
+        message: expect.stringMatching(/NUL/i),
+        span: {
+          fileId: compilation.fileId,
+          start: text.indexOf(expression),
+          end: text.indexOf(expression) + expression.length,
+        },
+      }),
+    ]);
+    expect(compilation.plan).toBeUndefined();
+  });
+
+  test.each([
     'const input = new Network(); input[channel] += CC(1 * A);',
     'const input = new Network(); input + channel;',
     'const input = new Network(); IF(input[A] > 0, channel);',

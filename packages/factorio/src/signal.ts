@@ -17,6 +17,12 @@ export interface SignalId {
   readonly quality?: string;
 }
 
+function assertNoNul(value: string, label: 'name' | 'quality'): void {
+  if (value.includes('\u0000')) {
+    throw new TypeError(`Signal ${label} cannot contain NUL (U+0000).`);
+  }
+}
+
 declare const signalRefBrand: unique symbol;
 export type SignalRef = string & {
   readonly [signalRefBrand]: true;
@@ -48,9 +54,11 @@ function assertSignalId(id: SignalId): void {
   if (typeof id.name !== 'string' || id.name.length === 0) {
     throw new TypeError('A signal name cannot be empty.');
   }
+  assertNoNul(id.name, 'name');
   if (id.quality !== undefined && (typeof id.quality !== 'string' || id.quality.length === 0)) {
     throw new TypeError('A signal quality cannot be empty when provided.');
   }
+  if (typeof id.quality === 'string') assertNoNul(id.quality, 'quality');
 }
 
 /** Formats the public, reversible SignalRef without changing internal bus keys. */
@@ -122,9 +130,11 @@ export function Signal(typeOrName: SignalType | string, name?: string, quality?:
   if (typeof resolvedName !== 'string' || resolvedName.length === 0) {
     throw new TypeError('A signal name cannot be empty.');
   }
+  assertNoNul(resolvedName, 'name');
   if (quality !== undefined && (typeof quality !== 'string' || quality.length === 0)) {
     throw new TypeError('A signal quality cannot be empty when provided.');
   }
+  if (quality !== undefined) assertNoNul(quality, 'quality');
 
   return Object.freeze(
     quality === undefined ? { type, name: resolvedName } : { type, name: resolvedName, quality },
@@ -141,6 +151,8 @@ export function signal(typeOrName: SignalType | string, name?: string, quality?:
 }
 
 export function signalKey(id: SignalId): string {
+  if (typeof id.name === 'string') assertNoNul(id.name, 'name');
+  if (typeof id.quality === 'string') assertNoNul(id.quality, 'quality');
   const quality = id.quality === undefined || id.quality === 'normal' ? '' : id.quality;
   return `${id.type}\u0000${id.name}\u0000${quality}`;
 }

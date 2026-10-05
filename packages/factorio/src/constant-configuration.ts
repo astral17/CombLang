@@ -229,11 +229,17 @@ function canonicalSignal(
     if (typeof record.name !== 'string' || record.name.length === 0) {
       invalid('FC1001', `${path}.name`, 'expected a non-empty Signal name.');
     }
+    if (record.name.includes('\u0000')) {
+      invalid('FC1001', `${path}.name`, 'Signal name cannot contain NUL (U+0000).');
+    }
     if (
       'quality' in record &&
       (typeof record.quality !== 'string' || record.quality.length === 0)
     ) {
       invalid('FC1001', `${path}.quality`, 'expected a non-empty Signal quality.');
+    }
+    if ('quality' in record && (record.quality as string).includes('\u0000')) {
+      invalid('FC1001', `${path}.quality`, 'Signal quality cannot contain NUL (U+0000).');
     }
     try {
       return Signal(

@@ -108,6 +108,35 @@ describe('Constant configuration semantic core', () => {
     );
   });
 
+  it.each([
+    [
+      'Signal name NUL',
+      {
+        sections: [
+          { filters: [{ signal: { type: 'virtual', name: 'signal-A\u0000rare' }, value: 1 }] },
+        ],
+      },
+      '$.sections[0].filters[0].signal.name',
+    ],
+    [
+      'Signal quality NUL',
+      {
+        sections: [
+          {
+            filters: [
+              { signal: { type: 'virtual', name: 'signal-A', quality: 'rare\u0000' }, value: 1 },
+            ],
+          },
+        ],
+      },
+      '$.sections[0].filters[0].signal.quality',
+    ],
+  ])('rejects %s at its precise data path', (_name, value, path) => {
+    expect(() => canonicalizeConstantConfiguration(value)).toThrowError(
+      expect.objectContaining<Partial<ConstantConfigurationError>>({ code: 'FC1001', path }),
+    );
+  });
+
   it('enforces bounded input limits and rejects cycles', () => {
     const cyclic: { sections?: unknown } = {};
     cyclic.sections = [cyclic];
