@@ -378,6 +378,31 @@ a located diagnostic; valid configuration slots canonicalize it to the original
 host handle. Host-side declaration metadata remains available through the
 host-local API.
 
+### Descriptor-based local binding
+
+Hosts that need stable data IDs instead of nominal parameter handles can create a
+local binding session from the exact successful compilation. IDs follow declaration
+order and belong only to that session; the descriptor list is detached immutable
+data. Each bind is a full snapshot against the original defaults, and omitting the
+overrides resets all declarations. Binding reuses the captured templates and does
+not rerun source or evaluate formula metadata:
+
+```ts
+const session = createSourceParameterBindingSession(compilation);
+const amount = session.parameters.find(({ label }) => label === 'Amount');
+if (amount === undefined) throw new Error('Missing Amount declaration');
+const bound = session.bind([{ id: amount.id, value: 11 }]);
+// Replay this matching pair together; binding does not compile or execute source again.
+executeResolvedDirectPlan(bound.plan, bound.resolvedCircuit);
+```
+
+This is a host-only local API. Its IDs are not portable between compilations and
+do not add Worker, CLI, UI or native-blueprint override transport. Use both fields
+of the returned pair for strict replay; the original compilation remains unchanged.
+An unused declaration can remain at its default without adding hardware. An explicit
+override for an unused declaration retains the existing `CP1001` binding error;
+the session does not silently discard it.
+
 For an internal host-only native export, the same source-compilation module
 provides `exportSourceCompilationNativeBlueprint(compilation, options)`.
 It returns an immutable, validated `NativeBlueprintFcir` for the existing

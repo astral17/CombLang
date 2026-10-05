@@ -9,7 +9,8 @@
     "./entity-plan-validation": "./src/entity-plan-validation.ts",
     "./entity-provisioning": "./src/entity-provisioning.ts",
     "./entity-registry": "./src/entity-registry.ts",
-    "./source-compilation": "./src/source-compilation.ts"
+    "./source-compilation": "./src/source-compilation.ts",
+    "./source-parameter-binding": "./src/source-parameter-binding.ts"
   },
   "dependencies": {
     "@comblang/compiler": "0.0.0",
