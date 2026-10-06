@@ -1094,6 +1094,7 @@ function handleWorkerMessage(
     compilerWorkerProgress.report(workerId, event.data.revision, event.data.stage);
     return;
   }
+  if (event.data.kind === 'bound') return;
   if (
     compilerWorkerScheduler.activeRevision !== event.data.revision ||
     !compilerWorkerScheduler.complete(workerId, event.data.revision)

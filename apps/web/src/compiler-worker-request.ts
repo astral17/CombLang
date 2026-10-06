@@ -18,7 +18,10 @@ import {
 import { parseDiagnosticPolicy, type Diagnostic, type DiagnosticPolicy } from '@comblang/shared';
 import type { EntityPrototypeResolver } from '@comblang/runtime/entity-registry';
 import type { SourceCompilationEnvironment } from '@comblang/runtime/source-compilation';
-import { listSourceCompilationParameters } from '@comblang/runtime/source-compilation';
+import {
+  listSourceCompilationParameters,
+  type BoundSourceCompilationCircuit,
+} from '@comblang/runtime/source-compilation';
 import {
   createSourceParameterBindingSession,
   type SourceParameterBindingSession,
@@ -27,6 +30,7 @@ import {
   conservativeEntityProvisioningPolicy,
   EntityProvisioningService,
 } from '@comblang/runtime/entity-provisioning';
+import { BlueprintParameterError } from '../../../packages/compiler/src/blueprint-parameters.js';
 
 import { compileOwnedSource } from './compile-source.js';
 import {
@@ -40,6 +44,8 @@ import type {
   CompilerWorkerRequest,
   CompilerWorkerParsedResponse,
   CompilerWorkerParameterBindingResult,
+  CompilerWorkerBindRequest,
+  CompilerWorkerBoundResponse,
 } from './worker-protocol.js';
 
 class BrowserPrototypeSelectionError extends Error {
@@ -409,6 +415,47 @@ export class CompilerWorkerRuntime {
       );
     }
     return retained.session.bind(overrides);
+  }
+
+  handleBinding(request: CompilerWorkerBindRequest): CompilerWorkerBoundResponse {
+    try {
+      const bound: BoundSourceCompilationCircuit = this.bindParameters(
+        request.token,
+        request.sourceRevision,
+        request.overrides,
+      );
+      return {
+        kind: 'bound',
+        revision: request.revision,
+        sourceRevision: request.sourceRevision,
+        result: { ok: true, ...bound },
+      };
+    } catch (error) {
+      const diagnostic: Diagnostic =
+        error instanceof BlueprintParameterError
+          ? {
+              code: error.code,
+              severity: 'error',
+              message: error.message,
+              ...(error.span === undefined ? {} : { span: error.span }),
+            }
+          : error instanceof CompilerWorkerParameterBindingError
+            ? { code: 'WP1007', severity: 'error', message: error.message }
+            : {
+                code: 'WP1008',
+                severity: 'error',
+                message:
+                  error instanceof Error && error.message.length > 0
+                    ? error.message
+                    : 'Unexpected parameter binding failure.',
+              };
+      return {
+        kind: 'bound',
+        revision: request.revision,
+        sourceRevision: request.sourceRevision,
+        result: { ok: false, diagnostics: [diagnostic] },
+      };
+    }
   }
 
   #issueToken(): string {

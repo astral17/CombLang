@@ -220,16 +220,23 @@ unverified. Default preview/copy and simulation continue to use concrete default
 ## Optional Worker-local parameter binding
 
 An in-process owner of a `CompilerWorkerRuntime` can opt in to a detached
-parameter listing while retaining the exact successful compilation locally:
+parameter listing, then bind a full override snapshot against the exact retained
+compilation:
 
 ```ts
 import { CompilerWorkerRuntime } from '../apps/web/src/compiler-worker-request.js';
 
 const runtime = new CompilerWorkerRuntime();
-const response = await runtime.handle({ ...request, parameterBinding: true });
-const listing = response.parameterBinding;
+const parsed = await runtime.handle({ ...request, revision: 7, parameterBinding: true });
+const listing = parsed.parameterBinding;
 if (listing?.ok && listing.token !== undefined) {
-  const bound = runtime.bindParameters(listing.token, response.revision, [{ id: 0, value: 9 }]);
+  const bound = runtime.handleBinding({
+    kind: 'bind-parameters',
+    revision: 8,
+    sourceRevision: 7,
+    token: listing.token,
+    overrides: [{ id: 0, value: 9 }],
+  });
 }
 ```
 
@@ -242,20 +249,31 @@ not retain a session. A failure of optional native blueprint export does not
 prevent binding a successful compilation. Invalid flag data is rejected as
 `WP1006` before profile loading or source execution.
 
-The token routes only to one in-memory session in that runtime instance. It is
-not an authorization credential or persistent identifier. Starting any later
-`handle` call expires that slot immediately, even if the later request omits or
-disables binding or eventually fails. `bindParameters` accepts a full override
-snapshot: omitting an override resets all declarations to their source defaults.
-Binding reuses the retained compilation and does not execute source again.
-Invalid or expired tokens and revision mismatches produce `WP1007`; valid-token
-override validation keeps the adapter's `CP1000`/`CP1001` diagnostics and source
-spans.
+The bind request's `revision` is its correlation ID; `sourceRevision` identifies
+the parse response that issued the token. The caller contract requires both to
+be non-negative safe integers; their meanings must not be conflated. Its `overrides` field is cloneable data
+when sent through `postMessage`; omission or `[]` means the original source
+defaults, never the last bound values.
 
-This host-local method is not a Worker message operation: the browser Worker
-protocol, scheduler, UI and CLI do not route bind requests or expose override
-controls. No source is persisted, and binding does not evaluate native formula
-metadata or establish Factorio behavior.
+The response has `kind: 'bound'` and echoes both revisions. Its `result` is either
+`{ ok: true, plan, resolvedCircuit }`—the existing fresh concrete pair—or
+`{ ok: false, diagnostics }`. The operation reuses the retained compilation and
+does not execute source or reload a profile. `WP1007` reports a missing, expired,
+or mismatched token/revision; valid-token binding preserves `CP1000`, `CP1001`,
+and `CP1002` diagnostics and source spans. Unexpected binding exceptions become
+`WP1008` without a stack or invented source span.
+
+The token routes only to one in-memory session in that Worker runtime; it is not
+an authorization credential or persistent identifier. Starting any later parse
+expires the slot immediately, including while a newer parse is still in flight.
+A failed bind does not expire the current session, so a valid retry can follow.
+No source is persisted, and binding does not evaluate native formula metadata or
+establish Factorio behavior.
+
+The parser Worker now accepts this bind message and returns a bound response. The
+current page still has no override controls: its scheduler remains parse-only and
+the message handler ignores unsolicited bound responses. The CLI and UI do not
+route or consume the new operation.
 
 ### Web blueprint panel
 

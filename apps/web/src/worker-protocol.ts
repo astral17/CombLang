@@ -9,6 +9,7 @@ import type {
 import type { Diagnostic, DiagnosticPolicy } from '@comblang/shared';
 import type { BlueprintExportOptions } from './blueprint-export.js';
 import type { SourceParameterDescriptor } from '@comblang/runtime/source-parameter-binding';
+import type { BoundSourceCompilationCircuit } from '@comblang/runtime/source-compilation';
 
 export interface BrowserPrototypeProfileSource {
   /** Normalized or raw Factorio Prototype JSON. It is parsed only inside the Worker. */
@@ -43,6 +44,18 @@ export interface CompilerWorkerRequest {
   readonly parameterBinding?: boolean;
 }
 
+export interface CompilerWorkerBindRequest {
+  readonly kind: 'bind-parameters';
+  /** Request correlation ID; independent of the source compilation revision. */
+  readonly revision: number;
+  /** Revision of the retained source compilation selected by the token. */
+  readonly sourceRevision: number;
+  readonly token: string;
+  readonly overrides?: unknown;
+}
+
+export type CompilerWorkerOperationRequest = CompilerWorkerRequest | CompilerWorkerBindRequest;
+
 export interface BrowserPrototypeEnvironmentReport {
   readonly identity: string;
   readonly format: 'normalized' | 'factorio-data-raw';
@@ -74,6 +87,15 @@ export interface CompilerWorkerParsedResponse {
   readonly parameterBinding?: CompilerWorkerParameterBindingResult;
 }
 
+export interface CompilerWorkerBoundResponse {
+  readonly kind: 'bound';
+  readonly revision: number;
+  readonly sourceRevision: number;
+  readonly result:
+    | (BoundSourceCompilationCircuit & { readonly ok: true })
+    | { readonly ok: false; readonly diagnostics: readonly Diagnostic[] };
+}
+
 export type CompilerWorkerParameterBindingResult =
   | {
       readonly ok: true;
@@ -83,4 +105,7 @@ export type CompilerWorkerParameterBindingResult =
   | { readonly ok: false; readonly diagnostics: readonly Diagnostic[] };
 
 export type CompilerWorkerResponse =
-  CompilerWorkerReadyResponse | CompilerWorkerProgressResponse | CompilerWorkerParsedResponse;
+  | CompilerWorkerReadyResponse
+  | CompilerWorkerProgressResponse
+  | CompilerWorkerParsedResponse
+  | CompilerWorkerBoundResponse;

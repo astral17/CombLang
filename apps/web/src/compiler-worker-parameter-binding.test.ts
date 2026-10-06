@@ -14,7 +14,11 @@ import {
   CompilerWorkerParameterBindingError,
   CompilerWorkerRuntime,
 } from './compiler-worker-request.js';
-import type { CompilerWorkerRequest } from './worker-protocol.js';
+import type {
+  CompilerWorkerBindRequest,
+  CompilerWorkerBoundResponse,
+  CompilerWorkerRequest,
+} from './worker-protocol.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -108,6 +112,218 @@ function deferred<T>() {
 }
 
 describe('Worker-local source parameter sessions', () => {
+  test('bind operation returns its exact concrete pair with independent revisions and no source rerun', async () => {
+    resetRunCount();
+    const runtime = parameterRuntime();
+    const parsed = await runtime.handle(parseRequest(100, { parameterBinding: true }));
+    const token = parsed.parameterBinding?.ok === true ? parsed.parameterBinding.token : undefined;
+    if (token === undefined) throw new Error('Expected a retained parameter token.');
+
+    const request: CompilerWorkerBindRequest = {
+      kind: 'bind-parameters',
+      revision: 101,
+      sourceRevision: 100,
+      token,
+      overrides: [
+        { id: 0, value: 9 },
+        { id: 1, value: { type: 'virtual', name: 'signal-B' } },
+      ],
+    };
+    const bindParameters = vi.spyOn(runtime, 'bindParameters');
+    const response: CompilerWorkerBoundResponse = runtime.handleBinding(request);
+
+    expect(response).toMatchObject({
+      kind: 'bound',
+      revision: 101,
+      sourceRevision: 100,
+      result: { ok: true },
+    });
+    if (!response.result.ok) throw new Error('Expected a successful concrete binding.');
+    expect(bindParameters).toHaveBeenCalledOnce();
+    expect(bindParameters).toHaveBeenCalledWith(
+      request.token,
+      request.sourceRevision,
+      request.overrides,
+    );
+    const delegatedPair = bindParameters.mock.results[0]!.value;
+    expect(response.result.plan).toBe(delegatedPair.plan);
+    expect(response.result.resolvedCircuit).toBe(delegatedPair.resolvedCircuit);
+    expect(response.result.resolvedCircuit.ir.entities[0]!.configuration).toMatchObject({
+      mode: 'constant',
+      value: {
+        sections: [{ filters: [{ signal: { type: 'virtual', name: 'signal-B' }, value: 9 }] }],
+      },
+    });
+    expect(structuredClone(response)).toEqual(response);
+    expect(runCount()).toBe(1);
+  });
+
+  test('returns WP1007 for missing, mismatched, and other-runtime binding tokens', async () => {
+    const runtime = parameterRuntime();
+    const parsed = await runtime.handle(parseRequest(110, { parameterBinding: true }));
+    const token = parsed.parameterBinding?.ok === true ? parsed.parameterBinding.token : undefined;
+    if (token === undefined) throw new Error('Expected a retained parameter token.');
+
+    const requests: CompilerWorkerBindRequest[] = [
+      { kind: 'bind-parameters', revision: 111, sourceRevision: 110, token: 'wrong-token' },
+      { kind: 'bind-parameters', revision: 112, sourceRevision: 111, token },
+    ];
+    for (const request of requests) {
+      const response = runtime.handleBinding(request);
+      expect(response).toMatchObject({
+        kind: 'bound',
+        revision: request.revision,
+        sourceRevision: request.sourceRevision,
+        result: { ok: false, diagnostics: [{ code: 'WP1007', severity: 'error' }] },
+      });
+      expect(structuredClone(response)).toEqual(response);
+    }
+
+    const otherRuntimeResponse = parameterRuntime().handleBinding({
+      kind: 'bind-parameters',
+      revision: 113,
+      sourceRevision: 110,
+      token,
+    });
+    expect(otherRuntimeResponse.result).toMatchObject({
+      ok: false,
+      diagnostics: [{ code: 'WP1007', severity: 'error' }],
+    });
+  });
+
+  test('retains located parameter failures, permits retry, and treats each bind as a full snapshot', async () => {
+    resetRunCount();
+    const runtime = parameterRuntime();
+    const parsed = await runtime.handle(parseRequest(120, { parameterBinding: true }));
+    const binding = parsed.parameterBinding;
+    if (binding?.ok !== true || binding.token === undefined) {
+      throw new Error('Expected a retained parameter token.');
+    }
+    const source = binding.parameters[0]!.source;
+    const failed = runtime.handleBinding({
+      kind: 'bind-parameters',
+      revision: 121,
+      sourceRevision: 120,
+      token: binding.token,
+      overrides: [{ id: 0, value: 'nine' }],
+    });
+    expect(failed.result).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          code: 'CP1000',
+          severity: 'error',
+          message: expect.stringContaining('$.overrides[0].value'),
+          span: source,
+        },
+      ],
+    });
+    expect(structuredClone(failed)).toEqual(failed);
+
+    const retried = runtime.handleBinding({
+      kind: 'bind-parameters',
+      revision: 122,
+      sourceRevision: 120,
+      token: binding.token,
+      overrides: [{ id: 0, value: 9 }],
+    });
+    expect(retried.result).toMatchObject({ ok: true });
+    const defaults = runtime.handleBinding({
+      kind: 'bind-parameters',
+      revision: 123,
+      sourceRevision: 120,
+      token: binding.token,
+    });
+    const emptySnapshot = runtime.handleBinding({
+      kind: 'bind-parameters',
+      revision: 124,
+      sourceRevision: 120,
+      token: binding.token,
+      overrides: [],
+    });
+    expect(defaults.result).toMatchObject({ ok: true });
+    expect(emptySnapshot.result).toEqual(defaults.result);
+    if (defaults.result.ok) expect(defaults.result.plan).toEqual(parsed.result.plan);
+    expect(runCount()).toBe(1);
+  });
+
+  test('preserves CP1001 for an unused declaration and maps unexpected failures to WP1008', async () => {
+    const runtime = parameterRuntime();
+    const unusedCompilation = await runtime.handle(
+      parseRequest(130, {
+        parameterBinding: true,
+        file: {
+          path: 'unused-worker-parameter.ts',
+          text: `const unused = Param.number('Unused', 3);
+const A = Signal('virtual', 'signal-A');
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: A, value: 2 }] }] });`,
+        },
+      }),
+    );
+    const token =
+      unusedCompilation.parameterBinding?.ok === true
+        ? unusedCompilation.parameterBinding.token
+        : undefined;
+    if (token === undefined) throw new Error('Expected a retained unused declaration.');
+    const unused = runtime.handleBinding({
+      kind: 'bind-parameters',
+      revision: 131,
+      sourceRevision: 130,
+      token,
+      overrides: [{ id: 0, value: 9 }],
+    });
+    expect(unused.result).toMatchObject({
+      ok: false,
+      diagnostics: [{ code: 'CP1001', severity: 'error' }],
+    });
+    expect(structuredClone(unused)).toEqual(unused);
+
+    const normalCompilation = await runtime.handle(parseRequest(132, { parameterBinding: true }));
+    const normalToken =
+      normalCompilation.parameterBinding?.ok === true
+        ? normalCompilation.parameterBinding.token
+        : undefined;
+    if (normalToken === undefined) throw new Error('Expected a retained parameter token.');
+    vi.spyOn(runtime, 'bindParameters')
+      .mockImplementationOnce(() => {
+        throw new Error('unexpected bind failure');
+      })
+      .mockImplementationOnce(() => {
+        throw new Error('');
+      });
+    const unexpected = runtime.handleBinding({
+      kind: 'bind-parameters',
+      revision: 133,
+      sourceRevision: 132,
+      token: normalToken,
+    });
+    expect(unexpected.result).toMatchObject({
+      ok: false,
+      diagnostics: [{ code: 'WP1008', severity: 'error', message: 'unexpected bind failure' }],
+    });
+    if (unexpected.result.ok) throw new Error('Expected the unexpected failure diagnostic.');
+    expect(unexpected.result.diagnostics[0]).not.toHaveProperty('span');
+    expect(unexpected.result.diagnostics[0]).not.toHaveProperty('stack');
+    expect(structuredClone(unexpected)).toEqual(unexpected);
+    const emptyMessage = runtime.handleBinding({
+      kind: 'bind-parameters',
+      revision: 134,
+      sourceRevision: 132,
+      token: normalToken,
+    });
+    expect(emptyMessage.result).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          code: 'WP1008',
+          severity: 'error',
+          message: 'Unexpected parameter binding failure.',
+        },
+      ],
+    });
+  });
+
   test('lists detached descriptors and binds defaults, overrides, and reset without recompiling', async () => {
     resetRunCount();
     const runtime = parameterRuntime();
@@ -220,10 +436,43 @@ describe('Worker-local source parameter sessions', () => {
       parseRequest(47, { parameterBinding: undefined }),
       parseRequest(48, { parameterBinding: false }),
     ]) {
-      const response = await runtime.handle(request);
+      const pending = runtime.handle(request);
+      expect(
+        runtime.handleBinding({
+          kind: 'bind-parameters',
+          revision: request.revision + 100,
+          sourceRevision: 45,
+          token,
+        }).result,
+      ).toMatchObject({ ok: false, diagnostics: [{ code: 'WP1007', severity: 'error' }] });
+      const response = await pending;
       expect(response).not.toHaveProperty('parameterBinding');
-      expect(() => runtime.bindParameters(token, 45)).toThrow(CompilerWorkerParameterBindingError);
     }
+  });
+
+  test('a newer failed parse immediately expires the previous binding token', async () => {
+    const runtime = parameterRuntime();
+    const captured = await runtime.handle(parseRequest(481, { parameterBinding: true }));
+    const token =
+      captured.parameterBinding?.ok === true ? captured.parameterBinding.token : undefined;
+    if (token === undefined) throw new Error('Expected an initial token.');
+
+    const pending = runtime.handle(
+      parseRequest(482, {
+        file: { path: 'failed-newer-parse.ts', text: 'const = ;' },
+        parameterBinding: true,
+      }),
+    );
+    expect(
+      runtime.handleBinding({
+        kind: 'bind-parameters',
+        revision: 483,
+        sourceRevision: 481,
+        token,
+      }).result,
+    ).toMatchObject({ ok: false, diagnostics: [{ code: 'WP1007', severity: 'error' }] });
+    const failed = await pending;
+    expect(failed.parameterBinding).toMatchObject({ ok: false });
   });
 
   test('returns an empty listing for parameter-free source and rejects binding errors', async () => {
@@ -448,9 +697,14 @@ output += Constant({ sections: [{ filters: [{ signal: A, value: 2 }] }] });`,
       }),
     );
     await oldEntered.promise;
-    expect(() => runtime.bindParameters(previousToken, 54)).toThrow(
-      CompilerWorkerParameterBindingError,
-    );
+    expect(
+      runtime.handleBinding({
+        kind: 'bind-parameters',
+        revision: 551,
+        sourceRevision: 54,
+        token: previousToken,
+      }).result,
+    ).toMatchObject({ ok: false, diagnostics: [{ code: 'WP1007', severity: 'error' }] });
     const newPending = runtime.handle(
       parseRequest(56, {
         file: raceFile,

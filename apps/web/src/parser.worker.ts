@@ -2,15 +2,19 @@
 
 import { CompilerWorkerRuntime } from './compiler-worker-request.js';
 import type {
+  CompilerWorkerOperationRequest,
   CompilerWorkerReadyResponse,
-  CompilerWorkerRequest,
   CompilerWorkerProgressStage,
 } from './worker-protocol.js';
 
 const worker = self as DedicatedWorkerGlobalScope;
 const compiler = new CompilerWorkerRuntime();
 
-worker.addEventListener('message', (event: MessageEvent<CompilerWorkerRequest>) => {
+worker.addEventListener('message', (event: MessageEvent<CompilerWorkerOperationRequest>) => {
+  if (event.data.kind === 'bind-parameters') {
+    worker.postMessage(compiler.handleBinding(event.data));
+    return;
+  }
   if (event.data.kind !== 'parse') {
     return;
   }
