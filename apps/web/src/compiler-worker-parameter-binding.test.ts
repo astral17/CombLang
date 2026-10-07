@@ -14,6 +14,7 @@ import {
   CompilerWorkerParameterBindingError,
   CompilerWorkerRuntime,
 } from './compiler-worker-request.js';
+import { CompilerWorkerScheduler } from './compiler-worker-scheduler.js';
 import type {
   CompilerWorkerBindRequest,
   CompilerWorkerBoundResponse,
@@ -156,6 +157,93 @@ describe('Worker-local source parameter sessions', () => {
     });
     expect(structuredClone(response)).toEqual(response);
     expect(runCount()).toBe(1);
+  });
+
+  test('scheduler coalesces binding snapshots and lets a newer parse replace queued binds', async () => {
+    resetRunCount();
+    const runtime = parameterRuntime();
+    const scheduler = new CompilerWorkerScheduler();
+    const workerId = scheduler.createWorker();
+    scheduler.enqueue(parseRequest(150, { parameterBinding: true }));
+    expect(scheduler.markReady(workerId)).toBe(true);
+
+    const parseDispatch = scheduler.takeForDispatch();
+    if (parseDispatch?.request.kind !== 'parse') throw new Error('Expected a parse dispatch.');
+    const parsed = await runtime.handle(parseDispatch.request);
+    expect(scheduler.complete(workerId, parsed)).toBe('accepted');
+    const capture = scheduler.bindingCapture;
+    if (capture === undefined) throw new Error('Expected the scheduler to capture the token.');
+
+    const firstBinding: CompilerWorkerBindRequest = {
+      kind: 'bind-parameters',
+      revision: 151,
+      sourceRevision: capture.sourceRevision,
+      token: capture.token,
+      overrides: [
+        { id: 0, value: 9 },
+        { id: 1, value: { type: 'virtual', name: 'signal-B' } },
+      ],
+    };
+    const latestBinding: CompilerWorkerBindRequest = {
+      ...firstBinding,
+      revision: 152,
+      overrides: [
+        { id: 0, value: 17 },
+        { id: 1, value: { type: 'virtual', name: 'signal-C' } },
+      ],
+    };
+    expect(scheduler.enqueueBinding(firstBinding)).toBe(true);
+    const firstDispatch = scheduler.takeForDispatch();
+    if (firstDispatch?.request.kind !== 'bind-parameters') {
+      throw new Error('Expected the first binding dispatch.');
+    }
+    expect(scheduler.enqueueBinding(latestBinding)).toBe(true);
+    const supersededResponse = runtime.handleBinding(firstDispatch.request);
+    expect(scheduler.complete(workerId, supersededResponse)).toBe('stale');
+
+    const latestDispatch = scheduler.takeForDispatch();
+    if (latestDispatch?.request.kind !== 'bind-parameters') {
+      throw new Error('Expected the latest binding dispatch.');
+    }
+    expect(latestDispatch.request).toEqual(latestBinding);
+    const latestResponse = runtime.handleBinding(latestDispatch.request);
+    expect(scheduler.complete(workerId, latestResponse)).toBe('accepted');
+    if (!latestResponse.result.ok) throw new Error('Expected a successful concrete binding.');
+    expect(latestResponse.result.resolvedCircuit.ir.entities[0]!.configuration).toMatchObject({
+      mode: 'constant',
+      value: {
+        sections: [{ filters: [{ signal: { type: 'virtual', name: 'signal-C' }, value: 17 }] }],
+      },
+    });
+    expect(latestResponse.revision).toBe(152);
+    expect(latestResponse.sourceRevision).toBe(150);
+    expect(runCount()).toBe(1);
+
+    const obsoleteBinding = { ...latestBinding, revision: 153 };
+    const obsoleteRetry = { ...latestBinding, revision: 154 };
+    expect(scheduler.enqueueBinding(obsoleteBinding)).toBe(true);
+    const obsoleteDispatch = scheduler.takeForDispatch();
+    if (obsoleteDispatch?.request.kind !== 'bind-parameters') {
+      throw new Error('Expected an obsolete binding dispatch.');
+    }
+    expect(scheduler.enqueueBinding(obsoleteRetry)).toBe(true);
+    scheduler.enqueue(parseRequest(155, { parameterBinding: true }));
+    expect(scheduler.bindingCapture).toBeUndefined();
+    expect(scheduler.complete(workerId, runtime.handleBinding(obsoleteDispatch.request))).toBe(
+      'stale',
+    );
+    const replacementParse = scheduler.takeForDispatch();
+    if (replacementParse?.request.kind !== 'parse') {
+      throw new Error('Expected the newer parse to replace queued bindings.');
+    }
+    const replacementResponse = await runtime.handle(replacementParse.request);
+    expect(scheduler.complete(workerId, replacementResponse)).toBe('accepted');
+    expect(scheduler.bindingCapture).toMatchObject({
+      workerId,
+      sourceRevision: 155,
+    });
+    expect(scheduler.bindingCapture?.token).not.toBe(capture.token);
+    expect(runCount()).toBe(2);
   });
 
   test('returns WP1007 for missing, mismatched, and other-runtime binding tokens', async () => {

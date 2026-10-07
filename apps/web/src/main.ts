@@ -48,7 +48,11 @@ import { loadTestDraft, saveTestDraft } from './test-draft.js';
 import { TestTracePanel } from './test-trace-panel.js';
 import type { TestWorkerRequest, TestWorkerResponse } from './test-worker-protocol.js';
 import { buildDetailTimeline, buildOverviewTimeline, signalLabel } from './timeline-view.js';
-import type { CompilerWorkerRequest, CompilerWorkerResponse } from './worker-protocol.js';
+import type {
+  CompilerWorkerOperationRequest,
+  CompilerWorkerRequest,
+  CompilerWorkerResponse,
+} from './worker-protocol.js';
 import './styles.css';
 
 const sampleSource = `const SIGNAL_A = Signal("virtual", "signal-A");
@@ -1090,21 +1094,37 @@ function handleWorkerMessage(
     return;
   }
   if (event.data.kind === 'progress') {
-    if (compilerWorkerScheduler.activeRevision !== event.data.revision) return;
+    const activeRequest = compilerWorkerScheduler.activeRequest;
+    if (activeRequest?.kind !== 'parse' || activeRequest.revision !== event.data.revision) return;
     compilerWorkerProgress.report(workerId, event.data.revision, event.data.stage);
     return;
   }
-  if (event.data.kind === 'bound') return;
-  if (
-    compilerWorkerScheduler.activeRevision !== event.data.revision ||
-    !compilerWorkerScheduler.complete(workerId, event.data.revision)
-  ) {
-    return;
-  }
+  const completion = compilerWorkerScheduler.complete(workerId, event.data);
+  if (completion === 'ignored') return;
   compilerWorkerProgress.clear();
   if (workerTimeout !== undefined) clearTimeout(workerTimeout);
   workerTimeout = undefined;
-  warmOfflineCache();
+  if (event.data.kind === 'parsed') warmOfflineCache();
+  if (completion === 'stale') {
+    pumpCompilerWorker();
+    return;
+  }
+  if (event.data.kind === 'bound') {
+    if (!event.data.result.ok && event.data.sourceRevision === currentRevision) {
+      const diagnostic = event.data.result.diagnostics[0];
+      const message =
+        diagnostic === undefined
+          ? 'Parameter binding failed.'
+          : formatSourceDiagnostic(diagnostic, sourceEditor.getValue());
+      status.textContent = 'Parameter binding failed';
+      status.dataset.state = 'invalid';
+      renderProofError(message);
+      renderTestsBlocked('Parameter binding failed, so tests were not run.');
+      result.textContent = `${diagnostic?.code ?? 'WP1008'} error: ${message}`;
+    }
+    pumpCompilerWorker();
+    return;
+  }
   if (event.data.revision !== currentRevision) {
     pumpCompilerWorker();
     return;
@@ -1321,7 +1341,7 @@ function handleWorkerBootstrapTimeout(worker: Worker, workerId: number): void {
 
 function handleWorkerError(event: ErrorEvent, worker: Worker, workerId: number): void {
   if (parserWorker !== worker || !compilerWorkerScheduler.isCurrent(workerId)) return;
-  const failedRevision = compilerWorkerScheduler.activeRevision;
+  const failedRequest = compilerWorkerScheduler.activeRequest;
   const wasBooting = compilerWorkerScheduler.phase === 'booting';
   if (workerTimeout !== undefined) clearTimeout(workerTimeout);
   workerTimeout = undefined;
@@ -1334,7 +1354,10 @@ function handleWorkerError(event: ErrorEvent, worker: Worker, workerId: number):
   workerPrototypeIdentity = undefined;
   compilerWorkerScheduler.fail(workerId);
   const failureMessage = event.message || 'the compiler Worker crashed.';
-  const rolledBack = rollbackPendingPrototypeProfile(`Worker failed: ${failureMessage}`);
+  const bindingFailed = failedRequest?.kind === 'bind-parameters';
+  const rolledBack = bindingFailed
+    ? false
+    : rollbackPendingPrototypeProfile(`Worker failed: ${failureMessage}`);
   if (wasBooting) {
     const bootstrapFailure = `Compiler Worker failed before readiness: ${failureMessage}`;
     status.textContent = 'Compiler Worker failed to start';
@@ -1342,7 +1365,16 @@ function handleWorkerError(event: ErrorEvent, worker: Worker, workerId: number):
     renderProofError(bootstrapFailure);
     renderTestsBlocked('The compiler Worker failed before it became ready.');
     result.textContent = bootstrapFailure;
-  } else if (failedRevision === currentRevision) {
+  } else if (
+    failedRequest?.kind === 'bind-parameters' &&
+    failedRequest.sourceRevision === currentRevision
+  ) {
+    status.textContent = 'Parameter binding failed';
+    status.dataset.state = 'invalid';
+    renderProofError(failureMessage);
+    renderTestsBlocked('Parameter binding failed, so tests were not run.');
+    result.textContent = `WP1008 error: ${failureMessage}`;
+  } else if (failedRequest?.kind === 'parse' && failedRequest.revision === currentRevision) {
     status.textContent = 'Worker failed';
     status.dataset.state = 'invalid';
     renderProofError(failureMessage);
@@ -1407,8 +1439,9 @@ function pumpCompilerWorker(): void {
   if (compilerWorkerScheduler.phase !== 'ready') return;
   const dispatch = compilerWorkerScheduler.takeForDispatch();
   if (dispatch === undefined) return;
-  let request = dispatch.request;
+  let request: CompilerWorkerOperationRequest = dispatch.request;
   if (
+    request.kind === 'parse' &&
     request.prototypeProfile !== undefined &&
     'identity' in request.prototypeProfile &&
     request.prototypeProfile.identity !== workerPrototypeIdentity &&
@@ -1434,18 +1467,23 @@ function pumpCompilerWorker(): void {
   const workerId = parserWorkerId;
   if (workerId === undefined)
     throw new Error('Compiler Worker scheduler lost its Worker identity.');
-  compilerWorkerProgress.begin(workerId, request.revision);
+  if (request.kind === 'parse') compilerWorkerProgress.begin(workerId, request.revision);
   worker.postMessage(request);
   const timeoutMs = compilerWorkerRequestTimeoutMs(request, dispatch.isCold);
   workerTimeout = setTimeout(() => {
+    const activeRequest = compilerWorkerScheduler.activeRequest;
     if (
       parserWorker !== worker ||
       !compilerWorkerScheduler.isCurrent(workerId) ||
-      compilerWorkerScheduler.activeRevision !== request.revision
+      activeRequest?.kind !== dispatch.request.kind ||
+      activeRequest.revision !== dispatch.request.revision
     ) {
       return;
     }
-    const lastStage = compilerWorkerProgress.lastStage(workerId, request.revision);
+    const lastStage =
+      request.kind === 'parse'
+        ? compilerWorkerProgress.lastStage(workerId, request.revision)
+        : undefined;
     worker.terminate();
     parserWorker = undefined;
     parserWorkerId = undefined;
@@ -1454,6 +1492,17 @@ function pumpCompilerWorker(): void {
     compilerWorkerProgress.clear();
     compilerWorkerScheduler.fail(workerId);
     const timeoutReason = compilerWorkerRequestTimeoutReason(request, timeoutMs, lastStage);
+    if (request.kind === 'bind-parameters') {
+      if (request.sourceRevision === currentRevision) {
+        status.textContent = 'Parameter binding timed out';
+        status.dataset.state = 'invalid';
+        renderProofError(timeoutReason);
+        renderTestsBlocked('Parameter binding timed out, so tests were not run.');
+        result.textContent = `WP1009 error: ${timeoutReason}`;
+      }
+      pumpCompilerWorker();
+      return;
+    }
     const testsBlockedReason =
       lastStage === undefined
         ? 'Circuit elaboration timed out, so tests were not run.'

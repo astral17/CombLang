@@ -270,10 +270,17 @@ A failed bind does not expire the current session, so a valid retry can follow.
 No source is persisted, and binding does not evaluate native formula metadata or
 establish Factorio behavior.
 
-The parser Worker now accepts this bind message and returns a bound response. The
-current page still has no override controls: its scheduler remains parse-only and
-the message handler ignores unsolicited bound responses. The CLI and UI do not
-route or consume the new operation.
+The compiler Worker scheduler routes parse and bind operations through one active
+slot and one latest-operation queue. It retains only the current generation's
+source revision and token as routing metadata. A newly queued parse clears that
+capture immediately and takes precedence over queued bindings; queued bindings
+for the current capture coalesce to the latest request. Matched bound responses
+release the active slot, while stale responses are not applied. Binding uses the
+existing Worker and never recompiles source.
+
+The current page still sends only parse requests: it has no override controls and
+does not consume bound pairs. This lifecycle support does not add a UI, CLI
+binding route, or native Factorio behavior claim.
 
 ### Web blueprint panel
 

@@ -8,7 +8,7 @@ import { CompilerWorkerScheduler } from './compiler-worker-scheduler.js';
 import { createSourceCircuitArtifact } from './source-circuit-artifact.js';
 import { SourceSimulationController } from './source-demo.js';
 import { runWebTests } from './web-test-runner.js';
-import type { CompilerWorkerRequest } from './worker-protocol.js';
+import type { CompilerWorkerParsedResponse, CompilerWorkerRequest } from './worker-protocol.js';
 import {
   blueprintExportRequest,
   selectBlueprintPanel,
@@ -392,7 +392,12 @@ output += ${device};`;
     const currentRevision = 4;
     let panel = selectBlueprintPanel({ parameters: true, pending: true });
     const accept = (revision: number) => {
-      if (!scheduler.complete(worker, revision) || revision !== currentRevision) return;
+      const outcome = scheduler.complete(worker, {
+        kind: 'parsed',
+        revision,
+        result: {} as CompilerWorkerParsedResponse['result'],
+      });
+      if (outcome !== 'accepted' || revision !== currentRevision) return;
       panel = selectBlueprintPanel({
         parameters: true,
         exported: { ok: true, document: parameterDocument },

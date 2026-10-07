@@ -125,7 +125,11 @@ colors, output rows, Entity placement, native-shaped configuration, and one
 physical object per linked producer. It is not an exchange-string codec and
 does not by itself prove native Factorio behavior.
 
-The Worker keeps compiler assets warm across revisions, retains only the newest
-queued request, and replaces a timed-out or crashed generation. The first cold
-request and later warm requests have separate budgets; a `ready` notification
-means bootstrap completed, not that compilation already ran.
+The Worker keeps compiler assets warm across revisions and serializes parse and
+parameter-binding operations through one active slot and one latest-operation
+queue. A newly queued parse invalidates its binding capture and supersedes queued
+bindings; binds use the warm 1,000 ms budget and do not change parse warmth. The
+page still sends only parse requests and does not consume bound pairs. A timed-out
+or crashed operation replaces the Worker generation. The first cold parse and
+later warm parses have separate budgets; a `ready` notification means bootstrap
+completed, not that compilation already ran.
