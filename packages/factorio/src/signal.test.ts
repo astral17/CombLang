@@ -162,4 +162,54 @@ describe('SignalID', () => {
     expect(refs.every((ref) => !ref.startsWith('signal:'))).toBe(true);
     expect(refs).toContain('virtual/name%2Fwith%25delimiters%20%F0%9F%9B%B0');
   });
+
+  test.each(['signal-each', 'signal-anything', 'signal-everything'])(
+    'rejects virtual wildcard domain %s as a concrete signal at every SignalRef/key boundary',
+    (name) => {
+      const qualities = [undefined, 'normal', 'rare'] as const;
+      const wildcardError = new RegExp(
+        `${name}.*wildcard.*not a concrete Signal.*Each.*Anything.*Everything`,
+        'i',
+      );
+      for (const quality of qualities) {
+        const create = () =>
+          quality === undefined ? Signal('virtual', name) : Signal('virtual', name, quality);
+        const createAlias = () =>
+          quality === undefined ? signal('virtual', name) : signal('virtual', name, quality);
+        const raw: SignalId = {
+          type: 'virtual',
+          name,
+          ...(quality === undefined ? {} : { quality }),
+        };
+        const ref = quality === undefined ? `virtual/${name}` : `virtual/${name}/${quality}`;
+        const ordinary = Signal('virtual', 'signal-A');
+
+        expect(create).toThrowError(wildcardError);
+        expect(createAlias).toThrowError(wildcardError);
+        expect(() => signalKey(raw)).toThrowError(wildcardError);
+        expect(() => sameSignal(raw, ordinary)).toThrowError(wildcardError);
+        expect(() => compareSignalIds(raw, ordinary)).toThrowError(wildcardError);
+        expect(() => formatSignalRef(raw)).toThrowError(wildcardError);
+        expect(() => parseSignalRef(ref)).toThrowError(wildcardError);
+      }
+    },
+  );
+
+  test('keeps same-spelled non-virtual signals, ordinary virtual names and supported types valid', () => {
+    expect(Signal('signal-each')).toEqual({ type: 'item', name: 'signal-each' });
+    expect(signal('signal-anything')).toEqual({ type: 'item', name: 'signal-anything' });
+    expect(Signal('item', 'signal-everything', 'rare')).toEqual({
+      type: 'item',
+      name: 'signal-everything',
+      quality: 'rare',
+    });
+    expect(Signal('fluid', 'signal-each')).toEqual({ type: 'fluid', name: 'signal-each' });
+    expect(Signal('virtual', 'signal-A', 'rare')).toEqual({
+      type: 'virtual',
+      name: 'signal-A',
+      quality: 'rare',
+    });
+    for (const type of signalTypes)
+      expect(Signal(type, 'unknown-to-the-catalog')).toMatchObject({ type });
+  });
 });

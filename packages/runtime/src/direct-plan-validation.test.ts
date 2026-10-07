@@ -76,6 +76,61 @@ describe('direct plan envelope validation', () => {
     expect(result.value?.plan.producers[0]).not.toHaveProperty('outputs');
   });
 
+  test.each([
+    ['reserved virtual wildcard', { type: 'virtual', name: 'signal-each', quality: 'legendary' }],
+    ['reserved virtual wildcard without quality', { type: 'virtual', name: 'signal-anything' }],
+    [
+      'reserved virtual wildcard with normal quality',
+      { type: 'virtual', name: 'signal-everything', quality: 'normal' },
+    ],
+    ['NUL in raw name', { type: 'virtual', name: 'signal-A\u0000bad' }],
+    ['NUL in raw quality', { type: 'virtual', name: 'signal-A', quality: 'rare\u0000bad' }],
+  ])('rejects %s Signal IDs in a raw Plan output', (_name, signalId) => {
+    const plan = {
+      format: 'comblang-direct-plan',
+      networks: [{ name: 'output', source: span, instancePath: [] }],
+      producers: [
+        {
+          kind: 'constant',
+          outputs: [{ signal: signalId, value: 2 }],
+          destinations: [{ network: 'output', source: span, instancePath: [] }],
+          source: span,
+          instancePath: [],
+        },
+      ],
+    };
+
+    expect(validateDirectPlanEnvelope(plan).diagnostics).toMatchObject([
+      {
+        code: 'RT1001',
+        message: expect.stringContaining('$.producers[0].outputs[0].signal'),
+        span,
+      },
+    ]);
+  });
+
+  test('keeps same-spelled non-virtual Signal IDs valid in raw Plans', () => {
+    const plan = {
+      format: 'comblang-direct-plan',
+      networks: [{ name: 'output', source: span, instancePath: [] }],
+      producers: [
+        {
+          kind: 'constant',
+          outputs: [
+            { signal: { type: 'item', name: 'signal-each' }, value: 1 },
+            { signal: { type: 'fluid', name: 'signal-anything' }, value: 2 },
+            { signal: { type: 'virtual', name: 'signal-custom' }, value: 3 },
+          ],
+          destinations: [{ network: 'output', source: span, instancePath: [] }],
+          source: span,
+          instancePath: [],
+        },
+      ],
+    };
+
+    expect(validateDirectPlanEnvelope(plan).diagnostics).toEqual([]);
+  });
+
   test('accepts a minimal canonical transport without allocating a circuit', () => {
     const plan = {
       format: 'comblang-direct-plan',

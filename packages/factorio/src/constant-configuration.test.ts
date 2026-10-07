@@ -137,6 +137,23 @@ describe('Constant configuration semantic core', () => {
     );
   });
 
+  it.each(['signal-each', 'signal-anything', 'signal-everything'])(
+    'rejects virtual wildcard filter %s at the Signal name path',
+    (name) => {
+      expect(() =>
+        canonicalizeConstantConfiguration({
+          sections: [{ filters: [{ signal: { type: 'virtual', name }, value: 1 }] }],
+        }),
+      ).toThrowError(
+        expect.objectContaining<Partial<ConstantConfigurationError>>({
+          code: 'FC1001',
+          path: '$.sections[0].filters[0].signal.name',
+          detail: expect.stringMatching(/wildcard.*not a concrete Signal/i),
+        }),
+      );
+    },
+  );
+
   it('enforces bounded input limits and rejects cycles', () => {
     const cyclic: { sections?: unknown } = {};
     cyclic.sections = [cyclic];

@@ -297,6 +297,37 @@ Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-A'), value
     }
   });
 
+  test('rejects reserved wildcard in a full snapshot without mutating prior bindings', () => {
+    const session = createSourceParameterBindingSession(compile());
+    const firstSnapshot = session.bind([
+      { id: 0, value: 8 },
+      { id: 1, value: signal('virtual', 'signal-C') },
+    ]);
+    const error = expectParameterError(() =>
+      session.bind([
+        { id: 0, value: 9 },
+        { id: 1, value: { type: 'virtual', name: 'signal-each' } },
+      ]),
+    );
+    expect(error).toMatchObject({
+      code: 'CP1000',
+      path: '$.overrides[1].value.name',
+      span: session.parameters[1]!.source,
+    });
+    expect(constantConfiguration(firstSnapshot)).toMatchObject({
+      sections: [{ filters: [{ signal: { type: 'virtual', name: 'signal-C' }, value: 8 }] }],
+    });
+
+    const retry = session.bind([
+      { id: 0, value: 9 },
+      { id: 1, value: signal('virtual', 'signal-B') },
+    ]);
+    expect(constantConfiguration(retry)).toMatchObject({
+      sections: [{ filters: [{ signal: { type: 'virtual', name: 'signal-B' }, value: 9 }] }],
+    });
+    expect(session.bind([])).toEqual(session.bind());
+  });
+
   test.each([
     ['name', { type: 'virtual', name: 'signal-B\u0000bad' }, '$.overrides[1].value.name'],
     [

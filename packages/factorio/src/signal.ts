@@ -17,10 +17,19 @@ export interface SignalId {
   readonly quality?: string;
 }
 
+const virtualWildcardNames = new Set(['signal-each', 'signal-anything', 'signal-everything']);
+
 function assertNoNul(value: string, label: 'name' | 'quality'): void {
   if (value.includes('\u0000')) {
     throw new TypeError(`Signal ${label} cannot contain NUL (U+0000).`);
   }
+}
+
+function assertConcreteSignalId(id: Pick<SignalId, 'type' | 'name'>): void {
+  if (id.type !== 'virtual' || !virtualWildcardNames.has(id.name)) return;
+  throw new TypeError(
+    `Virtual signal '${id.name}' is a wildcard domain, not a concrete Signal; use Each, Anything, or Everything.`,
+  );
 }
 
 declare const signalRefBrand: unique symbol;
@@ -59,6 +68,7 @@ function assertSignalId(id: SignalId): void {
     throw new TypeError('A signal quality cannot be empty when provided.');
   }
   if (typeof id.quality === 'string') assertNoNul(id.quality, 'quality');
+  assertConcreteSignalId(id);
 }
 
 /** Formats the public, reversible SignalRef without changing internal bus keys. */
@@ -135,6 +145,7 @@ export function Signal(typeOrName: SignalType | string, name?: string, quality?:
     throw new TypeError('A signal quality cannot be empty when provided.');
   }
   if (quality !== undefined) assertNoNul(quality, 'quality');
+  assertConcreteSignalId({ type, name: resolvedName });
 
   return Object.freeze(
     quality === undefined ? { type, name: resolvedName } : { type, name: resolvedName, quality },
@@ -153,6 +164,7 @@ export function signal(typeOrName: SignalType | string, name?: string, quality?:
 export function signalKey(id: SignalId): string {
   if (typeof id.name === 'string') assertNoNul(id.name, 'name');
   if (typeof id.quality === 'string') assertNoNul(id.quality, 'quality');
+  assertConcreteSignalId(id);
   const quality = id.quality === undefined || id.quality === 'normal' ? '' : id.quality;
   return `${id.type}\u0000${id.name}\u0000${quality}`;
 }

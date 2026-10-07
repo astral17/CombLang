@@ -1,8 +1,10 @@
 import type { ConstantConfiguration, SignalId } from '@comblang/factorio';
+import { Signal } from '@comblang/factorio';
 
 export type NativeBlueprintComparator = '>' | '<' | '=' | '>=' | '<=' | '!=';
 
 export function signalJson(signal: SignalId): Record<string, string> {
+  Signal(signal.type, signal.name, signal.quality);
   return {
     ...(signal.type === 'item' ? {} : { type: signal.type }),
     name: signal.name,

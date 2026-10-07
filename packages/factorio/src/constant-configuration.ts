@@ -241,6 +241,16 @@ function canonicalSignal(
     if ('quality' in record && (record.quality as string).includes('\u0000')) {
       invalid('FC1001', `${path}.quality`, 'Signal quality cannot contain NUL (U+0000).');
     }
+    if (
+      record.type === 'virtual' &&
+      ['signal-each', 'signal-anything', 'signal-everything'].includes(record.name)
+    ) {
+      invalid(
+        'FC1001',
+        `${path}.name`,
+        `Virtual signal '${record.name}' is a wildcard domain, not a concrete Signal; use Each, Anything, or Everything.`,
+      );
+    }
     try {
       return Signal(
         record.type as SignalType,

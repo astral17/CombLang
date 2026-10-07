@@ -14,6 +14,7 @@ import type {
 } from '@comblang/compiler/direct-plan-schema';
 import type { ArithmeticOperation, LogicalArithmeticOutput } from '@comblang/compiler';
 import {
+  Signal,
   canonicalizeConstantConfiguration,
   circuitConstant,
   type SignalId,
@@ -150,14 +151,22 @@ function isCircuitValue(value: unknown): value is number {
 }
 
 function isSignalId(value: unknown): boolean {
-  return (
+  if (
     isRecord(value) &&
     typeof value.type === 'string' &&
     signalTypes.has(value.type) &&
     typeof value.name === 'string' &&
     value.name.length > 0 &&
     (value.quality === undefined || (typeof value.quality === 'string' && value.quality.length > 0))
-  );
+  ) {
+    try {
+      Signal(value.type as SignalType, value.name, value.quality as string | undefined);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  return false;
 }
 
 function validateNetworkRef(

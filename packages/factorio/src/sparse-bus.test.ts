@@ -56,6 +56,23 @@ describe('Factorio circuit value primitives', () => {
     expect(bus.entries()).toEqual([[normalA, 7]]);
   });
 
+  it.each(['signal-each', 'signal-anything', 'signal-everything'])(
+    'rejects virtual wildcard %s at every concrete bus boundary without mutating state',
+    (name) => {
+      const bus = new SparseBus([[normalA, 7]]);
+      const wildcard = { type: 'virtual', name } as const;
+      const message = new RegExp(`${name}.*wildcard.*not a concrete Signal`, 'i');
+
+      expect(() => bus.get(wildcard)).toThrowError(message);
+      expect(() => bus.set(wildcard, 9)).toThrowError(message);
+      expect(() => bus.add(wildcard, 2)).toThrowError(message);
+      expect(() => new SparseBus([[wildcard, 9]])).toThrowError(message);
+      expect(bus.size).toBe(1);
+      expect(bus.get(normalA)).toBe(7);
+      expect(bus.entries()).toEqual([[normalA, 7]]);
+    },
+  );
+
   it('uses Factorio-style truncating division and signed remainder', () => {
     expect(divideInt32(-19, 10)).toBe(-1);
     expect(divideInt32(19, -10)).toBe(-1);

@@ -83,6 +83,25 @@ rejected; its explicit string conversion is supported. Omitted quality and
 `normal` normalize to the same identity. See the
 [Signal reference](../language-reference.md#signals) for encoding rules.
 
+## Concrete Signals and wildcard domains
+
+`Signal('virtual', 'signal-each')`, `signal-anything`, and
+`signal-everything` are reserved wildcard-domain names, not concrete Signals.
+They are rejected regardless of quality, including when parsed from a
+`virtual/...` SignalRef or used as a concrete Constant filter/output. Use the
+explicit `Each`, `Anything`, or `Everything` operators where the DSL accepts a
+wildcard. The same names in item, fluid, or another non-virtual namespace remain
+ordinary concrete Signals; other virtual names are unaffected. The one-argument
+`Signal('signal-each')` still means an item Signal.
+
+For example, use `Each(input)` as an Arithmetic input with `output: Each`,
+`Anything(input) > 0` as a Decider condition, or `Everything(input)` as a
+Decider output. The `Any`/`All` aliases remain supported. The invalid concrete
+form is `Signal('virtual', 'signal-each')`.
+
+This is a compiler/runtime concrete-Signal boundary, not a global restriction on
+raw Factorio JSON or exchange-codec payloads.
+
 ## Export notes
 
 Signal fields in blueprint JSON omit the default item type. Constant filter

@@ -1,4 +1,5 @@
 import { canonicalizeConstantConfiguration, signal } from '@comblang/factorio';
+import type { SignalId } from '@comblang/factorio';
 import type { NetworkId, ProducerId, SourceFileId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
@@ -6,6 +7,7 @@ import { BlueprintJsonError, generateBlueprintJson } from './blueprint-json.js';
 import { syntheticZeroPortEntityProfile } from './entity-fixtures.js';
 import type { EntityPhysicalRecord } from './entity.js';
 import type { LogicalDeciderCondition, NativeCircuitIr } from './ir.js';
+import { signalJson } from './native-blueprint-fields.js';
 
 const network = (value: number) => `network:${value}` as NetworkId;
 const producer = (value: number) => `producer:${value}` as ProducerId;
@@ -21,6 +23,113 @@ const testNetworks: NativeCircuitIr['networks'] = [
   { id: network(2), color: 'green', provenance },
   { id: network(3), color: 'red', provenance },
 ];
+
+describe('concrete Signal export fields', () => {
+  test.each(['signal-each', 'signal-anything', 'signal-everything'])(
+    'rejects virtual wildcard domain %s with any quality',
+    (name) => {
+      const forged = { type: 'virtual', name, quality: 'legendary' } as SignalId;
+      expect(() => signalJson(forged)).toThrow(/wildcard domain/);
+    },
+  );
+
+  test('keeps same-spelled items and ordinary virtual Signals exportable', () => {
+    expect(signalJson({ type: 'item', name: 'signal-each' })).toEqual({ name: 'signal-each' });
+    expect(signalJson({ type: 'virtual', name: 'signal-custom' })).toEqual({
+      type: 'virtual',
+      name: 'signal-custom',
+    });
+  });
+
+  test('preserves all three explicit native wildcard fields', () => {
+    const ir: NativeCircuitIr = {
+      format: 'comblang-ncir',
+      networks: [testNetworks[0]!],
+      entities: [],
+      producers: (['each', 'anything', 'everything'] as const).map((value, index) => ({
+        id: producer(index + 1),
+        kind: 'decider',
+        config: {
+          condition: {
+            kind: 'compare',
+            left: {
+              kind: 'wildcard',
+              value,
+              refKind: 'single',
+              network: network(1),
+            },
+            comparator: '>',
+            right: { kind: 'constant', value: 0 },
+          },
+          outputs: [
+            {
+              mode: 'constant',
+              signal: { kind: 'signal', signal: signal('virtual', 'signal-A') },
+              value: 1,
+            },
+          ],
+        },
+        destinations: [network(1)],
+        provenance,
+      })),
+    };
+
+    const deciders = generateBlueprintJson(ir).blueprint.entities.map(
+      (entity) =>
+        entity.control_behavior as {
+          decider_conditions: {
+            conditions: Record<string, unknown>[];
+            outputs: Record<string, unknown>[];
+          };
+        },
+    );
+    expect(
+      deciders.map((decider) => decider.decider_conditions.conditions[0]!.first_signal),
+    ).toEqual([
+      { type: 'virtual', name: 'signal-each' },
+      { type: 'virtual', name: 'signal-anything' },
+      { type: 'virtual', name: 'signal-everything' },
+    ]);
+  });
+
+  test.each(['signal-each', 'signal-anything', 'signal-everything'])(
+    'rejects a copied NCIR fixture containing concrete virtual %s',
+    (name) => {
+      const fixture: NativeCircuitIr = {
+        format: 'comblang-ncir',
+        networks: [testNetworks[0]!],
+        entities: [],
+        producers: [
+          {
+            id: producer(1),
+            kind: 'constant',
+            config: { outputs: [{ signal: signal('virtual', 'signal-A'), value: 2 }] },
+            destinations: [network(1)],
+            provenance,
+          },
+        ],
+      };
+      const copied = structuredClone(fixture);
+      const constantProducer = copied.producers[0]!;
+      if (constantProducer.kind !== 'constant' || !('outputs' in constantProducer.config)) {
+        throw new Error('Expected a legacy Constant output fixture.');
+      }
+      const first = constantProducer.config.outputs[0]!;
+      const forgedSignal = { ...first.signal, name };
+      const forged: NativeCircuitIr = {
+        ...copied,
+        producers: [
+          {
+            ...constantProducer,
+            config: { outputs: [{ ...first, signal: forgedSignal }] },
+          },
+        ],
+      };
+
+      expect(() => generateBlueprintJson(forged)).toThrow(/wildcard domain/);
+    },
+  );
+});
 const compare = (name: string): LogicalDeciderCondition => ({
   kind: 'compare',
   left: { kind: 'signal', signal: signal('virtual', name), refKind: 'single', network: network(1) },

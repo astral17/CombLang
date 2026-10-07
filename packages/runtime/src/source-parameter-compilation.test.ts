@@ -530,6 +530,22 @@ device.to(output, mirror);`;
         expect(sourceCompilationArtifact(compilation)).toEqual(original);
         expect(bindSourceCompilationCircuit(compilation, bindings)).toEqual(bound);
       }
+      let wildcardFailure: unknown;
+      try {
+        bindSourceCompilationCircuit(compilation, [
+          { parameter: amount!.parameter, value: 12 },
+          { parameter: channel!.parameter, value: { type: 'virtual', name: 'signal-each' } },
+        ]);
+      } catch (error) {
+        wildcardFailure = error;
+      }
+      expect(wildcardFailure).toMatchObject({
+        code: 'CP1000',
+        path: '$.entries[0].output.signal.name',
+        span: channel!.source,
+      });
+      expect(sourceCompilationArtifact(compilation)).toEqual(original);
+      expect(bindSourceCompilationCircuit(compilation, bindings)).toEqual(bound);
       const cloned = structuredClone(sourceCompilationArtifact(compilation));
       expectConcreteDataTree([cloned.plan, cloned.resolvedCircuit]);
       expect(cloned.plan).toEqual(original.plan);
@@ -666,6 +682,85 @@ const output = new Network(); output += device;`;
     ]);
     expect(compilation.plan).toBeUndefined();
   });
+
+  test.each(['signal-each', 'signal-anything', 'signal-everything'])(
+    'rejects wildcard-domain Signal %s as a source parameter default at the constructor call',
+    (name) => {
+      const expression = `Signal('virtual', '${name}', 'legendary')`;
+      const text = `const channel = Param.signal('Bad', ${expression});`;
+      const compilation = compileSourceProgram(
+        { path: 'wildcard-output-default.factorio.ts', text },
+        parameterHost(),
+      );
+      expect(compilation.pipelineDiagnostics).toEqual([
+        expect.objectContaining({
+          code: 'EX1001',
+          message: expect.stringContaining('wildcard domain'),
+          span: {
+            fileId: compilation.fileId,
+            start: text.indexOf(expression),
+            end: text.indexOf(expression) + expression.length,
+          },
+        }),
+      ]);
+      expect(compilation.plan).toBeUndefined();
+      expect(compilation.resolvedCircuit).toBeUndefined();
+    },
+  );
+
+  test('rejects a concrete wildcard-domain Arithmetic input at the Signal call', () => {
+    const expression = "Signal('virtual', 'signal-each')";
+    const text = `const input = new Network();
+const output = new Network();
+output += Arithmetic({ left: input[${expression}], operation: 'add', right: 5,
+  output: Signal('virtual', 'signal-C') });`;
+    const compilation = compileSourceProgram(
+      { path: 'wildcard-arithmetic-input.factorio.ts', text },
+      parameterHost(),
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'EX1001',
+        message: expect.stringContaining('wildcard domain'),
+        span: {
+          fileId: compilation.fileId,
+          start: text.indexOf(expression),
+          end: text.indexOf(expression) + expression.length,
+        },
+      }),
+    ]);
+    expect(compilation.plan).toBeUndefined();
+    expect(compilation.resolvedCircuit).toBeUndefined();
+  });
+
+  test.each(['signal-anything', 'signal-everything'])(
+    'rejects concrete Decider condition %s at the Signal call',
+    (name) => {
+      const expression = `Signal('virtual', '${name}')`;
+      const text = `const input = new Network();
+const output = new Network();
+output += Decider({ condition: input[${expression}] > 0, outputs: [input[Signal('virtual', 'signal-A')]] });`;
+      const compilation = compileSourceProgram(
+        { path: 'wildcard-decider-condition.factorio.ts', text },
+        parameterHost(),
+      );
+
+      expect(compilation.pipelineDiagnostics).toEqual([
+        expect.objectContaining({
+          code: 'EX1001',
+          message: expect.stringContaining('wildcard domain'),
+          span: {
+            fileId: compilation.fileId,
+            start: text.indexOf(expression),
+            end: text.indexOf(expression) + expression.length,
+          },
+        }),
+      ]);
+      expect(compilation.plan).toBeUndefined();
+      expect(compilation.resolvedCircuit).toBeUndefined();
+    },
+  );
 
   test.each([
     'const input = new Network(); input[channel] += CC(1 * A);',
