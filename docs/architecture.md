@@ -36,13 +36,14 @@ parameter session is open, then evaluated after sealing.
 
 The reviewed host-local use is limited to the `value` of either constant
 operand in an Arithmetic template, the constant `condition.compare.right`
-threshold in a Decider template (including nested AND/OR conditions), and
-Constant template section multipliers and filter counts. Arithmetic, Decider,
-and filter-count results require a safe integer and use their existing int32
-normalization. A Constant multiplier instead requires only a finite double and
+threshold in a Decider template (including nested AND/OR conditions), constant
+values in both Decider output branches, and Constant template section multipliers
+and filter counts. Arithmetic, Decider, and filter-count results require a safe
+integer and use their existing int32 normalization. A Constant multiplier instead
+requires only a finite double and
 passes through the existing Constant canonicalizer, preserving values such as
 fractions and negative zero. The symbolic graph does not cross the binding
-boundary; Decider outputs and every other slot remain concrete. Non-unit
+boundary; returned configurations contain concrete values. Non-unit
 multipliers may remain unsupported by the simulator; this host-local
 binding/export path does not claim simulator or native Factorio behavior.
 
@@ -129,7 +130,9 @@ The Worker keeps compiler assets warm across revisions and serializes parse and
 parameter-binding operations through one active slot and one latest-operation
 queue. A newly queued parse invalidates its binding capture and supersedes queued
 bindings; binds use the warm 1,000 ms budget and do not change parse warmth. The
-page still sends only parse requests and does not consume bound pairs. A timed-out
-or crashed operation replaces the Worker generation. The first cold parse and
-later warm parses have separate budgets; a `ready` notification means bootstrap
+page's parameter controls submit full override snapshots against the retained
+source; accepted bound pairs replace preview, tests, and concrete JSON together,
+with a fresh simulation at T0. Native-template export remains a separate mode.
+A timed-out or crashed operation replaces the Worker generation. The first cold
+parse and later warm parses have separate budgets; a `ready` notification means bootstrap
 completed, not that compilation already ran.

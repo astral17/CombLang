@@ -278,9 +278,30 @@ for the current capture coalesce to the latest request. Matched bound responses
 release the active slot, while stale responses are not applied. Binding uses the
 existing Worker and never recompiles source.
 
-The current page still sends only parse requests: it has no override controls and
-does not consume bound pairs. This lifecycle support does not add a UI, CLI
-binding route, or native Factorio behavior claim.
+The current page opts into parameter capture on compilation. Its **Circuit
+parameters** section lists number and Signal declarations. **Apply** binds the
+edited values against that retained source; **Reset** restores the original
+declaration defaults and binds an empty override snapshot. Neither action reruns
+source. Each successful binding supplies the matching concrete plan and resolved
+circuit to preview, independent circuit tests, and concrete blueprint JSON.
+
+Numeric inputs accept fractional values without integer clamping; invalid values
+are reported by the Worker at their declaration. Signal fields select a namespace
+and accept exact name and optional quality text. Empty quality means omitted/normal;
+omitted, empty and `normal` quality compare equally when deciding whether a default
+has changed. Signal names and other quality text are not trimmed. Unchanged
+declarations are omitted from each full snapshot, including unused declarations.
+Errors clear the previous preview, tests and copy payload while retaining edited
+fields for a valid retry. Original generated JavaScript remains the source output.
+
+Each successful bind creates a fresh simulation at T0; previous tick edits and
+history are not carried over. New Apply/Reset requests can replace a queued bind
+with the latest values. Source or prototype-profile changes immediately invalidate
+the controls. Worker loss or an expired capture disables Apply/Reset; **Recompile
+source** explicitly executes the current source again to obtain a new capture.
+Sources without declarations show an empty-parameters message. Parameter drafts
+and capture tokens are not saved across reloads or source recompilation. This
+browser-local binding behavior does not establish native Factorio acceptance.
 
 ### Web blueprint panel
 
@@ -300,8 +321,12 @@ source/profile errors and mode changes immediately clear the previous copy
 payload. Changing the checkbox does not edit source or test drafts; recompilation
 uses the existing fresh-simulation behavior rather than migrating tick state.
 
-There is no parameter editor or override UI. Native formula strings are preserved
-as metadata, not evaluated locally: simulation uses the declared defaults.
+While **Include numeric parameters** is checked, Apply/Reset are disabled: this
+mode exports the original source template, rather than a bound circuit. Turning it
+on recompiles source and resets local parameter edits to the declaration defaults.
+Turn it off to edit and bind concrete values again. Native formula strings are
+preserved as metadata and are not evaluated locally; template-mode simulation uses
+the declared defaults.
 Showing or copying a document is not evidence of native placement or formula
 validity.
 

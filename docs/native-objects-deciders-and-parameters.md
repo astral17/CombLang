@@ -259,8 +259,10 @@ Explicit native parameter metadata export rejects symbolic multipliers with
 located `CP1002`, even at default 1 or when the same handle is a supported filter
 count. A fractional declaration can fail the existing native original-int32 check
 first. Ordinary concrete CLI/Worker export retains the default multiplier;
-native-export failure is separate from successful compilation. No binding UI is
-provided. Signal parameters cannot be multipliers.
+native-export failure is separate from successful compilation. The
+[browser parameter controls](blueprint-json.md#optional-worker-local-parameter-binding)
+can bind concrete values; they do not enable native multiplier substitution.
+Signal parameters cannot be multipliers.
 
 ### Arithmetic output Signal parameters
 
@@ -300,8 +302,11 @@ continues to emit 7 under B. Bare Signal parameters remain invalid as `left` or
 arithmetic, compact `IF`/`when` outputs, dynamic operations and coercion are not
 enabled by this slot. Concrete Signal and `Each` output behavior is unchanged.
 
-This is host-local concrete binding, not native ID replacement or binding UI.
-Ordinary concrete export uses defaults. Explicit native parameter metadata export
+This is concrete binding, also available through the
+[browser parameter controls](blueprint-json.md#optional-worker-local-parameter-binding),
+not native ID replacement. Ordinary export of the original compilation uses
+defaults; the browser's concrete bound preview uses its selected values.
+Explicit native parameter metadata export
 still rejects Signal declarations with located `CP1002`, including compilations
 with otherwise valid numeric parameters; there is no concrete fallback in that
 explicit mode. Worker compilation/simulation/tests remain usable after this

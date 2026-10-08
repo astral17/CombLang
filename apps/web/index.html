@@ -128,6 +128,25 @@
         </div>
       </section>
 
+      <section class="parameter-panel" aria-labelledby="parameter-panel-title">
+        <div class="parameter-panel-header">
+          <div>
+            <p class="section-kicker">Current source · parameter binding</p>
+            <h2 id="parameter-panel-title">Circuit parameters</h2>
+          </div>
+          <div class="parameter-panel-actions">
+            <output id="parameter-panel-status" data-state="pending" aria-live="polite">
+              Waiting for source compilation.
+            </output>
+            <button id="parameter-apply" type="button" disabled>Apply</button>
+            <button id="parameter-reset" type="button" disabled>Reset</button>
+            <button id="parameter-recompile" type="button">Recompile source</button>
+          </div>
+        </div>
+        <p id="parameter-empty" class="parameter-empty" hidden></p>
+        <div id="parameter-fields" class="parameter-fields"></div>
+      </section>
+
       <section class="prototype-profile" aria-labelledby="prototype-profile-title">
         <div>
           <strong id="prototype-profile-title">Prototype environment</strong>

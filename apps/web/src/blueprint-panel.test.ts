@@ -494,3 +494,120 @@ describe('blueprint panel browser wiring contract', () => {
     expect(copy).toContain('copyText(captured.json)');
   });
 });
+
+describe('parameter controls browser wiring contract', () => {
+  const main = readFileSync(new URL('./main.ts', import.meta.url), 'utf8');
+  const html = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8');
+  const panel = readFileSync(new URL('./parameter-panel.ts', import.meta.url), 'utf8');
+
+  test('uses labelled fields, safe descriptor text, unrestricted numbers and wrapping actions', () => {
+    expect(html).toContain('aria-labelledby="parameter-panel-title"');
+    expect(html).toContain('id="parameter-apply"');
+    expect(html).toContain('id="parameter-reset"');
+    expect(html).toContain('Recompile source');
+    expect(html).toMatch(/id="parameter-panel-status"[^>]*aria-live="polite"/);
+    expect(panel).toContain('legend.textContent = parameter.label');
+    expect(panel).not.toContain('innerHTML');
+    expect(panel).toContain("input.type = 'number'");
+    expect(panel).toContain("input.step = 'any'");
+    expect(panel).toContain('for (const signalType of signalTypes)');
+    expect(panel).toContain('label.append(caption, input)');
+    expect(panel).toContain('nameLabel.append(nameCaption, name)');
+    expect(panel).toContain('qualityLabel.append(qualityCaption, quality)');
+    expect(panel).toContain('source-parameter-${parameter.id}');
+    expect(css.match(/\.parameter-panel-actions\s*\{([^}]+)\}/)?.[1]).toContain('flex-wrap: wrap');
+    expect(css).toContain('minmax(min(100%, 230px), 1fr)');
+  });
+
+  test('binds full snapshots without source execution and invalidates fields before debounce', () => {
+    expect(main).toContain('parameterBinding: true');
+    expect(main.match(/currentRevision = \+\+operationCounter/g)).toHaveLength(2);
+    const submit = main.slice(
+      main.indexOf('function submitParameterBinding('),
+      main.indexOf('function handleWorkerMessage('),
+    );
+    expect(submit).toContain('revision: ++operationCounter');
+    expect(submit).toContain('sourceRevision !== currentRevision');
+    expect(submit).toContain('includeNumericParameters.checked');
+    expect(submit).toContain('enqueueBinding(request)');
+    expect(submit).toContain('renderProofPending()');
+    expect(submit).toContain('submitParameterBinding([])');
+    expect(submit).not.toMatch(
+      /\brender\(|\bscheduleRender\(|startCompilerWorker\(|ensureCompilerWorker\(/,
+    );
+    const schedule = main.slice(
+      main.indexOf('function scheduleRender('),
+      main.indexOf("includeNumericParameters.addEventListener('change'"),
+    );
+    expect(schedule.indexOf('parameterPanel.setParameters(undefined)')).toBeGreaterThan(-1);
+    expect(schedule.indexOf('parameterPanel.setParameters(undefined)')).toBeLessThan(
+      schedule.indexOf('setTimeout('),
+    );
+    const pending = panel.slice(panel.indexOf('setPending('), panel.indexOf('setStatus('));
+    expect(pending).not.toContain('#available = false');
+  });
+
+  test('publishes matching bound pairs after preview and preserves original generated JavaScript', () => {
+    const branch = main.slice(
+      main.indexOf("if (event.data.kind === 'bound')"),
+      main.indexOf('if (event.data.revision !== currentRevision)'),
+    );
+    expect(branch).toContain('event.data.sourceRevision !== currentRevision');
+    expect(branch.replace(/\s+/g, ' ')).toContain(
+      'bound.plan, currentFoldedOperations, bound.resolvedCircuit',
+    );
+    expect(branch.indexOf('renderSourceProof(')).toBeLessThan(
+      branch.indexOf('currentPlan = bound.plan'),
+    );
+    expect(branch).toContain('parameters: false, concrete');
+    expect(branch).toContain('scheduleTestRender()');
+    expect(branch).toContain('renderProofError(message)');
+    expect(branch).toContain('sourcePipelineDiagnostics');
+    expect(branch).not.toContain('result.textContent');
+    expect(branch).not.toContain('scheduleRender(');
+  });
+
+  test.each(['success', 'failure'] as const)(
+    'late clipboard %s cannot revive after Reset restores identical JSON in the same source revision',
+    async (outcome) => {
+      let finish!: () => void;
+      let fail!: () => void;
+      const clipboard = new Promise<void>((resolve, reject) => {
+        finish = resolve;
+        fail = () => reject(new Error('clipboard denied'));
+      });
+      const captured = { revision: 100, parameters: false, json: 'original JSON' };
+      const capturedOperation = 100;
+      let operationCounter = 100;
+      let current: { revision: number; parameters: boolean; json: string | undefined } = captured;
+      const isCurrentCopy = () =>
+        capturedOperation === operationCounter && blueprintCopyIsCurrent(captured, current);
+      let label = 'Copy blueprint';
+      let resetScheduled = false;
+      const completion = clipboard
+        .then(() => {
+          if (isCurrentCopy()) label = 'Copied';
+        })
+        .catch(() => {
+          if (isCurrentCopy()) label = 'Copy failed';
+        })
+        .finally(() => {
+          if (isCurrentCopy()) resetScheduled = true;
+        });
+      operationCounter += 1;
+      current = { ...captured, json: undefined };
+      expect(isCurrentCopy()).toBe(false);
+      operationCounter += 1;
+      current = { ...captured };
+      expect(blueprintCopyIsCurrent(captured, current)).toBe(true);
+      expect(isCurrentCopy()).toBe(false);
+      if (outcome === 'success') finish();
+      else fail();
+      await completion;
+      expect(label).toBe('Copy blueprint');
+      expect(resetScheduled).toBe(false);
+      expect(main).toContain('capturedOperation === operationCounter');
+    },
+  );
+});

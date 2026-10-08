@@ -3,6 +3,7 @@ import type { FactorioBlueprintJson } from '@comblang/compiler/blueprint-json';
 import { signal, type SignalId, type SignalType } from '@comblang/factorio';
 import type { ResolvedCircuit } from '@comblang/compiler/resolved-circuit';
 import { offsetToPosition, sourceFileId, sourceSpan, type Diagnostic } from '@comblang/shared';
+import type { SourceParameterOverride } from '@comblang/runtime/source-parameter-binding';
 
 import { blueprintJsonForArtifact } from './blueprint-demo.js';
 import {
@@ -44,11 +45,13 @@ import {
   type SourceCircuitSummary,
 } from './source-demo.js';
 import { createSourceCircuitArtifact } from './source-circuit-artifact.js';
+import { ParameterPanel } from './parameter-panel.js';
 import { loadTestDraft, saveTestDraft } from './test-draft.js';
 import { TestTracePanel } from './test-trace-panel.js';
 import type { TestWorkerRequest, TestWorkerResponse } from './test-worker-protocol.js';
 import { buildDetailTimeline, buildOverviewTimeline, signalLabel } from './timeline-view.js';
 import type {
+  CompilerWorkerBindRequest,
   CompilerWorkerOperationRequest,
   CompilerWorkerRequest,
   CompilerWorkerResponse,
@@ -160,6 +163,19 @@ const blueprintStatus = requiredElement<HTMLOutputElement>('#blueprint-status');
 const blueprintResult = requiredElement<HTMLPreElement>('#blueprint-result');
 const copyBlueprint = requiredElement<HTMLButtonElement>('#copy-blueprint');
 const includeNumericParameters = requiredElement<HTMLInputElement>('#blueprint-parameters');
+const parameterPanel = new ParameterPanel(
+  {
+    fields: requiredElement<HTMLElement>('#parameter-fields'),
+    empty: requiredElement<HTMLElement>('#parameter-empty'),
+    status: requiredElement<HTMLOutputElement>('#parameter-panel-status'),
+    apply: requiredElement<HTMLButtonElement>('#parameter-apply'),
+    reset: requiredElement<HTMLButtonElement>('#parameter-reset'),
+    recompile: requiredElement<HTMLButtonElement>('#parameter-recompile'),
+  },
+  submitParameterBinding,
+  submitParameterReset,
+  () => scheduleRender(false),
+);
 const testHost = requiredElement<HTMLElement>('#test-editor');
 const testEditorMode = requiredElement<HTMLButtonElement>('#test-editor-mode');
 const testEditorLabel = requiredElement<HTMLElement>('#test-editor-label');
@@ -183,7 +199,11 @@ const compilerWorkerProgress = new CompilerWorkerProgressTracker();
 let parserWorkerId: number | undefined;
 let workerBootstrapTimeout: ReturnType<typeof setTimeout> | undefined;
 let workerTimeout: ReturnType<typeof setTimeout> | undefined;
+let operationCounter = 0;
 let currentRevision = 0;
+let parameterSourceRevision: number | undefined;
+let sourcePipelineDiagnostics: readonly Diagnostic[] = [];
+let currentFoldedOperations = 0;
 let renderTimer: ReturnType<typeof setTimeout> | undefined;
 let copyResetTimer: ReturnType<typeof setTimeout> | undefined;
 let currentBlueprintJson: string | undefined;
@@ -820,12 +840,14 @@ function renderSourceProof(
 
 copyBlueprint.addEventListener('click', () => {
   if (currentBlueprintJson === undefined) return;
+  const capturedOperation = operationCounter;
   const captured = {
     revision: currentRevision,
     parameters: includeNumericParameters.checked,
     json: currentBlueprintJson,
   };
   const isCurrentCopy = () =>
+    capturedOperation === operationCounter &&
     blueprintCopyIsCurrent(captured, {
       revision: currentRevision,
       parameters: includeNumericParameters.checked,
@@ -1020,11 +1042,15 @@ function render(): void {
     renderTestsBlocked('Load or disable the unavailable prototype profile.');
     return;
   }
-  currentRevision += 1;
+  currentRevision = ++operationCounter;
+  parameterSourceRevision = undefined;
+  parameterPanel.setParameters(undefined);
+  parameterPanel.setAvailability(false, 'Waiting for source compilation.', 'pending');
   const request: CompilerWorkerRequest = {
     kind: 'parse',
     revision: currentRevision,
     file: { path: 'main.factorio.ts', text: sourceEditor.getValue() },
+    parameterBinding: true,
     ...blueprintExportRequest(includeNumericParameters.checked),
     ...(activePrototypeProfile === undefined
       ? {}
@@ -1059,7 +1085,16 @@ function render(): void {
 
 function scheduleRender(saveDraft = true): void {
   if (saveDraft) saveSourceDraft(draftStorage, sourceEditor.getValue());
-  currentRevision += 1;
+  currentRevision = ++operationCounter;
+  parameterSourceRevision = undefined;
+  parameterPanel.setParameters(undefined);
+  parameterPanel.setAvailability(
+    false,
+    includeNumericParameters.checked
+      ? 'Include numeric parameters exports the original template; turn it off to bind values.'
+      : 'Source or profile changed; waiting for recompilation.',
+    'pending',
+  );
   testRevision += 1;
   terminateTestWorker();
   if (testRenderTimer !== undefined) clearTimeout(testRenderTimer);
@@ -1079,6 +1114,55 @@ function scheduleRender(saveDraft = true): void {
 includeNumericParameters.addEventListener('change', () => {
   scheduleRender(false);
 });
+
+function submitParameterBinding(overrides: readonly SourceParameterOverride[]): void {
+  const capture = compilerWorkerScheduler.bindingCapture;
+  const sourceRevision = parameterSourceRevision;
+  if (
+    !profileReady ||
+    profileRestoreError !== undefined ||
+    includeNumericParameters.checked ||
+    sourceRevision === undefined ||
+    sourceRevision !== currentRevision ||
+    capture === undefined ||
+    capture.sourceRevision !== sourceRevision
+  ) {
+    parameterPanel.setAvailability(
+      false,
+      includeNumericParameters.checked
+        ? 'Turn off Include numeric parameters to bind concrete values.'
+        : 'The parameter capture is unavailable; recompile source to continue.',
+      'warning',
+    );
+    return;
+  }
+  const request: CompilerWorkerBindRequest = {
+    kind: 'bind-parameters',
+    revision: ++operationCounter,
+    sourceRevision,
+    token: capture.token,
+    overrides: [...overrides],
+  };
+  if (!compilerWorkerScheduler.enqueueBinding(request)) {
+    parameterSourceRevision = undefined;
+    parameterPanel.setAvailability(
+      false,
+      'The parameter capture expired; recompile source to continue.',
+      'warning',
+    );
+    return;
+  }
+  if (testRenderTimer !== undefined) clearTimeout(testRenderTimer);
+  testRenderTimer = undefined;
+  renderProofPending();
+  setTestsWaiting('Binding parameters; tests will rerun on the resulting circuit.');
+  parameterPanel.setPending();
+  pumpCompilerWorker();
+}
+
+function submitParameterReset(): void {
+  submitParameterBinding([]);
+}
 
 function handleWorkerMessage(
   event: MessageEvent<CompilerWorkerResponse>,
@@ -1110,7 +1194,11 @@ function handleWorkerMessage(
     return;
   }
   if (event.data.kind === 'bound') {
-    if (!event.data.result.ok && event.data.sourceRevision === currentRevision) {
+    if (event.data.sourceRevision !== currentRevision) {
+      pumpCompilerWorker();
+      return;
+    }
+    if (!event.data.result.ok) {
       const diagnostic = event.data.result.diagnostics[0];
       const message =
         diagnostic === undefined
@@ -1120,7 +1208,43 @@ function handleWorkerMessage(
       status.dataset.state = 'invalid';
       renderProofError(message);
       renderTestsBlocked('Parameter binding failed, so tests were not run.');
-      result.textContent = `${diagnostic?.code ?? 'WP1008'} error: ${message}`;
+      sourceEditor.setDiagnostics([...sourcePipelineDiagnostics, ...event.data.result.diagnostics]);
+      if (compilerWorkerScheduler.bindingCapture === undefined) {
+        parameterSourceRevision = undefined;
+        parameterPanel.setAvailability(
+          false,
+          `${message} Recompile source to continue.`,
+          'invalid',
+        );
+      } else {
+        parameterPanel.setStatus(message, 'invalid');
+      }
+    } else {
+      const bound = event.data.result;
+      try {
+        const concrete = renderSourceProof(
+          bound.plan,
+          currentFoldedOperations,
+          bound.resolvedCircuit,
+        );
+        currentPlan = bound.plan;
+        currentResolvedCircuit = bound.resolvedCircuit;
+        sourceEditor.setDiagnostics(sourcePipelineDiagnostics);
+        renderBlueprintPanel(selectBlueprintPanel({ parameters: false, concrete }));
+        scheduleTestRender();
+        status.textContent = 'Parameters applied';
+        status.dataset.state = 'valid';
+        parameterPanel.setStatus('Applied concrete values; simulation restarted at T0.', 'valid');
+      } catch (error) {
+        const diagnostic = sourcePreviewDiagnostic(error);
+        const message = formatSourceDiagnostic(diagnostic, sourceEditor.getValue());
+        sourceEditor.setDiagnostics([...sourcePipelineDiagnostics, diagnostic]);
+        status.textContent = 'Bound circuit preview failed';
+        status.dataset.state = 'invalid';
+        renderProofError(message);
+        renderTestsBlocked('Bound circuit preview failed, so tests were not run.');
+        parameterPanel.setStatus(message, 'invalid');
+      }
     }
     pumpCompilerWorker();
     return;
@@ -1233,10 +1357,12 @@ function handleWorkerMessage(
     };
   });
   sourceEditor.setDiagnostics(parsed.pipelineDiagnostics);
+  sourcePipelineDiagnostics = parsed.pipelineDiagnostics;
   const foldedOperations = parsed.semantics.filter(
     (summary) => summary.operatorDomain === 'compile-time',
   ).length;
   const sourceFunctions = parsed.semantics.filter((summary) => summary.kind === 'function').length;
+  currentFoldedOperations = foldedOperations;
   const syntaxErrors = syntaxDiagnostics.filter((diagnostic) => diagnostic.severity === 'error');
   const compilerErrors = diagnostics.filter((diagnostic) => diagnostic.severity === 'error');
   const warnings = diagnostics.filter((diagnostic) => diagnostic.severity === 'warning');
@@ -1251,6 +1377,35 @@ function handleWorkerMessage(
     .filter(Boolean)
     .join(' · ');
   const valid = syntaxErrors.length === 0 && compilerErrors.length === 0;
+  const binding = event.data.parameterBinding;
+  if (valid && parsed.plan !== undefined && binding?.ok === true) {
+    parameterPanel.setParameters(binding.parameters);
+    const capture = compilerWorkerScheduler.bindingCapture;
+    parameterSourceRevision =
+      capture?.sourceRevision === currentRevision ? currentRevision : undefined;
+    parameterPanel.setAvailability(
+      parameterSourceRevision !== undefined && profileReady && !includeNumericParameters.checked,
+      includeNumericParameters.checked
+        ? 'Include numeric parameters exports the original template; turn it off to bind values.'
+        : binding.parameters.length === 0
+          ? 'This source declares no editable parameters.'
+          : parameterSourceRevision === undefined
+            ? 'The parameter capture is unavailable; recompile source to continue.'
+            : 'Edit values and Apply, or Reset to the original source defaults.',
+      includeNumericParameters.checked ? 'warning' : 'none',
+    );
+  } else {
+    parameterSourceRevision = undefined;
+    parameterPanel.setParameters(undefined);
+    const diagnostic = binding?.ok === false ? binding.diagnostics[0] : undefined;
+    parameterPanel.setAvailability(
+      false,
+      diagnostic === undefined
+        ? 'Parameters unavailable; fix or recompile source to continue.'
+        : formatSourceDiagnostic(diagnostic, sourceEditor.getValue()),
+      'invalid',
+    );
+  }
   status.textContent =
     syntaxErrors.length > 0
       ? `${syntaxErrors.length} syntax error(s)`
@@ -1354,6 +1509,14 @@ function handleWorkerError(event: ErrorEvent, worker: Worker, workerId: number):
   workerPrototypeIdentity = undefined;
   compilerWorkerScheduler.fail(workerId);
   const failureMessage = event.message || 'the compiler Worker crashed.';
+  if (parameterSourceRevision === currentRevision) {
+    parameterSourceRevision = undefined;
+    parameterPanel.setAvailability(
+      false,
+      `${failureMessage} Recompile source to continue.`,
+      'invalid',
+    );
+  }
   const bindingFailed = failedRequest?.kind === 'bind-parameters';
   const rolledBack = bindingFailed
     ? false
@@ -1373,7 +1536,12 @@ function handleWorkerError(event: ErrorEvent, worker: Worker, workerId: number):
     status.dataset.state = 'invalid';
     renderProofError(failureMessage);
     renderTestsBlocked('Parameter binding failed, so tests were not run.');
-    result.textContent = `WP1008 error: ${failureMessage}`;
+    parameterSourceRevision = undefined;
+    parameterPanel.setAvailability(
+      false,
+      `${failureMessage} Recompile source to continue.`,
+      'invalid',
+    );
   } else if (failedRequest?.kind === 'parse' && failedRequest.revision === currentRevision) {
     status.textContent = 'Worker failed';
     status.dataset.state = 'invalid';
@@ -1498,7 +1666,12 @@ function pumpCompilerWorker(): void {
         status.dataset.state = 'invalid';
         renderProofError(timeoutReason);
         renderTestsBlocked('Parameter binding timed out, so tests were not run.');
-        result.textContent = `WP1009 error: ${timeoutReason}`;
+        parameterSourceRevision = undefined;
+        parameterPanel.setAvailability(
+          false,
+          `${timeoutReason} Recompile source to continue.`,
+          'invalid',
+        );
       }
       pumpCompilerWorker();
       return;

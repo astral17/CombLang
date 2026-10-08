@@ -844,6 +844,145 @@ code {
     Consolas,
     monospace;
 }
+.parameter-panel {
+  display: grid;
+  gap: 14px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid #304038;
+  border-radius: 12px;
+  background: #18201b;
+}
+
+.parameter-panel-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.parameter-panel .section-kicker {
+  margin-bottom: 5px;
+  font-size: 0.62rem;
+}
+
+.parameter-panel h2 {
+  font-size: 0.92rem;
+}
+
+.parameter-panel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.parameter-panel-actions output {
+  max-width: 34rem;
+  color: #a7b5ac;
+  font-size: 0.68rem;
+  overflow-wrap: anywhere;
+}
+
+.parameter-panel-actions output[data-state='invalid'] {
+  color: #dda095;
+}
+
+.parameter-panel-actions output[data-state='valid'] {
+  color: #9dceb0;
+}
+
+.parameter-panel-actions button {
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid #4a5c51;
+  border-radius: 7px;
+  color: #d7dfda;
+  background: #202b24;
+  font:
+    600 0.68rem ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+  cursor: pointer;
+}
+
+.parameter-panel-actions button:hover:not(:disabled) {
+  border-color: #8b7651;
+  background: #2a3127;
+}
+
+.parameter-panel-actions button:focus-visible,
+.parameter-fields input:focus-visible,
+.parameter-fields select:focus-visible {
+  outline: 2px solid #c59770;
+  outline-offset: 2px;
+}
+
+.parameter-panel-actions button:disabled {
+  color: #65736b;
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
+.parameter-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr));
+  gap: 10px;
+}
+
+.parameter-row {
+  display: grid;
+  min-width: 0;
+  gap: 9px;
+  margin: 0;
+  padding: 11px;
+  border: 1px solid #304038;
+  border-radius: 8px;
+}
+
+.parameter-row legend {
+  max-width: 100%;
+  padding: 0 5px;
+  color: #d7dfda;
+  font-size: 0.72rem;
+  overflow-wrap: anywhere;
+}
+
+.parameter-row label {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  color: #a7b5ac;
+  font-size: 0.64rem;
+}
+
+.parameter-row input,
+.parameter-row select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  padding: 5px 8px;
+  border: 1px solid #3d5045;
+  border-radius: 6px;
+  color: #e0e8e2;
+  background: #111814;
+  font:
+    0.72rem ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+}
+
+.parameter-empty {
+  margin: 0;
+  color: #a7b5ac;
+  font-size: 0.72rem;
+}
+
 .blueprint-panel {
   margin-top: 24px;
   overflow: hidden;

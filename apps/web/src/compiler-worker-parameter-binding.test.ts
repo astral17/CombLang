@@ -9,12 +9,20 @@ import {
 import type { EntityProfile } from '@comblang/compiler/entity';
 import type { EntityPrototype } from '@comblang/prototypes';
 import type { EntityPrototypeResolver } from '@comblang/runtime/entity-registry';
+import type { BoundSourceCompilationCircuit } from '@comblang/runtime/source-compilation';
+import type { SourceParameterOverride } from '@comblang/runtime/source-parameter-binding';
+import { signal } from '@comblang/factorio';
 
 import {
   CompilerWorkerParameterBindingError,
   CompilerWorkerRuntime,
 } from './compiler-worker-request.js';
 import { CompilerWorkerScheduler } from './compiler-worker-scheduler.js';
+import { createParameterDrafts, parameterDraftOverrides } from './parameter-panel.js';
+import { createSourceCircuitArtifact } from './source-circuit-artifact.js';
+import { SourceSimulationController } from './source-demo.js';
+import { runWebTests } from './web-test-runner.js';
+import { selectBlueprintPanel } from './blueprint-panel.js';
 import type {
   CompilerWorkerBindRequest,
   CompilerWorkerBoundResponse,
@@ -113,6 +121,159 @@ function deferred<T>() {
 }
 
 describe('Worker-local source parameter sessions', () => {
+  test('parameter drafts drive preview, independent tests and concrete JSON through retry and Reset without rerunning source', async () => {
+    resetRunCount();
+    const runtime = parameterRuntime();
+    const parsed = structuredClone(
+      await runtime.handle(parseRequest(90, { parameterBinding: true })),
+    );
+    if (
+      parsed.parameterBinding?.ok !== true ||
+      parsed.parameterBinding.token === undefined ||
+      parsed.result.plan === undefined ||
+      parsed.result.resolvedCircuit === undefined
+    ) {
+      throw new Error('Expected a concrete parse pair and parameter capture.');
+    }
+    const { parameters, token } = parsed.parameterBinding;
+    const defaultsBefore = structuredClone(parameters);
+    const original = { plan: parsed.result.plan, resolvedCircuit: parsed.result.resolvedCircuit };
+    const originalBefore = structuredClone(original);
+    let revision = 90;
+    const bind = (overrides: readonly SourceParameterOverride[]) => {
+      const request: CompilerWorkerBindRequest = {
+        kind: 'bind-parameters',
+        revision: ++revision,
+        sourceRevision: 90,
+        token,
+        overrides,
+      };
+      const before = structuredClone(request);
+      const response = structuredClone(runtime.handleBinding(structuredClone(request)));
+      expect(request).toEqual(before);
+      expect(runCount()).toBe(1);
+      return response;
+    };
+    const consume = (
+      pair: BoundSourceCompilationCircuit,
+      amount: number,
+      name: string,
+      quality?: string,
+    ) => {
+      const before = structuredClone(pair);
+      const artifact = createSourceCircuitArtifact(pair.plan, pair.resolvedCircuit);
+      const controller = new SourceSimulationController(artifact);
+      const channel = signal('virtual', name, quality);
+      expect(controller.currentTick).toBe(0);
+      expect(controller.timeline).toHaveLength(1);
+      expect(controller.timeline[0]!.networks.every(({ signals }) => signals.length === 0)).toBe(
+        true,
+      );
+      controller.stepFrom(0);
+      expect(controller.signalValueAt(1, 'output', channel)).toBe(amount);
+      expect(artifact.blueprint.blueprint.entities[0]!.control_behavior).toMatchObject({
+        sections: {
+          sections: [
+            {
+              filters: [
+                {
+                  type: 'virtual',
+                  name,
+                  count: amount,
+                  ...(quality === undefined ? {} : { quality }),
+                },
+              ],
+            },
+          ],
+        },
+      });
+      const panel = selectBlueprintPanel({ parameters: false, concrete: artifact.blueprint });
+      expect(panel.copyPayload).toBe(JSON.stringify(artifact.blueprint, null, 2));
+      expect(JSON.parse(panel.copyPayload!)).not.toHaveProperty('blueprint.parameters');
+      expect(
+        selectBlueprintPanel({ parameters: true, concrete: artifact.blueprint }),
+      ).toMatchObject({
+        state: 'invalid',
+        status: 'Parameter export unavailable',
+      });
+      expect(
+        selectBlueprintPanel({ parameters: true, concrete: artifact.blueprint }).copyPayload,
+      ).toBeUndefined();
+      const output = artifact.execution.network('output');
+      controller.setSignalAt(0, output.id, channel, 123);
+      controller.stepFrom(0, 3);
+      expect(controller.currentTick).toBe(3);
+      const signalExpression = `Signal('virtual', ${JSON.stringify(name)}${quality === undefined ? '' : `, ${JSON.stringify(quality)}`})`;
+      const run = runWebTests(
+        pair.plan,
+        `const channel = ${signalExpression};
+test('chosen value in independent session', ({ network, tick, expectSignal }) => {
+  expectSignal(network('output'), channel).toBe(0);
+  tick(1); expectSignal(network('output'), channel).toBe(${amount});
+});
+test('another fresh session', ({ network, tick, expectSignal }) => {
+  expectSignal(network('output'), channel).toBe(0);
+  tick(1); expectSignal(network('output'), channel).toBe(${amount});
+});`,
+        pair.resolvedCircuit,
+      );
+      expect(run).toMatchObject({ passed: 2, failed: 0 });
+      expect(pair).toEqual(before);
+      return controller;
+    };
+    const originalPreview = consume(original, 5, 'signal-A');
+    const drafts = createParameterDrafts(parameters);
+    const amount = drafts[0]!;
+    const channel = drafts[1]!;
+    if (amount.kind !== 'number' || channel.kind !== 'signal')
+      throw new Error('Expected number and Signal drafts.');
+    amount.value = '9';
+    channel.name = 'signal-B';
+    channel.quality = 'rare';
+    const changed = bind(parameterDraftOverrides(parameters, drafts));
+    if (!changed.result.ok) throw new Error('Expected a changed concrete pair.');
+    const changedPair = changed.result;
+    consume(changedPair, 9, 'signal-B', 'rare');
+    expect(originalPreview.currentTick).toBe(3);
+    expect(() => createSourceCircuitArtifact(original.plan, changedPair.resolvedCircuit)).toThrow();
+    expect(
+      runWebTests(
+        original.plan,
+        "test('unreachable mismatch', () => {});",
+        changedPair.resolvedCircuit,
+      ),
+    ).toMatchObject({ passed: 0, failed: 1 });
+
+    amount.value = ' ';
+    const invalidNumber = bind(parameterDraftOverrides(parameters, drafts));
+    expect(invalidNumber.result).toMatchObject({
+      ok: false,
+      diagnostics: [{ code: 'CP1000', span: parameters[0]!.source }],
+    });
+    amount.value = '9';
+    channel.name = 'signal-each';
+    const invalidSignal = bind(parameterDraftOverrides(parameters, drafts));
+    expect(invalidSignal.result).toMatchObject({
+      ok: false,
+      diagnostics: [{ code: 'CP1000', span: parameters[1]!.source }],
+    });
+
+    amount.value = '-7';
+    channel.name = 'signal-C';
+    channel.quality = 'legendary';
+    const retry = bind(parameterDraftOverrides(parameters, drafts));
+    if (!retry.result.ok) throw new Error('Expected a valid retry.');
+    consume(retry.result, -7, 'signal-C', 'legendary');
+    const resetDrafts = createParameterDrafts(parameters);
+    expect(parameterDraftOverrides(parameters, resetDrafts)).toEqual([]);
+    const reset = bind([]);
+    if (!reset.result.ok) throw new Error('Expected original defaults after Reset.');
+    consume(reset.result, 5, 'signal-A');
+    expect(parameters).toEqual(defaultsBefore);
+    expect(original).toEqual(originalBefore);
+    expect(runCount()).toBe(1);
+  });
+
   test('bind operation returns its exact concrete pair with independent revisions and no source rerun', async () => {
     resetRunCount();
     const runtime = parameterRuntime();
