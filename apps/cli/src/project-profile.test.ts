@@ -100,6 +100,143 @@ describe('CLI project profile', () => {
     });
   });
 
+  test('resolves parameter listing as source-only and leaves explicit source paths cwd-relative', async () => {
+    const path = await projectFile({
+      ...profile,
+      tests: 'tests/missing-or-throwing.test.js',
+      prototypes: { path: 'data/profile.json', identity: 'pinned' },
+      diagnostics: { rules: { 'producer.unused-output': { enabled: false } } },
+    });
+    const configured = await resolveProjectOptions(
+      parseCompilationOptions(['--project', path]),
+      'parameters',
+    );
+    expect(configured.files).toEqual([join(dirname(path), 'source/main.factorio.ts')]);
+    expect(configured.files).not.toContain(join(dirname(path), profile.tests));
+    expect(configured.prototypePath).toBe(join(dirname(path), 'data/profile.json'));
+    expect(configured.prototypeIdentity).toBe('pinned');
+    expect(configured.diagnosticPolicy?.rules).toEqual({
+      'producer.unused-output': { enabled: false },
+    });
+    const matchingPin = await resolveProjectOptions(
+      parseCompilationOptions(['--project', path, '--prototype-identity', 'pinned']),
+      'parameters',
+    );
+    expect(matchingPin.prototypeIdentity).toBe('pinned');
+    await expect(
+      resolveProjectOptions(
+        parseCompilationOptions(['--project', path, '--prototype-identity', 'other']),
+        'parameters',
+      ),
+    ).rejects.toMatchObject({ code: 'CLI1003' });
+
+    const explicit = await resolveProjectOptions(
+      parseCompilationOptions(['--project', path, 'alternate.factorio.ts']),
+      'parameters',
+    );
+    expect(explicit.files).toEqual(['alternate.factorio.ts']);
+  });
+
+  test('lists configured and explicit project sources, then exports cwd-relative override and output paths', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'comblang-project-parameter-cli-'));
+    directories.push(directory);
+    const projectDirectory = join(directory, 'project');
+    const projectSourceDirectory = join(projectDirectory, 'source');
+    const projectDataDirectory = join(projectDirectory, 'data');
+    await mkdir(projectSourceDirectory, { recursive: true });
+    await mkdir(projectDataDirectory, { recursive: true });
+    const projectPath = join(projectDirectory, 'comblang.json');
+    const configuredSource = `const configured = Param.number('Configured', 5);
+const output = new Network();`;
+    await writeFile(join(projectSourceDirectory, 'main.factorio.ts'), configuredSource);
+
+    const databasePath = fileURLToPath(
+      new URL('../../../packages/prototypes/generated/space-age-2.1.17.json', import.meta.url),
+    );
+    const { prototypes } = await loadPrototypeDatabase(
+      JSON.parse(await readFile(databasePath, 'utf8')),
+    );
+    await writeFile(join(projectDataDirectory, 'profile.json'), await readFile(databasePath));
+    await writeFile(
+      projectPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        source: 'source/main.factorio.ts',
+        tests: 'tests/does-not-exist.test.js',
+        prototypes: { path: 'data/profile.json', identity: prototypes.identity },
+        diagnostics: { rules: { 'producer.unused-output': { enabled: false } } },
+      }),
+    );
+
+    const alternateSource = `const selected = Param.number('CWD explicit', 7);
+const output = new Network();`;
+    await writeFile(join(directory, 'alternate.factorio.ts'), alternateSource);
+    const exportSource = `const amount = Param.number('Export amount', 5);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-A'), value: amount }] }] });`;
+    await writeFile(join(directory, 'alternate-export.factorio.ts'), exportSource);
+    await writeFile(join(directory, 'values.json'), JSON.stringify([{ id: 0, value: 17 }]));
+
+    const previous = process.cwd();
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      process.chdir(directory);
+      expect(
+        await run(['parameters', 'list', '--json', '--project', 'project/comblang.json']),
+      ).toBe(0);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+        ok: true,
+        parameters: [{ id: 0, kind: 'number', label: 'Configured', defaultValue: 5 }],
+      });
+
+      log.mockClear();
+      expect(
+        await run([
+          'parameters',
+          'list',
+          '--json',
+          '--project',
+          'project/comblang.json',
+          'alternate.factorio.ts',
+        ]),
+      ).toBe(0);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+        ok: true,
+        parameters: [{ id: 0, kind: 'number', label: 'CWD explicit', defaultValue: 7 }],
+      });
+
+      log.mockClear();
+      expect(
+        await run([
+          'blueprint',
+          'export',
+          '--json',
+          '--project',
+          'project/comblang.json',
+          '--overrides',
+          'values.json',
+          '--output',
+          'project-export.json',
+          'alternate-export.factorio.ts',
+        ]),
+      ).toBe(0);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+        ok: true,
+        output: join(directory, 'project-export.json'),
+      });
+      const exported = JSON.parse(await readFile(join(directory, 'project-export.json'), 'utf8'));
+      expect(
+        exported.blueprint.entities[0].control_behavior.sections.sections[0].filters[0],
+      ).toMatchObject({
+        count: 17,
+      });
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      process.chdir(previous);
+    }
+  });
+
   test('exports the checked-in pinned project with no positional source and no stdout banner', async () => {
     const path = fileURLToPath(
       new URL('../../../examples/prototype-stack/comblang.json', import.meta.url),

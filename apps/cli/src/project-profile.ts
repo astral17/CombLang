@@ -75,7 +75,7 @@ export function parseProjectProfile(text: string, path: string): ProjectProfile 
 
 export async function resolveProjectOptions(
   options: CompilationOptions,
-  command: 'check' | 'test' | 'export',
+  command: 'check' | 'test' | 'export' | 'parameters',
 ): Promise<CompilationOptions> {
   if (options.projectPath === undefined) return options;
   if (options.prototypePath !== undefined) {

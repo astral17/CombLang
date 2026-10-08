@@ -19,8 +19,9 @@ self-generated fixtures are not native Factorio conformance evidence.
 ## Source export CLI
 
 ```text
-factorio-dsl blueprint export [--json] [--parameters] [--label <text>] [--output <document.json>] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts>
-factorio-dsl blueprint export [--json] [--parameters] [--label <text>] [--output <document.json>] --project <comblang.json> [source.factorio.ts]
+factorio-dsl parameters list [--json] [--project <comblang.json>] [--prototypes <database.json>] [--prototype-identity <id>] [source.factorio.ts]
+factorio-dsl blueprint export [--json] [--parameters | --overrides <values.json>] [--label <text>] [--output <document.json>] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts>
+factorio-dsl blueprint export [--json] [--parameters | --overrides <values.json>] [--label <text>] [--output <document.json>] --project <comblang.json> [--prototype-identity <id>] [source.factorio.ts]
 ```
 
 Save this parameter-free source as `simple.factorio.ts`:
@@ -39,20 +40,40 @@ node apps/cli/dist/main.js blueprint export --label "My circuit" --output simple
 node apps/cli/dist/main.js blueprint export --project examples/prototype-stack/comblang.json
 ```
 
+`parameters list` describes declarations from one source execution. Save a
+parameterized source as `numeric.factorio.ts` and list its detached descriptors
+in declaration order:
+
+```sh
+node apps/cli/dist/main.js parameters list --json --prototypes database.json numeric.factorio.ts
+node apps/cli/dist/main.js parameters list --project comblang.json
+```
+
+The JSON result is `{ "ok": true, "parameters": [...] }`, with compile
+diagnostics when present. Plain output shows each ID, kind, JSON-quoted label and
+JSON default; a source with no declarations prints `No parameters declared.`
+Labels and defaults may repeat; IDs distinguish declarations only within this
+execution. Plain-mode warnings go to stderr; JSON-mode warnings stay in the
+diagnostic list. Compile errors return failure diagnostics and
+no partial listing. As with export, exact combinators may need the selected
+Entity-capable prototype environment.
+
 Default export uses concrete defaults and emits no parameter metadata, even
 when the source declares parameters. The label defaults to `CombLang generated
 circuit`; Decider expansion retains the 1024-row limit. Explicit `--parameters`
 requests numeric native metadata from that same owning compilation; it never
 falls back to concrete output after rejection. Without declarations, both modes
-produce an ordinary document without empty parameter rows.
+produce an ordinary document without empty parameter rows. Concrete
+`--overrides` mode accepts only an empty array when there are no declarations.
 
 `--project` reuses a CLI project profile's one configured source and prototype
-database. Omitting the positional source selects the configured source; one
-explicit source replaces it. The `--project` filename resolves from the current
-working directory; paths configured inside that file resolve from its directory.
-An explicit source and `--output` resolve from the current working directory.
-Export ignores the configured test path entirely and
-does not read, compile or execute that file. Project diagnostics and prototype
+database for listing and export. Omitting the positional source selects the
+configured source; one explicit source replaces it. The `--project` filename
+resolves from the current working directory; paths configured inside that file
+resolve from its directory. An explicit source, override file and `--output`
+resolve from the current working directory. Listing and export ignore the
+configured test path entirely and do not read, compile or execute that file.
+Project diagnostics and prototype
 identity selection follow the same rules as `check` and `test`; an explicit
 `--prototype-identity` may repeat a project pin or pin an unpinned project.
 Malformed export arguments are rejected before project or provider loading.
@@ -87,13 +108,61 @@ node apps/cli/dist/main.js blueprint export --prototypes database.json --paramet
 node apps/cli/dist/main.js blueprint encode --output numeric.txt numeric.json
 ```
 
+For concrete local overrides, write a JSON array using the listed declaration
+IDs and the runtime adapter's `{ id, value }` shape. For example, if the source
+declares two numeric parameters in that order:
+
+```json
+[
+  { "id": 0, "value": 11 },
+  { "id": 1, "value": 42 }
+]
+```
+
+Then export the bound concrete circuit (this mode cannot be combined with
+`--parameters`):
+
+```sh
+node apps/cli/dist/main.js blueprint export --prototypes database.json --overrides values.json --output chosen.json numeric.factorio.ts
+```
+
+Overrides are a full snapshot against the source's original defaults, not a
+delta: omitted IDs reset to their declared defaults. Keep explicit entries even
+when their value equals the default; in particular, an explicit override for an
+unused declaration must retain the runtime adapter's `CP1001` error. IDs are
+local to this listing/source execution, follow declaration order and are not
+stable across source edits or dynamic executions. A separate list and export
+command execute source separately, so a dynamic source is not implicitly pinned
+to the earlier listing.
+
+The override file is ordinary JSON and is read as bounded UTF-8 input (1 MiB
+maximum) before project/provider loading or source execution. Its array, ID,
+Signal and slot semantics are validated by the existing runtime binding adapter;
+there is no second CLI validator, label-keyed format or `id=value` syntax. For a
+source without declarations only `[]` is accepted; any other override input is
+an explicit error, never ignored. Binding failures keep their `CP1000`/`CP1001`
+codes, semantic paths and declaration spans, and do not create an output file or
+fall back to defaults.
+
+Concrete binding supports only the existing exact source slots: Arithmetic's
+direct numeric operand or Signal output; Constant's direct filter Signal/count
+and section numeric multiplier; Decider's direct right-hand numeric threshold;
+and Selector `select`'s numeric/Signal index or `count`'s Signal output. Other
+slots, source expressions on parameter handles and unsupported declarations
+remain explicit errors; this command does not add Factorio-native substitution
+or formula evaluation. See the [parameter guide](native-objects-deciders-and-parameters.md)
+for the complete source and model limits.
+
 The optional `--prototype-identity <id>` pins the provider identity, with the
-same validation as `check`/`test`. Source executes once; local simulation and
-concrete export use defaults, not formula results. Numeric `variable`, `formula`
+same validation as `check`/`test`. Source executes once per invocation. Ordinary
+export and native-template mode use original defaults; concrete `--overrides`
+export uses the chosen bound values. Neither mode evaluates formula metadata.
+Numeric `variable`, `formula`
 and `dependent` fields are preserved opaquely. Native formula validity,
 original-value substitution and placement are not verified. Signal declarations,
 unsupported slots/expressions, unused parameters, ambiguous equal originals and
-non-int32 originals fail explicitly. See the precise supported slots and native
+non-int32 originals fail explicitly in `--parameters` native-metadata mode. See
+the precise supported slots and native
 limitations in [the parameter guide](native-objects-deciders-and-parameters.md).
 
 Without `--output`, plain stdout contains only native JSON; warnings go to stderr.
@@ -111,10 +180,10 @@ with optional error fields and a nonempty diagnostic list for compile errors.
 Compiler/export codes such as `CP1002` are retained. Arguments are validated
 before source execution. Exactly one source is accepted without `--project`; a
 project accepts zero or one explicit source. `--` ends option parsing for literal
-filenames beginning with `-`. Project linking, parameter overrides, `--format`,
-and `--exchange` are unsupported here. Exchange encoding is a separate command.
-The web panel also offers an optional numeric-parameter export mode, described
-below; it does not provide parameter overrides.
+filenames beginning with `-`. Project linking, `--format`, and `--exchange` are
+unsupported here. Exchange encoding is a separate command. The web panel also
+offers both [concrete parameter controls](#optional-worker-local-parameter-binding)
+and the separate [numeric native-metadata export mode](#web-blueprint-panel).
 
 ## Mapping
 

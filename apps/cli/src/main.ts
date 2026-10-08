@@ -46,6 +46,11 @@ import { offsetToPosition, type Diagnostic, type DiagnosticPolicy } from '@combl
 import { resolveProjectOptions } from './project-profile.js';
 import { runBlueprintCommand } from './blueprint-command.js';
 import {
+  parseSourceParameterListOptions,
+  readSourceParameterOverrides,
+  runSourceParameterListing,
+} from './source-parameters.js';
+import {
   parseSourceExportOptions,
   reportSourceExportFailure,
   runSourceBlueprintExport,
@@ -66,6 +71,7 @@ Usage:
   factorio-dsl test [--json] --project <comblang.json> [source.factorio.ts circuit.test.js]
   factorio-dsl check [--json] [--prototypes <database.json>] [--prototype-identity <id>] <file...>
   factorio-dsl test [--json] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts> <circuit.test.js>
+  factorio-dsl parameters list [--json] [--project <comblang.json>] [--prototypes <database.json>] [--prototype-identity <id>] [source.factorio.ts]
   factorio-dsl prototypes normalize <data-raw-dump.json> <metadata.json> <output.json>
   factorio-dsl prototypes asset generate [--check] <data-raw-dump.json> <metadata.json> <output.json>
   factorio-dsl prototypes asset verify <database.json> <manifest.json>
@@ -73,8 +79,8 @@ Usage:
   factorio-dsl prototypes evidence [--json] <database.json> <evidence.json>
   factorio-dsl blueprint decode [--json] [--input-file <exchange.txt> | <exchange-string>] [--output <document.json>]
   factorio-dsl blueprint encode [--json] [--output <exchange.txt>] <document.json>
-  factorio-dsl blueprint export [--json] [--parameters] [--label <text>] [--output <document.json>] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts>
-  factorio-dsl blueprint export [--json] [--parameters] [--label <text>] [--output <document.json>] --project <comblang.json> [source.factorio.ts]
+  factorio-dsl blueprint export [--json] [--parameters | --overrides <values.json>] [--label <text>] [--output <document.json>] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts>
+  factorio-dsl blueprint export [--json] [--parameters | --overrides <values.json>] [--label <text>] [--output <document.json>] --project <comblang.json> [--prototype-identity <id>] [source.factorio.ts]
 
 Checks circuits, executes browser/Node-neutral JavaScript test files, and processes prototype dumps, circuit supplements, or evidence manifests.`;
 
@@ -577,8 +583,16 @@ export async function run(
     }
     try {
       const parsed = parseSourceExportOptions(exportArgs);
+      const overrideValues =
+        parsed.overridesFile === undefined
+          ? undefined
+          : await readSourceParameterOverrides(parsed.overridesFile);
       const resolved = await resolveProjectOptions(parsed, 'export');
-      const options = { ...parsed, ...resolved };
+      const options = {
+        ...parsed,
+        ...resolved,
+        ...(parsed.overridesFile === undefined ? {} : { overrideValues }),
+      };
       if (options.files.length !== 1 || options.files[0]!.trim().length === 0) {
         throw new CliInputError('CLI1001', 'export requires one resolved source file.');
       }
@@ -594,6 +608,28 @@ export async function run(
       );
     } catch (error) {
       return reportSourceExportFailure(error, sourceExportJsonHint(exportArgs));
+    }
+  }
+  if (command === 'parameters') {
+    const jsonHint = sourceExportJsonHint(rest);
+    try {
+      const parsed = parseSourceParameterListOptions(rest);
+      const options = await resolveProjectOptions(parsed, 'parameters');
+      if (options.files.length !== 1 || options.files[0]!.trim().length === 0) {
+        throw new CliInputError('CLI1001', 'parameters list requires one resolved source file.');
+      }
+      const prototypes = await selectPrototypeProvider(options, environment.prototypes);
+      const selected = provisionCliEnvironment(
+        options.diagnosticPolicy === undefined
+          ? environment
+          : { ...environment, diagnosticPolicy: options.diagnosticPolicy },
+        prototypes,
+      );
+      return await runSourceParameterListing(options, selected, (diagnostic, source) =>
+        formatDiagnostic(diagnostic, new Map([[source.fileId, source]])),
+      );
+    } catch (error) {
+      return reportSourceExportFailure(error, jsonHint);
     }
   }
   if (command !== 'check' && command !== 'test' && command !== 'prototypes') {

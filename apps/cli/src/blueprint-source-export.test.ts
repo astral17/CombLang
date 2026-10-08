@@ -1,6 +1,6 @@
 import { mkdtemp, open, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { DEFAULT_BLUEPRINT_CODEC_LIMITS } from '@comblang/blueprint';
 import {
@@ -11,6 +11,7 @@ import type { EntityProfile } from '@comblang/compiler/entity';
 import * as blueprintJson from '@comblang/compiler/blueprint-json';
 import { loadPrototypeDatabase, syntheticPrototypeDatabase } from '@comblang/prototypes';
 import * as sourceApi from '@comblang/runtime/source-compilation';
+import { createSourceParameterBindingSession } from '@comblang/runtime/source-parameter-binding';
 import { run, type CliCompilationEnvironment } from './main.js';
 import { parseSourceExportOptions, reportSourceExportFailure } from './blueprint-source-export.js';
 
@@ -150,6 +151,96 @@ describe('source blueprint export CLI', () => {
     expect(
       parseSourceExportOptions(['--project', 'comblang.json', '--', '--source.ts']).files,
     ).toEqual(['--source.ts']);
+  });
+
+  test('parses one overrides file and rejects malformed or native-template combinations', () => {
+    expect(parseSourceExportOptions(['--overrides', 'values.json', 'source.ts'])).toMatchObject({
+      overridesFile: 'values.json',
+      files: ['source.ts'],
+      parameters: false,
+    });
+    expect(
+      parseSourceExportOptions([
+        '--project',
+        'comblang.json',
+        '--overrides',
+        'values.json',
+        '--',
+        'alternate.ts',
+      ]),
+    ).toMatchObject({
+      projectPath: 'comblang.json',
+      overridesFile: 'values.json',
+      files: ['alternate.ts'],
+    });
+    for (const args of [
+      ['source.ts', '--overrides'],
+      ['source.ts', '--overrides', ''],
+      ['source.ts', '--overrides', '   '],
+      ['source.ts', '--overrides', 'a.json', '--overrides', 'b.json'],
+      ['source.ts', '--overrides', 'values.json', '--parameters'],
+    ]) {
+      expect(() => parseSourceExportOptions(args)).toThrowError(
+        expect.objectContaining({ code: 'CLIBP1001' }),
+      );
+    }
+  });
+
+  test('validates override conflicts first and reads malformed JSON before profile or source work', async () => {
+    const path = await sourceFile(
+      `globalThis.__comblang_override_ingress_runs += 1;\n${simpleSource}`,
+    );
+    const globals = globalThis as Record<string, unknown>;
+    const key = '__comblang_override_ingress_runs';
+    const previous = globals[key];
+    globals[key] = 0;
+    const { log, error } = capture();
+    try {
+      const invalidJson = join(dirname(path), 'invalid-values.json');
+      await writeFile(invalidJson, '{');
+      const missingProject = join(dirname(path), 'missing-project.json');
+      expect(
+        await run([
+          'blueprint',
+          'export',
+          '--json',
+          '--overrides',
+          invalidJson,
+          '--project',
+          missingProject,
+          path,
+        ]),
+      ).toBe(2);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+        ok: false,
+        error: {
+          code: 'CLI1001',
+          message: expect.stringContaining(resolve(invalidJson)),
+        },
+      });
+      expect(globals[key]).toBe(0);
+
+      log.mockClear();
+      const missingValues = join(dirname(path), 'missing-values.json');
+      expect(
+        await run([
+          'blueprint',
+          'export',
+          '--json',
+          '--parameters',
+          '--overrides',
+          missingValues,
+          path,
+        ]),
+      ).toBe(2);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0])).error.code).toBe('CLIBP1001');
+      expect(String(log.mock.calls[0]?.[0])).not.toContain('Unable to open input file');
+      expect(globals[key]).toBe(0);
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete globals[key];
+      else globals[key] = previous;
+    }
   });
 
   test('dispatches source export with clean native stdout and both help entry points', async () => {
@@ -319,6 +410,302 @@ describe('source blueprint export CLI', () => {
       if (previous === undefined) delete globals[key];
       else globals[key] = previous;
     }
+  });
+
+  test('exports parameter overrides from one concrete bound pair and keeps the default export intact', async () => {
+    const { environment } = await parameterHost();
+    const key = '__comblang_cli_override_export_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const previous = globals[key];
+    globals[key] = 0;
+    const source = `globalThis.${key} = Number(globalThis.${key} ?? 0) + 1;
+const A = Signal('virtual', 'signal-A');
+const channel = Param.signal('Channel', Signal('virtual', 'signal-B'));
+const amount = Param.number('Amount', 5, { variable: 'x', formula: 'x * 2', dependent: true });
+const input = new Network(); const output = new Network();
+input += CC(2 * A);
+output += Constant({ sections: [{ filters: [{ signal: channel, value: amount }] }] });
+output += Arithmetic({ left: input[A], operation: 'add', right: amount, output: channel });`;
+    const path = await sourceFile(source);
+    const overridePath = join(dirname(path), 'values.json');
+    const overrideValues = [
+      { id: 0, value: { type: 'virtual', name: 'signal-C', quality: 'rare' } },
+      { id: 1, value: 12 },
+    ] as const;
+    await writeFile(overridePath, JSON.stringify(overrideValues));
+    const { log, error } = capture();
+    try {
+      const apiCompilation = sourceApi.compileSourceProgram({ path, text: source }, environment);
+      const apiDefaultDocument = blueprintJson.generateBlueprintJson(
+        apiCompilation.resolvedCircuit!.ir,
+        { label: 'CombLang generated circuit', maxDeciderConditionRows: 1024 },
+      );
+      const apiBound = createSourceParameterBindingSession(apiCompilation).bind(overrideValues);
+      const apiBoundDocument = blueprintJson.generateBlueprintJson(apiBound.resolvedCircuit.ir, {
+        label: 'CombLang generated circuit',
+        maxDeciderConditionRows: 1024,
+      });
+      expect(
+        blueprintJson.generateBlueprintJson(apiCompilation.resolvedCircuit!.ir, {
+          label: 'CombLang generated circuit',
+          maxDeciderConditionRows: 1024,
+        }),
+      ).toEqual(apiDefaultDocument);
+      expect(globals[key]).toBe(1);
+
+      expect(await run(['blueprint', 'export', '--json', path], environment)).toBe(0);
+      const originalReport = JSON.parse(String(log.mock.calls[0]?.[0]));
+      const originalDocument = structuredClone(originalReport.document);
+      expect(originalDocument).toEqual(apiDefaultDocument);
+      expect(globals[key]).toBe(2);
+      log.mockClear();
+      expect(
+        await run(
+          ['blueprint', 'export', '--json', '--overrides', overridePath, path],
+          environment,
+        ),
+      ).toBe(0);
+      const report = JSON.parse(String(log.mock.calls[0]?.[0]));
+      expect(report.ok).toBe(true);
+      expect(report.document).toEqual(apiBoundDocument);
+      expect(report.document).not.toHaveProperty('parameters');
+      expect(JSON.stringify(report.document)).not.toMatch(/Channel|Amount|configurationTemplate/i);
+
+      const originalEntities = originalDocument.blueprint.entities;
+      const boundEntities = report.document.blueprint.entities;
+      expect(boundEntities.map((entity: { name: string }) => entity.name)).toEqual(
+        originalEntities.map((entity: { name: string }) => entity.name),
+      );
+      expect(report.document.blueprint.wires).toEqual(originalDocument.blueprint.wires);
+      const entity = (
+        entities: Array<Record<string, any>>,
+        name: string,
+        index = 0,
+      ): Record<string, any> => {
+        const found = entities.filter((candidate) => candidate.name === name)[index];
+        expect(found).toBeDefined();
+        return found!;
+      };
+      expect(
+        entity(originalEntities, 'constant-combinator', 1).control_behavior.sections.sections[0]
+          .filters[0],
+      ).toMatchObject({ name: 'signal-B', count: 5 });
+      expect(
+        entity(boundEntities, 'constant-combinator', 1).control_behavior.sections.sections[0]
+          .filters[0],
+      ).toMatchObject({ name: 'signal-C', quality: 'rare', count: 12 });
+      expect(
+        entity(originalEntities, 'arithmetic-combinator').control_behavior.arithmetic_conditions,
+      ).toMatchObject({ second_constant: 5, output_signal: { name: 'signal-B' } });
+      expect(
+        entity(boundEntities, 'arithmetic-combinator').control_behavior.arithmetic_conditions,
+      ).toMatchObject({
+        second_constant: 12,
+        output_signal: { name: 'signal-C', quality: 'rare' },
+      });
+      expect(originalReport.document).toEqual(originalDocument);
+      const sentinelPath = join(dirname(path), 'existing-bound-output.json');
+      await writeFile(sentinelPath, 'keep this file');
+      log.mockClear();
+      expect(
+        await run(
+          [
+            'blueprint',
+            'export',
+            '--json',
+            '--overrides',
+            overridePath,
+            '--output',
+            sentinelPath,
+            path,
+          ],
+          environment,
+        ),
+      ).toBe(2);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0])).error).toMatchObject({
+        code: 'CLIBP1003',
+        path: sentinelPath,
+      });
+      expect(await readFile(sentinelPath, 'utf8')).toBe('keep this file');
+      expect(globals[key]).toBe(4);
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete globals[key];
+      else globals[key] = previous;
+    }
+  });
+
+  test('accepts only an empty override array for parameter-free sources', async () => {
+    const path = await sourceFile(simpleSource);
+    const valuesPath = join(dirname(path), 'empty-values.json');
+    await writeFile(valuesPath, '[]');
+    const invalidPath = join(dirname(path), 'invalid-empty-values.json');
+    await writeFile(invalidPath, '[{"id":0,"value":1}]');
+    const malformedPath = join(dirname(path), 'malformed-empty-values.json');
+    await writeFile(malformedPath, '{}');
+    const { log, error } = capture();
+
+    expect(await run(['blueprint', 'export', '--json', path])).toBe(0);
+    const defaultDocument = JSON.parse(String(log.mock.calls[0]?.[0])).document;
+    log.mockClear();
+    expect(await run(['blueprint', 'export', '--json', '--overrides', valuesPath, path])).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0])).document).toEqual(defaultDocument);
+
+    for (const [index, overrides] of [invalidPath, malformedPath].entries()) {
+      const outputPath = join(dirname(path), `must-not-exist-${index}.json`);
+      log.mockClear();
+      expect(
+        await run([
+          'blueprint',
+          'export',
+          '--json',
+          '--overrides',
+          overrides,
+          '--output',
+          outputPath,
+          path,
+        ]),
+      ).toBe(2);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+        ok: false,
+        error: { code: 'CLI1001', message: expect.stringContaining('no parameter declarations') },
+      });
+      await expect(stat(outputPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  test('retains adapter error codes, semantic paths and declaration spans without publishing', async () => {
+    const { environment } = await parameterHost();
+    const source = `const amount = Param.number('Amount', 5);
+const channel = Param.signal('Channel', Signal('virtual', 'signal-B'));
+const unused = Param.number('Unused', 9);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: amount }] }] });`;
+    const path = await sourceFile(source);
+    const cases = [
+      {
+        values: [{ id: 0, value: 'five' }],
+        code: 'CP1000',
+        semanticPath: '$.overrides[0].value',
+        hasSpan: true,
+      },
+      {
+        values: [{ id: 1, value: { type: 'virtual', name: 'signal-each' } }],
+        code: 'CP1000',
+        semanticPath: '$.overrides[0].value.name',
+        hasSpan: true,
+      },
+      {
+        values: [{ id: 99, value: 5 }],
+        code: 'CP1000',
+        semanticPath: '$.overrides[0].id',
+        hasSpan: false,
+      },
+      {
+        values: [
+          { id: 0, value: 5 },
+          { id: 0, value: 6 },
+        ],
+        code: 'CP1000',
+        semanticPath: '$.overrides[1].id',
+        hasSpan: true,
+      },
+      {
+        values: [{ id: 2, value: 10 }],
+        code: 'CP1001',
+        semanticPath: '$.bindings',
+        hasSpan: true,
+      },
+    ] as const;
+    const { log, error } = capture();
+
+    for (const [index, item] of cases.entries()) {
+      const valuesPath = join(dirname(path), `invalid-${index}.json`);
+      const outputPath = join(dirname(path), `unpublished-${index}.json`);
+      await writeFile(valuesPath, JSON.stringify(item.values));
+      log.mockClear();
+      expect(
+        await run(
+          [
+            'blueprint',
+            'export',
+            '--json',
+            '--overrides',
+            valuesPath,
+            '--output',
+            outputPath,
+            path,
+          ],
+          environment,
+        ),
+      ).toBe(2);
+      const report = JSON.parse(String(log.mock.calls[0]?.[0]));
+      expect(report).toMatchObject({
+        ok: false,
+        error: { code: item.code, path: item.semanticPath },
+      });
+      if (item.hasSpan) {
+        expect(report.error.span).toMatchObject({
+          start: expect.any(Number),
+          end: expect.any(Number),
+        });
+      } else expect(report.error).not.toHaveProperty('span');
+      expect(report).not.toHaveProperty('document');
+      await expect(stat(outputPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    }
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  test('allows a finite fractional multiplier but rejects a fractional Constant count', async () => {
+    const { environment } = await parameterHost();
+    const multiplierSource = await sourceFile(`const scale = Param.number('Scale', 1);
+const output = new Network();
+output += Constant({ sections: [{ multiplier: scale, filters: [{ signal: Signal('virtual', 'signal-A'), value: 1 }] }] });`);
+    const multiplierOverrides = join(dirname(multiplierSource), 'fractional-multiplier.json');
+    await writeFile(multiplierOverrides, JSON.stringify([{ id: 0, value: 0.5 }]));
+    const { log, error } = capture();
+    expect(
+      await run(
+        ['blueprint', 'export', '--json', '--overrides', multiplierOverrides, multiplierSource],
+        environment,
+      ),
+    ).toBe(0);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0])).document.blueprint.entities[0]).toMatchObject(
+      {
+        control_behavior: { sections: { sections: [{ multiplier: 0.5 }] } },
+      },
+    );
+
+    const countSource = await sourceFile(`const count = Param.number('Count', 1);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-A'), value: count }] }] });`);
+    const countOverrides = join(dirname(countSource), 'fractional-count.json');
+    const countOutput = join(dirname(countSource), 'must-not-exist.json');
+    await writeFile(countOverrides, JSON.stringify([{ id: 0, value: 1.5 }]));
+    log.mockClear();
+    expect(
+      await run(
+        [
+          'blueprint',
+          'export',
+          '--json',
+          '--overrides',
+          countOverrides,
+          '--output',
+          countOutput,
+          countSource,
+        ],
+        environment,
+      ),
+    ).toBe(2);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0])).error).toMatchObject({
+      code: 'CP1000',
+      path: expect.stringContaining('filters[0].value'),
+      span: { start: expect.any(Number), end: expect.any(Number) },
+    });
+    await expect(stat(countOutput)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(error).not.toHaveBeenCalled();
   });
 
   test('both modes produce identical ordinary documents without declarations', async () => {

@@ -6,6 +6,7 @@ import {
   exportSourceCompilationNativeBlueprint,
   listSourceCompilationParameters,
 } from '@comblang/runtime/source-compilation';
+import { createSourceParameterBindingSession } from '@comblang/runtime/source-parameter-binding';
 import type { Diagnostic, SourceSpan } from '@comblang/shared';
 import { emitNativeBlueprintJson } from '../../../packages/compiler/src/native-blueprint-emitter.js';
 import { BlueprintCliError, readBoundedUtf8File, writeExclusiveText } from './blueprint-command.js';
@@ -17,13 +18,15 @@ import {
 } from './prototype-options.js';
 
 export const sourceExportUsage = `Usage:
-  factorio-dsl blueprint export [--json] [--parameters] [--label <text>] [--output <document.json>] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts>
-  factorio-dsl blueprint export [--json] [--parameters] [--label <text>] [--output <document.json>] --project <comblang.json> [source.factorio.ts]`;
+  factorio-dsl blueprint export [--json] [--parameters | --overrides <values.json>] [--label <text>] [--output <document.json>] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts>
+  factorio-dsl blueprint export [--json] [--parameters | --overrides <values.json>] [--label <text>] [--output <document.json>] --project <comblang.json> [--prototype-identity <id>] [source.factorio.ts]`;
 
 export interface SourceExportOptions extends CompilationOptions {
   readonly parameters: boolean;
   readonly label?: string;
   readonly output?: string;
+  readonly overridesFile?: string;
+  readonly overrideValues?: unknown;
 }
 
 export function sourceExportJsonHint(args: readonly string[]): boolean {
@@ -46,6 +49,7 @@ export function parseSourceExportOptions(args: readonly string[]): SourceExportO
       argument === '--parameters' ||
       argument === '--label' ||
       argument === '--output' ||
+      argument === '--overrides' ||
       argument === '--prototypes' ||
       argument === '--prototype-identity' ||
       argument === '--project'
@@ -93,13 +97,18 @@ export function parseSourceExportOptions(args: readonly string[]): SourceExportO
         : 'export accepts at most one source file with --project.',
     );
   }
+  if (seen.has('--parameters') && seen.has('--overrides')) {
+    throw new BlueprintCliError('CLIBP1001', '--overrides cannot be combined with --parameters.');
+  }
   const label = values.get('--label');
   const output = values.get('--output');
+  const overridesFile = values.get('--overrides');
   return {
     ...options,
     parameters: seen.has('--parameters'),
     ...(label === undefined ? {} : { label }),
     ...(output === undefined ? {} : { output }),
+    ...(overridesFile === undefined ? {} : { overridesFile }),
   };
 }
 
@@ -214,10 +223,31 @@ export async function runSourceBlueprintExport(
       label: options.label ?? 'CombLang generated circuit',
       maxDeciderConditionRows: 1024,
     };
-    const document =
-      options.parameters && listSourceCompilationParameters(compilation).length > 0
-        ? emitNativeBlueprintJson(exportSourceCompilationNativeBlueprint(compilation, projection))
-        : generateBlueprintJson(compilation.resolvedCircuit.ir, projection);
+    const declarationCount =
+      options.overridesFile === undefined && !options.parameters
+        ? 0
+        : listSourceCompilationParameters(compilation).length;
+    let document: ReturnType<typeof generateBlueprintJson>;
+    if (options.overridesFile !== undefined) {
+      if (declarationCount === 0) {
+        if (!Array.isArray(options.overrideValues) || options.overrideValues.length !== 0) {
+          throw new CliInputError(
+            'CLI1001',
+            `--overrides was provided for ${path}, but the source has no parameter declarations; only an empty [] override array is valid.`,
+          );
+        }
+        document = generateBlueprintJson(compilation.resolvedCircuit.ir, projection);
+      } else {
+        const bound = createSourceParameterBindingSession(compilation).bind(options.overrideValues);
+        document = generateBlueprintJson(bound.resolvedCircuit.ir, projection);
+      }
+    } else if (options.parameters && declarationCount > 0) {
+      document = emitNativeBlueprintJson(
+        exportSourceCompilationNativeBlueprint(compilation, projection),
+      );
+    } else {
+      document = generateBlueprintJson(compilation.resolvedCircuit.ir, projection);
+    }
     const output = JSON.stringify(document, null, 2);
     if (Buffer.byteLength(output, 'utf8') > DEFAULT_BLUEPRINT_CODEC_LIMITS.maxEmittedBytes) {
       throw new BlueprintCliError(

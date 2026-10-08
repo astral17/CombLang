@@ -105,6 +105,33 @@ Add `--json` for machine-readable results. The browser is not required for
 compiler or simulator validation. The current circuit source is one synchronous
 file; imports and multi-file libraries are not supported yet.
 
+## List and bind CLI parameters
+
+For a parameterized source, `npm run cli -- parameters list --json <source>`
+shows declaration IDs, kinds, labels and defaults. With `--project`, the
+configured source is used unless you give one explicit source. IDs belong only
+to that source execution, so use them with the same source and do not persist
+them across edits or dynamic executions.
+
+`blueprint export --overrides <values.json>` produces a concrete export using
+the existing local binding support. The JSON file is a full `{id, value}`
+snapshot; omitted IDs return to their original defaults. For example:
+
+```json
+[{ "id": 0, "value": 11 }]
+```
+
+```sh
+npm run cli -- parameters list --json --project comblang.json
+npm run cli -- blueprint export --project comblang.json --overrides values.json --output chosen.json
+```
+
+The override file and output path are relative to the current working directory;
+project-configured source and prototype paths are relative to the project file.
+Concrete overrides cannot be combined with `--parameters`, which requests the
+separate native numeric-metadata export mode. See [blueprint export](blueprint-json.md#source-export-cli)
+for supported slots, ID lifetime, errors and evidence limits.
+
 ## Prototypes and entities
 
 The browser offers bundled Base + Space Age prototype data. Ordinary circuit
