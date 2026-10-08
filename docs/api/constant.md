@@ -177,8 +177,10 @@ overflow are errors. Exact records accept only the listed semantic fields;
 Section options do not accept raw `multiplier` or `filters` fields. No additional
 native slot-capacity or placement guarantee is implied by these examples.
 
-Direct source parameters and host-only export are separate from web copied
-blueprints: see [Blueprint parameters](../native-objects-deciders-and-parameters.md#blueprint-parameter-values).
+Exact filter Signal/count fields and section multipliers also accept direct
+parameters; CC rows and Section scaling do not gain parameter arithmetic.
+See [Param](parameters.md#supported-fields) for local binding, numeric field
+rules and the separate native-template export subset.
 Related: [Decider output rows](decider.md#conditions-and-outputs), [Network](network.md),
 [detailed Constant reference](../language-reference.md#constant-combinator) and
 [Testbench](../testbench.md#executable-files).

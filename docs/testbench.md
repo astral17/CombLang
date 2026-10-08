@@ -68,6 +68,59 @@ source functions or alter its topology. Ordinary source validation/throws happen
 during elaboration and cannot assert future simulated ticks. Test assertions
 inspect committed snapshots after elaboration.
 
+### Concrete CLI parameter overrides
+
+```sh
+npm run cli -- parameters list --json --project comblang.json
+npm run cli -- test --json --project comblang.json --overrides values.json
+npm run cli -- test --json --overrides values.json main.factorio.ts circuit.test.js
+```
+
+`values.json` is a UTF-8 JSON array of `{ "id": 0, "value": 11 }` entries,
+bounded to 1 MiB. List IDs from the same source/profile: declaration IDs are
+local to that source execution, not stable pins across edits or dynamic runs.
+Signal values use `{ "type": "virtual", "name": "signal-A", "quality": "rare" }`
+(quality is optional), not source `Signal(...)` expressions. Overrides are a
+full snapshot against the original defaults, not a patch on a previous choice:
+omitted IDs use defaults and `[]` restores all defaults. Explicit entries for
+unused declarations are rejected even when their value equals the default.
+Without declarations, only `[]` is accepted when the flag is present.
+
+The command executes the circuit source once, binds once, then passes the
+matching concrete plan and resolved circuit to the test runner. Every callback
+starts independently at T0; neither a changed drive nor a failed earlier test
+contaminates the next. No overrides retains the original execution path.
+Existing debug aliases, trace documents and environment reporting are preserved.
+Numeric formula metadata is opaque and is never evaluated by CLI tests.
+
+`--project` selects both configured source and test paths, or accepts exactly
+two explicit replacements; one path cannot mix configured and explicit roles.
+Configured source/tests/prototypes resolve relative to the project file.
+Explicit source/test/override paths resolve relative to the current working
+directory. Prototype pins, diagnostic policy and host authorization still apply;
+exact combinators require an appropriate Entity-capable prototype environment.
+Arguments and override-file syntax are checked before project/provider/source
+work. `--` ends option parsing, so subsequent paths stay literal.
+
+JSON retains `{ diagnostics, tests?, ...environment }`, not an export envelope.
+Located binding/setup errors retain compiler codes and declaration spans where
+known, keep compile warnings, and omit `tests`; unknown IDs have no invented
+declaration location. Exit codes are 0 for success, 1 for circuit/binding/test
+failure, and 2 for arguments, override ingress, provider or file I/O errors.
+Plain output retains PASS/FAIL rows and the summary; setup errors do not register
+tests. Malformed test scripts still produce the ordinary registration-failure
+test report.
+
+See [concrete export and supported slots](blueprint-json.md#source-export-cli)
+for binding limits. For example, Constant filter counts require safe integers,
+while section multipliers accept finite fractions structurally. Non-unit
+multipliers retain the simulator's unmodeled `Unknown` values; accepting a bind
+does not add multiplier simulation. Values are not rounded or clamped by the
+CLI parser. `test` does not accept `--parameters`, `--label` or
+`--output`, and `check` does not accept overrides. Native numeric-metadata export
+via `blueprint export --parameters` is a separate mode. CLI simulator success
+and agreement with concrete JSON are not native Factorio acceptance evidence.
+
 The test callback receives these convenience methods and complete APIs:
 
 | Surface                      | Purpose                                                                                                |

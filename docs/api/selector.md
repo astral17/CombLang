@@ -122,9 +122,10 @@ are rejected, even when structural schema fields exist. No `Select`, `Count`,
 introduced by this page. Unsupported field mixtures, missing output/input,
 accessors, symbols and invalid indices fail with source-aware diagnostics.
 
-Direct source parameter indices/count outputs have their own capture/binding
-restrictions; host-only native metadata is not copied-web support. See
-[Blueprint parameters](../native-objects-deciders-and-parameters.md#blueprint-parameter-values).
+Select `index` accepts a direct number or Signal parameter, and count `output`
+accepts a direct Signal parameter. `selectMax` stays concrete. Local binding and
+opt-in native-template export have different supported subsets; see
+[Param](parameters.md#supported-fields).
 Related: [Signal](signal.md), [pair inputs](../language-reference.md#both-colors-input-views),
 [exact/structural reference](../language-reference.md#provider--and-host-bound-entities)
 and [Testbench](../testbench.md#executable-files).

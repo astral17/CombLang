@@ -18,6 +18,12 @@ self-generated fixtures are not native Factorio conformance evidence.
 
 ## Source export CLI
 
+The same local override array can select concrete values for
+[`test --overrides`](testbench.md#concrete-cli-parameter-overrides). CLI tests
+consume the matching bound plan and resolved circuit rather than re-executing
+source or reading exported JSON. Their diagnostics/test report and exit codes
+remain the test command's own contract; native `--parameters` export is separate.
+
 ```text
 factorio-dsl parameters list [--json] [--project <comblang.json>] [--prototypes <database.json>] [--prototype-identity <id>] [source.factorio.ts]
 factorio-dsl blueprint export [--json] [--parameters | --overrides <values.json>] [--label <text>] [--output <document.json>] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts>

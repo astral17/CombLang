@@ -12,10 +12,17 @@ import {
   conservativeEntityProvisioningPolicy,
   EntityProvisioningService,
 } from '../../packages/runtime/src/entity-provisioning.js';
-import { compileSourceProgram } from '../../packages/runtime/src/source-compilation.js';
-import { runExecutedDirectPlanTests } from '../../packages/runtime/src/test-runner.js';
+import {
+  compileSourceProgram,
+  exportSourceCompilationNativeBlueprint,
+} from '../../packages/runtime/src/source-compilation.js';
+import { createSourceParameterBindingSession } from '@comblang/runtime/source-parameter-binding';
+import {
+  runExecutedDirectPlanTests,
+  runResolvedDirectPlanTests,
+} from '../../packages/runtime/src/test-runner.js';
 
-const pages = ['functions', 'prototypes', 'entity'];
+const pages = ['functions', 'prototypes', 'entity', 'parameters'];
 const pageUrl = (name) => new URL(`../../docs/api/${name}.md`, import.meta.url);
 const read = (name) => readFileSync(pageUrl(name), 'utf8');
 const blocks = (name) =>
@@ -83,6 +90,104 @@ describe('author API documentation', () => {
     expect(page).toContain('## Restrictions');
     expect(blocks(name).length).toBeGreaterThan(0);
   });
+
+  test.each([
+    [0, 2],
+    [1, 1],
+  ])('compiles literal parameter example %i with %i physical devices', async (index, count) => {
+    expect(blocks('parameters')).toHaveLength(2);
+    const text = blocks('parameters')[index];
+    expect(text).not.toMatch(/\b(import|await)\s/);
+    expect(compile(text, await bundled).resolvedCircuit.ir.producers).toHaveLength(count);
+  });
+
+  test('matches the parameter example defaults and pipeline timing', async () => {
+    const compilation = compile(blocks('parameters')[0], await bundled);
+    run(
+      compilation,
+      `const B = Signal('virtual', 'signal-B');
+const output = network('output');
+expectSignal(output, B).toBe(0);
+tick(); expectSignal(output, B).toBe(5);
+tick(); expectSignal(output, B).toBe(7);`,
+    );
+  });
+
+  test('binds the literal documented ID values and resets against original defaults', async () => {
+    const compilation = compile(blocks('parameters')[0], await bundled);
+    const session = createSourceParameterBindingSession(compilation);
+    expect(session.parameters).toMatchObject([
+      { id: 0, kind: 'number', label: 'Amount', defaultValue: 5 },
+      { id: 1, kind: 'signal', label: 'Result', defaultValue: { name: 'signal-B' } },
+    ]);
+    const jsonBlocks = [...read('parameters').matchAll(/```json\r?\n([\s\S]*?)```/g)];
+    expect(jsonBlocks).toHaveLength(1);
+    const original = generateBlueprintJson(compilation.resolvedCircuit.ir);
+    const bound = session.bind(JSON.parse(jsonBlocks[0][1]));
+    expect(
+      runResolvedDirectPlanTests(
+        bound.plan,
+        bound.resolvedCircuit,
+        `test('chosen result', ({ network, tick, expectSignal }) => {
+  const C = Signal('virtual', 'signal-C', 'rare');
+  const output = network('output');
+  expectSignal(output, C).toBe(0);
+  tick(); expectSignal(output, C).toBe(11);
+  tick(); expectSignal(output, C).toBe(13);
+});`,
+      ),
+    ).toMatchObject({ passed: 1, failed: 0 });
+    const chosen = generateBlueprintJson(bound.resolvedCircuit.ir);
+    expect(chosen.blueprint.entities).toHaveLength(2);
+    expect(chosen.blueprint).not.toHaveProperty('parameters');
+    expect(chosen.blueprint.wires).toEqual(original.blueprint.wires);
+    expect(
+      chosen.blueprint.entities.find(({ name }) => name === 'arithmetic-combinator')
+        .control_behavior.arithmetic_conditions,
+    ).toMatchObject({
+      second_constant: 11,
+      output_signal: { type: 'virtual', name: 'signal-C', quality: 'rare' },
+    });
+    const reset = session.bind([]);
+    expect(generateBlueprintJson(reset.resolvedCircuit.ir)).toEqual(original);
+    expect(generateBlueprintJson(compilation.resolvedCircuit.ir)).toEqual(original);
+  });
+
+  test('keeps literal formula metadata opaque while defaults drive the documented counts', async () => {
+    const compilation = compile(blocks('parameters')[1], await bundled);
+    run(
+      compilation,
+      `tick();
+expectSignal(network('output'), Signal('virtual', 'signal-A')).toBe(5);
+expectSignal(network('output'), Signal('virtual', 'signal-B')).toBe(111);`,
+    );
+    expect(createSourceParameterBindingSession(compilation).parameters).toMatchObject([
+      { defaultValue: 5, metadata: { variable: 'x' } },
+      { defaultValue: 111, metadata: { formula: 'x * 2', dependent: true } },
+    ]);
+    const native = exportSourceCompilationNativeBlueprint(compilation, {
+      label: 'Documented metadata',
+      maxDeciderConditionRows: 1024,
+    });
+    expect(native.parameters).toMatchObject([
+      { type: 'number', number: '5', variable: 'x' },
+      { type: 'number', number: '111', formula: 'x * 2', dependent: true },
+    ]);
+    expect(generateBlueprintJson(compilation.resolvedCircuit.ir).blueprint).not.toHaveProperty(
+      'parameters',
+    );
+  });
+
+  test.each(['amount + 1;', '5 * result;', 'input + amount;', 'amount.defaultValue;'])(
+    'does not give opaque source parameters ordinary-value APIs: %s',
+    async (suffix) => {
+      const compilation = result(`${blocks('parameters')[0]}\n${suffix}`, await bundled);
+      expect(compilation.pipelineDiagnostics).toEqual([
+        expect.objectContaining({ severity: 'error', span: expect.any(Object) }),
+      ]);
+      expect(compilation.resolvedCircuit).toBeUndefined();
+    },
+  );
 
   test.each([
     [0, 2],

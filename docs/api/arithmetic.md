@@ -137,9 +137,11 @@ Missing/unknown fields, invalid operations and unsupported quantifiers fail with
 source-aware diagnostics. Output binding must remain compatible with the input
 wildcard shape; placement does not validate native wire reach or collisions.
 
-Direct source parameters and owning-host binding/export are described separately
-in [Blueprint parameters](../native-objects-deciders-and-parameters.md#blueprint-parameter-values).
-They do not imply native metadata in a copied web blueprint. These examples
+Exact constant operands also accept number parameters, and exact `output` accepts
+a Signal parameter. These are direct fields, not ordinary operators such as
+`input + amount`; see [Param's supported fields](parameters.md#supported-fields).
+Concrete binding and opt-in numeric native-template export are different modes.
+These examples
 verify the implemented compiler/simulator model, not native Factorio conformance.
 
 See also [Constant](constant.md), [Signal](signal.md),

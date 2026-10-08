@@ -33,7 +33,7 @@ current implementation restrictions.
 | Test signal values and delays             | [Testbench](testbench.md#executable-files), [complete test examples](testbench-acceptance.md)                                                                              |
 | Understand an error or warning            | [Diagnostics](diagnostics.md)                                                                                                                                              |
 | Export JSON or process an exchange string | [Blueprint JSON](blueprint-json.md), [exchange codec](blueprint-exchange-codec.md)                                                                                         |
-| Understand current parameter support      | [Blueprint parameters](native-objects-deciders-and-parameters.md#blueprint-parameter-values)                                                                               |
+| Declare and edit circuit parameters       | [Param](api/parameters.md), [binding and export](blueprint-json.md#source-export-cli)                                                                                      |
 
 ## API reference
 
@@ -41,7 +41,7 @@ The entity-oriented reference starts with [Signal](api/signal.md),
 [Network](api/network.md), [Combinator](api/combinator.md),
 [Arithmetic](api/arithmetic.md), [Decider](api/decider.md),
 [Constant and Section](api/constant.md), [Selector](api/selector.md),
-[Entity](api/entity.md), [prototypes](api/prototypes.md), and [Functions](api/functions.md): construction,
+[Param](api/parameters.md), [Entity](api/entity.md), [prototypes](api/prototypes.md), and [Functions](api/functions.md): construction,
 operators, methods, return values, capabilities and complete examples.
 Other API entries currently remain in the [language reference](language-reference.md);
 they have not all been converted to this format yet. Guides teach circuit
@@ -58,8 +58,9 @@ A normal source program, a JavaScript test file and an embedding-host API exampl
 are different contexts. Test files are not operator-transformed: they use
 `[[A, 5]]`, not `5 * A`, and `expectSignal`, not circuit indexing. Examples with
 `@comblang/...` imports describe application/embedding code, not source to paste
-into the editor. Some parameter APIs are host-only and do not yet change the
-web's copied blueprint.
+into the editor. Parameters have separate concrete-binding and native-template
+export modes: start with [Param](api/parameters.md#formula-metadata-and-export-modes),
+not an embedding-host snippet, to choose the intended behavior.
 
 Schema-checked Entity configuration does not imply that the Entity is callable
 or simulated. A generated blueprint and passing simulator test demonstrate the

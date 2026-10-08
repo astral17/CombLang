@@ -36,15 +36,25 @@ import {
   type FactorioDumpMetadata,
   type PrototypeProvider,
 } from '@comblang/prototypes';
-import { runExecutedDirectPlanTests, type ExecutedDirectPlan } from '@comblang/runtime';
+import {
+  executionFailureDiagnostic,
+  runExecutedDirectPlanTests,
+  runResolvedDirectPlanTests,
+} from '@comblang/runtime';
 import {
   conservativeEntityProvisioningPolicy,
   EntityProvisioningService,
 } from '@comblang/runtime/entity-provisioning';
-import { compileParsedSourceProgram } from '@comblang/runtime/source-compilation';
+import {
+  compileParsedSourceProgram,
+  listSourceCompilationParameters,
+  type LocalSourceCompilation,
+} from '@comblang/runtime/source-compilation';
+import { createSourceParameterBindingSession } from '@comblang/runtime/source-parameter-binding';
 import { offsetToPosition, type Diagnostic, type DiagnosticPolicy } from '@comblang/shared';
 import { resolveProjectOptions } from './project-profile.js';
-import { runBlueprintCommand } from './blueprint-command.js';
+import { BlueprintCliError, runBlueprintCommand } from './blueprint-command.js';
+import { parseSourceTestOptions } from './source-test-options.js';
 import {
   parseSourceParameterListOptions,
   readSourceParameterOverrides,
@@ -68,9 +78,9 @@ const usage = `factorio-dsl
 
 Usage:
   factorio-dsl check [--json] --project <comblang.json> [file...]
-  factorio-dsl test [--json] --project <comblang.json> [source.factorio.ts circuit.test.js]
+  factorio-dsl test [--json] [--overrides <values.json>] --project <comblang.json> [source.factorio.ts circuit.test.js]
   factorio-dsl check [--json] [--prototypes <database.json>] [--prototype-identity <id>] <file...>
-  factorio-dsl test [--json] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts> <circuit.test.js>
+  factorio-dsl test [--json] [--overrides <values.json>] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts> <circuit.test.js>
   factorio-dsl parameters list [--json] [--project <comblang.json>] [--prototypes <database.json>] [--prototype-identity <id>] [source.factorio.ts]
   factorio-dsl prototypes normalize <data-raw-dump.json> <metadata.json> <output.json>
   factorio-dsl prototypes asset generate [--check] <data-raw-dump.json> <metadata.json> <output.json>
@@ -283,6 +293,7 @@ async function testCircuit(
   fileNames: readonly string[],
   json: boolean,
   environment: CliCompilationEnvironment,
+  overrides?: { readonly values: unknown },
 ): Promise<number> {
   if (fileNames.length !== 2) {
     console.error(usage);
@@ -299,21 +310,52 @@ async function testCircuit(
   const project = parseProject([source]);
   const file = [...project.files.values()][0];
   const diagnostics: Diagnostic[] = [...projectOnlyDiagnostics(project)];
-  let execution: ExecutedDirectPlan | undefined;
+  let compilation: LocalSourceCompilation | undefined;
 
   if (file !== undefined && !diagnostics.some(({ severity }) => severity === 'error')) {
-    const compiled = compileParsedSourceProgram(file, environment);
-    diagnostics.push(...compiled.pipelineDiagnostics);
-    execution = compiled.execution;
+    compilation = compileParsedSourceProgram(file, environment);
+    diagnostics.push(...compilation.pipelineDiagnostics);
   }
 
-  const tests =
-    execution === undefined || diagnostics.some(({ severity }) => severity === 'error')
-      ? undefined
-      : runExecutedDirectPlanTests(execution, testSource, {
-          sourceName: relative(process.cwd(), absoluteTest).replaceAll('\\', '/'),
-          stackLineOffset: 3,
-        });
+  let tests: ReturnType<typeof runExecutedDirectPlanTests> | undefined;
+  if (
+    compilation?.execution !== undefined &&
+    !diagnostics.some(({ severity }) => severity === 'error')
+  ) {
+    const options = {
+      sourceName: relative(process.cwd(), absoluteTest).replaceAll('\\', '/'),
+      stackLineOffset: 3,
+    };
+    if (overrides === undefined) {
+      tests = runExecutedDirectPlanTests(compilation.execution, testSource, options);
+    } else {
+      try {
+        if (listSourceCompilationParameters(compilation).length === 0) {
+          if (!Array.isArray(overrides.values) || overrides.values.length !== 0) {
+            throw new CliInputError(
+              'CLI1001',
+              'Source has no parameter declarations; overrides must be an empty array.',
+            );
+          }
+          tests = runExecutedDirectPlanTests(compilation.execution, testSource, options);
+        } else {
+          const bound = createSourceParameterBindingSession(compilation).bind(overrides.values);
+          tests = runResolvedDirectPlanTests(
+            bound.plan,
+            bound.resolvedCircuit,
+            testSource,
+            options,
+          );
+        }
+      } catch (error) {
+        diagnostics.push(
+          error instanceof CliInputError
+            ? { code: error.code, severity: 'error', message: error.message }
+            : executionFailureDiagnostic(error),
+        );
+      }
+    }
+  }
 
   if (json) {
     console.log(
@@ -665,8 +707,13 @@ export async function run(
       console.error(usage);
       return 2;
     }
-    const parsedOptions = parseCompilationOptions(rest);
+    const testOptions = command === 'test' ? parseSourceTestOptions(rest) : undefined;
+    const parsedOptions = testOptions ?? parseCompilationOptions(rest);
     json = parsedOptions.json;
+    const overrides =
+      testOptions?.overridesFile === undefined
+        ? undefined
+        : { values: await readSourceParameterOverrides(testOptions.overridesFile) };
     const options = await resolveProjectOptions(parsedOptions, command);
     prototypePath = options.prototypePath;
     if (options.files.length === 0 || (command === 'test' && options.files.length !== 2)) {
@@ -691,7 +738,7 @@ export async function run(
     }
     return command === 'check'
       ? await check(options.files, json, selected)
-      : await testCircuit(options.files, json, selected);
+      : await testCircuit(options.files, json, selected, overrides);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const action = command === 'prototypes' ? 'process prototype data' : `${command} source files`;
@@ -699,6 +746,7 @@ export async function run(
       const diagnostic = {
         code:
           error instanceof CliInputError ||
+          (command === 'test' && error instanceof BlueprintCliError) ||
           error instanceof PrototypeValidationError ||
           error instanceof EntityReplayContextError
             ? error.code
@@ -708,6 +756,7 @@ export async function run(
         ...(error instanceof PrototypeValidationError
           ? { path: error.path, file: prototypePath }
           : {}),
+        ...(command === 'test' && error instanceof BlueprintCliError ? { path: error.path } : {}),
       };
       if (json) console.log(JSON.stringify({ diagnostics: [diagnostic] }, null, 2));
       else

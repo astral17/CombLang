@@ -243,7 +243,7 @@ physical state is committed. `.at(...)`, `.to(...)`, `Network +=`, aliases,
 functions, loops, and concrete `SelectorCombinator` annotations retain one
 physical Producer identity per constructor call.
 
-The initial source-parameter subset also permits `Param.number(...)` or
+The [Param API](api/parameters.md) also permits `Param.number(...)` or
 `Param.signal(...)` directly in `select.index`, and `Param.signal(...)` directly
 in `count.output`. Each slot requires a concrete default; the default Selector
 configuration remains concrete, and host-local binding changes the paired
@@ -659,8 +659,9 @@ binding may override the output SignalID and numeric operands without changing
 hardware or topology. A bare Signal parameter is not a Network selection and
 remains invalid as `left` or `right`. Parameter keys, ordinary arithmetic and
 compact Decider outputs are not enabled. Explicit native metadata export still
-rejects Signal declarations with located `CP1002`; concrete preview/export and
-simulation use defaults. See the [complete output and binding example](native-objects-deciders-and-parameters.md#arithmetic-output-signal-parameters).
+rejects Signal declarations with located `CP1002`. Ordinary compilation uses
+defaults; concrete parameter controls and CLI overrides use chosen bound values.
+See [Param](api/parameters.md) and the [complete output and binding example](native-objects-deciders-and-parameters.md#arithmetic-output-signal-parameters).
 Numeric values use the same signed-int32
 normalization as ordinary arithmetic. Exact Arithmetic requires the trusted
 base `entity:arithmetic-combinator` profile and creates one linked physical

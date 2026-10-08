@@ -186,6 +186,10 @@ topology or tick; raw legacy `CC` remains usable without that authority.
 
 ## Blueprint parameter values
 
+For source-author signatures, supported fields, complete examples and user-facing
+binding/export modes, start with the [Param API reference](api/parameters.md).
+The following sections also describe embedding-host capture and replay contracts.
+
 The source language supports an initial, concrete-binding subset of configuration
 parameters. A declaration requires a label and a concrete default:
 
@@ -385,7 +389,7 @@ host-local API.
 
 ### Descriptor-based local binding
 
-Hosts that need stable data IDs instead of nominal parameter handles can create a
+Hosts that need declaration IDs instead of nominal parameter handles can create a
 local binding session from the exact successful compilation. IDs follow declaration
 order and belong only to that session; the descriptor list is detached immutable
 data. Each bind is a full snapshot against the original defaults, and omitting the
@@ -401,9 +405,11 @@ const bound = session.bind([{ id: amount.id, value: 11 }]);
 executeResolvedDirectPlan(bound.plan, bound.resolvedCircuit);
 ```
 
-This is a host-only local API. Its IDs are not portable between compilations and
-do not add Worker, CLI, UI or native-blueprint override transport. Use both fields
-of the returned pair for strict replay; the original compilation remains unchanged.
+This is a host-only local API; its IDs are not portable between compilations.
+The [CLI listing/export and browser parameter controls](blueprint-json.md#source-export-cli)
+expose the same adapter through their respective interfaces, without transporting
+nominal handles or export authority. Use both fields of the returned pair for
+strict replay; the original compilation remains unchanged.
 An unused declaration can remain at its default without adding hardware. An explicit
 override for an unused declaration retains the existing `CP1001` binding error;
 the session does not silently discard it.
@@ -472,11 +478,13 @@ successful concrete simulation or tests. The checkbox defaults off and is not
 persisted. It does not change source/test drafts or provide overrides.
 See [source export CLI](blueprint-json.md#source-export-cli) for prototype selection
 and file/stdout conventions. Existing parameter-free export bytes are
-unchanged. This subset preserves explicit numeric formula strings but does not
-add native parameter indices,
-recipe/property dependencies, signal placeholders, Worker binding/override
-transport or parameter-editor UI. See [optional Worker result export](blueprint-json.md#optional-worker-result-export)
-for the request/result contract. Simulation remains concrete; native placement, substitution and
+unchanged. This native-export subset preserves explicit numeric formula strings
+but does not add native parameter indices, recipe/property dependencies or signal
+placeholders. Concrete Worker binding and the parameter controls are separate
+implemented features; they do not enable those native semantics. See
+[optional Worker result export](blueprint-json.md#optional-worker-result-export)
+and [concrete Worker binding](blueprint-json.md#optional-worker-local-parameter-binding)
+for their request/result contracts. Simulation remains concrete; native placement, substitution and
 formula evaluation require independent Factorio evidence.
 
 Known limitation: this is a source-language feature, not a hardened sandbox.

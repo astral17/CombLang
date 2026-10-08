@@ -124,10 +124,16 @@ snapshot; omitted IDs return to their original defaults. For example:
 ```sh
 npm run cli -- parameters list --json --project comblang.json
 npm run cli -- blueprint export --project comblang.json --overrides values.json --output chosen.json
+npm run cli -- test --project comblang.json --overrides values.json
 ```
 
 The override file and output path are relative to the current working directory;
-project-configured source and prototype paths are relative to the project file.
+project-configured source, test and prototype paths are relative to the project file.
+For `test`, give both explicit source and test paths or neither; explicit paths
+resolve from the current working directory. Circuit source runs once, and every
+test starts independently at T0 with the selected concrete values. Binding errors
+are setup failures, not passed or skipped tests. See [CLI test overrides](testbench.md#concrete-cli-parameter-overrides)
+for reports, exit codes and limits.
 Concrete overrides cannot be combined with `--parameters`, which requests the
 separate native numeric-metadata export mode. See [blueprint export](blueprint-json.md#source-export-cli)
 for supported slots, ID lifetime, errors and evidence limits.
