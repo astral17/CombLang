@@ -1301,11 +1301,498 @@ output += arithmetic;`,
     }
   });
 
+  test.each([
+    [
+      'a derived right operand',
+      `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5);
+const input = new Network(), output = new Network();
+input += CC(3 * A);
+const scaled = (amount + 1) * 2;
+output += Arithmetic({ left: input[A], operation: 'add', right: scaled, output: A });`,
+      12,
+      20,
+      'right',
+    ],
+    [
+      'a derived left operand',
+      `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5);
+const input = new Network(), output = new Network();
+input += CC(3 * A);
+const offset = amount + 1;
+output += Arithmetic({ left: offset, operation: 'add', right: input[A], output: A });`,
+      6,
+      10,
+      'left',
+    ],
+    [
+      'symbolic unary negation with subtraction',
+      `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5);
+const input = new Network(), output = new Network();
+input += CC(3 * A);
+const negative = -amount;
+output += Arithmetic({ left: input[A], operation: 'subtract', right: negative, output: A });`,
+      -5,
+      -9,
+      'right',
+    ],
+  ] as const)(
+    'captures %s in an exact Arithmetic slot',
+    (_label, text, defaultValue, overrideValue, side) => {
+      const compilation = compileSourceProgram(
+        { path: 'source-numeric-expression.factorio.ts', text },
+        parameterHost(),
+      );
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      expect(compilation.plan?.producers).toHaveLength(2);
+      expect(compilation.plan?.entities).toHaveLength(2);
+      expect(compilation.plan?.producers.find(({ kind }) => kind === 'arithmetic')).toMatchObject({
+        [side]: { kind: 'constant', value: defaultValue },
+      });
+      const amount = listSourceCompilationParameters(compilation).find(
+        ({ kind }) => kind === 'number',
+      );
+      expect(amount).toBeDefined();
+      const bound = bindSourceCompilationCircuit(compilation, [
+        { parameter: amount!.parameter, value: 9 },
+      ]);
+      expect(bound.plan.producers.find(({ kind }) => kind === 'arithmetic')).toMatchObject({
+        [side]: { kind: 'constant', value: overrideValue },
+      });
+    },
+  );
+
+  test('reuses opaque numeric expression DAGs across operands, locals, functions and arrays', () => {
+    const text = `const amount = Param.number('Amount', 5);
+const factor = Param.number('Factor', 2);
+const shifted = amount + 1;
+const reversed = 1 + amount;
+const product = amount * factor;
+const shared = shifted + product;
+const values = [{ value: shared }];
+function selected() { return values; }
+const output = new Network();
+output += Arithmetic({ left: reversed, operation: 'add', right: selected()[0].value, output: Signal('virtual', 'signal-A') });`;
+    const compilation = compileSourceProgram(
+      { path: 'reused-source-numeric-expression.factorio.ts', text },
+      parameterHost(),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.plan?.producers).toHaveLength(1);
+    expect(compilation.plan?.entities).toHaveLength(1);
+    expect(compilation.plan?.producers[0]).toMatchObject({
+      kind: 'arithmetic',
+      left: { kind: 'constant', value: 6 },
+      right: { kind: 'constant', value: 16 },
+    });
+    const parameters = listSourceCompilationParameters(compilation);
+    const bound = bindSourceCompilationCircuit(compilation, [
+      { parameter: parameters[0]!.parameter, value: 9 },
+      { parameter: parameters[1]!.parameter, value: 3 },
+    ]);
+    expect(bound.plan.producers[0]).toMatchObject({
+      left: { kind: 'constant', value: 10 },
+      right: { kind: 'constant', value: 37 },
+    });
+  });
+
+  test('binds source expressions as full snapshots without rerun or topology changes', () => {
+    const key = '__comblang_source_numeric_expression_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const had = Object.hasOwn(globals, key);
+    const before = globals[key];
+    globals[key] = 0;
+    const text = `globalThis.${key} += 1;
+const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5);
+const input = new Network(), output = new Network();
+input += CC(3 * A);
+const scaled = (amount + 1) * 2;
+output += Arithmetic({ left: input[A], operation: 'add', right: scaled, output: A });`;
+    try {
+      const compilation = compileSourceProgram(
+        { path: 'bound-source-numeric-expression.factorio.ts', text },
+        parameterHost(),
+      );
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      const originalArtifact = structuredClone(sourceCompilationArtifact(compilation));
+      const amount = listSourceCompilationParameters(compilation)[0]!.parameter;
+      const defaults = bindSourceCompilationCircuit(compilation);
+      const overridden = bindSourceCompilationCircuit(compilation, [
+        { parameter: amount, value: 9 },
+      ]);
+      const reset = bindSourceCompilationCircuit(compilation, []);
+      const fullSnapshot = bindSourceCompilationCircuit(compilation, [
+        { parameter: amount, value: 7 },
+      ]);
+      const defaultSnapshot = structuredClone(defaults);
+      const overriddenSnapshot = structuredClone(overridden);
+
+      const rightConstant = (pair: ReturnType<typeof bindSourceCompilationCircuit>) => {
+        const arithmetic = generateBlueprintJson(pair.resolvedCircuit.ir).blueprint.entities.find(
+          ({ name }) => name === 'arithmetic-combinator',
+        );
+        return (
+          arithmetic!.control_behavior as {
+            arithmetic_conditions: { second_constant: number };
+          }
+        ).arithmetic_conditions.second_constant;
+      };
+      expect(rightConstant(defaults)).toBe(12);
+      expect(rightConstant(overridden)).toBe(20);
+      expect(rightConstant(reset)).toBe(12);
+      expect(rightConstant(fullSnapshot)).toBe(16);
+      expect(defaults.plan.entities).toHaveLength(2);
+      expect(overridden.plan.entities).toHaveLength(2);
+
+      const readings = (pair: ReturnType<typeof bindSourceCompilationCircuit>) => {
+        const replay = executeResolvedDirectPlan(pair.plan, pair.resolvedCircuit);
+        const testSession = replay.createTestSession();
+        const output = replay.network('output');
+        return [0, 1, 2].map(() => {
+          const result = testSession.read(output).get(signal('virtual', 'signal-A')) ?? 0;
+          testSession.tick();
+          return result;
+        });
+      };
+      expect(readings(defaults)).toEqual([0, 12, 15]);
+      expect(readings(overridden)).toEqual([0, 20, 23]);
+      expect(readings(reset)).toEqual([0, 12, 15]);
+
+      const topology = (pair: ReturnType<typeof bindSourceCompilationCircuit>) => ({
+        networks: pair.resolvedCircuit.ir.networks,
+        entities: pair.resolvedCircuit.ir.entities.map(
+          ({ id, profile, prototypeName, placement, connectorBindings, ordinal, provenance }) => ({
+            id,
+            profile,
+            prototypeName,
+            placement,
+            connectorBindings,
+            ordinal,
+            provenance,
+          }),
+        ),
+        wires: generateBlueprintJson(pair.resolvedCircuit.ir).blueprint.wires,
+        producers: pair.plan.producers.map(({ kind, entityId, destinations, placement }) => ({
+          kind,
+          entityId,
+          destinations,
+          placement,
+        })),
+      });
+      expect(topology(overridden)).toEqual(topology(defaults));
+      expect(topology(reset)).toEqual(topology(defaults));
+      expect(topology(fullSnapshot)).toEqual(topology(defaults));
+
+      expect(bindSourceCompilationCircuit(compilation)).toEqual(defaults);
+      expect(bindSourceCompilationCircuit(compilation, [{ parameter: amount, value: 9 }])).toEqual(
+        overridden,
+      );
+      expect(defaults).toEqual(defaultSnapshot);
+      expect(overridden).toEqual(overriddenSnapshot);
+      expect(sourceCompilationArtifact(compilation)).toEqual(originalArtifact);
+      expect(globals[key]).toBe(1);
+      expect(() =>
+        bindSourceCompilationCircuit(compilation, [{ parameter: amount, value: 5.25 }]),
+      ).toThrow();
+      expect(defaults).toEqual(defaultSnapshot);
+      expect(overridden).toEqual(overriddenSnapshot);
+    } finally {
+      if (had) globals[key] = before;
+      else delete globals[key];
+    }
+  });
+
+  test('keeps shared roots and both nominal dependencies while enforcing expression result bounds', () => {
+    const sharedText = `const amount = Param.number('Amount', 5);
+const offset = Param.number('Offset', 3);
+const shared = amount * 0;
+const output = new Network();
+output += Arithmetic({ left: shared, operation: 'add', right: shared + offset, output: Signal('virtual', 'signal-A') });`;
+    const shared = compileSourceProgram(
+      { path: 'shared-source-numeric-expression.factorio.ts', text: sharedText },
+      parameterHost(),
+    );
+    expect(shared.pipelineDiagnostics).toEqual([]);
+    expect(shared.plan?.producers[0]).toMatchObject({
+      left: { kind: 'constant', value: 0 },
+      right: { kind: 'constant', value: 3 },
+    });
+    const [amount, offset] = listSourceCompilationParameters(shared);
+    const sharedBound = bindSourceCompilationCircuit(shared, [
+      { parameter: amount!.parameter, value: 9 },
+      { parameter: offset!.parameter, value: 11 },
+    ]);
+    expect(sharedBound.plan.producers[0]).toMatchObject({
+      left: { kind: 'constant', value: 0 },
+      right: { kind: 'constant', value: 11 },
+    });
+
+    const fractionalIntermediate = compileSourceProgram(
+      {
+        path: 'fractional-intermediate.factorio.ts',
+        text: `const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Arithmetic({ left: amount * 0.5 * 2, operation: 'add', right: 0, output: Signal('virtual', 'signal-A') });`,
+      },
+      parameterHost(),
+    );
+    expect(fractionalIntermediate.pipelineDiagnostics).toEqual([]);
+    expect(fractionalIntermediate.plan?.producers[0]).toMatchObject({
+      left: { kind: 'constant', value: 5 },
+    });
+    expect(
+      bindSourceCompilationCircuit(fractionalIntermediate, [
+        {
+          parameter: listSourceCompilationParameters(fractionalIntermediate)[0]!.parameter,
+          value: 9,
+        },
+      ]).plan.producers[0],
+    ).toMatchObject({ left: { kind: 'constant', value: 9 } });
+
+    const fractionalFinal = compileSourceProgram(
+      {
+        path: 'fractional-final.factorio.ts',
+        text: `const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Arithmetic({ left: amount * 0.5, operation: 'add', right: 0, output: Signal('virtual', 'signal-A') });`,
+      },
+      parameterHost(),
+    );
+    expect(fractionalFinal.pipelineDiagnostics).toHaveLength(1);
+    expect(fractionalFinal.plan).toBeUndefined();
+    expect(fractionalFinal.pipelineDiagnostics[0]?.span).toBeDefined();
+
+    for (const [index, factor, binding] of [
+      [0, '1e308', 2],
+      [1, '1e16', 1],
+    ] as const) {
+      const compilation = compileSourceProgram(
+        {
+          path: `expression-boundary-${index}.factorio.ts`,
+          text: `const amount = Param.number('Amount', 0);
+const output = new Network();
+output += Arithmetic({ left: amount * ${factor}, operation: 'add', right: 0, output: Signal('virtual', 'signal-A') });`,
+        },
+        parameterHost(),
+      );
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      const usable = bindSourceCompilationCircuit(compilation);
+      expect(() =>
+        bindSourceCompilationCircuit(compilation, [
+          { parameter: listSourceCompilationParameters(compilation)[0]!.parameter, value: binding },
+        ]),
+      ).toThrow();
+      expect(bindSourceCompilationCircuit(compilation)).toEqual(usable);
+    }
+
+    const wrapping = compileSourceProgram(
+      {
+        path: 'expression-int32-wrap.factorio.ts',
+        text: `const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Arithmetic({ left: amount + 1, operation: 'add', right: 0, output: Signal('virtual', 'signal-A') });`,
+      },
+      parameterHost(),
+    );
+    expect(wrapping.pipelineDiagnostics).toEqual([]);
+    const wrapped = bindSourceCompilationCircuit(wrapping, [
+      { parameter: listSourceCompilationParameters(wrapping)[0]!.parameter, value: 2147483648 },
+    ]);
+    expect(wrapped.plan.producers[0]).toMatchObject({
+      left: { kind: 'constant', value: -2147483647 },
+    });
+  });
+
+  test('rejects derived expressions outside their reviewed numeric slots with locations', () => {
+    const cases = [
+      {
+        name: 'Signal parameter operand',
+        text: `const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const result = channel * 2;`,
+        anchor: 'channel * 2',
+      },
+      {
+        name: 'Network selection operand',
+        text: `const amount = Param.number('Amount', 5);
+const input = new Network();
+const result = amount * input[Signal('virtual', 'signal-A')];`,
+        anchor: 'amount * input',
+      },
+      {
+        name: 'unsupported arithmetic operator',
+        text: `const amount = Param.number('Amount', 5);
+const result = amount / 1;`,
+        anchor: 'amount / 1',
+      },
+      {
+        name: 'control flow',
+        text: `const amount = Param.number('Amount', 5);
+const result = amount + 1;
+if (result) {}`,
+        anchor: 'if (result)',
+      },
+      {
+        name: 'comparison',
+        text: `const amount = Param.number('Amount', 5);
+const result = amount + 1;
+const comparison = result > 2;`,
+        anchor: 'result > 2',
+      },
+      {
+        name: 'coercion',
+        text: `const amount = Param.number('Amount', 5);
+const result = amount + 1;
+String(result);`,
+        anchor: 'amount + 1',
+      },
+      {
+        name: 'property access',
+        text: `const amount = Param.number('Amount', 5);
+const result = amount + 1;
+result.value;`,
+        anchor: 'amount + 1',
+      },
+      {
+        name: 'unreviewed Constant slot',
+        text: `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5);
+const result = amount + 1;
+Constant({ sections: [{ filters: [{ signal: A, value: result }] }] });`,
+        anchor: 'value: result',
+      },
+      {
+        name: 'compact arithmetic input',
+        text: `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5);
+const input = new Network(), output = new Network();
+const result = amount + 1;
+output += input + result;`,
+        anchor: 'input + result',
+      },
+    ];
+    for (const [index, item] of cases.entries()) {
+      const compilation = compileSourceProgram(
+        { path: `derived-expression-boundary-${index}.factorio.ts`, text: item.text },
+        parameterHost(),
+      );
+      expect(compilation.pipelineDiagnostics, item.name).toHaveLength(1);
+      expect(compilation.pipelineDiagnostics[0], item.name).toMatchObject({
+        severity: 'error',
+        span: {
+          fileId: compilation.fileId,
+          start: expect.any(Number),
+          end: expect.any(Number),
+        },
+      });
+      expect(compilation.plan, item.name).toBeUndefined();
+      expect(compilation.resolvedCircuit, item.name).toBeUndefined();
+      const anchorStart = item.text.indexOf(item.anchor);
+      const diagnosticSpan = compilation.pipelineDiagnostics[0]!.span!;
+      expect(diagnosticSpan.start, item.name).toBeLessThan(anchorStart + item.anchor.length);
+      expect(diagnosticSpan.end, item.name).toBeGreaterThan(anchorStart);
+    }
+  });
+
+  test('preserves parameter-free JavaScript arithmetic, comparison and short-circuit order', () => {
+    const key = '__comblang_parameter_free_operator_semantics';
+    const globals = globalThis as Record<string, unknown>;
+    const had = Object.hasOwn(globals, key);
+    const before = globals[key];
+    try {
+      const compilation = compileSourceProgram({
+        path: 'parameter-free-operators.factorio.ts',
+        text: `let calls = 0;
+function sideEffect() { calls += 1; return true; }
+globalThis.${key} = ['a' + 'b', 1 < 2, false && sideEffect(), calls];`,
+      });
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      expect(globals[key]).toEqual(['ab', true, false, 0]);
+    } finally {
+      if (had) globals[key] = before;
+      else delete globals[key];
+    }
+  });
+
+  test('keeps ordinary unary minus native for negative zero, coercion and throws', () => {
+    const key = '__comblang_native_unary_minus_semantics';
+    const globals = globalThis as Record<string, unknown>;
+    const had = Object.hasOwn(globals, key);
+    const before = globals[key];
+    try {
+      const compilation = compileSourceProgram({
+        path: 'native-unary-minus.factorio.ts',
+        text: `let evaluations = 0;
+const value = { valueOf() { evaluations += 1; return 3; } };
+const negativeZero = -0;
+const negative = -value;
+const throwing = { valueOf() { throw 17; } };
+let caught = false;
+try { const unused = -throwing; } catch (error) { caught = error === 17; }
+globalThis.${key} = [1 / negativeZero === -Infinity, negative, evaluations, caught];`,
+      });
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      expect(globals[key]).toEqual([true, -3, 1, true]);
+    } finally {
+      if (had) globals[key] = before;
+      else delete globals[key];
+    }
+  });
+
+  test('preserves a returned expression container identity and mutation aliases', () => {
+    const compilation = compileSourceProgram({
+      path: 'expression-return-identity.factorio.ts',
+      text: `const amount = Param.number('Amount', 5);
+const box = { expression: amount + 1, tag: 0 };
+function selected() { return box; }
+const returned = selected();
+if (returned !== box) throw new Error('Returned expression container was copied.');
+returned.tag = 7;
+if (box.tag !== 7) throw new Error('Returned expression container lost its mutation alias.');`,
+    });
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.resolvedCircuit).toBeDefined();
+  });
+
+  test.each([
+    ['unary minus', '-value', -3],
+    ['binary addition', 'value + 1', 4],
+  ] as const)(
+    'preserves ordinary %s for a record with a parameter-like kind',
+    (_name, operation, expected) => {
+      const compilation = compileSourceProgram({
+        path: 'ordinary-parameter-like-record.factorio.ts',
+        text: `let coercions = 0;
+const value = { kind: 'number', valueOf() { coercions += 1; return 3; } };
+const result = ${operation};
+if (result !== ${expected}) throw new Error('Ordinary JavaScript value was misclassified.');
+if (coercions !== 1) throw new Error('Ordinary coercion count changed.');`,
+      });
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      expect(compilation.resolvedCircuit).toBeDefined();
+    },
+  );
+
+  test('preserves an ordinary unary-minus Error object caught by source', () => {
+    const compilation = compileSourceProgram({
+      path: 'native-unary-minus-error-identity.factorio.ts',
+      text: `const failure = new Error('Native valueOf failure.');
+const value = { valueOf() { throw failure; } };
+let caught;
+try { const result = -value; } catch (error) { caught = error; }
+if (caught !== failure) throw new Error('Native unary-minus exception identity changed.');`,
+    });
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.resolvedCircuit).toBeDefined();
+  });
+
   test('rejects handles escaping through control flow, coercion, arbitrary calls and wrong slots', () => {
     const unsupported = [
       `const amount = Param.number('Amount', 5); if (amount) {}`,
       `const amount = Param.number('Amount', 5); const gate = !amount; if (gate) {}`,
-      `const amount = Param.number('Amount', 5); amount + 1;`,
+      `const amount = Param.number('Amount', 5); amount / 1;`,
       `const amount = Param.number('Amount', 5); const record = { [amount]: 1 };`,
       `const amount = Param.number('Amount', 5); for (let index = 0; index < amount; index++) {}`,
       `const amount = Param.number('Amount', 5); Number(amount);`,

@@ -94,8 +94,9 @@ describe('author API documentation', () => {
   test.each([
     [0, 2],
     [1, 1],
+    [2, 2],
   ])('compiles literal parameter example %i with %i physical devices', async (index, count) => {
-    expect(blocks('parameters')).toHaveLength(2);
+    expect(blocks('parameters')).toHaveLength(3);
     const text = blocks('parameters')[index];
     expect(text).not.toMatch(/\b(import|await)\s/);
     expect(compile(text, await bundled).resolvedCircuit.ir.producers).toHaveLength(count);
@@ -111,6 +112,46 @@ expectSignal(output, B).toBe(0);
 tick(); expectSignal(output, B).toBe(5);
 tick(); expectSignal(output, B).toBe(7);`,
     );
+  });
+
+  test('matches local expression defaults, bound timing and concrete JSON', async () => {
+    const compilation = compile(blocks('parameters')[2], await bundled);
+    expect(compilation.resolvedCircuit.ir.producers).toHaveLength(2);
+    run(
+      compilation,
+      `const A = Signal('virtual', 'signal-A');
+const output = network('output');
+expectSignal(output, A).toBe(0);
+tick(); expectSignal(output, A).toBe(12);
+tick(); expectSignal(output, A).toBe(15);`,
+    );
+    const session = createSourceParameterBindingSession(compilation);
+    expect(session.parameters).toMatchObject([
+      { id: 0, kind: 'number', label: 'Amount', defaultValue: 5 },
+    ]);
+    const original = generateBlueprintJson(compilation.resolvedCircuit.ir);
+    const bound = session.bind([{ id: 0, value: 9 }]);
+    expect(
+      runResolvedDirectPlanTests(
+        bound.plan,
+        bound.resolvedCircuit,
+        `test('bound local expression', ({ network, tick, expectSignal }) => {
+  const A = Signal('virtual', 'signal-A');
+  const output = network('output');
+  expectSignal(output, A).toBe(0);
+  tick(); expectSignal(output, A).toBe(20);
+  tick(); expectSignal(output, A).toBe(23);
+});`,
+      ),
+    ).toMatchObject({ passed: 1, failed: 0 });
+    const chosen = generateBlueprintJson(bound.resolvedCircuit.ir);
+    expect(chosen.blueprint.entities).toHaveLength(2);
+    expect(chosen.blueprint.wires).toEqual(original.blueprint.wires);
+    expect(
+      chosen.blueprint.entities.find(({ name }) => name === 'arithmetic-combinator')
+        .control_behavior.arithmetic_conditions,
+    ).toMatchObject({ second_constant: 20 });
+    expect(generateBlueprintJson(session.bind([]).resolvedCircuit.ir)).toEqual(original);
   });
 
   test('binds the literal documented ID values and resets against original defaults', async () => {
@@ -178,8 +219,8 @@ expectSignal(network('output'), Signal('virtual', 'signal-B')).toBe(111);`,
     );
   });
 
-  test.each(['amount + 1;', '5 * result;', 'input + amount;', 'amount.defaultValue;'])(
-    'does not give opaque source parameters ordinary-value APIs: %s',
+  test.each(['amount / 1;', '5 * result;', 'input + amount;', 'amount.defaultValue;'])(
+    'does not give opaque source parameters unsupported ordinary-value APIs: %s',
     async (suffix) => {
       const compilation = result(`${blocks('parameters')[0]}\n${suffix}`, await bundled);
       expect(compilation.pipelineDiagnostics).toEqual([

@@ -113,6 +113,7 @@ import { returnNetworkValue } from './network-return-policy.js';
 import { validateCombinatorAttachment } from './combinator-attachment-policy.js';
 import { bindCombinatorHandle } from './combinator-handle-policy.js';
 import { returnOwnedValue } from './return-owned-value-policy.js';
+import { inspectReturnValueGraph } from './return-value-graph.js';
 import {
   EntityRegistry,
   EntityRegistryError,
@@ -163,9 +164,18 @@ import {
   type BlueprintSignalParameterHandle,
 } from '../../compiler/src/blueprint-parameters.js';
 import {
+  createBlueprintNumericExpression,
+  evaluateBlueprintNumericExpression,
+  type BlueprintNumericExpression,
+} from '../../compiler/src/blueprint-numeric-expression.js';
+import {
   isBlueprintParameterShaped,
   lookupBlueprintParameterSlot,
 } from '../../compiler/src/blueprint-parameter-validation.js';
+import {
+  createSourceNumericExpressionView,
+  findSourceNumericExpressionView,
+} from './source-numeric-expressions.js';
 
 interface RawSpan {
   readonly start: number;
@@ -219,8 +229,8 @@ interface NormalizedArithmeticConfiguration {
   readonly configuration: ExactArithmeticConfiguration;
   readonly parameterSlots:
     | {
-        readonly left?: BlueprintNumberParameterHandle;
-        readonly right?: BlueprintNumberParameterHandle;
+        readonly left?: BlueprintNumberParameterHandle | BlueprintNumericExpression;
+        readonly right?: BlueprintNumberParameterHandle | BlueprintNumericExpression;
         readonly output?: BlueprintSignalParameterHandle;
       }
     | undefined;
@@ -1723,6 +1733,8 @@ class ElaborationRecorder {
       return Object.fromEntries(entries);
     },
     compare: (operator: string, left: unknown, right: unknown, rawSpan: RawSpan): unknown => {
+      this.#rejectDerivedNumericExpression(left, rawSpan);
+      this.#rejectDerivedNumericExpression(right, rawSpan);
       let normalizedRight = right;
       let parameter: BlueprintNumberParameterHandle | undefined;
       const rightIsParameter =
@@ -1957,6 +1969,37 @@ class ElaborationRecorder {
         kind: 'condition',
         condition: operators.invertCondition(value.condition),
       });
+    },
+    unaryMinus: (value: unknown, rawSpan: RawSpan): unknown => {
+      const expressionView = findSourceNumericExpressionView(value);
+      const parameterLike =
+        expressionView === undefined &&
+        (findBlueprintParameterHandle(value) !== undefined || isBlueprintParameterShaped(value));
+      if (expressionView === undefined && !parameterLike) return -(value as number);
+      try {
+        if (this.#parameterCapture === undefined) {
+          throw new Error('Source numeric expressions require an owning parameter session.');
+        }
+        this.#recordDslCall();
+        const operand = this.#numericExpressionOperand(value, '$.operand');
+        const expression = createBlueprintNumericExpression(this.#parameterCapture.session, {
+          kind: 'negate',
+          operand,
+        });
+        return createSourceNumericExpressionView(
+          this.#parameterCapture.session,
+          expression,
+          this.#span(rawSpan),
+        );
+      } catch (error) {
+        throw new ElaborationExecutionError(
+          error instanceof Error ? error.message : 'Invalid source numeric negation.',
+          this.#span(rawSpan),
+          'RT2027',
+          undefined,
+          { cause: error },
+        );
+      }
     },
     destinations: (...args: unknown[]): DestinationValue => {
       const rawSpan = args.at(-1);
@@ -2251,8 +2294,73 @@ class ElaborationRecorder {
         return this.#attachToCombinator(producer, values, rawSpan);
       });
     },
-    binary: (operator: string, left: unknown, right: unknown, rawSpan: RawSpan): unknown => {
-      return operators.dispatchBinary(operator, left, right, rawSpan, this.#operatorContext);
+    binary: (
+      operator: string,
+      left: unknown,
+      right: unknown,
+      sourceExpressionOrSpan: RawSpan | boolean,
+      sourceExpressionSpan?: RawSpan,
+    ): unknown => {
+      const sourceExpression =
+        typeof sourceExpressionOrSpan === 'boolean' && sourceExpressionOrSpan;
+      const rawSpan =
+        typeof sourceExpressionOrSpan === 'boolean' ? sourceExpressionSpan : sourceExpressionOrSpan;
+      if (!isRawSpan(rawSpan)) throw new Error('binary is missing source provenance.');
+      if (!sourceExpression) {
+        return operators.dispatchBinary(operator, left, right, rawSpan, this.#operatorContext);
+      }
+      const leftExpression = findSourceNumericExpressionView(left);
+      const rightExpression = findSourceNumericExpressionView(right);
+      const leftParameterLike =
+        leftExpression === undefined &&
+        (findBlueprintParameterHandle(left) !== undefined || isBlueprintParameterShaped(left));
+      const rightParameterLike =
+        rightExpression === undefined &&
+        (findBlueprintParameterHandle(right) !== undefined || isBlueprintParameterShaped(right));
+      if (
+        leftExpression === undefined &&
+        rightExpression === undefined &&
+        !leftParameterLike &&
+        !rightParameterLike
+      ) {
+        return operators.dispatchBinary(operator, left, right, rawSpan, this.#operatorContext);
+      }
+      try {
+        if (this.#parameterCapture === undefined) {
+          throw new Error('Source numeric expressions require an owning parameter session.');
+        }
+        const expressionOperator =
+          operator === '+'
+            ? 'add'
+            : operator === '-'
+              ? 'subtract'
+              : operator === '*'
+                ? 'multiply'
+                : undefined;
+        if (expressionOperator === undefined) {
+          throw new Error('Source numeric expressions support only +, -, and * operators.');
+        }
+        this.#recordDslCall();
+        const expression = createBlueprintNumericExpression(this.#parameterCapture.session, {
+          kind: 'binary',
+          operator: expressionOperator,
+          left: this.#numericExpressionOperand(left, '$.left'),
+          right: this.#numericExpressionOperand(right, '$.right'),
+        });
+        return createSourceNumericExpressionView(
+          this.#parameterCapture.session,
+          expression,
+          this.#span(rawSpan),
+        );
+      } catch (error) {
+        throw new ElaborationExecutionError(
+          error instanceof Error ? error.message : 'Invalid source numeric expression.',
+          this.#span(rawSpan),
+          'RT2027',
+          undefined,
+          { cause: error },
+        );
+      }
     },
     addAssign: (
       left: unknown,
@@ -2828,8 +2936,8 @@ class ElaborationRecorder {
     value: CombinatorValue,
     captureId: string,
     parameterSlots: {
-      readonly left?: BlueprintNumberParameterHandle;
-      readonly right?: BlueprintNumberParameterHandle;
+      readonly left?: BlueprintNumberParameterHandle | BlueprintNumericExpression;
+      readonly right?: BlueprintNumberParameterHandle | BlueprintNumericExpression;
       readonly output?: BlueprintSignalParameterHandle;
     },
   ): void {
@@ -2840,7 +2948,7 @@ class ElaborationRecorder {
     }
     const templateOperand = (
       operand: PlanArithmeticOperand,
-      parameter: BlueprintNumberParameterHandle | undefined,
+      parameter: BlueprintNumberParameterHandle | BlueprintNumericExpression | undefined,
     ): unknown => {
       if (parameter !== undefined) return { kind: 'constant', value: parameter };
       return operand.kind === 'signal'
@@ -3857,7 +3965,19 @@ class ElaborationRecorder {
   #returnOwnedValue(value: unknown, rawSpan: RawSpan): unknown {
     const source = this.#span(rawSpan);
     const frame = this.#currentFunctionFrame();
-    return returnOwnedValue(value, source, {
+    const expressionGraph = inspectReturnValueGraph(
+      value,
+      (item) => findSourceNumericExpressionView(item) !== undefined,
+    );
+    const expressionMarkers = new Map<object, object>();
+    for (const expression of expressionGraph.handles) {
+      if (!expressionMarkers.has(expression)) {
+        expressionMarkers.set(expression, Object.freeze(Object.create(null) as object));
+      }
+    }
+    const safeValue =
+      expressionMarkers.size === 0 ? value : expressionGraph.replace(expressionMarkers);
+    const returnedValue = returnOwnedValue(safeValue, source, {
       isEntity: (item): item is EntityValue => this.#isEntity(item),
       entityNetworks: (entity) => {
         const authority = this.#entityAuthority(entity, source);
@@ -3897,6 +4017,14 @@ class ElaborationRecorder {
       chargeTransfer: () => this.#recordDslCall(),
       returnNetwork: (network) => this.#returnOwnedNetwork(network, rawSpan, false),
     });
+    if (expressionMarkers.size === 0) return returnedValue;
+    const markerExpressions = new Map(
+      [...expressionMarkers].map(([expression, marker]) => [marker, expression] as const),
+    );
+    const returnedGraph = inspectReturnValueGraph(returnedValue, (item) =>
+      markerExpressions.has(item),
+    );
+    return returnedGraph.replace(markerExpressions);
   }
 
   #assertEntityReturnable(
@@ -4102,7 +4230,60 @@ class ElaborationRecorder {
     return this.#runtimeValues.hasSignal(value);
   }
 
+  #numericExpressionOperand(value: unknown, path: string): unknown {
+    if (typeof value === 'number') {
+      if (!Number.isFinite(value)) throw new Error('Numeric expression literals must be finite.');
+      return { kind: 'literal', value };
+    }
+    if (this.#isSignal(value)) {
+      throw new Error(
+        'Numeric expressions accept only finite numbers and owning number parameters.',
+      );
+    }
+    if (this.#isSection(value)) {
+      throw new Error('Only finite number * Section is supported for Section values.');
+    }
+    if (this.#isCircuitDslValue(value)) {
+      throw new Error('Circuit arithmetic currently requires a Network or numeric operand.');
+    }
+    const expressionView = findSourceNumericExpressionView(value);
+    if (expressionView !== undefined) {
+      if (this.#parameterCapture?.session !== expressionView.session) {
+        throw new Error('Source numeric expression belongs to a different parameter session.');
+      }
+      return expressionView.expression;
+    }
+    if (this.#parameterCapture === undefined) {
+      throw new Error('Source numeric expressions require an owning parameter session.');
+    }
+    const slot = lookupBlueprintParameterSlot(
+      value,
+      'number',
+      this.#parameterCapture.session,
+      path,
+    );
+    if (slot === undefined) {
+      throw new Error(
+        'Numeric expressions accept only finite numbers and owning number parameters.',
+      );
+    }
+    if (typeof slot.registration.defaultValue !== 'number') {
+      throw new Error('Numeric expressions require a number parameter with a finite default.');
+    }
+    return { kind: 'parameter', parameter: slot.handle };
+  }
+
+  #rejectDerivedNumericExpression(value: unknown, rawSpan: RawSpan): void {
+    if (findSourceNumericExpressionView(value) === undefined) return;
+    throw new ElaborationExecutionError(
+      'A derived source numeric expression can only be consumed in an exact Arithmetic left or right operand.',
+      this.#span(rawSpan),
+      'RT2029',
+    );
+  }
+
   #rejectParameterControlValue(value: unknown, rawSpan: RawSpan): void {
+    this.#rejectDerivedNumericExpression(value, rawSpan);
     const declaration = findBlueprintParameterHandle(value);
     if (declaration === undefined) return;
     throw new ElaborationExecutionError(
@@ -4205,18 +4386,52 @@ class ElaborationRecorder {
     }
     let left: PlanArithmeticOperand;
     let right: PlanArithmeticOperand;
-    let leftParameter: BlueprintNumberParameterHandle | undefined;
-    let rightParameter: BlueprintNumberParameterHandle | undefined;
+    let leftParameter: BlueprintNumberParameterHandle | BlueprintNumericExpression | undefined;
+    let rightParameter: BlueprintNumberParameterHandle | BlueprintNumericExpression | undefined;
     try {
       const normalizeOperand = (
         operand: unknown,
         field: 'left' | 'right',
       ): {
         readonly operand: PlanArithmeticOperand;
-        readonly parameter?: BlueprintNumberParameterHandle;
+        readonly parameter?: BlueprintNumberParameterHandle | BlueprintNumericExpression;
       } => {
         if (this.#parameterCapture === undefined) {
           return { operand: this.#arithmeticOperand(operand as DslValue, source) };
+        }
+        const expressionView = findSourceNumericExpressionView(operand);
+        if (expressionView !== undefined) {
+          if (expressionView.session !== this.#parameterCapture.session) {
+            throw new ElaborationExecutionError(
+              'Source numeric expression belongs to a different parameter session.',
+              this.#span(useSite),
+              'RT2027',
+            );
+          }
+          try {
+            return {
+              operand: {
+                kind: 'constant',
+                value: circuitConstant(
+                  evaluateBlueprintNumericExpression(
+                    this.#parameterCapture.session,
+                    expressionView.expression,
+                  ),
+                ),
+              },
+              parameter: expressionView.expression,
+            };
+          } catch (error) {
+            throw new ElaborationExecutionError(
+              error instanceof Error
+                ? error.message
+                : `Invalid Arithmetic ${field} numeric expression.`,
+              this.#span(useSite),
+              'RT2027',
+              undefined,
+              { cause: error },
+            );
+          }
         }
         let slot;
         try {

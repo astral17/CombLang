@@ -913,26 +913,64 @@ output += Constant({ sections: [{ multiplier: scale, filters: [] }] });`);
     });
   });
 
+  test('rejects derived Arithmetic roots from native formula export with provenance', () => {
+    const text = `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5);
+const input = new Network(), output = new Network();
+input += CC(3 * A);
+const constantEquivalent = amount * 0;
+output += Arithmetic({ left: input[A], operation: 'add', right: constantEquivalent, output: A });`;
+    const compilation = sourceApi.compileSourceProgram(
+      { path: 'native-derived-arithmetic.factorio.ts', text },
+      parameterHost(),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const originalArtifact = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+    const originalPair = sourceApi.bindSourceCompilationCircuit(compilation);
+    const originalJson = generateBlueprintJson(originalPair.resolvedCircuit.ir);
+    let failure: unknown;
+    try {
+      sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    } catch (error) {
+      failure = error;
+    }
+    expect(failure).toMatchObject({
+      code: 'CP1002',
+      span: { fileId: compilation.fileId, start: expect.any(Number), end: expect.any(Number) },
+    });
+    const overridden = sourceApi.bindSourceCompilationCircuit(compilation, [
+      { parameter: sourceApi.listSourceCompilationParameters(compilation)[0]!.parameter, value: 9 },
+    ]);
+    expect(
+      generateBlueprintJson(overridden.resolvedCircuit.ir).blueprint.entities.find(
+        ({ name }) => name === 'arithmetic-combinator',
+      )!.control_behavior,
+    ).toMatchObject({ arithmetic_conditions: { second_constant: 0 } });
+    expect(generateBlueprintJson(originalPair.resolvedCircuit.ir)).toEqual(originalJson);
+    expect(sourceApi.bindSourceCompilationCircuit(compilation)).toEqual(originalPair);
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(originalArtifact);
+  });
+
   test.each([
     [
       'Decider({ condition: input[A] > amount, outputs: [amount * A] })',
-      'EX1001',
-      'A typed Signal value must use numericCount * Signal.',
+      'RT2027',
+      'Numeric expressions accept only finite numbers and owning number parameters.',
     ],
     [
       'Decider({ condition: input[A] > amount, outputs: [input[A]], elseOutputs: [amount * A] })',
-      'EX1001',
-      'A typed Signal value must use numericCount * Signal.',
+      'RT2027',
+      'Numeric expressions accept only finite numbers and owning number parameters.',
     ],
     [
       'Decider({ condition: input[A] > (amount + 1), outputs: [input[A]] })',
-      'CP1001',
-      '$.parameter: Blueprint parameter handles are symbolic configuration slots and cannot be coerced to JavaScript primitives.',
+      'RT2029',
+      'A derived source numeric expression can only be consumed in an exact Arithmetic left or right operand.',
     ],
     [
       "Selector({ input, operation: 'select', index: amount + 1 })",
       'CP1001',
-      '$.parameter: Blueprint parameter handles are symbolic configuration slots and cannot be coerced to JavaScript primitives.',
+      '$.expression: Source numeric expression views are opaque and cannot be inspected or coerced.',
     ],
   ])(
     'retains real source diagnostics for unreachable numeric use in %s',

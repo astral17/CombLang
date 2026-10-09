@@ -199,15 +199,16 @@ const limit = Param.number('Limit', 100);
 ```
 
 `Param` is reserved. Supported slots are an exact Arithmetic configuration's
-direct numeric operand or direct Signal output, an exact Constant filter's direct
+direct numeric operand, a derived local numeric expression or direct Signal output, an exact Constant filter's direct
 Signal or count and a section's direct numeric multiplier, an
 exact Decider condition's direct right-hand numeric threshold, and exact
 Selector `select`'s `index` (number or Signal) or `count`'s `output` (Signal).
 Selector `selectMax` remains concrete; other Selector operations and slots are
 not parameterized. The defaults compile once into an ordinary concrete Plan
-and NCIR. Parameters are not JavaScript numbers, booleans, or loop bounds;
-arithmetic on a handle, control-flow use, coercion, and arbitrary function calls
-are rejected. Unsupported declaration forms report a source diagnostic
+and NCIR. Parameters are not JavaScript numbers, booleans, or loop bounds.
+Derived source expressions are limited to `+`, `-`, `*` and unary `-` and may
+only be consumed in exact Arithmetic numeric constant operands; they remain
+opaque and cannot be used for control flow, coercion or comparisons. Unsupported declaration forms report a source diagnostic
 (`CL1050` for malformed syntax; `CP1000` for an invalid concrete default or metadata).
 
 ### Constant multiplier parameters
@@ -257,7 +258,9 @@ numeric simulation result. Non-unit multipliers retain the existing sparse-bus
 `FC1003` unsupported-configuration boundary and Known/Unknown model Unknown origin.
 This does not implement Factorio multiplier/group semantics, native substitution
 or rounding. `parameter * Section(...)`, CC convenience scaling, symbolic
-`isOn`/`active`/`group`, parameter keys and source formula arithmetic remain unsupported.
+`isOn`/`active`/`group` and parameter keys remain unsupported. Local numeric
+source expressions are limited to exact Arithmetic constant operands and do not
+create native formulas.
 
 Explicit native parameter metadata export rejects symbolic multipliers with
 located `CP1002`, even at default 1 or when the same handle is a supported filter
@@ -302,9 +305,12 @@ const bound = bindSourceCompilationCircuit(compilation, [
 Strict replay uses `bound.plan` together with `bound.resolvedCircuit`; this pair
 emits 13 under the overridden item Signal after one tick. The original compilation
 continues to emit 7 under B. Bare Signal parameters remain invalid as `left` or
-`right` inputs; they are not Network selections. Network property keys, ordinary
-arithmetic, compact `IF`/`when` outputs, dynamic operations and coercion are not
-enabled by this slot. Concrete Signal and `Each` output behavior is unchanged.
+`right` inputs; they are not Network selections. Derived numeric expressions
+formed from owning number parameters and finite numbers are also accepted in
+exact `left`/`right` constant slots, using the existing local numeric DAG without
+extra hardware or source re-execution. They do not enable Network property keys,
+`input + amount`, compact `IF`/`when` outputs, dynamic operations or coercion.
+Concrete Signal and `Each` output behavior is unchanged.
 
 This is concrete binding, also available through the
 [browser parameter controls](blueprint-json.md#optional-worker-local-parameter-binding),
@@ -427,7 +433,7 @@ Export performs one default binding and normal native projection, without
 executing source again or changing the original concrete artifacts.
 
 Every declaration in this export subset must be a number parameter used only
-as a direct exact Constant filter count, Arithmetic constant operand
+as a direct exact Constant filter count, direct Arithmetic constant operand
 (`left` or `right`), Selector `select` numeric index, or Decider
 constant-right comparison threshold, including leaves of nested AND/OR conditions.
 Its explicit default is also its
@@ -444,7 +450,8 @@ For valid captured compilations, unsupported declarations or uses fail
 atomically with `CP1002`, a declaration or Constant/device-call source span,
 and a semantic path. Signal and unused parameters, symbolic Decider outputs (including else outputs),
 Selector Signal indices/count outputs, symbolic multipliers and numeric
-expressions are outside this subset. A marked Decider threshold is tracked by its
+expressions are outside this subset; a derived Arithmetic value still fails with
+`CP1002` even when its local result is constant-equivalent. A marked Decider threshold is tracked by its
 exact comparison-leaf path in the authenticated capture and concrete producer.
 The existing bounded native condition expansion identifies every emitted row of
 that leaf, including duplicated rows; each must retain the declared original.

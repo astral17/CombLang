@@ -37,16 +37,25 @@ Arithmetic device.
 
 Exact `Arithmetic` requires all four keys, with no defaults or extra keys:
 
-| Field           | Accepted source value                                                                                        |
-| --------------- | ------------------------------------------------------------------------------------------------------------ |
-| `left`, `right` | Finite safe-integer number, concrete Network selection, readable Network/Combinator/pair, or `Each(source)`. |
-| `operation`     | One canonical operation name from the table, not the operator character.                                     |
-| `output`        | A current-source Signal handle, or `Each` / `EACH`.                                                          |
+| Field           | Accepted source value                                                                                                                 |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `left`, `right` | Finite safe-integer number, local number expression, concrete Network selection, readable Network/Combinator/pair, or `Each(source)`. |
+| `operation`     | One canonical operation name from the table, not the operator character.                                                              |
+| `output`        | A current-source Signal handle, or `Each` / `EACH`.                                                                                   |
 
 A bare readable Network, Combinator or pair operand means Each. `Any`/`Anything`
 and `All`/`Everything` are not Arithmetic operands. Concrete selections and Each
 participate in the existing wildcard compatibility checks; they are not arbitrary
 JavaScript numeric values. Safe-integer constants are normalized to signed int32.
+
+An exact numeric constant operand may also be a local expression formed from
+owning number parameters and finite numbers with `+`, `-`, `*`, or unary `-`.
+The existing registered numeric DAG evaluates its default and each binding; the
+result must be a safe integer before the existing int32 normalization. This
+expression is consumed only in exact `Arithmetic.left`/`right`: it creates no
+hardware, does not become a Factorio formula, and does not widen compact
+arithmetic or other parameter slots. Parameter-free JavaScript operators retain
+their normal behavior.
 
 For an operator expression, output defaults to the first concrete input Signal
 from left to right, or Each when there is none. Bind a compatible output explicitly
@@ -137,9 +146,10 @@ Missing/unknown fields, invalid operations and unsupported quantifiers fail with
 source-aware diagnostics. Output binding must remain compatible with the input
 wildcard shape; placement does not validate native wire reach or collisions.
 
-Exact constant operands also accept number parameters, and exact `output` accepts
-a Signal parameter. These are direct fields, not ordinary operators such as
-`input + amount`; see [Param's supported fields](parameters.md#supported-fields).
+Exact constant operands also accept number parameters and the limited derived
+numeric expressions above; exact `output` accepts a Signal parameter. These
+rules do not enable `input + amount`, derived comparisons/control flow, or
+derived values in other families; see [Param's supported fields](parameters.md#supported-fields).
 Concrete binding and opt-in numeric native-template export are different modes.
 These examples
 verify the implemented compiler/simulator model, not native Factorio conformance.

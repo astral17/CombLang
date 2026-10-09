@@ -80,6 +80,8 @@ ordinary circuit authoring.
   and [security model](security-model.md).
 - [Elaboration transform](elaboration-transform.md), [Direct Plan schema](direct-plan-schema.md)
   and [Entity pipeline](entity-pipeline.md).
+- [Compiler Worker export and parameter binding](compiler-worker-parameters.md):
+  cloneable requests/results, retained capture, revisions and invalidation.
 - [Combinator value policy](producer-materialization-policy.md), [returned ownership](return-ownership.md)
   and [debug index](debug-index.md).
 - [Object test adapters](object-test-adapters.md), [graph metrics](circuit-graph-metrics.md)

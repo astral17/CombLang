@@ -114,6 +114,7 @@ const element = helper?.[input[SIGNAL_A]];`,
     const code = transformElaborationModule(source).code;
 
     expect(code).toContain('helper?.use(__dsl.binary("+", input, 1');
+    expect(code).toContain('__dsl.binary("+", input, 1, true, { start:');
     expect(code).toContain('helper?.[__dsl.element(input, SIGNAL_A');
     expect(code).not.toContain('__dsl.attachTo(helper');
   });
@@ -199,7 +200,7 @@ for (let i = 0; i < 10; i++) {
     expect(program.code).toContain('__dsl.controlTest(__dsl.compare("<", i, 10');
   });
 
-  test('guards JavaScript control-flow tests and routes unary not through runtime dispatch', () => {
+  test('guards JavaScript control flow and routes unary not and minus through runtime dispatch', () => {
     const source = parseFile({
       path: 'control-flow.factorio.ts',
       text: `if (condition) yes(); else no();
@@ -208,13 +209,56 @@ while (condition) work();
 do work(); while (condition);
 for (; condition;) work();
 for (;;) break;
-const inverted = !value;`,
+const inverted = !value;
+const negative = -value;`,
     });
     const code = transformElaborationModule(source).code;
 
     expect(code.match(/__dsl\.controlTest\(condition/g)).toHaveLength(5);
     expect(code).toContain('for (;;)');
     expect(code).toContain('__dsl.not(value');
+    expect(code).toContain('__dsl.unaryMinus(value');
+  });
+
+  test('preserves native unary-minus value, coercion, throws and one operand evaluation', () => {
+    const source = parseFile({
+      path: 'unary-minus.factorio.ts',
+      text: `const result = [-0, -read()];`,
+    });
+    const program = transformElaborationModule(source);
+    const runtime = {
+      bind: (value: unknown) => value,
+      unaryMinus: (value: unknown) => -(value as number),
+      invoke: (callable: unknown, args: readonly { readonly value: unknown }[]) =>
+        (callable as (...values: unknown[]) => unknown)(...args.map(({ value }) => value)),
+    };
+    let coercions = 0;
+    const value = {
+      valueOf() {
+        coercions += 1;
+        return 3;
+      },
+    };
+    const read = vi.fn(() => value);
+    const result = Function(
+      program.runtimeParameter,
+      'read',
+      `${program.code}\nreturn result;`,
+    )(runtime, read) as number[];
+    expect(Object.is(result[0], -0)).toBe(true);
+    expect(result[1]).toBe(-3);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(coercions).toBe(1);
+
+    const failure = new Error('native valueOf failure');
+    const throws = Function(program.runtimeParameter, 'read', `${program.code}\nreturn result;`);
+    expect(() =>
+      throws(runtime, () => ({
+        valueOf: () => {
+          throw failure;
+        },
+      })),
+    ).toThrow(failure);
   });
 
   test('routes reads through runtime dispatch while preserving ordinary element writes', () => {
@@ -245,7 +289,8 @@ const output: Network<G> = (input + 1).at(10.5, -2, 8);`,
     expect(program.code).toContain('"at", { start:');
     expect(program.code).toContain('"green"');
     expect(program.code).toContain('value: 10.5, source:');
-    expect(program.code).toContain('value: -2, source:');
+    expect(program.code).toContain('value: __dsl.unaryMinus(2,');
+    expect(program.code).toContain('source: { start: 77, end: 79 }');
     expect(program.code).toContain('value: 8, source:');
   });
 

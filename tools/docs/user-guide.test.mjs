@@ -92,6 +92,20 @@ describe('runnable user documentation', () => {
       prototypes: { path: 'data/prototypes.json', identity: '<reported identity>' },
     });
   });
+  test('separates author export instructions from Worker embedding requests', () => {
+    const author = read('blueprint-json.md');
+    const host = read('compiler-worker-parameters.md');
+    const sourceSection = author.split('## Source export CLI')[1]?.split('## Mapping')[0];
+    expect(blocks(sourceSection, 'ts')).toHaveLength(2);
+    expect(author).not.toContain('runtime.handleBinding(');
+    expect(author).not.toContain('WP1005');
+    expect(host).toContain('## Result export');
+    expect(host).toContain('## Parameter binding');
+    expect(host).toContain('## Scheduling and invalidation');
+    expect(host).toContain('prototypeProfile: { source: prototypeDatabaseJson }');
+    expect(host).toContain("const amount = Param.number('Amount', 5);");
+    expect(host).toContain('overrides: [{ id: 0, value: 9 }]');
+  });
   test('matches the loop guide count and tick claim', () => {
     const compilation = compile(basics[5]);
     expect(
@@ -177,6 +191,8 @@ describe('runnable user documentation', () => {
     'prototype-environment.md',
     'prototype-normalization.md',
     'prototype-truth-sources.md',
+    'blueprint-json.md',
+    'compiler-worker-parameters.md',
   ])('keeps %s relative documentation targets and section anchors valid', (name) => {
     for (const [, href] of read(name).matchAll(/\]\(([^)]+)\)/g)) {
       if (/^[a-z]+:|^\//i.test(href)) continue;

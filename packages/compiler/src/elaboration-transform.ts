@@ -410,12 +410,19 @@ export function transformElaborationModule(
             factory.createStringLiteral(node.operatorToken.getText(file.ast)),
             ts.visitNode(node.left, visit) as ts.Expression,
             ts.visitNode(node.right, visit) as ts.Expression,
+            factory.createTrue(),
             spanLiteral(factory, node),
           ]);
         }
       }
       if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.ExclamationToken) {
         return dslCall(factory, 'not', [
+          ts.visitNode(node.operand, visit) as ts.Expression,
+          spanLiteral(factory, node),
+        ]);
+      }
+      if (ts.isPrefixUnaryExpression(node) && node.operator === ts.SyntaxKind.MinusToken) {
+        return dslCall(factory, 'unaryMinus', [
           ts.visitNode(node.operand, visit) as ts.Expression,
           spanLiteral(factory, node),
         ]);
