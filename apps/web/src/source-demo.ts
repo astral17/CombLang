@@ -7,7 +7,7 @@ import {
   analyzeCircuitGraph,
   type CircuitGraphMetrics,
 } from '@comblang/compiler/circuit-graph-metrics';
-import { signal, SparseBus, type SignalId } from '@comblang/factorio';
+import { sameSignal, signal, SparseBus, type SignalId } from '@comblang/factorio';
 import type { NetworkId } from '@comblang/shared';
 import type { SimulationSnapshot } from '@comblang/simulator';
 
@@ -182,15 +182,7 @@ export class SourceSimulationController {
   signalValueAt(tick: number, networkName: string, signalId: SignalId): number {
     const sample = this.#sample(tick);
     const network = sample.networks.find(({ name }) => name === networkName);
-    return (
-      network?.signals.find(({ signal }) => {
-        return (
-          signal.type === signalId.type &&
-          signal.name === signalId.name &&
-          signal.quality === signalId.quality
-        );
-      })?.value ?? 0
-    );
+    return network?.signals.find(({ signal }) => sameSignal(signal, signalId))?.value ?? 0;
   }
 
   #sample(tick: number): CircuitTimelineSample {

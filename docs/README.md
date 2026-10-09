@@ -85,6 +85,7 @@ ordinary circuit authoring.
 - [Object test adapters](object-test-adapters.md), [graph metrics](circuit-graph-metrics.md)
   and [source-linked schematic editing](source-linked-schematic.md).
 - [Prototype evidence boundaries](prototype-truth-sources.md) and
+  [normalization reference](prototype-normalization.md), with
   [pinned Factorio API inputs](../tools/factorio-api/README.md).
 
 Return to [getting started](getting-started.md) when you just want to build a circuit.

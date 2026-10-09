@@ -4,6 +4,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 import { compileSourceProgram } from '../../packages/runtime/src/source-compilation.js';
 import { runExecutedDirectPlanTests } from '../../packages/runtime/src/test-runner.js';
+import { loadPrototypeInputJson } from '../../packages/prototypes/src/input.js';
+import { parseProjectProfile } from '../../apps/cli/src/project-profile.js';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (name) => readFileSync(resolve(root, 'docs', name), 'utf8');
@@ -45,6 +47,49 @@ describe('runnable user documentation', () => {
     expect(runExecutedDirectPlanTests(compilation.execution, tests[0])).toMatchObject({
       passed: 1,
       failed: 0,
+    });
+  });
+  test('loads the literal environment metadata with every bundled dependency named', async () => {
+    const examples = blocks(read('prototype-environment.md'), 'json');
+    expect(examples).toHaveLength(2);
+    const metadata = JSON.parse(examples[0]);
+    expect(metadata).toEqual(
+      JSON.parse(
+        readFileSync(
+          resolve(root, 'packages/prototypes/generated/space-age-2.1.17.metadata.json'),
+          'utf8',
+        ),
+      ),
+    );
+    const loaded = await loadPrototypeInputJson(
+      JSON.stringify({
+        item: {
+          'iron-plate': { type: 'item', name: 'iron-plate', stack_size: 100 },
+        },
+        fluid: {},
+        recipe: {},
+        quality: {},
+        'recipe-category': {},
+        'virtual-signal': {},
+      }),
+      { factorioDumpMetadata: examples[0] },
+    );
+    expect(loaded.format).toBe('factorio-data-raw');
+    expect(loaded.database.environment).toMatchObject(metadata);
+    expect(loaded.prototypes.stackSize('iron-plate')).toBe(100);
+    expect(loaded.database.capabilities.entityCircuitCapabilities).toBe(false);
+    expect(loaded.warnings.map(({ code }) => code)).toEqual(['PD2002']);
+  });
+  test('parses the literal data-only project without treating its placeholder as a real pin', () => {
+    const project = parseProjectProfile(
+      blocks(read('prototype-environment.md'), 'json')[1],
+      'comblang.json',
+    );
+    expect(project).toEqual({
+      schemaVersion: 1,
+      source: 'main.factorio.ts',
+      tests: 'circuit.test.js',
+      prototypes: { path: 'data/prototypes.json', identity: '<reported identity>' },
     });
   });
   test('matches the loop guide count and tick claim', () => {
@@ -129,6 +174,9 @@ describe('runnable user documentation', () => {
     'api/network.md',
     'api/signal.md',
     'api/combinator.md',
+    'prototype-environment.md',
+    'prototype-normalization.md',
+    'prototype-truth-sources.md',
   ])('keeps %s relative documentation targets and section anchors valid', (name) => {
     for (const [, href] of read(name).matchAll(/\]\(([^)]+)\)/g)) {
       if (/^[a-z]+:|^\//i.test(href)) continue;

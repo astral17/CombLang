@@ -1,190 +1,140 @@
 # Prototype evidence and data boundaries
 
-Reviewed static data is the structural input. It does not prove runtime circuit
-behavior. Host-bound Entity profiles can separately authorize specific compiler
-or simulator capabilities; synthetic fixtures and checked Blueprint structure
-remain distinct from independently verified native behavior.
+[Documentation](README.md) · [Loading guide](prototype-environment.md) · [Normalization reference](prototype-normalization.md)
+
+Prototype structure, compiler authority and native behavior are separate.
+A validated database identifies its data; a trusted host profile authorizes
+specific Entity operations; native evidence establishes what was actually
+observed in Factorio. None of these can silently substitute for another.
 
 ## Three different kinds of evidence
 
-| Layer                        | Authority and intended use                                                                                                                                                       | Not evidence of                                                        |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| Raw data-stage dump          | Official `factorio.exe --dump-data` output: finalized modded `data.raw`, typed recipe rows, structural prototype fields, and diagnostics from the reviewed static-input pipeline | Runtime-only circuit behavior or environment identity without metadata |
-| Pinned API metadata          | Versioned local Factorio API descriptions used to validate the static normalizer and its supported shapes                                                                        | A live game connection or complete capability profile                  |
-| Reviewed capability evidence | Explicit assertions bound to an exact provider identity and accepted only by the corresponding host policy                                                                       | Untested features or another mod/version/settings combination          |
+| Layer                    | Intended use                                                                                | Does not establish                                                        |
+| ------------------------ | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| Raw data-stage dump      | Final modded `data.raw`: names, recipes, stack sizes, structural Entity and quality fields. | Runtime circuit behavior or game/mod identity without companion metadata. |
+| Pinned API metadata      | Reviewed field shapes and limits used by the converter/catalog.                             | A live game connection or behavior for an arbitrary modpack.              |
+| Reviewed native evidence | Recorded assertions for a specific environment and operation, with traceable inputs.        | Untested operations or a different version/mod/settings combination.      |
 
-The compiler receives a normalized immutable provider, not a raw dump or a live
-game connection. The shared input loader can now accept normalized v1 JSON or a
-raw `data.raw` dump plus explicit metadata before constructing that provider. The
-browser may perform that raw-to-normalized conversion in its Worker; the CLI can
-perform the same conversion ahead of time. The simulator continues to consume lowered devices and buses;
-it does not become a factory simulator or depend on `packages/prototypes`.
+The selected environment is an immutable normalized provider. The browser can
+convert a raw dump plus explicit metadata in its Worker; the CLI can normalize
+them ahead of compilation. No CombLang mod, scenario, headless runner or live
+connection is required. See the [loading guide](prototype-environment.md) for
+user import and maintainer asset generation.
 
-The current schema/normalizer predates this split. Successful validation and a
-stable hash do **not** certify native behavior, and coverage flags describe
-available data rather than evidence quality. The speculative runtime exporter
-transport was removed because no captured runtime fact was shown to add required
-structural information unavailable from the final dump plus the pinned schema.
+The [pinned Factorio 2.1.17 API inputs](../tools/factorio-api/README.md) and shipped
+Base + Space Age asset provide structural provenance. Hashes prove byte identity,
+not the truth of metadata declarations or native conformance. Coverage flags
+describe available facts, not their evidence quality.
 
-The separate identity-bound evidence manifest now records this distinction without
-promoting data into the normalized database. A static source can support structural
-references, while only an explicitly reviewed capability source can back a matching
-circuit claim. Synthetic manifests are useful contract/format fixtures only; the
-repository contains no reviewed capability artifact yet. Source digests identify
-bytes but do not establish their truth by themselves.
+The simulator consumes lowered devices and buses. It is not a factory simulator
+and does not use prototype geometry to infer Entity computation.
 
-## Extraction plan
+## Entity authority
 
-For a custom environment, run the official Factorio command with the desired mods and
-startup settings:
+`Entity(prototype, configuration?)` refers to one persistent physical object.
+Its blueprint configuration is checked separately from connectors, callable
+projections and computation. A normalized `blueprintEligible: true` record can
+authorize conservative construction; that fallback does not infer circuit ports
+or read behavior.
 
-```text
-factorio.exe --dump-data
+Explicit trusted host profiles can authorize additional capabilities.
+A provider record, circuit flag, evidence-manifest source ID or routing label
+alone is not such a profile. See [Entity](api/entity.md) and the
+[Entity pipeline](entity-pipeline.md) for the distinct construction, configuration,
+connection and simulation boundaries.
+
+## Partial circuit facts and supplements
+
+Omitted `entity.circuit` means unknown. An explicit record contains all nine
+boolean fields; an all-false record is a negative assertion, not an empty default.
+Complete coverage requires explicit records for every Entity. Do not add false
+records merely to satisfy the validator.
+
+`applyEntityCircuitSupplement(database, supplement)` merges explicit facts into
+a validated frozen copy without mutating the input. The CLI equivalent is:
+
+```powershell
+npm run cli -- prototypes supplement --json prototypes.json circuit-supplement.json enriched-prototypes.json
 ```
 
-Use the resulting raw dump from Factorio's `script-output` directory together with
-explicit, honest metadata describing that same environment. The browser accepts the
-raw dump plus metadata directly, or the existing CLI can normalize them into the v1
-database first. The bundled Base + Space Age profile is already checked in and works
-without this step; authors cannot prebuild every possible modpack profile.
+Illustrative **synthetic** supplement, not native Factorio evidence:
 
-The extraction path normalizes the final dump's item stack sizes, typed recipe
-ingredients/products, `main_product`, categories/energy, entity footprint inputs,
-crafting fields, and quality chains. A mandatory companion metadata file records
-the game/mod/startup-setting environment because the dump does not identify it.
-Unknown fields remain distinct from explicit negative or empty facts.
+```json
+{
+  "schemaVersion": 1,
+  "baseIdentity": "<reported identity of prototypes.json>",
+  "entities": [
+    {
+      "key": "entity:synthetic-container",
+      "type": "container",
+      "circuit": {
+        "read": true,
+        "enableDisable": false,
+        "readContents": true,
+        "setFilters": false,
+        "setRequests": false,
+        "setRecipe": false,
+        "readRecipe": false,
+        "readFinishedCraft": false,
+        "outputSignals": true
+      }
+    }
+  ]
+}
+```
 
-Raw entity tables are selected from the concrete prototype type catalog derived
-from the checked-in 2.1.17 prototype API; an arbitrary top-level table is not
-promoted to Entity. Recognized entities remain present when neither ordinary
-footprint axis is available. The normalized v1 footprint fields are optional as
-an all-or-nothing pair, and no placement dimension is fabricated.
+Use the exact base identity reported by a CLI check or provider, not the
+placeholder above. The nonempty supplement list must reference existing Entities
+with matching types. Duplicate Entities, stale base identities, missing/nonboolean
+flags and conflicting existing facts are rejected. Matching records are accepted;
+there is no implicit overwrite of conflicting assertions.
 
-The pinned runtime API description and prototype API snapshot checked for this decision are
-the hash-pinned Factorio 2.1.17 / JSON API 6 fixtures under
-`tools/factorio-api/fixtures/2.1.17`. Their offline inventory generator and review
-manifest are documented in `tools/factorio-api/README.md`. Exporter outputs must
-state their own exact version; declarations in manually supplied metadata are not
-proof of the version that generated a dump.
+Adding facts changes the resulting database identity. A subsequent supplement
+must target that resulting identity, or combine the assertions against the
+original base in one supplement. CLI JSON reports base/result identities and
+`{ known, total, complete }` circuit coverage. Full coverage is derived from
+the records, not accepted as an unchecked supplement claim.
 
-In particular:
+Identity checks prevent accidental cross-database mixing. They do not verify
+manually supplied assertions or create trusted Entity execution profiles.
 
-- Empty-output recipes are legal. Preserve them, including engine sentinel
-  recipes; they contribute no entries to the product index.
-- Entity tiling dimensions honor explicit `tile_width`/`tile_height` independently,
-  then use the prototype API's documented per-axis collision-box fallback. A
-  selection box is not a tile footprint; if both sources are insufficient, the
-  Entity remains in the normalized database with omitted dimensions.
-- Product and ingredient schemas must be validated by role and item/fluid type.
-  Do not tighten runtime rules on a mixed raw representation first: raw artifacts
-  such as fluid `extra_count_fraction` must not become authoritative runtime facts.
-  The normalized v1 policy reports those fields as `PT1004` at canonical paths;
-  the raw converter omits known inapplicable fields and emits `PD2003` at their
-  exact raw snake_case paths. Applicable malformed values remain `PD1001`.
-  Ingredients require exact positive amounts; products accept an exact amount or
-  a complete range, with zero allowed for item/fluid products and item values
-  bounded by uint16. Normalized ranges are canonical ascending ranges, while raw
-  descending product ranges use Factorio's effective `amountMax = amountMin`
-  fallback. The public TypeScript model exposes item/fluid ingredient/product
-  unions without serializing duplicate role/kind fields. These boundaries have
-  explicit regression coverage at the correct source boundary.
-- Circuit connector geometry is not proof of behavior-level capabilities. Keep the
-  identity-bound supplement and evidence-manifest checks; fields absent from the
-  static database remain unknown unless an explicit identity-bound assertion is
-  supplied. A fallback Entity profile does not infer connectors from geometry.
-- Duplicate ingredients and numeric limits need their own validation pass after
-  the role/source split. Duplicate **products** may be intentional and must remain.
+## Identity-bound evidence manifests
 
-Boundary for the bundled first-run database: checked-in static data, explicit
-metadata for the selected environment, identity-bound provenance, and integrity
-verification. For custom profiles, the same boundary accepts either the official
-raw dump plus explicit metadata or its normalized v1 result. Entity profiles may
-provide separately authorized capabilities, but structural provider data alone
-does not verify per-Entity behavior. The shipped browser does not require a live
-game connection or user-collected runtime artifact.
+Evidence manifests are separate from the normalized database, provider identity
+and compiler cache keys. Inspect one with:
 
-The deterministic asset generator/check now provides the release seam for those
-inputs, and the confirmed Space Age profile is checked in under
-`packages/prototypes/generated/`. Its sidecar pins the raw dump, metadata,
-normalized output bytes, schema versions, and database identity; it does not turn
-structural extraction into runtime behavior evidence or supply missing environment
-provenance. The browser uses this structural asset as its first-run profile, and
-its integrity check is part of the shipped provider boundary. No generic runtime
-capture format is retained.
+```powershell
+npm run cli -- prototypes evidence --json prototypes.json evidence.json
+```
 
-## Implemented audit corrections
+Each source has an ID, a `sha256:<64 lowercase hex>` artifact digest and one of
+these kinds: `data-raw-structure`, `runtime-structure`,
+`reviewed-native-behavior` or `synthetic`. A source-kind label is a declared
+classification, not automatic independent verification.
 
-- Persisted canonical ordering uses lexicographic UTF-16 code units, never host
-  locale collation. This applies to normalization, provider collections, identity,
-  and setting-object comparison; recipe row order remains significant.
-- The normalizer retains empty-output recipes and no longer emits a skip warning
-  for them. Version `comblang-factorio-data-dump-v1.10` also uses explicit tile
-  dimensions before the documented collision-box fallback, role/kind-aware
-  normalized recipe projection, and canonical amount normalization for raw
-  product ranges.
-- Explicit malformed recipe booleans and `main_product` values fail with `PD1001`
-  and a raw field path. A nonempty raw main-product name must identify exactly
-  one product namespace. Repeated rows in that namespace are allowed; matching
-  both item and fluid is ambiguous. Empty string means no main product.
-- `canCraft` was removed in favor of `isBasicCraftingCompatible`. This checks only
-  category overlap and the coarse `supportsFluids` flag. Missing facts/unknown
-  prototypes throw instead of returning a misleading negative answer. `true`
-  does not validate fluidbox routing, temperatures, limits, surfaces, quality,
-  machine configuration, or exact native craftability. A future richer query
-  should return yes/no/unknown with reasons and evidence.
+Structural references may use raw/runtime structural sources. A circuit claim
+must match an existing database boolean and use a reviewed-native source;
+synthetic and structural sources cannot certify behavior. The loaded index
+distinguishes `unknown` (no database fact), `unverified` (stored fact without a
+reviewed claim) and `verified` (matching reviewed claim). A verified false value
+remains false, not unknown.
 
-### Identity migration
+The checked-in [synthetic manifest](../examples/prototype-stack/evidence.synthetic.json)
+demonstrates the format only. It contains no reviewed native behavior evidence.
+The shipped browser does not require a user-collected runtime artifact.
 
-Fixing locale collation can change hashes of databases whose ordering differs
-under locale collation, without changing their schema version. The checked-in
-minimal pinned example keeps its identity: its ordering is unaffected. The
-corrected pre-v1 implementation retains the `comblang-prototypes-v1-sha256:` prefix.
-Pins that no longer match are intentionally rejected; there is no compatibility
-fallback. Reload the JSON without a stale pin, inspect the new identity, and
-explicitly update project/supplement pins as appropriate. In the browser, select
-the JSON again if the cached identity no longer matches. Old entries are not
-silently migrated or exempted from validation. Regenerating a raw database with
-v1.10 also changes its contents and generator metadata, hence its identity; it
-also records the explicit raw-flag proof used for blueprint eligibility. Older
-valid schema-v1 JSON retains its recorded generator label when loaded; the loader
-does not rewrite it to the current raw converter identity.
+## Identity migration
 
-## Entity implementation and evidence boundary
+Regeneration can change supported facts, canonical ordering or generator metadata
+and therefore the content identity. Existing normalized JSON keeps its recorded
+generator identifier when loaded; loading does not rerun the raw converter.
 
-Source `Entity(prototype, configuration?)` uses persistent profile-backed
-identity and a conservative fallback for eligible provider records. Placement,
-inspection, mocks, and declared circuit connections refer to that physical
-Entity. Checked Blueprint fields are validated separately from profile-owned
-connectors, computation, callable projections, and native behavior. Explicit
-named connectors are required where a trusted profile's topology is ambiguous.
-This does not imply simulating the entire game.
+On a pin mismatch, reload without the stale pin, inspect the new database and
+explicitly update project/supplement pins if the change is intended. In the
+browser, reselect the JSON when its saved identity no longer matches. No stale
+pin is silently accepted, and a missing custom profile is not replaced with the
+bundled one.
 
-The following language/runtime work is tracked separately from prototype data:
-
-- Implemented: the shared `SignalValueSource` for CC accepts typed counts,
-  signal/count tuples, nested arrays, maps, and ordinary computed-key objects.
-  It preserves actual JavaScript key behavior (`{ A: 5 }` is an item-name string
-  key, not the variable `A`), executed ordering, duplicates, zeros, source paths,
-  and canonical Signal property keys without accepting arbitrary iterables.
-- Implemented: parity/color contradiction checks run during elaboration operations
-  (including fixed colors, pairs, connector inputs, and attachments). A
-  contradiction fails at its first executed operation with source provenance,
-  before subsequent JavaScript runs. The final solver only
-  orients/materializes already-consistent components.
-- Implemented initial policy: simple bare `Network` parameters and direct Networks
-  passed to untyped function-declaration parameters receive non-consuming read-only
-  borrows, with one declaration warning per compilation. Ordinary generic values
-  remain unchanged. Automatic writable inference is not implemented; writes require
-  explicit `Ref`, and `Move` remains the only consuming parameter boundary. See
-  [ownership rules](ownership-and-multi-network.md) for the supported scope.
-- Implemented: poison a TestSession after a failed scheduled callback/boundary. Callbacks can
-  already have mutated drives, mocks, and schedules before throwing. Do not permit
-  retrying that partially applied boundary as if it were atomic. Reads of the last
-  committed snapshot, traces, and model state remain available; all further
-  mutation/advancement is blocked. Scheduled callbacks and participant failures
-  have separate regression coverage. Out-of-boundary validation/assertion errors
-  and `settle` non-convergence do not poison the session.
-
-These items do not require replacing the ownership state machine. Full module
-sandbox hardening and an optional reproducible-build policy remain unimplemented
-and are separate from prototype evidence.
+Keep native behavior claims tied to their actual inputs. A successful cache
+migration, asset digest check or codec round trip does not establish new native
+behavior.

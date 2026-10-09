@@ -115,6 +115,8 @@ function assertions(
   amount: number,
   channel: { type: string; name: string; quality?: string },
   inputCount: number,
+  outputCount: number,
+  normalOutputCount = outputCount,
 ) {
   return `${registered}const S = Signal(${JSON.stringify(channel.type)}, ${JSON.stringify(channel.name)}, ${JSON.stringify(channel.quality)});
 test('fresh concrete values', ({ network, session, tick, expectSignal, execution }) => {
@@ -122,10 +124,11 @@ test('fresh concrete values', ({ network, session, tick, expectSignal, execution
   expectSignal(input, S).toBe(0); expectSignal(output, S).toBe(0);
   session.trace(output);
   tick(); expectSignal(input, S).toBe(${inputCount}); expectSignal(output, S).toBe(${amount});
-  tick(); expectSignal(output, S).toBe(${channel.name === 'signal-A' && channel.quality === undefined ? inputCount + amount : amount});
+  tick(); expectSignal(output, S).toBe(${outputCount});
+  expectSignal(output, Signal(${JSON.stringify(channel.type)}, ${JSON.stringify(channel.name)})).toBe(${normalOutputCount});
+  expectSignal(output, Signal(${JSON.stringify(channel.type)}, ${JSON.stringify(channel.name)}, 'normal')).toBe(${normalOutputCount});
   if (${JSON.stringify(channel.name)} !== 'signal-A') {
     expectSignal(output, Signal('virtual', 'signal-A')).toBe(0);
-    expectSignal(output, Signal('virtual', ${JSON.stringify(channel.name)})).toBe(0);
   }
   expectSignal(output, Signal('virtual', 'signal-B')).toBe(0);
   if (execution.debug.root.network('output').id !== output.id) throw new Error('debug alias lost');
@@ -417,7 +420,7 @@ describe('CLI test selected pair and fresh sessions', () => {
 test('changed first session', ({ network, drive, tick, expectSignal }) => {
   drive(network('input'), [[C, 100]]); tick(3);
   expectSignal(network('output'), C).toBe(-999);
-});\n${assertions(8, { type: 'virtual', name: 'signal-C', quality: 'rare' }, 8)}`;
+});\n${assertions(8, { type: 'virtual', name: 'signal-C', quality: 'rare' }, 8, 8, 0)}`;
     const f = await files(source, tests);
     const c = capture();
     const original = bindingApi.createSourceParameterBindingSession;
@@ -457,14 +460,40 @@ test('changed first session', ({ network, drive, tick, expectSignal }) => {
   });
 
   test.each([
-    [[], 5, { type: 'virtual', name: 'signal-A' }, 5],
-    [[{ id: 0, value: 8 }], 8, { type: 'virtual', name: 'signal-A' }, 8],
-    [chosen, 8, { type: 'virtual', name: 'signal-C', quality: 'rare' }, 8],
+    [[], 5, { type: 'virtual', name: 'signal-A' }, 5, 10, 10],
+    [[{ id: 0, value: 8 }], 8, { type: 'virtual', name: 'signal-A' }, 8, 16, 16],
+    [
+      [
+        { id: 0, value: 8 },
+        { id: 1, value: { type: 'virtual', name: 'signal-A', quality: 'normal' } },
+      ],
+      8,
+      { type: 'virtual', name: 'signal-A', quality: 'normal' },
+      8,
+      16,
+      16,
+    ],
+    [
+      [
+        { id: 0, value: 8 },
+        { id: 1, value: { type: 'virtual', name: 'signal-A', quality: 'rare' } },
+      ],
+      8,
+      { type: 'virtual', name: 'signal-A', quality: 'rare' },
+      8,
+      8,
+      0,
+    ],
+    [chosen, 8, { type: 'virtual', name: 'signal-C', quality: 'rare' }, 8, 8, 0],
   ] as const)(
     'agrees with API binding and concrete export with independent expectations: %j',
-    async (values, amount, channel, inputCount) => {
+    async (values, amount, channel, inputCount, outputCount, normalOutputCount) => {
       const { environment } = await parameterHost();
-      const f = await files(source, assertions(amount, channel, inputCount), values);
+      const f = await files(
+        source,
+        assertions(amount, channel, inputCount, outputCount, normalOutputCount),
+        values,
+      );
       const c = capture();
       const compilation = sourceApi.compileSourceProgram(
         { path: f.sourcePath, text: source },
@@ -492,7 +521,7 @@ test('changed first session', ({ network, drive, tick, expectSignal }) => {
       const apiTests = runtime.runResolvedDirectPlanTests(
         pair.plan,
         pair.resolvedCircuit,
-        assertions(amount, channel, inputCount),
+        assertions(amount, channel, inputCount, outputCount, normalOutputCount),
       );
       expect(apiTests.results.map(({ message }) => message)).toEqual([undefined]);
       expect(apiTests).toMatchObject({ passed: 1, failed: 0 });
@@ -509,6 +538,29 @@ test('changed first session', ({ network, drive, tick, expectSignal }) => {
         }),
       );
       expect(
+        c
+          .report()
+          .document.blueprint.entities.find(
+            (entity: { name: string }) => entity.name === 'constant-combinator',
+          ),
+      ).toMatchObject({
+        control_behavior: {
+          sections: {
+            sections: [
+              {
+                filters: [
+                  {
+                    name: channel.name,
+                    quality: 'quality' in channel ? channel.quality : 'normal',
+                    count: amount,
+                  },
+                ],
+              },
+            ],
+          },
+        },
+      });
+      expect(
         await run(
           ['test', '--json', '--overrides', f.valuesPath, f.sourcePath, f.testPath],
           environment,
@@ -521,7 +573,7 @@ test('changed first session', ({ network, drive, tick, expectSignal }) => {
 
   test('keeps no-overrides JSON/plain results and original execution path', async () => {
     const { environment } = await parameterHost();
-    const f = await files(source, assertions(5, { type: 'virtual', name: 'signal-A' }, 5));
+    const f = await files(source, assertions(5, { type: 'virtual', name: 'signal-A' }, 5, 10));
     const c = capture();
     const bound = vi.spyOn(runtime, 'runResolvedDirectPlanTests');
     const executed = vi.spyOn(runtime, 'runExecutedDirectPlanTests');
@@ -621,7 +673,7 @@ describe('CLI test project paths, pins and policy', () => {
     const c = capture();
     const f = await files(
       `${source}\nconst structural = Entity('structural');`,
-      assertions(8, { type: 'virtual', name: 'signal-C', quality: 'rare' }, 8),
+      assertions(8, { type: 'virtual', name: 'signal-C', quality: 'rare' }, 8, 8, 0),
     );
     const projectDirectory = join(f.directory, 'project');
     await mkdir(projectDirectory);
@@ -629,7 +681,7 @@ describe('CLI test project paths, pins and policy', () => {
     await writeFile(join(projectDirectory, 'configured.ts'), source);
     await writeFile(
       join(projectDirectory, 'configured.js'),
-      assertions(8, { type: 'virtual', name: 'signal-C', quality: 'rare' }, 8),
+      assertions(8, { type: 'virtual', name: 'signal-C', quality: 'rare' }, 8, 8, 0),
     );
     const projectPath = join(projectDirectory, 'comblang.json');
     const profile = {

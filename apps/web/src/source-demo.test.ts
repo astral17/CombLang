@@ -30,6 +30,39 @@ const output: Network = Scale(input);`,
 }
 
 describe('source-driven homepage proof', () => {
+  test.each([
+    [undefined, 'normal'],
+    ['normal', undefined],
+  ] as const)(
+    'reads equivalent normal quality after editing %s and querying %s',
+    (written, queried) => {
+      const compiled = compileSource({
+        path: 'quality-timeline.factorio.ts',
+        text: `const input = new Network();
+const output = new Network();
+output += input + 0;`,
+      });
+      expect(compiled.compilerDiagnostics).toEqual([]);
+      const artifact = createSourceCircuitArtifact(compiled.plan!, compiled.resolvedCircuit);
+      const controller = new SourceSimulationController(artifact);
+      const input = controller.timeline[0]!.networks.find(
+        ({ id }) => id === artifact.execution.network('input').id,
+      )!;
+      controller.setSignalAt(0, input.id, signal('virtual', 'signal-A', written), 9);
+      expect(controller.signalValueAt(0, input.name, signal('virtual', 'signal-A', queried))).toBe(
+        9,
+      );
+      for (const distinct of [
+        signal('virtual', 'signal-A', 'rare'),
+        signal('virtual', 'signal-A', 'uncommon'),
+        signal('item', 'signal-A'),
+        signal('virtual', 'signal-B'),
+      ]) {
+        expect(controller.signalValueAt(0, input.name, distinct)).toBe(0);
+      }
+    },
+  );
+
   test('previews a transferred producer output from the canonical resolved circuit', () => {
     const compiled = compileSource({
       path: 'resolved-preview.factorio.ts',
@@ -45,6 +78,98 @@ output += input + 1;`,
       outputNetwork: 'output',
       outputValue: 8,
     });
+  });
+
+  test.each([
+    [undefined, 'normal'],
+    ['normal', undefined],
+  ] as const)(
+    'replaces and deletes %s through %s without mutating saved feedback history',
+    (initialQuality, editQuality) => {
+      const compiled = compileSource({
+        path: 'quality-feedback.factorio.ts',
+        text: `const cell = new Network();
+cell += cell + 0;`,
+      });
+      expect(compiled.compilerDiagnostics).toEqual([]);
+      const artifact = createSourceCircuitArtifact(compiled.plan!, compiled.resolvedCircuit);
+      const controller = new SourceSimulationController(artifact);
+      const cell = controller.timeline[0]!.networks.find(
+        ({ id }) => id === artifact.execution.network('cell').id,
+      )!;
+      const normal = signal('virtual', 'signal-A');
+      const explicitNormal = signal('virtual', 'signal-A', 'normal');
+      const rare = signal('virtual', 'signal-A', 'rare');
+      const uncommon = signal('virtual', 'signal-A', 'uncommon');
+      controller.setSignalAt(0, cell.id, signal('virtual', 'signal-A', initialQuality), 9);
+      controller.setSignalAt(0, cell.id, rare, 11);
+      controller.setSignalAt(0, cell.id, uncommon, 3);
+      controller.stepFrom(0, 2);
+      const saved = controller.timeline.slice();
+      const before = structuredClone(saved);
+      for (const tick of [0, 1, 2]) {
+        expect(controller.signalValueAt(tick, cell.name, normal)).toBe(9);
+        expect(controller.signalValueAt(tick, cell.name, explicitNormal)).toBe(9);
+        expect(controller.signalValueAt(tick, cell.name, rare)).toBe(11);
+        expect(controller.signalValueAt(tick, cell.name, uncommon)).toBe(3);
+      }
+      controller.setSignalAt(2, cell.id, signal('virtual', 'signal-A', editQuality), 13);
+      const replaced = controller.timeline[2]!.networks.find(({ id }) => id === cell.id)!;
+      expect(replaced.signals).toHaveLength(3);
+      expect(replaced.signals.map(({ value }) => value).sort((a, b) => a - b)).toEqual([3, 11, 13]);
+      expect(controller.signalValueAt(2, cell.name, normal)).toBe(13);
+      expect(controller.signalValueAt(2, cell.name, explicitNormal)).toBe(13);
+      controller.stepFrom(2);
+      expect(controller.signalValueAt(3, cell.name, normal)).toBe(13);
+      controller.setSignalAt(3, cell.id, signal('virtual', 'signal-A', initialQuality), 0);
+      controller.stepFrom(3);
+      for (const tick of [3, 4]) {
+        expect(controller.signalValueAt(tick, cell.name, normal)).toBe(0);
+        expect(controller.signalValueAt(tick, cell.name, explicitNormal)).toBe(0);
+        expect(controller.signalValueAt(tick, cell.name, rare)).toBe(11);
+        expect(controller.signalValueAt(tick, cell.name, uncommon)).toBe(3);
+        expect(
+          controller.timeline[tick]!.networks.find(({ id }) => id === cell.id)!.signals,
+        ).toHaveLength(2);
+        expect(controller.signalValueAt(tick, cell.name, signal('virtual', 'signal-B'))).toBe(0);
+      }
+      controller.stepFrom(1, 2);
+      expect(controller.timeline.map(({ tick }) => tick)).toEqual([0, 1, 2, 3]);
+      expect(controller.signalValueAt(3, cell.name, explicitNormal)).toBe(9);
+      expect(controller.signalValueAt(3, cell.name, rare)).toBe(11);
+      expect(controller.signalValueAt(3, cell.name, uncommon)).toBe(3);
+      expect(saved).toEqual(before);
+    },
+  );
+
+  test('preserves missing Network/Signal zeros and invalid tick/edit errors with real timeline samples', () => {
+    const compiled = compileSource({
+      path: 'quality-boundaries.factorio.ts',
+      text: 'const cell = new Network(); cell += cell + 0;',
+    });
+    const artifact = createSourceCircuitArtifact(compiled.plan!, compiled.resolvedCircuit);
+    const controller = new SourceSimulationController(artifact);
+    const A = signal('virtual', 'signal-A', 'normal');
+    expect(controller.signalValueAt(0, 'missing', A)).toBe(0);
+    expect(controller.signalValueAt(0, 'cell', A)).toBe(0);
+    expect(() => controller.signalValueAt(1, 'cell', A)).toThrow(
+      'Tick 1 is not present in the timeline.',
+    );
+    expect(() => controller.stepFrom(0, 0)).toThrow(
+      'Simulation step count must be a positive safe integer.',
+    );
+    expect(() =>
+      controller.setSignalAt(
+        0,
+        'missing' as ReturnType<typeof artifact.execution.network>['id'],
+        A,
+        9,
+      ),
+    ).toThrow('Unknown timeline Network: missing');
+    expect(controller.timeline).toHaveLength(1);
+    expect(controller.timeline[0]!.networks.every(({ signals }) => signals.length === 0)).toBe(
+      true,
+    );
   });
 
   test('previews the homepage circuit through the canonical resolved path', () => {

@@ -31,6 +31,18 @@ Signal: its count does not replace or merge with ordinary iron-plate counts.
 This concerns identity in circuit data, not a promise about JavaScript `===`
 between independently constructed handles.
 
+Preview/timeline lookup, circuit test assertions and SparseBus edits use this
+same identity: reading an omitted-quality row through explicit `normal` (or the
+reverse) returns the same count. Editing either spelling replaces one row;
+setting it to zero removes only that normal identity, leaving rare/uncommon rows
+intact. Different types, names and non-normal qualities remain distinct.
+Representations may retain or omit the `quality` field even when their circuit
+meaning is equal; this does not require byte-identical transport JSON.
+
+Omitted ordinary Signal quality means normal, not any quality. Any-quality
+logistic filters are a separate filtering domain, not another Signal identity
+or a Signal parameter value.
+
 **Returns:** a Signal handle registered to the current source elaboration.
 Constructing a Signal adds no hardware or ticks. A plain `{ type, name }`
 JavaScript object is not a substitute for this handle in source DSL operations.

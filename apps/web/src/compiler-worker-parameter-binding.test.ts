@@ -171,6 +171,13 @@ describe('Worker-local source parameter sessions', () => {
       );
       controller.stepFrom(0);
       expect(controller.signalValueAt(1, 'output', channel)).toBe(amount);
+      const normalAmount = quality === undefined || quality === 'normal' ? amount : 0;
+      expect(controller.signalValueAt(1, 'output', signal('virtual', name))).toBe(normalAmount);
+      expect(controller.signalValueAt(1, 'output', signal('virtual', name, 'normal'))).toBe(
+        normalAmount,
+      );
+      if (quality !== 'rare')
+        expect(controller.signalValueAt(1, 'output', signal('virtual', name, 'rare'))).toBe(0);
       expect(artifact.blueprint.blueprint.entities[0]!.control_behavior).toMatchObject({
         sections: {
           sections: [
@@ -180,7 +187,7 @@ describe('Worker-local source parameter sessions', () => {
                   type: 'virtual',
                   name,
                   count: amount,
-                  ...(quality === undefined ? {} : { quality }),
+                  quality: quality ?? 'normal',
                 },
               ],
             },
@@ -210,6 +217,8 @@ describe('Worker-local source parameter sessions', () => {
 test('chosen value in independent session', ({ network, tick, expectSignal }) => {
   expectSignal(network('output'), channel).toBe(0);
   tick(1); expectSignal(network('output'), channel).toBe(${amount});
+  expectSignal(network('output'), Signal('virtual', ${JSON.stringify(name)})).toBe(${normalAmount});
+  expectSignal(network('output'), Signal('virtual', ${JSON.stringify(name)}, 'normal')).toBe(${normalAmount});
 });
 test('another fresh session', ({ network, tick, expectSignal }) => {
   expectSignal(network('output'), channel).toBe(0);
@@ -269,6 +278,36 @@ test('another fresh session', ({ network, tick, expectSignal }) => {
     const reset = bind([]);
     if (!reset.result.ok) throw new Error('Expected original defaults after Reset.');
     consume(reset.result, 5, 'signal-A');
+    // Exercise actual retained binding messages, not just parameter-draft equality.
+    const topology = {
+      devices: original.plan.entities.length,
+      producers: original.plan.producers.length,
+      networks: original.plan.networks.length,
+      timelineNetworks: originalPreview.timeline[0]!.networks.length,
+      blueprintWires: createSourceCircuitArtifact(original.plan, original.resolvedCircuit).blueprint
+        .blueprint.wires,
+    };
+    for (const quality of [undefined, 'normal', 'rare']) {
+      const selected = bind([
+        { id: 0, value: 9 },
+        { id: 1, value: signal('virtual', 'signal-A', quality) },
+      ]);
+      if (!selected.result.ok) throw new Error('Expected a quality-specific matching pair.');
+      const preview = consume(selected.result, 9, 'signal-A', quality);
+      expect(selected.result.plan.entities).toHaveLength(topology.devices);
+      expect(selected.result.plan.producers).toHaveLength(topology.producers);
+      expect(selected.result.plan.networks).toHaveLength(topology.networks);
+      expect(preview.timeline[0]!.networks).toHaveLength(topology.timelineNetworks);
+      expect(
+        createSourceCircuitArtifact(selected.result.plan, selected.result.resolvedCircuit).blueprint
+          .blueprint.wires,
+      ).toEqual(topology.blueprintWires);
+      preview.reset();
+      expect(preview.currentTick).toBe(0);
+      expect(preview.timeline).toHaveLength(1);
+      expect(preview.signalValueAt(0, 'output', signal('virtual', 'signal-A'))).toBe(0);
+      expect(preview.signalValueAt(0, 'output', signal('virtual', 'signal-A', 'normal'))).toBe(0);
+    }
     expect(parameters).toEqual(defaultsBefore);
     expect(original).toEqual(originalBefore);
     expect(runCount()).toBe(1);

@@ -133,6 +133,18 @@ declaration order within one execution and are not persistent identities across
 source edits or dynamic executions. Listing and export are separate CLI commands
 and each executes source once; neither pins the other's execution.
 
+For a Signal override with the same type and name, omitting `quality` and setting
+`quality: 'normal'` select the same ordinary Signal. Both lookup forms read its
+chosen count in preview and tests; `rare` or `uncommon` select distinct Signals.
+For example, an Arithmetic reading ordinary A also reads an explicitly normal A,
+but not rare A. Constant filters export explicit `quality: 'normal'` for both
+ordinary spellings; this is not an any-quality logistic filter. Any-quality
+filtering is not a Signal parameter input.
+
+Equivalent identities need not produce byte-identical Plan/IR representations.
+Each binding still supplies its own matching plan and resolved circuit; do not
+mix artifacts from different bindings or reuse earlier edited tick state.
+
 An unused declaration can keep its default. Explicitly overriding it reports
 `CP1001`, even if the chosen value equals that default. Binding does not add
 dummy hardware to make an unused parameter useful. A binding error produces no

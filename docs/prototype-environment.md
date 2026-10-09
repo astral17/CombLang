@@ -1,156 +1,44 @@
 # Prototype environment
 
-Typed objects and high-level generators must not treat one bundled vanilla
-prototype list as compiler truth. A CombLang compilation environment identifies
-the Factorio version, enabled expansions, exact mod set, startup settings, and a
-normalized snapshot of the resulting prototypes. Mods may add prototypes and
-also modify vanilla ones, so reading only the upstream `factorio-data` Lua files
-cannot describe an arbitrary user's game.
+[Documentation](README.md) · [prototypes API](api/prototypes.md) · [Data format](prototype-normalization.md)
 
-This is a compilation-time environment input. It does not belong in the circuit
-simulator and must not be a process-global mutable singleton.
+A prototype environment is an immutable snapshot of a selected Factorio version,
+mod set and startup settings. It supplies names, stack sizes, recipes, qualities
+and structural Entity facts to compilation. It is not a connection to a running
+game, and importing a prototype does not grant Entity circuit behavior.
 
-## Package boundary
+For ordinary circuit authoring, start with the [prototypes API](api/prototypes.md).
+This page explains how to select and load the data behind that API.
 
-`packages/prototypes` provides these responsibilities:
+## Choose an environment
 
-- versioned normalized schema and structural validation;
-- environment metadata and a deterministic content identity;
-- immutable LuaPrototypes-shaped tables, derived indexes, and query helpers;
-- JSON loading for Node and browser consumers;
-- small contract fixtures and a deterministic generated-asset boundary with a
-  provenance manifest.
+| Situation                        | What to load                                                                                 |
+| -------------------------------- | -------------------------------------------------------------------------------------------- |
+| Bundled Base + Space Age         | The workbench's first-run profile; no extraction needed.                                     |
+| Custom modpack in the workbench  | One normalized prototype JSON, or a raw dump plus its metadata JSON.                         |
+| Custom modpack in the CLI        | Normalize the dump first, then select the resulting JSON with `--prototypes` or `--project`. |
+| No prototype queries or Entities | An ordinary circuit can compile without a provider.                                          |
 
-The implemented foundation also includes an offline static-dump normalizer,
-an identity-bound generated asset plus provenance manifest, and explicit CLI
-database selection with optional identity pins. Versioned CLI project profiles,
-browser-local file selection, and identity-keyed IndexedDB persistence are
-implemented. The checked-in Space Age structural asset is available for explicit
-loading and offline integrity checks, and the browser uses it as a lazy first-run
-profile. The normalized provider does not infer runtime circuit behavior from
-prototype geometry. Host-side Entity provisioning is separate: its conservative
-fallback records unknown connector structure, while any connector, read,
-computation, or callable capability must come from an explicit trusted profile.
-
-The raw normalizer is transitional, not a live game snapshot. See [Prototype truth
-sources and audit follow-up](prototype-truth-sources.md) for the static-source split,
-known footprint and role-validation gaps, and the later capability boundary.
-
-The compiler, language service, typed-object schemas, layout, and blueprint
-backend receive a provider through an explicit compilation environment. They do
-not reach into a giant JSON object or a global registry. The simulator continues
-to consume already-lowered circuit devices and buses rather than prototype data.
-
-The public `loadPrototypeInputJson()` boundary accepts either normalized v1 JSON
-or a Factorio `data.raw` dump. A raw dump must be accompanied by explicit metadata
-because its JSON does not identify the Factorio version, mod versions, enabled
-expansions, or startup settings. The loader parses the source once, chooses the
-format conservatively, and does not retry a recognized malformed format as another
-format. Callers that require the strict normalized contract may continue using
-`loadPrototypeDatabaseJson()`.
-
-Schema version 1 includes only facts required by the next acceptance programs:
-
-- environment: schema/generator version, Factorio version, expansions, ordered
-  mod names and versions, startup-settings identity, and optional captured setting values;
-- items and fluids: canonical key and item stack size;
-- recipes: key, one or more categories, ingredients, products, energy, exact
-  fluid temperature, the 2.x integer-plus-fraction result count form, independent
-  and shared product probability metadata, statistics/productivity exclusions,
-  item spoilage/freshness, and fluidbox routing metadata;
-- entities: key, type, optional all-or-nothing footprint, crafting categories, and capability-oriented
-  circuit flags;
-- qualities: canonical key and stable ordering information;
-- recipe categories and virtual signals: canonical key and name;
-- indexes such as every recipe producing a product.
-
-Every prototype carries a canonical namespaced key such as
-`item:iron-plate`, `fluid:water`, or `entity:assembling-machine-3`. Normalized
-prototype arrays, expansions, mods, categories, qualities, and generated
-indexes have deterministic ordering. Recipe ingredient/product order remains
-part of the normalized content; repeated products do not duplicate a recipe in
-the `recipesByProduct` index. TypeScript exposes ingredients and products as
-precise item/fluid unions: the canonical `prototype` key is the kind
-discriminant, while the containing array is the role discriminant. These
-discriminants are not serialized as duplicate `role`/`kind` properties.
-
-Normalized ingredients require an exact amount: item ingredients use integer
-amounts `1..65535`, while fluid ingredients use finite positive amounts.
-Products use either an exact amount or a complete range; item product values are
-integers in `0..65535`, fluid product values are finite and non-negative. Thus
-zero item/fluid products are valid, but zero ingredients are not. Normalized
-ranges must be ascending, and `extraCountFraction` never substitutes for a
-missing or invalid amount. Raw product ranges follow Factorio's documented
-descending-range fallback by emitting the effective `amountMax = amountMin`.
-
-`validatePrototypeDatabase()` accepts untrusted JSON-shaped values, ignores
-unknown extension fields, copies and freezes accepted data, and rejects:
-
-- unsupported schema versions and malformed required fields;
-- noncanonical or duplicate keys;
-- invalid numeric ranges and non-fluid temperature constraints;
-- missing ingredient/product references;
-- a `mainProduct` outside the product list;
-- a supplied index that disagrees with normalized recipe products.
-
-Validation errors carry stable `PT1000`–`PT1006` codes and a structural path.
-`loadPrototypeDatabase()` and `loadPrototypeDatabaseJson()` return the frozen
-database together with an immutable `prototypes` provider.
-
-`EntityPrototype` footprint fields are optional as a pair; omission means that
-ordinary placement dimensions are unknown.
-
-`EntityPrototype.blueprintEligible` is an optional normalized fact. The raw
-converter emits `true` only when the raw flags contain `player-creation` and do
-not contain `not-blueprintable`; it emits `false` otherwise, including when the
-optional raw flags field has its empty default. Legacy normalized Entities that
-omit the derived field remain unknown and do not authorize universal Entity
-construction.
-
-Recipe products are zero-to-many, and ingredients/products may be items or
-fluids. Entity data should expose capabilities needed by CombLang instead of
-copying unstable raw prototype table layouts. Icons and localization are
-separate optional assets, not part of the core identity.
+The bundled profile describes Factorio 2.1.17 with `base`, `elevated-rails`,
+`quality` and `space-age`. Other installations need their own data; a familiar
+prototype name does not establish that its configuration is unchanged.
 
 ## Static asset generation
 
-The primary structural authority for a selected Factorio installation and modpack is
-Factorio's official data-stage command:
+For a custom environment, run Factorio with the intended mods and startup
+settings using its official command:
 
 ```text
 factorio.exe --dump-data
 ```
 
-Run it with the desired mods and startup settings enabled. Factorio writes the raw
-prototype dump under its `script-output` directory. Copy that output out as
-`data-raw-dump.json`, and record honest metadata from the same environment. This is
-an official Factorio executable invoked by a user or maintainer; no CombLang code,
-mod, scenario, or runtime collector runs inside Factorio.
+Take the raw dump from Factorio's `script-output` directory and keep it with
+metadata for that same environment. No CombLang mod, scenario, runtime collector
+or live game connection is required.
 
-A separate offline CombLang converter selects and normalizes the small v1 schema
-without loading raw prototype JSON in the compiler. This is static data resolution,
-not a live game or runtime `LuaPrototypes` view. The former runtime-wide exporter was
-removed after it produced no required structural facts beyond final `data.raw`.
-The normalized static provider does not assert runtime-only circuit behavior.
-Host-bound Entity profiles and identity-bound evidence are separate from this
-provider boundary and do not change the static database identity.
-
-The checked-in Base + Space Age profile is ready immediately: the browser loads its
-integrity-checked generated pair lazily on first run. For a custom modpack, the user
-can either select `data-raw-dump.json` and its metadata JSON directly in the browser,
-where parsing and normalization happen in the Worker, or create a normalized profile
-with the CLI and select that one file. Checked-in asset generation remains a
-repository-maintainer workflow, but custom dump generation/import is a supported user
-workflow; the authors cannot prebuild a profile for every modpack.
-
-The command is:
-
-```text
-factorio-dsl prototypes normalize data-raw-dump.json metadata.json prototypes.json
-```
-
-`metadata.json` is required because `data-raw-dump.json` does not identify the
-Factorio version, active mod versions, expansions, or startup-settings state:
+The dump does not identify its game version, mod versions, expansions or startup
+settings. Record these separately. For the bundled Base + Space Age installation,
+the metadata is:
 
 ```json
 {
@@ -158,525 +46,115 @@ Factorio version, active mod versions, expansions, or startup-settings state:
   "expansions": ["space-age"],
   "mods": [
     { "name": "base", "version": "2.1.17" },
+    { "name": "elevated-rails", "version": "2.1.17" },
+    { "name": "quality", "version": "2.1.17" },
     { "name": "space-age", "version": "2.1.17" }
   ],
-  "startupSettingsIdentity": "project-specific-hash-or-label",
   "startupSettings": []
 }
 ```
 
-`startupSettings` is an optional array of `{ name, value }` entries from the same
-dump environment. Use `[]` only when it really has no startup settings; omit the
-field when values are unknown. Booleans, finite numbers, strings (including empty
-strings), and color objects/3-or-4-channel arrays are retained. Generator
-`comblang-factorio-data-dump-v1.3` preserves this explicit snapshot. The old
-`startupSettingsIdentity` remains a caller-supplied label/hash, not automatically
-verified against the values. Supplying a label does not replace a captured snapshot.
+Adapt the version, expansions and **complete enabled mod list**, including
+dependencies, to your own installation. Do not reuse this metadata for an
+unverified dump. The importer validates the metadata's shape, not its truth.
 
-### Reproducible generated asset
+`factorioVersion`, `expansions` and `mods` are required. `startupSettings`
+is an optional array of `{ name, value }` entries. Omission means unknown;
+`[]` means there are no startup settings, not "all settings use defaults".
+Supported values include booleans, finite numbers, strings and color objects or
+three/four-channel color arrays. An optional `startupSettingsIdentity` is a
+caller-supplied label/hash; it is not automatically verified against the values.
 
-The release seam turns the explicit raw dump and metadata into two deterministic
-files: the requested database JSON and a sibling `<output>.manifest.json`. The
-manifest records the raw-dump and metadata SHA-256 digests, the asset and
-normalized schema/generator versions, the normalized database identity, and the
-exact output JSON digest. It contains no input paths or generated timestamps.
+### Import into the workbench
 
-Generate or check the pair from the repository root:
+Use **Load prototype JSON** above the source editor:
 
-```powershell
-npm run prototype:asset -- data-raw-dump.json metadata.json prototypes.json
-npm run prototype:asset:check -- data-raw-dump.json metadata.json prototypes.json
-npm run prototype:asset:verify
-```
+1. Select one normalized JSON file; or select exactly two files, the raw dump
+   and its companion metadata JSON.
+2. For a two-file import, name the companion `metadata.json`,
+   `environment.json` or `profile.json`. A filename containing one of those
+   words separated by dots, underscores or hyphens also works. Exactly one
+   selected file must match this naming rule.
+3. Wait for Worker validation and inspect the selected profile/diagnostics.
+   Source and test drafts are not overwritten.
 
-The corresponding CLI spellings are `prototypes asset generate [--check]` for
-source regeneration and `prototypes asset verify` for release-integrity checks;
-the latter requires only the checked-in database and manifest.
+A raw dump without companion metadata is rejected. Importing malformed
+normalized JSON does not cause the loader to reinterpret it as a raw dump.
 
-Generation validates metadata and the normalized database before writing either
-file. `--check` regenerates in memory, verifies the manifest and all supplied
-input/output digests, and then compares bytes; it exits non-zero for missing or
-stale files. Runtime consumers can call `loadPrototypeAsset()` with only the two
-generated JSON sources, or optionally provide the original input bytes when an
-input pin must also be checked. This loader never parses the raw dump and does
-not treat structural data as circuit-behavior evidence.
+Custom profiles are saved in IndexedDB by content identity. The active choice
+is tab-local, so different tabs can select different profiles. Reloading checks
+the saved database against its identity before compiling. A storage/quota failure
+reports **not saved**; the current in-memory profile can still be used.
 
-The confirmed Space Age profile is tracked at
-`packages/prototypes/generated/space-age-2.1.17.metadata.json`: Factorio 2.1.17,
-Space Age, and the official dependency mods only. The companion settings capture
-contained no setting values, so the metadata records an explicit
-`startupSettings: []` and does not invent a settings identity or timestamp. Its
-generated asset is `space-age-2.1.17.json` with the sibling manifest
-`space-age-2.1.17.json.manifest.json`; the asset contains 342 items, 662 recipes,
-and 1028 entities (158 explicitly blueprint-eligible and 870 explicitly
-ineligible), plus 6 qualities. Its `entityCircuitCapabilities` value is false:
-the raw dump supplies structural data, not reviewed native circuit behavior. The
-browser selects this pair as its first-run structural profile, but does not treat
-it as native circuit-behavior evidence.
+**Disable** records an explicit empty selection for the current tab. It does not
+delete a cached database that another tab may use. If a selected custom database
+is missing from storage, reload it or explicitly disable it; the workbench does
+not silently substitute the bundled profile. Browser site-storage controls can
+remove cached databases.
 
-The converter reads every item subtype carrying raw `stack_size`, not
-only the literal `item` table. It applies the raw RecipePrototype defaults
-(`categories = ["crafting"]`, `energy_required = 0.5`, and enabled by default),
-preserves multiple categories, exact fluid temperature, and role/kind-applicable
-recipe component fields. Entity dimensions use explicit `tile_width` and
-`tile_height` independently, with the prototype API's documented per-axis
-collision-box fallback; selection boxes are not used as tile footprints. Entity
-table recognition is limited to the concrete type catalog derived from the
-checked-in 2.1.17 prototype API. A recognized record without enough footprint
-data remains an Entity with omitted dimensions.
-Empty-output recipes, including sentinel/parameter recipes, are retained. They
-do not contribute product-index entries.
+### Normalize for CLI use
 
-The supplied capture produces a 719,498-byte normalized structural database with
-342 items, 662 recipes, 1028 entities, and 6 qualities. The generator
-`comblang-factorio-data-dump-v1.1` additionally retains 100 independent probabilities,
-23 shared ranges, 268 statistics exclusions and 7 productivity exclusions in that
-dump. The smoke run used explicitly unverified environment metadata: it proves
-data ingestion, not the dump's game/mod version or native crafting behavior.
-
-Generator `comblang-factorio-data-dump-v1.2` additionally preserves the dump's one
-explicit spoil percentage, five reset-freshness flags, three fluidbox indexes and
-nine fluidbox multipliers. That dump has no explicit spoil weights, always-fresh
-flags or optional fluidbox index lists; synthetic tests cover those fields instead.
-Generator `comblang-factorio-data-dump-v1.4` also retains item recipe quality
-metadata and quality-chain links. The supplied dump has six quality records and
-four explicit `next` links, but no explicit recipe quality transformations; tests
-for those transformations use synthetic inputs. This is not an exhaustive native
-RecipePrototype implementation. Generator `comblang-factorio-data-dump-v1.10`
-retains all 662 recipes in the same supplied dump, including 11 empty-output
-recipes; only the circuit-capability warning remains in that smoke run. Explicit
-malformed values of applicable recipe fields, recipe booleans, or invalid/ambiguous
-raw main-product names fail with `PD1001` at their raw field path. A known raw
-recipe field that is inapplicable to its item/fluid and ingredient/product role is
-omitted from normalized facts and emits `PD2003` at the raw snake_case field path;
-this is an omission warning, not native behavior evidence. Lack of loss warnings
-does not establish complete recipe behavior coverage. Applicable malformed amount
-values and incomplete/conflicting amount forms fail with `PD1001` at their raw
-snake_case paths. A descending raw product range is normalized to the effective
-`amountMax = amountMin` documented by Factorio. For entity footprint, v1.10 uses explicit
-`tile_width` and `tile_height` per axis, falling back to collision-box dimensions
-as specified by the prototype API; it never substitutes the selection box.
-The same generator derives `blueprintEligible` from raw flags: only
-`player-creation` without `not-blueprintable` becomes `true`; a disqualifying or
-non-player-creatable record becomes `false`, and absent raw flags use the native
-empty-set default. Only an older normalized Entity which omits this derived fact
-remains unknown. Fallback Entity profiles are generated only from explicit `true`
-records.
-
-The Entity table catalog is pinned to the checked-in Factorio 2.1.17 prototype API.
-Its known engine type names remain valid for compatible later dumps, including
-modded records stored in those same tables. A genuinely new Entity type introduced
-by a later Factorio release is not imported until the pinned API is reviewed and
-the catalog is regenerated. Unknown top-level tables are not safely classifiable as
-Entities and are ignored by the raw normalizer.
-
-### Product probability and excluded amounts
-
-The checked-in Factorio prototype API snapshot 2.1.17 describes `ProductPrototypeBase`,
-`SharedProbabilityDefinition`, and the item/fluid ingredient/product definitions.
-The normalized mapping is:
-
-| Dump field                | Normalized field                  | Meaning                                                                      |
-| ------------------------- | --------------------------------- | ---------------------------------------------------------------------------- |
-| `independent_probability` | `independentProbability`          | Per-product independent roll threshold in `[0, 1]`                           |
-| `shared_probability`      | `sharedProbability: { min, max }` | Interval for the single roll shared by a product set; `0 <= min <= max <= 1` |
-| `ignored_by_stats`        | `ignoredByStats`                  | Ingredient/product amount excluded from consumption/production statistics    |
-| `ignored_by_productivity` | `ignoredByProductivity`           | Product amount excluded from productivity bonus crafts                       |
-
-Both independent and shared probability tests must pass. Shared intervals are not
-flattened into an expected count or one independent probability: overlapping and
-disjoint intervals encode correlated/exclusive outcomes between products. The
-empty interval `min === max` is legal. These are immutable compilation-time facts;
-the circuit simulator does not implement crafting RNG or productivity simulation.
-
-Explicit zero and omitted fields remain distinct. In particular the native
-`ignored_by_productivity` default refers to `ignored_by_stats`; absent metadata is
-not replaced with zero by the loader. Excluded counts may exceed the crafted amount.
-Item exclusions use non-negative uint16 counts; fluid exclusions allow non-negative
-finite amounts. Independent/shared probabilities and productivity exclusions are
-product-only; statistics exclusions also belong on ingredients. Amount ranges and
-legacy probability are product-only; `extra_count_fraction` and quality/spoilage
-fields are restricted to their item roles, while fluidbox and temperature fields
-are restricted to fluid roles. Temperature ranges are ingredient-only. The raw
-converter omits a present but inapplicable field with `PD2003` and its exact raw
-path instead of promoting it to a normalized runtime fact.
-
-Legacy normalized `probability` remains supported, but mixing it with the new
-independent/shared probability representation is rejected as an ambiguous normalized
-schema input. Older v1 data without the new optional fields remains loadable.
-The fields participate in the database identity, including explicit default-valued
-fields. Regenerating a database with the new generator may therefore require an
-explicit project pin update. Older loaders that do not know these fields are not
-equivalent readers for new datasets.
-
-### Spoilage and fluidbox metadata
-
-The same checked-in 2.1.17 API snapshot defines these optional ingredient/product fields:
-
-| Dump field                  | Normalized field          | Valid domain                                             |
-| --------------------------- | ------------------------- | -------------------------------------------------------- |
-| `percent_spoiled`           | `percentSpoiled`          | Item product fraction, `0 <= value < 1`                  |
-| `always_fresh`              | `alwaysFresh`             | Item product boolean                                     |
-| `reset_freshness_on_craft`  | `resetFreshnessOnCraft`   | Item product boolean                                     |
-| `spoil_weight`              | `spoilWeight`             | Item ingredient weight, `0 <= value <= 1`                |
-| `fluidbox_index`            | `fluidboxIndex`           | Fluid ingredient/product uint32 index                    |
-| `fluidbox_multiplier`       | `fluidboxMultiplier`      | Fluid ingredient/product integer, `1..255`               |
-| `optional_fluidbox_indexes` | `optionalFluidboxIndexes` | Fluid ingredient/product ordered array of uint32 indexes |
-
-`alwaysFresh` produces fresh output using `percentSpoiled` even with spoiled
-ingredients. `resetFreshnessOnCraft` produces fresh output when crafting succeeds
-without spoiling. `spoilWeight` controls an ingredient's influence on the product's
-spoil fraction. Their native defaults are respectively false, false, and 1;
-`percentSpoiled` defaults to 0. These defaults are documented, not inserted into
-the database. This metadata does not add spoilage or crafting simulation.
-
-Fluidbox indexes address input and output boxes separately and are 1-based, with
-the native default value 0 also accepted. The multiplier controls crafting-machine
-fluidbox volumes; its native default is 3. Optional indexes describe additional
-boxes: missing boxes do not make the recipe uncraftable. The native API loads this
-list only when `fluidbox_index` is defined. The normalized database preserves an
-explicit list even if the base index is absent, as inactive declarative metadata;
-consumers must not apply it without `fluidboxIndex`. It never invents the base index.
-Index lists retain order and duplicates, are copied/frozen on load, and participate
-in the identity. An empty raw Lua-table sentinel `{}` becomes `[]` at conversion;
-normalized JSON itself requires an array.
-
-All seven fields remain optional in schema v1. Explicit zero, false and empty lists
-remain distinguishable from omission through JSON serialization, provider access
-and identity calculation. New generators may require an explicit identity-pin
-update; existing data without these fields still loads unchanged. The strict
-normalized validator reports item-only fields on fluids, fluid-only fields on
-items and incorrect ingredient/product roles as `PT1004` at the canonical field
-path. The raw converter instead treats a known inapplicable field as a `PD2003`
-warning and omits it from the normalized component. Explicit zero, false and
-empty-list values in an applicable role remain valid facts.
-
-### Recipe quality transformations and chains
-
-The pinned 2.1.17 prototype API defines these item-only fields:
-
-| Dump field            | Normalized field    | Applies to                                          |
-| --------------------- | ------------------- | --------------------------------------------------- |
-| `affected_by_quality` | `affectedByQuality` | Item products; boolean                              |
-| `quality_change`      | `qualityChange`     | Item ingredients/products; int8 (`-128..127`)       |
-| `quality_min`         | `qualityMin`        | Item ingredients/products; canonical `quality:` key |
-| `quality_max`         | `qualityMax`        | Item ingredients/products; canonical `quality:` key |
-
-The quality-roll flag has native default true. False ignores the product quality
-roll, but does **not** mean that the product is always normal quality: recipe
-quality still matters. The shift defaults to zero and is relative to recipe
-quality. Ingredient shifts with identical min/max bounds are ignored by the native
-engine. The database preserves an explicitly declared shift rather than silently
-rewriting it; no crafting/quality-roll simulation is added.
-
-Missing bounds are not filled. Native defaults choose the end/start of the chain
-of the provided opposite bound. References are checked when quality coverage is
-available. Product/ingredient roles, item-only use, booleans, shifts and key shapes
-are validated regardless of reference coverage.
-
-The normalized schema remains v1 and does not serialize discriminated recipe
-component `role`/`kind` fields or evidence sidecars. Those are future F11 design
-work; the current role/kind policy is a package-internal validation and raw
-projection boundary.
-
-`prototypes.quality[name].next` contains a canonical quality key, `null` for a
-known chain end, or is omitted for unknown linkage in older databases. The native
-dump normalizer emits explicit ends for omitted raw `next` fields. Explicit dangling
-links are rejected when quality coverage is declared, and known cycles are rejected.
-With both bounds present, `qualityMax` must be reachable by following `next` from
-`qualityMin`; reaching an explicit end first is an error. If the path becomes
-unknown, the loader leaves that relationship unverified rather than guessing.
-`level` is not used to invent chains or validate chain membership/order.
-
-These remain optional schema-v1 fields. Explicit false/zero/bounds/link/end facts
-participate in identity and survive JSON/provider round trips. Existing snapshots
-without these fields still load unchanged. Regenerating with v1.4 changes identity
-and may require an explicit project pin update. Full native recipe conformance is
-still separate from successful structural validation.
-
-### Remaining conformance boundary
-
-The raw entity records expose connector geometry and wire distance, but not the
-normalized behavior-level flags in `EntityCircuitCapabilities`. The converter
-therefore emits entities and crafting data while setting
-`entityCircuitCapabilities: false`; those fields remain unknown unless an
-explicit identity-bound supplement supplies assertions. Neither the converter
-nor a visible connector infers them.
-
-The pinned Factorio 2.1.17 API descriptions document the available prototype
-shapes, but they do not turn runtime-only behavior into static facts. The removed
-prototype-wide exporter is not a prerequisite for the structural database, and raw
-extraction itself does not become the public compiler contract.
-
-Extraction details remain covered by checked-in static fixtures for base, Space Age,
-and modded data where available. The architecture does not depend on one extraction
-implementation: a future dump/API change may replace an extraction implementation
-without changing `PrototypeProvider` consumers.
-
-### Partial circuit coverage and supplements
-
-Circuit coverage is distinct from an entity's supported features:
-
-- `entity.circuit === undefined` means unknown/unprobed, not all-false.
-- An explicit `circuit` record contains all nine boolean fields. An all-false
-  record asserts that none of these features is supported.
-- `capabilities.entityCircuitCapabilities` means **complete** coverage. When true,
-  every entity must have an explicit record, and `capabilities.entities` must also
-  be true. Inconsistent declarations fail validation with `PT1004`.
-- When coverage is partial, `prototypes.entityCircuitCapabilities(nameOrKey)` can
-  still return known records. It throws a distinct error for an unknown prototype
-  or missing circuit facts. A missing-data error from DSL source retains its call
-  location. Direct `prototypes.entity[name].circuit` access remains optional.
-
-This tightens the early v1 loader: a database that declared complete coverage but
-omitted records previously received implicit all-false values. Such a database must
-now mark coverage partial or supply explicit, verified records; it must not add
-all-false records merely to bypass validation.
-
-`applyEntityCircuitSupplement(database, supplement)` is the browser/Node-neutral
-merge boundary. The CLI equivalent writes a new normalized database usable by the
-existing CLI project and browser profile loaders:
+From the repository root, run:
 
 ```powershell
-npm run cli -- prototypes supplement --json prototypes.json circuit-supplement.json enriched-prototypes.json
+npm run cli -- prototypes normalize data-raw-dump.json metadata.json prototypes.json
 ```
 
-Supplement schema 1 has this shape (illustrative synthetic entity, **not native
-Factorio capability evidence**):
+The installed executable spelling is
+`factorio-dsl prototypes normalize data-raw-dump.json metadata.json prototypes.json`.
+This command expects the dump's raw prototype tables. The browser/host input
+loader also recognizes a `data.raw` wrapper.
 
-```json
-{
-  "schemaVersion": 1,
-  "baseIdentity": "<exact comblang-prototypes-v1-sha256 identity of prototypes.json>",
-  "entities": [
-    {
-      "key": "entity:synthetic-container",
-      "type": "container",
-      "circuit": {
-        "read": true,
-        "enableDisable": false,
-        "readContents": true,
-        "setFilters": false,
-        "setRequests": false,
-        "setRecipe": false,
-        "readRecipe": false,
-        "readFinishedCraft": false,
-        "outputSignals": true
-      }
-    }
-  ]
-}
-```
-
-Obtain `baseIdentity` from `loadPrototypeDatabase(...).prototypes.identity` or the
-`prototypeEnvironment.identity` in a CLI `check --json --prototypes ...` report.
-The supplement requires a non-empty entity list. Each key must already exist,
-the type must match, and all flags must be booleans. Duplicate entities, stale
-base identities and conflicting existing records are rejected; there is no
-implicit overwrite. The library returns a validated frozen copy and leaves input
-objects unchanged. Matching existing records are accepted.
-
-CLI JSON reports the base and resulting identities plus `{ known, total, complete }`
-circuit coverage. Adding facts changes the resulting identity. Subsequent
-supplements must target that new identity (or combine assertions into one supplement
-against the original base). Full coverage is derived from explicit records; it
-is not an input claim in the supplement. Recipe/item data and environment metadata
-are untouched. Validation happens before the CLI opens the output for writing.
-
-The identity check prevents accidental cross-database mixing; it does not certify
-the truth of manually supplied assertions. Runtime-only capability fields remain
-unknown when the static database does not contain them. Identity-bound supplements
-can carry explicit assertions, but the shipped browser never requires a live game
-connection or a user-collected runtime artifact.
-
-### Identity-bound evidence manifests
-
-Evidence is a separate `comblang-prototype-evidence` schema-v1 artifact. It binds
-to the exact `comblang-prototypes-v1-sha256:...` identity but does not change the
-database schema, provider identity, or compiler cache keys. Inspect a manifest with:
-
-```powershell
-npm run cli -- prototypes evidence --json prototypes.json evidence.json
-```
-
-Each source has only a stable ID, one of `data-raw-structure`,
-`runtime-structure`, `reviewed-native-behavior`, or `synthetic`, and a
-`sha256:<64 lowercase hex>` artifact digest. The digest identifies bytes; it is
-not proof that those bytes are correct. Structural evidence may reference only
-raw/runtime sources. A circuit claim must match an existing database boolean and
-may be verified only by a `reviewed-native-behavior` source. Synthetic, raw and
-runtime sources cannot certify circuit behavior.
-
-The loaded index distinguishes `unknown` (no database circuit fact),
-`unverified` (a stored boolean without a reviewed claim), and `verified` (a
-matching reviewed claim). `verified: false` remains a verified false value; it is
-not converted to unknown or omitted. The checked-in
-[`evidence.synthetic.json`](../examples/prototype-stack/evidence.synthetic.json)
-is a format-only example bound to the synthetic prototype profile. It contains
-no reviewed native evidence and proves no Factorio behavior.
+The normalizer validates and writes a normalized database, then reports omission
+warnings. Choose a new output path: this normalization command can overwrite an
+existing file. Unknown circuit capabilities stay unknown; warnings are not
+permission to fill them with invented values. See the
+[normalization reference](prototype-normalization.md) for retained fields,
+defaults and diagnostics.
 
 ## Loading and identity
 
-The CLI validates normalized JSON before constructing a provider. Both commands
-accept an explicit database path, resolved relative to the working directory:
+The CLI loads normalized JSON explicitly:
 
-```sh
+```powershell
 npm run cli -- check --prototypes prototypes.json --json main.factorio.ts
 npm run cli -- test --prototypes prototypes.json --json main.factorio.ts circuit.test.js
+npm run cli -- blueprint export --prototypes prototypes.json main.factorio.ts
 ```
 
-The normalizer's output can be used directly. JSON results include
-`prototypeEnvironment` with the selected `identity`, Factorio/mod metadata and
-capability coverage. Human-readable output prints the identity and Factorio version.
-Read the reported identity first, then optionally require it on subsequent runs:
+Paths supplied on the command line are relative to the working directory.
+JSON reports include `prototypeEnvironment` with the selected identity,
+environment metadata and capability coverage. Read that identity, then optionally
+require it on subsequent runs:
 
-```sh
+```powershell
 npm run cli -- check --prototypes prototypes.json --prototype-identity "<reported identity>" main.factorio.ts
 ```
 
-`<reported identity>` is a placeholder for the full `comblang-prototypes-v1-sha256:…`
-value, not a profile name. A missing database, validation failure or identity
-mismatch stops before source execution with exit code `2`; no fallback is selected,
-even if the source does not use `prototypes`. With `--json`, loading/usage errors
-are emitted as one JSON document containing `diagnostics`. Database validation
-retains its `PT1000`–`PT1006` code, structural `path`, and supplied `file` path.
-Source/test failures still use exit code `1`.
+Use the full reported value, not a profile name. A missing database, invalid
+normalized data or identity mismatch stops before source execution with exit
+code `2`; there is no fallback even when the source does not use prototypes.
+Source/test failures use exit code `1`. JSON input errors contain diagnostics;
+database validation preserves its `PT1000`–`PT1006` code, structural path and
+supplied filename.
 
-Flags can precede or follow filenames. Duplicate value options and unknown flags
-are rejected; `--` ends option parsing for literal filenames. Quote paths containing
-spaces. One selected provider is used for all source files in that invocation, not
-saved globally. The programmatic `run(args, { prototypes })` seam remains supported,
-including an identity pin; combining an injected provider and `--prototypes` is an
-error rather than an implicit precedence rule.
+Flags may precede or follow filenames; `--` ends option parsing for literal
+filenames. Duplicate value options and unknown flags are rejected. Quote paths
+containing spaces.
 
-Without either source of prototype data, ordinary circuits still compile and
-accessing `prototypes` produces `EX1004`; Entity construction also has no
-authority. On a browser first run (a missing
-`comblang.prototype-selection.v1` session key), the checked-in Space Age database
-and its generated manifest are fetched as separate Vite assets and validated in
-the compiler Worker. The pair is never embedded in the JavaScript payload, is
-not copied into `public/`, and is not saved to IndexedDB. A missing or corrupt
-built-in pair leaves ordinary circuit compilation available with a truthful
-profile notice.
-
-In the browser, use **Load prototype JSON** above the source editor to choose a
-custom environment. Select one normalized JSON file, or a raw dump and one
-companion metadata JSON file. It does not modify source or test drafts. After
-validation, a custom database is saved in IndexedDB under its identity and the
-active identity is saved in tab-local session storage. Reloading the tab restores
-the saved custom database and checks that pin again before source execution.
-Separate tabs may select different environments without overwriting each
-other's selection.
-
-**Disable** persists an explicit empty selection for the current tab; it does not
-delete a database that another tab may be using. Cached databases can also be
-removed through browser site storage controls. Storage/quota failure is reported
-as **not saved**; compilation can still use the selected in-memory profile. A
-selected custom database missing from IndexedDB blocks compilation until the user
-loads a file or explicitly disables the selection. It never silently substitutes
-the built-in profile for that custom selection.
-
-The browser compiler Worker protocol accepts normalized or raw JSON (with raw
-metadata when needed) plus an optional expected identity, or an identity already
-confirmed by that Worker. A selected provider also enables conservative Entity
-construction: after loading and validating the provider, the Worker derives a
-deterministic zero-port fallback profile for each Entity record whose normalized
-`blueprintEligible` fact is explicitly `true`. Omitted or false facts do not
-authorize construction. The request's identity and its built-in/custom routing
-label are not authority; the loaded provider is.
-Parsing, validation, hashing and provider construction happen inside the Worker;
-only cloneable JSON enters it and only cloneable environment metadata, diagnostics,
-and the direct plan leave it. Provider methods are never structured-cloned.
-
-Successfully loaded environments are cached by identity for that Worker lifetime,
-so ordinary recompilation does not repeatedly parse and hash the database. Selection
-is still explicit on every compile request: omitting the profile compiles without
-one, while an unknown cached identity returns `WP1002` and asks the caller to send
-the JSON again. Thus a Worker restart cannot silently lose a pin or substitute a
-profile. The UI retains the JSON in memory after loading and resends it with the
-previous identity pin after a Worker restart. The same cold/warm path applies to
-the built-in generated pair: the Worker validates its database and manifest once,
-then reuses the confirmed identity until it is recreated. Initial JSON loading and
-compilation share a 15000 ms Worker timeout to cover a realistic large raw dump;
-warm identity-only recompilation keeps the 1000 ms budget, while its first request
-after Worker recreation uses the cold 15000 ms budget.
-
-The v1 environment identity is SHA-256 over canonical normalized JSON and is
-prefixed `comblang-prototypes-v1-sha256:`. It includes schema and generator
-versions, Factorio version, sorted expansions/mods, startup-settings identity,
-capability coverage, normalized prototypes, and indexes. Informational
-`generatedAt` provenance is deliberately excluded. This is a cache/project
-identity boundary, not a reproducible-build policy. A future schema version may
-select a different explicitly tagged algorithm.
-
-Canonical string ordering is locale-free UTF-16 code-unit order. The September 4
-collation fix can change identities even for unchanged JSON when its ordering
-differs under locale collation: reload and explicitly repin affected
-projects/supplements, or reselect browser JSON. Pins and cache entries that no
-longer match are not silently accepted; see the [migration note](prototype-truth-sources.md#identity-migration).
-
-After asynchronous loading, the primary synchronous surface deliberately feels
-like Factorio's Lua API. Singular snake_case tables are indexed by prototype
-name:
-
-```ts
-const { prototypes } = await loadPrototypeDatabaseJson(source);
-
-prototypes.item['iron-plate'];
-prototypes.fluid.water;
-prototypes.recipe['iron-gear-wheel'];
-prototypes.recipe_category.crafting;
-prototypes.entity['assembling-machine-3'];
-prototypes.quality.normal;
-prototypes.virtual_signal['signal-A'];
-```
-
-These frozen null-prototype objects model read-only `LuaCustomTable` access;
-an unknown name evaluates to `undefined`. The tables contain names only, while
-canonical-key access and cross-kind lookup live in query helpers and
-`prototypes.collections`:
-
-```ts
-prototypes.getItem('item:iron-plate');
-prototypes.collections.all['entity:chemical-plant'];
-prototypes.collections.recipesByProduct['item:iron-gear-wheel'];
-prototypes.collections.entitiesByType['assembling-machine'];
-prototypes.collections.craftingMachinesByCategory.crafting;
-```
-
-The other helpers answer stack-size, entity circuit-capability, recipe-product,
-and basic crafting-category/fluid-compatibility questions. If a database lacks
-complete coverage for one prototype kind, its direct table is empty and a
-helper requiring that coverage reports the missing capability separately from
-an unknown key. No provider singleton exists, and the simulator has no
-dependency on this package.
-
-Use `prototypes.isBasicCraftingCompatible(entity, recipe)` only as a coarse
-category/fluid prefilter. It replaces the overpromising `canCraft` name (no alias).
-Unknown keys, absent crafting data, or missing coverage throw. A positive result
-does not prove native craftability: fluidboxes, temperatures, ingredient limits,
-surface conditions, and machine state are outside this helper.
-
-Source code receives the same provider through an explicit compilation
-environment and may inspect it using the reserved `prototypes` value. The
-transform routes that identifier through its hygienic runtime bridge, so it is
-not a mutable process global:
-
-```ts
-const PLATE = Signal(prototypes.item['iron-plate'].name);
-const fullStack = CC(prototypes.item['iron-plate'].stackSize * PLATE);
-```
-
-Using `prototypes` without an injected environment reports source-linked
-`EX1004`. The runtime executor, browser-local `compileSource` boundary, and CLI
-`run` boundary accept the provider explicitly. CLI flags construct it inside the
-Node process, while the browser compiler Worker constructs and caches its own
-provider from JSON. CLI project files persist the paths and optional identity pin;
-providers with methods are never posted across a Worker boundary.
+Content identity is SHA-256 over canonical normalized data, including schema and
+generator identifiers, environment metadata, coverage, prototypes and indexes.
+Informational `generatedAt` is excluded. Ordering is locale-free UTF-16
+code-unit order; recipe component order remains significant. Treat the full
+identity as opaque. Changed content or generator metadata can require an
+explicit pin update; see [identity migration](prototype-truth-sources.md#identity-migration).
+An identity proves which normalized data was selected, not native game behavior
+or a fully reproducible build.
 
 ## CLI project files
 
-Use `--project <file>` to select a versioned, data-only project configuration:
+A data-only project file supplies one default source, an optional test file and
+a prototype selection:
 
 ```json
 {
@@ -690,51 +168,98 @@ Use `--project <file>` to select a versioned, data-only project configuration:
 }
 ```
 
-Replace `<reported identity>` with the full identity emitted by a successful
-`check --prototypes ... --json` run, or omit `identity` to accept the database's
-current contents. `schemaVersion`, `source` and `prototypes.path` are required;
-`tests` and `prototypes.identity` are optional. Unknown fields, empty strings and
-unsupported versions are errors. This v1 configuration supplies one default source
-and one optional test file; it is not yet a multi-module build manifest.
+Replace `<reported identity>` with the identity reported for the selected
+database, or omit `identity` to accept its current contents. `schemaVersion`,
+`source` and `prototypes.path` are required; `tests`, the identity pin and
+an optional [diagnostic policy](diagnostics.md) are not.
 
-```sh
+```powershell
 npm run cli -- check --project comblang.json
 npm run cli -- test --project comblang.json --json
 npm run cli -- blueprint export --project comblang.json
+npm run cli -- parameters list --project comblang.json --json
 ```
 
-All configured paths are resolved relative to the configuration file, never to
-the shell's working directory. Explicit positional filenames replace the configured
-source/test filenames and retain their usual working-directory-relative meaning.
-This lets the same profile check several independent files. `test` still requires
-exactly two resolved filenames; without explicit filenames it requires `tests`.
+Configured paths resolve relative to the project file. Explicit positional
+filenames replace the configured source/test filenames and resolve from the
+working directory, as do explicit output/override paths. `test` accepts either
+the configured pair or an explicit source/test pair, not one explicit filename.
+Export and parameter listing accept zero or one explicit source and do not read
+the configured test file. See [Param](api/parameters.md) for concrete overrides.
 
-`blueprint export --project comblang.json` resolves only the configured source and
-prototype database. Export never reads or runs the configured test file. One
-explicit source filename overrides the project's configured source; it resolves
-from the shell's working directory, as do `--output` and the `--project` filename.
-Configured source and prototype paths resolve from the directory containing the
-project file. Export uses the project's prototype identity and diagnostic policy
-like `check` and `test`, and accepts zero or one explicit source. This does not
-link project files or add module imports.
+There is no automatic parent-directory search, executable configuration, import
+or module linking. Multiple `check` filenames are independent compilations
+sharing the selected provider, not a linked project.
 
-There is no automatic parent-directory search, executable config, or import/eval
-step. A project cannot be combined with `--prototypes` or an injected provider.
-`--prototype-identity` may pin an otherwise unpinned project or repeat the existing
-pin, but a conflicting pin fails with `CLI1003`. Changing a pinned environment
-requires explicitly editing the project file. Invalid or unreadable project files
-report `CLI1005`; all loading/selection errors stop before source/test execution.
+Do not combine `--project` with `--prototypes` or an injected provider.
+`--prototype-identity` may pin an unpinned project or repeat its existing pin;
+a conflicting pin reports `CLI1003`. Unknown fields, unsupported schema values,
+invalid paths or unreadable project files report `CLI1005`. Selection errors
+stop before source or test execution.
 
 The checked-in [prototype-stack project](../examples/prototype-stack/comblang.json)
-provides a fully pinned synthetic example without downloads.
+is a pinned synthetic example that needs no downloads.
 
-## Current package and evidence boundaries
+## Embedding hosts and Worker loading
 
-The schema, provider, identity, validator, JSON boundary, normalized static
-dump, built-in asset, and runtime/browser/CLI loading seams are implemented.
-The simulator consumes lowered devices and does not depend on prototype data.
-Provider records establish static identity and structural facts; profile-backed
-Entity connectors, configuration, callable behavior, and computation remain
-separate host authority. Blueprint parameters bind concrete configuration above
-the provider boundary. None of these layers alone establishes native Factorio
-behavior.
+These are host APIs, not globals to paste into circuit source:
+
+| API                                              | Accepted input and result                                                                                                                                         |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `loadPrototypeDatabaseJson(normalizedJson)`      | Strict normalized JSON → frozen database and provider.                                                                                                            |
+| `loadPrototypeInputJson(json, options?)`         | Normalized JSON or recognized raw dump → frozen database/provider, detected format and normalization warnings. Raw input requires `options.factorioDumpMetadata`. |
+| `loadPrototypeAsset(databaseJson, manifestJson)` | Generated database/manifest pair with integrity checks. Original input bytes may also be supplied for input digest checks.                                        |
+
+Each provider is explicitly injected into its compilation environment. The
+reserved source value `prototypes` exposes frozen name tables and query helpers;
+there is no mutable process-global provider. Without an injected environment,
+reading `prototypes` reports source-linked `EX1004`.
+
+The compiler Worker receives cloneable JSON and metadata, never provider methods.
+It constructs and caches providers by identity for its own lifetime. An unknown
+cached identity reports `WP1002` rather than selecting another profile. After a
+restart, the UI resends its retained JSON with the identity pin. Cold loading and
+compilation use a 15000 ms timeout; warm identity-only recompilation uses 1000 ms.
+
+The bundled database/manifest pair is loaded as separate Vite assets, not embedded
+in the JavaScript payload or persisted to IndexedDB. A missing/corrupt bundled
+pair leaves ordinary circuits available with a profile notice. A missing selected
+custom profile blocks compilation until the selection is explicitly repaired.
+
+Structural data can authorize conservative construction only for Entities whose
+`blueprintEligible` fact is explicitly `true`. The host fallback has no
+inferred connectors or computation. Callable projections, circuit connections,
+configuration authority and simulator behavior need their own reviewed profiles;
+see [Entity](api/entity.md) and [evidence boundaries](prototype-truth-sources.md).
+The simulator consumes lowered devices and buses, not prototype data.
+
+## Reproducible generated asset
+
+For maintainers, the asset generator writes a database and its sibling
+`<output>.manifest.json`. The manifest records source-dump and metadata SHA-256
+digests, schema/generator identifiers, the normalized identity and exact output
+digest, without input paths or generated timestamps.
+
+```powershell
+npm run prototype:asset -- data-raw-dump.json metadata.json prototypes.json
+npm run prototype:asset:check -- data-raw-dump.json metadata.json prototypes.json
+npm run prototype:asset:verify
+```
+
+The first two commands generate or regenerate/check the pair from its original
+inputs. The last checks the shipped bundled pair without requiring those inputs.
+The installed command equivalents are `prototypes asset generate [--check]`
+and `prototypes asset verify <database.json> <manifest.json>`.
+
+Generation validates before writing. Check mode regenerates in memory and rejects
+missing, stale or digest-mismatched outputs. Integrity loading does not treat
+structural facts as native behavior evidence.
+
+The shipped files under `packages/prototypes/generated/` are
+`space-age-2.1.17.metadata.json`, `space-age-2.1.17.json` and
+`space-age-2.1.17.json.manifest.json`. Consult their current content rather
+than an old extraction report. The bundled database has
+`entityCircuitCapabilities: false`; importing it does not claim native behavior.
+
+See [normalization](prototype-normalization.md) for the data contract and
+[evidence boundaries](prototype-truth-sources.md) for supplements and claims.
