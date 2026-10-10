@@ -591,23 +591,163 @@ test('changed first session', ({ network, drive, tick, expectSignal }) => {
     expect(globals[sourceCounter]).toBe(2);
   });
 
+  test('tests primary Constant and Arithmetic expressions at defaults and from one override snapshot', async () => {
+    const { environment } = await parameterHost();
+    const expressionSource = `${counted}const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5);
+const factor = Param.number('Factor', 2);
+const input = new Network();
+const output = new Network();
+input += Constant({ sections: [{ filters: [{ signal: A, value: (amount + 1) * factor }] }] });
+output += Arithmetic({ left: input[A], operation: 'multiply', right: amount - 1, output: A });`;
+    const testSource = (inputCount: number, outputCount: number) => `${registered}
+const A = Signal('virtual', 'signal-A');
+test('primary fresh session one', ({ network, tick, expectSignal }) => {
+  expectSignal(network('input'), A).toBe(0);
+  expectSignal(network('output'), A).toBe(0);
+  tick();
+  expectSignal(network('input'), A).toBe(${inputCount});
+  expectSignal(network('output'), A).toBe(0);
+  tick();
+  expectSignal(network('output'), A).toBe(${outputCount});
+});
+test('primary fresh session two', ({ network, tick, expectSignal }) => {
+  expectSignal(network('input'), A).toBe(0);
+  expectSignal(network('output'), A).toBe(0);
+  tick();
+  expectSignal(network('input'), A).toBe(${inputCount});
+  expectSignal(network('output'), A).toBe(0);
+  tick();
+  expectSignal(network('output'), A).toBe(${outputCount});
+});`;
+
+    const defaults = await files(expressionSource, testSource(12, 48), []);
+    const defaultCapture = capture();
+    expect(await run(['test', '--json', defaults.sourcePath, defaults.testPath], environment)).toBe(
+      0,
+    );
+    expect(defaultCapture.report().tests).toMatchObject({ passed: 2, failed: 0 });
+    expect(globals[sourceCounter]).toBe(1);
+    expect(globals[testCounter]).toBe(1);
+
+    const overrides = [
+      { id: 0, value: 9 },
+      { id: 1, value: 3 },
+    ];
+    const boundFiles = await files(expressionSource, testSource(30, 240), overrides);
+    const boundCapture = capture();
+    expect(
+      await run(
+        [
+          'test',
+          '--json',
+          '--overrides',
+          boundFiles.valuesPath,
+          boundFiles.sourcePath,
+          boundFiles.testPath,
+        ],
+        environment,
+      ),
+    ).toBe(0);
+    expect(boundCapture.report().tests).toMatchObject({ passed: 2, failed: 0 });
+    expect(globals[sourceCounter]).toBe(1);
+    expect(globals[testCounter]).toBe(1);
+
+    expect(
+      await run(
+        [
+          'blueprint',
+          'export',
+          '--json',
+          '--overrides',
+          boundFiles.valuesPath,
+          boundFiles.sourcePath,
+        ],
+        environment,
+      ),
+    ).toBe(0);
+    const document = boundCapture.report().document;
+    const constant = document.blueprint.entities.find(
+      (entity: { name: string }) => entity.name === 'constant-combinator',
+    );
+    const arithmetic = document.blueprint.entities.find(
+      (entity: { name: string }) => entity.name === 'arithmetic-combinator',
+    );
+    expect(constant.control_behavior.sections.sections[0].filters[0].count).toBe(30);
+    expect(arithmetic.control_behavior.arithmetic_conditions.second_constant).toBe(8);
+    expect(globals[sourceCounter]).toBe(2);
+    expect(globals[testCounter]).toBe(1);
+  });
+
+  test('preserves Signal quality beside a derived Constant count through CLI tests and JSON', async () => {
+    const { environment } = await parameterHost();
+    const expressionSource = `${counted}const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: amount + 1 }] }] });`;
+    const testSource = `${registered}
+const rare = Signal('virtual', 'signal-B', 'rare');
+test('rare Signal and derived count', ({ network, tick, expectSignal }) => {
+  expectSignal(network('output'), rare).toBe(0);
+  tick();
+  expectSignal(network('output'), rare).toBe(10);
+  expectSignal(network('output'), Signal('virtual', 'signal-B')).toBe(0);
+  expectSignal(network('output'), Signal('virtual', 'signal-B', 'normal')).toBe(0);
+});
+test('same choice starts in a fresh session', ({ network, tick, expectSignal }) => {
+  expectSignal(network('output'), rare).toBe(0);
+  tick();
+  expectSignal(network('output'), rare).toBe(10);
+});`;
+    const overrides = [
+      { id: 0, value: { type: 'virtual', name: 'signal-B', quality: 'rare' } },
+      { id: 1, value: 9 },
+    ];
+    const f = await files(expressionSource, testSource, overrides);
+    const c = capture();
+    expect(
+      await run(
+        ['test', '--json', '--overrides', f.valuesPath, f.sourcePath, f.testPath],
+        environment,
+      ),
+    ).toBe(0);
+    expect(c.report().tests).toMatchObject({ passed: 2, failed: 0 });
+    expect(globals[sourceCounter]).toBe(1);
+    expect(globals[testCounter]).toBe(1);
+
+    expect(
+      await run(
+        ['blueprint', 'export', '--json', '--overrides', f.valuesPath, f.sourcePath],
+        environment,
+      ),
+    ).toBe(0);
+    const filter =
+      c.report().document.blueprint.entities[0].control_behavior.sections.sections[0].filters[0];
+    expect(filter).toMatchObject({ name: 'signal-B', quality: 'rare', count: 10 });
+    expect(globals[sourceCounter]).toBe(2);
+    expect(globals[testCounter]).toBe(1);
+  });
+
   test('accepts fractional multiplier structurally and exposes existing Unknown simulation semantics', async () => {
     const { environment } = await parameterHost();
-    const values = [{ id: 2, value: 0.5 }];
+    const fractionalSource = source
+      .replace("Param.number('Scale', 1)", "Param.number('Scale', 2)")
+      .replace('multiplier: scale,', 'multiplier: scale * 0.5,');
+    const values = [{ id: 2, value: 3 }];
     const tests = `${registered}test('fractional configuration', ({ execution, network, session, tick }) => {
   const entity = execution.circuit.ir.entities.find(e => e.prototypeName === 'constant-combinator');
   const section = entity.configuration.value.sections[0];
-  if (section.multiplier !== 0.5 || section.filters[0].value !== 5) throw new Error('fraction clamped or count changed');
+  if (section.multiplier !== 1.5 || section.filters[0].value !== 5) throw new Error('fraction clamped or count changed');
   tick();
   const value = session.readValue(network('input'));
   if (value.kind !== 'unknown' || !value.origins.some(o => o.description.includes('non-unit-multiplier'))) {
     throw new Error('unmodeled multiplier silently simulated');
   }
 });`;
-    const f = await files(source, tests, values);
+    const f = await files(fractionalSource, tests, values);
     const c = capture();
     const compilation = sourceApi.compileSourceProgram(
-      { path: f.sourcePath, text: source },
+      { path: f.sourcePath, text: fractionalSource },
       environment,
     );
     const pair = bindingApi.createSourceParameterBindingSession(compilation).bind(values);
@@ -633,7 +773,7 @@ test('changed first session', ({ network, drive, tick, expectSignal }) => {
           (e: { name: string }) => e.name === 'constant-combinator',
         ),
     ).toMatchObject({
-      control_behavior: { sections: { sections: [{ multiplier: 0.5, filters: [{ count: 5 }] }] } },
+      control_behavior: { sections: { sections: [{ multiplier: 1.5, filters: [{ count: 5 }] }] } },
     });
     expect(
       await run(

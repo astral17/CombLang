@@ -43,34 +43,50 @@ const output = new Network();
 output += Constant({ sections: [{ filters: [{ signal: channel, value: amount }] }] });`,
 };
 
+const localExpressionRunKey = '__worker_local_expression_runs';
+const localExpressionFile = {
+  path: 'worker-local-expression.factorio.ts',
+  text: `globalThis.${localExpressionRunKey} = Number(globalThis.${localExpressionRunKey} ?? 0) + 1;
+const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5);
+const factor = Param.number('Factor', 2);
+const input = new Network();
+const output = new Network();
+input += Constant({ sections: [{ filters: [{ signal: A, value: (amount + 1) * factor }] }] });
+output += Arithmetic({ left: input[A], operation: 'multiply', right: amount - 1, output: A });`,
+};
+
 function parameterHost() {
-  const profile: EntityProfile = {
+  const families = ['constant-combinator', 'arithmetic-combinator'] as const;
+  const profiles: EntityProfile[] = families.map((family, index) => ({
     ...structuredClone(syntheticZeroPortEntityProfile),
     ref: {
       ...syntheticZeroPortEntityProfile.ref,
-      prototypeKey: 'entity:constant-combinator' as EntityProfile['ref']['prototypeKey'],
-      profileId: 'profile:worker-parameter-session' as EntityProfile['ref']['profileId'],
+      prototypeKey: `entity:${family}` as EntityProfile['ref']['prototypeKey'],
+      profileId: `profile:worker-parameter-session-${index}` as EntityProfile['ref']['profileId'],
     },
-    prototypeType: 'constant-combinator',
-  };
+    prototypeType: family,
+  }));
   const trustedEntityReplayContext = createTrustedEntityReplayContext({
-    database: profile.ref.database,
+    database: profiles[0]!.ref.database,
     source: 'synthetic',
     evidenceIdentity: 'worker-parameter-session-evidence',
     policyIdentity: 'worker-parameter-session-policy',
-    profiles: [profile],
+    profiles,
   });
-  const prototype: EntityPrototype = {
-    key: 'entity:constant-combinator' as EntityPrototype['key'],
-    name: 'constant-combinator',
-    type: 'constant-combinator',
+  const prototypes: readonly EntityPrototype[] = families.map((family) => ({
+    key: `entity:${family}` as EntityPrototype['key'],
+    name: family,
+    type: family,
     tileWidth: 1,
     tileHeight: 1,
-  };
+  }));
   const entityPrototypeResolver: EntityPrototypeResolver = {
     database: trustedEntityReplayContext.database,
     getEntity(nameOrKey) {
-      return nameOrKey === prototype.key || nameOrKey === prototype.name ? prototype : undefined;
+      return prototypes.find(
+        (prototype) => nameOrKey === prototype.key || nameOrKey === prototype.name,
+      );
     },
   };
   return {
@@ -311,6 +327,318 @@ test('another fresh session', ({ network, tick, expectSignal }) => {
     expect(parameters).toEqual(defaultsBefore);
     expect(original).toEqual(originalBefore);
     expect(runCount()).toBe(1);
+  });
+
+  test('keeps primary Constant and Arithmetic expressions local across Worker consumers and native rejection', async () => {
+    const globals = globalThis as Record<string, unknown>;
+    const previous = globals[localExpressionRunKey];
+    globals[localExpressionRunKey] = 0;
+    try {
+      const runtime = parameterRuntime();
+      const parsed = structuredClone(
+        await runtime.handle(
+          parseRequest(200, {
+            file: localExpressionFile,
+            parameterBinding: true,
+            blueprintExport: { parameters: true },
+          }),
+        ),
+      );
+      expect(globals[localExpressionRunKey]).toBe(1);
+      expect(
+        parsed.result.pipelineDiagnostics.filter(({ severity }) => severity === 'error'),
+      ).toEqual([]);
+      expect(parsed.result.blueprintExport).toMatchObject({ ok: false });
+      expect(JSON.stringify(parsed.result.blueprintExport)).toContain('CP1002');
+      expect(parsed.result.plan?.entities).toHaveLength(2);
+      expect(parsed.result.plan?.producers).toHaveLength(2);
+      if (
+        parsed.parameterBinding?.ok !== true ||
+        parsed.parameterBinding.token === undefined ||
+        parsed.result.plan === undefined ||
+        parsed.result.resolvedCircuit === undefined
+      ) {
+        throw new Error('Expected a concrete pair and retained local-expression session.');
+      }
+      const { parameters, token } = parsed.parameterBinding;
+      expect(
+        parameters.map(({ id, kind, label, defaultValue }) => ({
+          id,
+          kind,
+          label,
+          defaultValue,
+        })),
+      ).toEqual([
+        { id: 0, kind: 'number', label: 'Amount', defaultValue: 5 },
+        { id: 1, kind: 'number', label: 'Factor', defaultValue: 2 },
+      ]);
+      expect(structuredClone(parameters)).toEqual(parameters);
+      expect(
+        parameters.every((parameter) => Object.getOwnPropertySymbols(parameter).length === 0),
+      ).toBe(true);
+      expect(JSON.stringify(parameters)).not.toMatch(/binary|numericExpression|expressionRoot/i);
+      expect(parsed.result).not.toHaveProperty('execution');
+      expect(parsed.result).not.toHaveProperty('session');
+      expect(parsed.result).not.toHaveProperty('parameters');
+      expect(structuredClone(parsed)).toEqual(parsed);
+
+      let revision = parsed.revision;
+      const bind = (overrides: readonly SourceParameterOverride[]) => {
+        const request: CompilerWorkerBindRequest = {
+          kind: 'bind-parameters',
+          revision: ++revision,
+          sourceRevision: parsed.revision,
+          token,
+          overrides,
+        };
+        const originalRequest = structuredClone(request);
+        const response: CompilerWorkerBoundResponse = structuredClone(
+          runtime.handleBinding(structuredClone(request)),
+        );
+        expect(request).toEqual(originalRequest);
+        expect(structuredClone(response)).toEqual(response);
+        expect(globals[localExpressionRunKey]).toBe(1);
+        return response;
+      };
+      const pairOf = (response: CompilerWorkerBoundResponse) => {
+        if (!response.result.ok) throw new Error('Expected a concrete bound pair.');
+        return response.result;
+      };
+      const defaults = pairOf(bind([]));
+      const overridden = pairOf(
+        bind([
+          { id: 0, value: 9 },
+          { id: 1, value: 3 },
+        ]),
+      );
+      const reset = pairOf(bind([]));
+      expect(defaults.plan).toEqual(parsed.result.plan);
+      expect(defaults.resolvedCircuit).toEqual(parsed.result.resolvedCircuit);
+      expect(reset.plan).toEqual(defaults.plan);
+      expect(reset.resolvedCircuit).toEqual(defaults.resolvedCircuit);
+
+      const consume = (
+        pair: BoundSourceCompilationCircuit,
+        count: number,
+        right: number,
+        result: number,
+      ) => {
+        const before = structuredClone(pair);
+        const artifact = createSourceCircuitArtifact(pair.plan, pair.resolvedCircuit);
+        expect(artifact.blueprint.blueprint.entities).toHaveLength(2);
+        const constant = artifact.blueprint.blueprint.entities.find(
+          ({ name }) => name === 'constant-combinator',
+        );
+        const arithmetic = artifact.blueprint.blueprint.entities.find(
+          ({ name }) => name === 'arithmetic-combinator',
+        );
+        expect(constant?.control_behavior).toMatchObject({
+          sections: { sections: [{ filters: [{ name: 'signal-A', count }] }] },
+        });
+        expect(arithmetic?.control_behavior).toMatchObject({
+          arithmetic_conditions: { first_signal: { name: 'signal-A' }, second_constant: right },
+        });
+        const controller = new SourceSimulationController(artifact);
+        const channel = signal('virtual', 'signal-A');
+        expect(controller.signalValueAt(0, 'input', channel)).toBe(0);
+        expect(controller.signalValueAt(0, 'output', channel)).toBe(0);
+        controller.stepFrom(0);
+        expect(controller.signalValueAt(1, 'input', channel)).toBe(count);
+        expect(controller.signalValueAt(1, 'output', channel)).toBe(0);
+        controller.stepFrom(1);
+        expect(controller.signalValueAt(2, 'output', channel)).toBe(result);
+
+        const panel = selectBlueprintPanel({ parameters: false, concrete: artifact.blueprint });
+        expect(panel.copyPayload).toBe(JSON.stringify(artifact.blueprint, null, 2));
+        expect(JSON.parse(panel.copyPayload!)).not.toHaveProperty('blueprint.parameters');
+        expect(
+          selectBlueprintPanel({ parameters: true, concrete: artifact.blueprint }),
+        ).toMatchObject({
+          state: 'invalid',
+          status: 'Parameter export unavailable',
+        });
+        const tests = runWebTests(
+          pair.plan,
+          `const A = Signal('virtual', 'signal-A');
+test('primary T0/T1/T2', ({ network, tick, expectSignal }) => {
+  expectSignal(network('input'), A).toBe(0);
+  expectSignal(network('output'), A).toBe(0);
+  tick();
+  expectSignal(network('input'), A).toBe(${count});
+  expectSignal(network('output'), A).toBe(0);
+  tick();
+  expectSignal(network('output'), A).toBe(${result});
+});
+test('primary independent session', ({ network, tick, expectSignal }) => {
+  expectSignal(network('input'), A).toBe(0);
+  expectSignal(network('output'), A).toBe(0);
+  tick();
+  expectSignal(network('input'), A).toBe(${count});
+  tick();
+  expectSignal(network('output'), A).toBe(${result});
+});`,
+          pair.resolvedCircuit,
+        );
+        expect(tests).toMatchObject({ passed: 2, failed: 0 });
+        expect(pair).toEqual(before);
+        return artifact.blueprint.blueprint.wires;
+      };
+
+      const wires = consume(defaults, 12, 4, 48);
+      expect(consume(overridden, 30, 8, 240)).toEqual(wires);
+      expect(consume(reset, 12, 4, 48)).toEqual(wires);
+      expect(globals[localExpressionRunKey]).toBe(1);
+    } finally {
+      if (previous === undefined) delete globals[localExpressionRunKey];
+      else globals[localExpressionRunKey] = previous;
+    }
+  });
+
+  test('preserves Signal quality and retries invalid derived counts on retained Worker sessions', async () => {
+    const globals = globalThis as Record<string, unknown>;
+    const previous = globals[localExpressionRunKey];
+    globals[localExpressionRunKey] = 0;
+    try {
+      const runtime = parameterRuntime();
+      const qualityFile = {
+        path: 'worker-local-expression-quality.factorio.ts',
+        text: `globalThis.${localExpressionRunKey} = Number(globalThis.${localExpressionRunKey} ?? 0) + 1;
+const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: amount + 1 }] }] });`,
+      };
+      const qualityParse = structuredClone(
+        await runtime.handle(parseRequest(210, { file: qualityFile, parameterBinding: true })),
+      );
+      expect(globals[localExpressionRunKey]).toBe(1);
+      const qualityBinding = qualityParse.parameterBinding;
+      if (qualityBinding?.ok !== true || qualityBinding.token === undefined) {
+        throw new Error('Expected a retained Signal/count expression session.');
+      }
+      expect(
+        qualityBinding.parameters.map(({ id, kind, label, defaultValue }) => ({
+          id,
+          kind,
+          label,
+          defaultValue,
+        })),
+      ).toEqual([
+        {
+          id: 0,
+          kind: 'signal',
+          label: 'Channel',
+          defaultValue: { type: 'virtual', name: 'signal-A' },
+        },
+        { id: 1, kind: 'number', label: 'Amount', defaultValue: 5 },
+      ]);
+      const qualityRequest: CompilerWorkerBindRequest = {
+        kind: 'bind-parameters',
+        revision: 211,
+        sourceRevision: qualityParse.revision,
+        token: qualityBinding.token,
+        overrides: [
+          { id: 0, value: { type: 'virtual', name: 'signal-B', quality: 'rare' } },
+          { id: 1, value: 9 },
+        ],
+      };
+      const qualityBound: CompilerWorkerBoundResponse = structuredClone(
+        runtime.handleBinding(structuredClone(qualityRequest)),
+      );
+      expect(structuredClone(qualityRequest)).toEqual(qualityRequest);
+      expect(structuredClone(qualityBound)).toEqual(qualityBound);
+      if (!qualityBound.result.ok) throw new Error('Expected a bound rare Signal pair.');
+      const qualityPair = qualityBound.result;
+      const qualityArtifact = createSourceCircuitArtifact(
+        qualityPair.plan,
+        qualityPair.resolvedCircuit,
+      );
+      expect(qualityArtifact.blueprint.blueprint.entities[0]?.control_behavior).toMatchObject({
+        sections: {
+          sections: [{ filters: [{ name: 'signal-B', quality: 'rare', count: 10 }] }],
+        },
+      });
+      const qualityController = new SourceSimulationController(qualityArtifact);
+      qualityController.stepFrom(0);
+      expect(
+        qualityController.signalValueAt(1, 'output', signal('virtual', 'signal-B', 'rare')),
+      ).toBe(10);
+      expect(qualityController.signalValueAt(1, 'output', signal('virtual', 'signal-B'))).toBe(0);
+      const qualityTests = runWebTests(
+        qualityPair.plan,
+        `const rare = Signal('virtual', 'signal-B', 'rare');
+test('rare identity in first test', ({ network, tick, expectSignal }) => {
+  tick();
+  expectSignal(network('output'), rare).toBe(10);
+  expectSignal(network('output'), Signal('virtual', 'signal-B')).toBe(0);
+});
+test('rare identity in fresh test', ({ network, tick, expectSignal }) => {
+  expectSignal(network('output'), rare).toBe(0);
+  tick();
+  expectSignal(network('output'), rare).toBe(10);
+});`,
+        qualityPair.resolvedCircuit,
+      );
+      expect(qualityTests).toMatchObject({ passed: 2, failed: 0 });
+      expect(globals[localExpressionRunKey]).toBe(1);
+
+      const unsafeFile = {
+        path: 'worker-local-expression-unsafe-count.factorio.ts',
+        text: `globalThis.${localExpressionRunKey} = Number(globalThis.${localExpressionRunKey} ?? 0) + 1;
+const amount = Param.number('Amount', 0);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-A'), value: amount * 1e16 }] }] });`,
+      };
+      const unsafeParse = structuredClone(
+        await runtime.handle(parseRequest(220, { file: unsafeFile, parameterBinding: true })),
+      );
+      expect(globals[localExpressionRunKey]).toBe(2);
+      const unsafeBinding = unsafeParse.parameterBinding;
+      if (unsafeBinding?.ok !== true || unsafeBinding.token === undefined) {
+        throw new Error('Expected a retained unsafe-result test session.');
+      }
+      let revision = unsafeParse.revision;
+      const bindUnsafe = (value: number) => {
+        const request: CompilerWorkerBindRequest = {
+          kind: 'bind-parameters',
+          revision: ++revision,
+          sourceRevision: unsafeParse.revision,
+          token: unsafeBinding.token!,
+          overrides: [{ id: 0, value }],
+        };
+        return structuredClone(runtime.handleBinding(structuredClone(request)));
+      };
+      const baselineResponse = bindUnsafe(0);
+      if (!baselineResponse.result.ok) throw new Error('Expected the valid zero default.');
+      const baseline = baselineResponse.result;
+      const baselineBefore = structuredClone(baseline);
+      const baselineArtifact = createSourceCircuitArtifact(baseline.plan, baseline.resolvedCircuit);
+      const baselineArtifactBefore = structuredClone(baselineArtifact.blueprint);
+      const failed = bindUnsafe(1);
+      expect(failed.result).toMatchObject({
+        ok: false,
+        diagnostics: [{ code: 'CP1000', severity: 'error' }],
+      });
+      expect(failed.result).not.toHaveProperty('plan');
+      expect(failed.result).not.toHaveProperty('resolvedCircuit');
+      expect(baseline).toEqual(baselineBefore);
+      expect(baselineArtifact.blueprint).toEqual(baselineArtifactBefore);
+      expect(globals[localExpressionRunKey]).toBe(2);
+
+      const retry = bindUnsafe(1e-15);
+      if (!retry.result.ok) throw new Error('Expected a valid derived-count retry.');
+      expect(retry.result.plan.producers[0]).toMatchObject({
+        configuration: { sections: [{ filters: [{ value: 10 }] }] },
+      });
+      const reset = bindUnsafe(0);
+      if (!reset.result.ok) throw new Error('Expected Reset to restore the valid default.');
+      expect(reset.result.plan).toEqual(baseline.plan);
+      expect(reset.result.resolvedCircuit).toEqual(baseline.resolvedCircuit);
+      expect(globals[localExpressionRunKey]).toBe(2);
+    } finally {
+      if (previous === undefined) delete globals[localExpressionRunKey];
+      else globals[localExpressionRunKey] = previous;
+    }
   });
 
   test('bind operation returns its exact concrete pair with independent revisions and no source rerun', async () => {

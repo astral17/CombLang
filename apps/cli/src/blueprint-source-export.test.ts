@@ -535,6 +535,172 @@ output += Arithmetic({ left: input[A], operation: 'add', right: amount, output: 
     }
   });
 
+  test('exports the accepted Constant-count and Arithmetic-operand expressions locally', async () => {
+    const { environment } = await parameterHost();
+    const key = '__comblang_cli_local_expression_export_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const previous = globals[key];
+    globals[key] = 0;
+    const source = `globalThis.${key} = Number(globalThis.${key} ?? 0) + 1;
+const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5);
+const factor = Param.number('Factor', 2);
+const input = new Network();
+const output = new Network();
+input += Constant({ sections: [{ filters: [{ signal: A, value: (amount + 1) * factor }] }] });
+output += Arithmetic({ left: input[A], operation: 'multiply', right: amount - 1, output: A });`;
+    try {
+      const path = await sourceFile(source);
+      const valuesPath = join(dirname(path), 'expression-values.json');
+      await writeFile(
+        valuesPath,
+        JSON.stringify([
+          { id: 0, value: 9 },
+          { id: 1, value: 3 },
+        ]),
+      );
+      const { log, error } = capture();
+
+      expect(await run(['blueprint', 'export', '--json', path], environment)).toBe(0);
+      const defaults = JSON.parse(String(log.mock.calls[0]?.[0])).document;
+      expect(globals[key]).toBe(1);
+      expect(defaults.blueprint.entities).toHaveLength(2);
+      const constant = (document: typeof defaults) =>
+        document.blueprint.entities.find(
+          (entity: { name: string }) => entity.name === 'constant-combinator',
+        );
+      const arithmetic = (document: typeof defaults) =>
+        document.blueprint.entities.find(
+          (entity: { name: string }) => entity.name === 'arithmetic-combinator',
+        );
+      expect(constant(defaults).control_behavior.sections.sections[0].filters[0]).toMatchObject({
+        name: 'signal-A',
+        count: 12,
+      });
+      expect(arithmetic(defaults).control_behavior.arithmetic_conditions).toMatchObject({
+        first_signal: { name: 'signal-A' },
+        second_constant: 4,
+        output_signal: { name: 'signal-A' },
+      });
+      expect(defaults.blueprint.wires.length).toBeGreaterThan(0);
+
+      log.mockClear();
+      expect(
+        await run(['blueprint', 'export', '--json', '--overrides', valuesPath, path], environment),
+      ).toBe(0);
+      const bound = JSON.parse(String(log.mock.calls[0]?.[0])).document;
+      expect(globals[key]).toBe(2);
+      expect(bound.blueprint.entities).toHaveLength(2);
+      expect(constant(bound).control_behavior.sections.sections[0].filters[0]).toMatchObject({
+        name: 'signal-A',
+        count: 30,
+      });
+      expect(arithmetic(bound).control_behavior.arithmetic_conditions).toMatchObject({
+        first_signal: { name: 'signal-A' },
+        second_constant: 8,
+        output_signal: { name: 'signal-A' },
+      });
+      expect(bound.blueprint.wires).toEqual(defaults.blueprint.wires);
+      expect(defaults.blueprint.entities[0]).not.toEqual(bound.blueprint.entities[0]);
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete globals[key];
+      else globals[key] = previous;
+    }
+  });
+
+  test.each([
+    [
+      'Constant filter count',
+      `Constant({ sections: [{ filters: [{ signal: A, value: amount + 1 }] }] })`,
+      'constant-combinator',
+    ],
+    [
+      'Arithmetic operand',
+      `Arithmetic({ left: amount + 1, operation: 'add', right: 0, output: A })`,
+      'arithmetic-combinator',
+    ],
+  ] as const)(
+    'keeps the derived %s root locally bindable but rejects native-template export',
+    async (_label, device, entityName) => {
+      const { environment } = await parameterHost();
+      const key = '__comblang_cli_derived_native_rejection_runs';
+      const globals = globalThis as Record<string, unknown>;
+      const previous = globals[key];
+      globals[key] = 0;
+      const source = `globalThis.${key} = Number(globalThis.${key} ?? 0) + 1;
+const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5);
+const output = new Network();
+output += ${device};`;
+      try {
+        const path = await sourceFile(source);
+        const valuesPath = join(dirname(path), 'expression-values.json');
+        const outputPath = join(dirname(path), 'rejected-expression.json');
+        await writeFile(valuesPath, JSON.stringify([{ id: 0, value: 9 }]));
+        const { log, error } = capture();
+
+        expect(await run(['blueprint', 'export', '--json', path], environment)).toBe(0);
+        const defaults = JSON.parse(String(log.mock.calls[0]?.[0])).document;
+        expect(defaults.blueprint.entities).toHaveLength(1);
+        expect(defaults.blueprint.entities[0].name).toBe(entityName);
+        expect(globals[key]).toBe(1);
+
+        log.mockClear();
+        expect(
+          await run(
+            ['blueprint', 'export', '--json', '--overrides', valuesPath, path],
+            environment,
+          ),
+        ).toBe(0);
+        const bound = JSON.parse(String(log.mock.calls[0]?.[0])).document;
+        expect(globals[key]).toBe(2);
+        expect(bound.blueprint.entities).toHaveLength(1);
+        expect(bound.blueprint.entities[0].control_behavior).not.toEqual(
+          defaults.blueprint.entities[0].control_behavior,
+        );
+        if (entityName === 'constant-combinator') {
+          expect(
+            bound.blueprint.entities[0].control_behavior.sections.sections[0].filters[0],
+          ).toMatchObject({
+            count: 10,
+          });
+        } else {
+          expect(bound.blueprint.entities[0].control_behavior.arithmetic_conditions).toMatchObject({
+            first_constant: 10,
+          });
+        }
+
+        log.mockClear();
+        expect(
+          await run(
+            ['blueprint', 'export', '--json', '--parameters', '--output', outputPath, path],
+            environment,
+          ),
+        ).toBe(2);
+        const failure = JSON.parse(String(log.mock.calls[0]?.[0]));
+        expect(failure).toMatchObject({
+          ok: false,
+          error: {
+            code: 'CP1002',
+            span: {
+              fileId: expect.any(String),
+              start: expect.any(Number),
+              end: expect.any(Number),
+            },
+          },
+        });
+        expect(failure).not.toHaveProperty('document');
+        await expect(stat(outputPath)).rejects.toMatchObject({ code: 'ENOENT' });
+        expect(globals[key]).toBe(3);
+        expect(error).not.toHaveBeenCalled();
+      } finally {
+        if (previous === undefined) delete globals[key];
+        else globals[key] = previous;
+      }
+    },
+  );
+
   test('accepts only an empty override array for parameter-free sources', async () => {
     const path = await sourceFile(simpleSource);
     const valuesPath = join(dirname(path), 'empty-values.json');

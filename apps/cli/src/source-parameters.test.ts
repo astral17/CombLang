@@ -213,6 +213,38 @@ output += CC(5 * Signal('virtual', 'signal-output'));`);
     }
   });
 
+  test('lists number descriptors without exposing local expression roots or views', async () => {
+    const key = '__comblang_cli_local_expression_list_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const previous = globals[key];
+    globals[key] = 0;
+    const path = await sourceFile(`globalThis.${key} = Number(globalThis.${key} ?? 0) + 1;
+const amount = Param.number('Amount', 5);
+const factor = Param.number('Factor', 2);
+const count = (amount + 1) * factor;
+const right = amount - 1;`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    try {
+      expect(await run(['parameters', 'list', '--json', path])).toBe(0);
+      const report = JSON.parse(String(log.mock.calls[0]?.[0]));
+      expect(report).toMatchObject({
+        ok: true,
+        parameters: [
+          { id: 0, kind: 'number', label: 'Amount', defaultValue: 5 },
+          { id: 1, kind: 'number', label: 'Factor', defaultValue: 2 },
+        ],
+      });
+      expect(report.parameters[0]).not.toHaveProperty('expression');
+      expect(report.parameters[1]).not.toHaveProperty('expression');
+      expect(Object.getOwnPropertySymbols(report.parameters[0])).toEqual([]);
+      expect(JSON.stringify(report.parameters)).not.toMatch(/numericExpression|binary|session/i);
+      expect(globals[key]).toBe(1);
+    } finally {
+      if (previous === undefined) delete globals[key];
+      else globals[key] = previous;
+    }
+  });
+
   test('prints empty listings and warnings plainly, and never returns a partial listing on compile errors', async () => {
     const warningSource = await sourceFile(`function Double(input) { return input * 2; }
 function Triple(input: Network) { return input * 3; }
