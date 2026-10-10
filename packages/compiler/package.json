@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./blueprint-json": "./src/blueprint-json.ts",
+    "./blueprint-import-source": "./src/blueprint-import-source.ts",
     "./circuit-color-constraints": "./src/circuit-color-constraints.ts",
     "./circuit-graph-metrics": "./src/circuit-graph-metrics.ts",
     "./color-solver": "./src/color-solver.ts",
