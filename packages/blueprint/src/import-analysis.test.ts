@@ -457,12 +457,14 @@ describe('blueprint import structural inventory', () => {
     expect(stringifyLosslessJson(result.document)).toBe(source);
   });
 
-  test('keeps the analyzer private to its direct module instead of package exports', async () => {
+  test('exports a dedicated analyzer subpath without adding it to the main barrel', async () => {
     const manifest = JSON.parse(
       await readFile(new URL('../package.json', import.meta.url), 'utf8'),
     ) as { exports: Record<string, string> };
+    const subpath = await import('@comblang/blueprint/import-analysis');
 
+    expect(subpath.analyzeBlueprintImport).toBe(analyzeBlueprintImport);
+    expect(manifest.exports['./import-analysis']).toBe('./src/import-analysis.ts');
     expect(publicBlueprint).not.toHaveProperty('analyzeBlueprintImport');
-    expect(Object.values(manifest.exports)).not.toContain('./src/import-analysis.ts');
   });
 });

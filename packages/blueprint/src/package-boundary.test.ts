@@ -18,6 +18,8 @@ describe('blueprint package boundary', () => {
       'exchange.ts',
       'exchange-codec.ts',
       'index.ts',
+      'import-analysis.ts',
+      'import-connectivity.ts',
       'limits.ts',
       'web-compression.ts',
     ];
@@ -29,7 +31,7 @@ describe('blueprint package boundary', () => {
 
     expect(source).not.toMatch(/from\s+['"]node:/);
     expect(source).not.toMatch(/@comblang\/(?:compiler|runtime|web|cli)\b/);
-    expect(source).not.toMatch(/\b(?:window|document|navigator)(?!\.js\b)\s*(?:\.|\[|\()/);
+    expect(source).not.toMatch(/(?<![.$\w])(?:window|document|navigator)(?!\.js\b)\s*(?:\.|\[|\()/);
     expect(source).not.toMatch(/\bJSON\.parse\s*\(/);
 
     const packageJson = JSON.parse(

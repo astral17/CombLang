@@ -376,6 +376,6 @@ describe('blueprint import profile endpoint mappings', () => {
     expect(Object.values(packageJson.exports)).not.toContain(
       './src/blueprint-import-profile-mappings.ts',
     );
-    expect(packageJson.dependencies).not.toHaveProperty('@comblang/blueprint');
+    expect(packageJson.dependencies['@comblang/blueprint']).toBe('0.0.0');
   });
 });

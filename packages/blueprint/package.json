@@ -12,6 +12,8 @@
     "./exchange": "./src/exchange.ts",
     "./exchange-codec": "./src/exchange-codec.ts",
     "./limits": "./src/limits.ts",
+    "./import-analysis": "./src/import-analysis.ts",
+    "./import-connectivity": "./src/import-connectivity.ts",
     "./web-compression": "./src/web-compression.ts"
   }
 }

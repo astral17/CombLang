@@ -305,12 +305,14 @@ describe('blueprint import connectivity', () => {
     expect(result.analysis).toBe(analysis);
   });
 
-  test('keeps the new algorithm private to its direct module', async () => {
+  test('exports a dedicated connectivity subpath without adding it to the main barrel', async () => {
     const manifest = JSON.parse(
       await readFile(new URL('../package.json', import.meta.url), 'utf8'),
     ) as { exports: Record<string, string> };
+    const subpath = await import('@comblang/blueprint/import-connectivity');
 
+    expect(subpath.analyzeBlueprintConnectivity).toBe(analyzeBlueprintConnectivity);
+    expect(manifest.exports['./import-connectivity']).toBe('./src/import-connectivity.ts');
     expect(publicBlueprint).not.toHaveProperty('analyzeBlueprintConnectivity');
-    expect(Object.values(manifest.exports)).not.toContain('./src/import-connectivity.ts');
   });
 });

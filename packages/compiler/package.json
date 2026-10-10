@@ -25,6 +25,7 @@
     "./resolved-circuit": "./src/resolved-circuit-public.ts"
   },
   "dependencies": {
+    "@comblang/blueprint": "0.0.0",
     "@comblang/factorio": "0.0.0",
     "@comblang/language": "0.0.0",
     "@comblang/shared": "0.0.0"

@@ -98,6 +98,20 @@ profiles and simulator tests establish implementation behavior only. Native
 Factorio conformance requires separate reviewed evidence and fixture-backed
 round trips.
 
+## Blueprint import preparation
+
+The blueprint package retains a lossless document and exposes a bounded,
+data-only structural inventory and connector-neutral wire references through
+dedicated package subpaths. The compiler host explicitly selects trusted Entity
+profiles from its replay context, projects their declared physical lanes through
+the current exporter mapping convention, and composes those mappings with the
+inventory into color-separated connectivity components. Dependency direction
+runs from compiler to blueprint; the blueprint package remains independent of
+compiler and runtime authority. A complete result means only that this full
+document graph is covered by the explicit selections and current mapping rules.
+It does not establish executable import, source-generation fidelity, or native
+Factorio validity; those require separate policies and evidence.
+
 ## Validation and transport
 
 Canonical validators accept unknown values and rebuild frozen data. They reject
