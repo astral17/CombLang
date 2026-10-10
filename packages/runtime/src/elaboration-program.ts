@@ -113,7 +113,6 @@ import { returnNetworkValue } from './network-return-policy.js';
 import { validateCombinatorAttachment } from './combinator-attachment-policy.js';
 import { bindCombinatorHandle } from './combinator-handle-policy.js';
 import { returnOwnedValue } from './return-owned-value-policy.js';
-import { inspectReturnValueGraph } from './return-value-graph.js';
 import {
   EntityRegistry,
   EntityRegistryError,
@@ -320,7 +319,9 @@ interface PendingNetworkAlias {
 }
 
 interface ExecutionApiFrame {
+  readonly operation: string;
   dslDomain: boolean;
+  forwardedNativeUnaryThrow?: { readonly value: unknown };
 }
 
 interface NetworkOwnershipSnapshot {
@@ -1973,9 +1974,18 @@ class ElaborationRecorder {
     unaryMinus: (value: unknown, rawSpan: RawSpan): unknown => {
       const expressionView = findSourceNumericExpressionView(value);
       const parameterLike =
-        expressionView === undefined &&
-        (findBlueprintParameterHandle(value) !== undefined || isBlueprintParameterShaped(value));
-      if (expressionView === undefined && !parameterLike) return -(value as number);
+        expressionView === undefined && findBlueprintParameterHandle(value) !== undefined;
+      if (expressionView === undefined && !parameterLike) {
+        try {
+          return -(value as number);
+        } catch (error) {
+          const frame = this.#executionApiFrames.at(-1);
+          if (frame?.operation === 'unaryMinus') {
+            frame.forwardedNativeUnaryThrow = { value: error };
+          }
+          throw error;
+        }
+      }
       try {
         if (this.#parameterCapture === undefined) {
           throw new Error('Source numeric expressions require an owning parameter session.');
@@ -2312,11 +2322,9 @@ class ElaborationRecorder {
       const leftExpression = findSourceNumericExpressionView(left);
       const rightExpression = findSourceNumericExpressionView(right);
       const leftParameterLike =
-        leftExpression === undefined &&
-        (findBlueprintParameterHandle(left) !== undefined || isBlueprintParameterShaped(left));
+        leftExpression === undefined && findBlueprintParameterHandle(left) !== undefined;
       const rightParameterLike =
-        rightExpression === undefined &&
-        (findBlueprintParameterHandle(right) !== undefined || isBlueprintParameterShaped(right));
+        rightExpression === undefined && findBlueprintParameterHandle(right) !== undefined;
       if (
         leftExpression === undefined &&
         rightExpression === undefined &&
@@ -2613,7 +2621,7 @@ class ElaborationRecorder {
     const wrapped = Object.entries(executionOperations).map(([name, operation]) => [
       name,
       (...args: unknown[]) => {
-        const frame: ExecutionApiFrame = { dslDomain: false };
+        const frame: ExecutionApiFrame = { operation: name, dslDomain: false };
         this.#executionApiFrames.push(frame);
         const rawSpan =
           (name === 'network' || name === 'bind') && typeof args.at(-1) === 'function'
@@ -2635,6 +2643,13 @@ class ElaborationRecorder {
           const result = (operation as (...values: unknown[]) => unknown)(...args);
           return result;
         } catch (error) {
+          if (
+            frame.operation === 'unaryMinus' &&
+            frame.forwardedNativeUnaryThrow !== undefined &&
+            Object.is(frame.forwardedNativeUnaryThrow.value, error)
+          ) {
+            throw error;
+          }
           const recoverable = error instanceof RecoverableElaborationExecutionError;
           const domainFailure =
             !recoverable &&
@@ -3965,19 +3980,8 @@ class ElaborationRecorder {
   #returnOwnedValue(value: unknown, rawSpan: RawSpan): unknown {
     const source = this.#span(rawSpan);
     const frame = this.#currentFunctionFrame();
-    const expressionGraph = inspectReturnValueGraph(
-      value,
-      (item) => findSourceNumericExpressionView(item) !== undefined,
-    );
-    const expressionMarkers = new Map<object, object>();
-    for (const expression of expressionGraph.handles) {
-      if (!expressionMarkers.has(expression)) {
-        expressionMarkers.set(expression, Object.freeze(Object.create(null) as object));
-      }
-    }
-    const safeValue =
-      expressionMarkers.size === 0 ? value : expressionGraph.replace(expressionMarkers);
-    const returnedValue = returnOwnedValue(safeValue, source, {
+    return returnOwnedValue(value, source, {
+      isOpaqueReturnValue: (item) => findSourceNumericExpressionView(item) !== undefined,
       isEntity: (item): item is EntityValue => this.#isEntity(item),
       entityNetworks: (entity) => {
         const authority = this.#entityAuthority(entity, source);
@@ -4017,14 +4021,6 @@ class ElaborationRecorder {
       chargeTransfer: () => this.#recordDslCall(),
       returnNetwork: (network) => this.#returnOwnedNetwork(network, rawSpan, false),
     });
-    if (expressionMarkers.size === 0) return returnedValue;
-    const markerExpressions = new Map(
-      [...expressionMarkers].map(([expression, marker]) => [marker, expression] as const),
-    );
-    const returnedGraph = inspectReturnValueGraph(returnedValue, (item) =>
-      markerExpressions.has(item),
-    );
-    return returnedGraph.replace(markerExpressions);
   }
 
   #assertEntityReturnable(

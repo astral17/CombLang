@@ -1788,6 +1788,29 @@ if (caught !== failure) throw new Error('Native unary-minus exception identity c
     expect(compilation.resolvedCircuit).toBeDefined();
   });
 
+  test('keeps a caught fatal symbolic operand failure source-located and unpublished', () => {
+    const text = `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5);
+const forged = { kind: 'number', value: 9 };
+try { const invalid = amount + forged; } catch (error) {}
+const input = new Network(), output = new Network();
+output += Arithmetic({ left: input[A], operation: 'add', right: amount, output: A });`;
+    const compilation = compileSourceProgram(
+      { path: 'caught-fatal-symbolic-operand.factorio.ts', text },
+      parameterHost(),
+    );
+
+    expect(compilation.pipelineDiagnostics).toHaveLength(1);
+    const [diagnostic] = compilation.pipelineDiagnostics;
+    expect(diagnostic).toMatchObject({
+      code: 'RT2027',
+      severity: 'error',
+      span: { fileId: compilation.fileId, start: expect.any(Number), end: expect.any(Number) },
+    });
+    expect(text.slice(diagnostic!.span!.start, diagnostic!.span!.end)).toBe('amount + forged');
+    expect(compilation.resolvedCircuit).toBeUndefined();
+  });
+
   test('rejects handles escaping through control flow, coercion, arbitrary calls and wrong slots', () => {
     const unsupported = [
       `const amount = Param.number('Amount', 5); if (amount) {}`,

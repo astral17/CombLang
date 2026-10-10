@@ -13,6 +13,8 @@ import type {
 import { inspectReturnValueGraph } from './return-value-graph.js';
 
 export interface ReturnOwnedValuePolicyContext {
+  /** Opaque non-owning handles that must pass through returns without container traversal. */
+  isOpaqueReturnValue?(value: unknown): boolean;
   isEntity?(value: unknown): value is EntityValue;
   entityNetworks?(entity: EntityValue): readonly NetworkValue[];
   assertEntityReturnable?(entity: EntityValue): void;
@@ -45,16 +47,21 @@ export function returnOwnedValue(
   source: SourceSpan,
   context: ReturnOwnedValuePolicyContext,
 ): unknown {
-  const graph = inspectReturnValueGraph(
-    value,
-    (item) =>
+  const opaqueReturnValues = new WeakSet<object>();
+  const graph = inspectReturnValueGraph(value, (item) => {
+    if (context.isOpaqueReturnValue?.(item) === true) {
+      opaqueReturnValues.add(item);
+      return true;
+    }
+    return (
       context.isEntity?.(item) === true ||
       context.isCombinator(item) ||
       context.isNetwork(item) ||
       context.isPair(item) ||
       context.isPairSelection(item) ||
-      context.isSelected(item),
-  );
+      context.isSelected(item)
+    );
+  });
   const networks: NetworkValue[] = [];
   const entities: EntityValue[] = [];
   const owners = new Set<NetworkOwnershipState>();
@@ -80,6 +87,7 @@ export function returnOwnedValue(
     if (combinator !== undefined) combinatorLanes.set(network, combinator);
   };
   for (const handle of graph.handles) {
+    if (opaqueReturnValues.has(handle)) continue;
     if (context.isEntity?.(handle) === true) {
       const entity = handle;
       if (returnedEntities.has(entity)) {

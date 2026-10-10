@@ -208,4 +208,53 @@ describe('return-owned value policy', () => {
 
     expect(result.value).toBe(original);
   });
+
+  test('preserves cyclic expression-only containers and repeated non-owning handles', () => {
+    const expression = Object.freeze({ kind: 'numeric-expression' });
+    const shared: { expression: object } = { expression };
+    const root: { expression: object; shared: object; values: unknown[]; self?: unknown } = {
+      expression,
+      shared,
+      values: [expression, shared, expression],
+    };
+    root.self = root;
+
+    const result = returnOwnedValue(
+      root,
+      source,
+      policy(new Map(), { isOpaqueReturnValue: (value) => value === expression }),
+    );
+
+    expect(result).toBe(root);
+    expect(root.self).toBe(root);
+    expect(root.shared).toBe(shared);
+    expect(root.values).toEqual([expression, shared, expression]);
+    expect(root.values[0]).toBe(expression);
+  });
+
+  test('keeps an opaque expression while transferring an actually owned Network', () => {
+    const expression = Object.freeze({ kind: 'numeric-expression' });
+    const originalNetwork = network('owned', 10);
+    const owner = ownership();
+    const returnNetwork = vi.fn((value: NetworkValue) => ({
+      ...value,
+      name: `${value.name}:returned`,
+    }));
+    const root = { expression, network: originalNetwork };
+
+    const result = returnOwnedValue(
+      root,
+      source,
+      policy(new Map([[originalNetwork, owner]]), {
+        isOpaqueReturnValue: (value) => value === expression,
+        returnNetwork,
+      }),
+    ) as typeof root;
+
+    expect(result).not.toBe(root);
+    expect(result.expression).toBe(expression);
+    expect(result.network.name).toBe('owned:returned');
+    expect(root.network).toBe(originalNetwork);
+    expect(returnNetwork).toHaveBeenCalledTimes(1);
+  });
 });
