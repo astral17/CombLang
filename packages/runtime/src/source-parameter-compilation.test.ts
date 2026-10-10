@@ -1505,6 +1505,246 @@ output += Arithmetic({ left: input[A], operation: 'add', right: scaled, output: 
     }
   });
 
+  test('binds direct Constant expression counts as full defaults, overrides and resets', () => {
+    const runsKey = '__comblang_constant_numeric_expression_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const had = Object.hasOwn(globals, runsKey);
+    const before = globals[runsKey];
+    globals[runsKey] = 0;
+    const text = `globalThis.${runsKey} += 1;
+const A = Signal('item', 'iron-plate', 'normal');
+const B = Signal('virtual', 'signal-B', 'excellent');
+const amount = Param.number('Amount', 5);
+const factor = Param.number('Factor', 2);
+const count = (amount + 1) * factor;
+const negative = -(amount - 1);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: A, value: count }, { signal: B, value: negative }] }] });`;
+    try {
+      const compilation = compileSourceProgram(
+        { path: 'bound-constant-numeric-expressions.factorio.ts', text },
+        parameterHost(),
+      );
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+
+      const [amount, factor] = listSourceCompilationParameters(compilation);
+      const defaults = bindSourceCompilationCircuit(compilation);
+      const overridden = bindSourceCompilationCircuit(compilation, [
+        { parameter: amount!.parameter, value: 9 },
+        { parameter: factor!.parameter, value: 3 },
+      ]);
+      const reset = bindSourceCompilationCircuit(compilation, []);
+      expect(defaults.plan.producers).toHaveLength(1);
+      expect(defaults.plan.entities).toHaveLength(1);
+      expect(defaults.plan.producers[0]).toMatchObject({
+        configuration: {
+          sections: [{ filters: [{ value: 12 }, { value: -4 }] }],
+        },
+      });
+      expect(overridden.plan.producers[0]).toMatchObject({
+        configuration: {
+          sections: [{ filters: [{ value: 30 }, { value: -8 }] }],
+        },
+      });
+      expect(reset.plan.producers[0]).toEqual(defaults.plan.producers[0]);
+
+      const readings = (pair: ReturnType<typeof bindSourceCompilationCircuit>) => {
+        const replay = executeResolvedDirectPlan(pair.plan, pair.resolvedCircuit);
+        const session = replay.createTestSession();
+        const output = replay.network('output');
+        return [0, 1, 2].map(() => {
+          const snapshot = session.read(output);
+          const values = [
+            snapshot.get(signal('item', 'iron-plate')) ?? 0,
+            snapshot.get(signal('virtual', 'signal-B', 'excellent')) ?? 0,
+          ];
+          session.tick();
+          return values;
+        });
+      };
+      expect(readings(defaults)).toEqual([
+        [0, 0],
+        [12, -4],
+        [12, -4],
+      ]);
+      expect(readings(overridden)).toEqual([
+        [0, 0],
+        [30, -8],
+        [30, -8],
+      ]);
+      expect(readings(reset)).toEqual([
+        [0, 0],
+        [12, -4],
+        [12, -4],
+      ]);
+      expect(overridden.plan.networks.map(({ name }) => name)).toEqual(
+        defaults.plan.networks.map(({ name }) => name),
+      );
+      expect(overridden.plan.entities.map(({ id }) => id)).toEqual(
+        defaults.plan.entities.map(({ id }) => id),
+      );
+      expect(generateBlueprintJson(overridden.resolvedCircuit.ir).blueprint.wires).toEqual(
+        generateBlueprintJson(defaults.resolvedCircuit.ir).blueprint.wires,
+      );
+      expect(globals[runsKey]).toBe(1);
+    } finally {
+      if (had) globals[runsKey] = before;
+      else delete globals[runsKey];
+    }
+  });
+
+  test('enforces Constant count and multiplier expression boundaries during atomic binding', () => {
+    const fractional = compileSourceProgram(
+      {
+        path: 'constant-fractional-count.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: A, value: amount * 0.5 * 2 }] }] });`,
+      },
+      parameterHost(),
+    );
+    expect(fractional.pipelineDiagnostics).toEqual([]);
+    const amount = listSourceCompilationParameters(fractional)[0]!.parameter;
+    const defaults = bindSourceCompilationCircuit(fractional);
+    const accepted = bindSourceCompilationCircuit(fractional, [{ parameter: amount, value: 9 }]);
+    expect(defaults.plan.producers[0]).toMatchObject({
+      configuration: { sections: [{ filters: [{ value: 5 }] }] },
+    });
+    expect(accepted.plan.producers[0]).toMatchObject({
+      configuration: { sections: [{ filters: [{ value: 9 }] }] },
+    });
+    const acceptedSnapshot = structuredClone(accepted);
+    expect(() =>
+      bindSourceCompilationCircuit(fractional, [
+        { parameter: amount, value: Number.MAX_SAFE_INTEGER + 1 },
+      ]),
+    ).toThrowError(expect.objectContaining({ code: 'CP1000' }));
+    expect(accepted).toEqual(acceptedSnapshot);
+    expect(bindSourceCompilationCircuit(fractional)).toEqual(defaults);
+
+    const wrapping = compileSourceProgram(
+      {
+        path: 'constant-expression-int32-wrap.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 1);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: A, value: amount + 0 }] }] });`,
+      },
+      parameterHost(),
+    );
+    expect(wrapping.pipelineDiagnostics).toEqual([]);
+    expect(
+      bindSourceCompilationCircuit(wrapping, [
+        {
+          parameter: listSourceCompilationParameters(wrapping)[0]!.parameter,
+          value: 2147483648,
+        },
+      ]).plan.producers[0],
+    ).toMatchObject({ configuration: { sections: [{ filters: [{ value: -2147483648 }] }] } });
+
+    const scaleCompilation = compileSourceProgram(
+      {
+        path: 'constant-expression-multiplier.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const scale = Param.number('Scale', 2);
+const output = new Network();
+output += Constant({ sections: [{ multiplier: scale * 0.5, filters: [{ signal: A, value: 5 }] }] });`,
+      },
+      parameterHost(),
+    );
+    expect(scaleCompilation.pipelineDiagnostics).toEqual([]);
+    const scale = listSourceCompilationParameters(scaleCompilation)[0]!.parameter;
+    const scaled = bindSourceCompilationCircuit(scaleCompilation, [{ parameter: scale, value: 3 }]);
+    expect(scaled.plan.producers[0]).toMatchObject({
+      configuration: { sections: [{ multiplier: 1.5, filters: [{ value: 5 }] }] },
+    });
+    const replay = executeResolvedDirectPlan(scaled.plan, scaled.resolvedCircuit);
+    expect(() => replay.circuit.createSimulation().step()).toThrowError(
+      expect.objectContaining({ code: 'FC1003', reasons: ['non-unit-multiplier'] }),
+    );
+    const testSession = replay.createTestSession();
+    testSession.tick();
+    expect(testSession.readValue(replay.network('output'))).toMatchObject({
+      kind: 'unknown',
+      origins: [
+        expect.objectContaining({ description: expect.stringContaining('non-unit-multiplier') }),
+      ],
+    });
+
+    const nonfinite = compileSourceProgram(
+      {
+        path: 'constant-expression-nonfinite.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 1);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: A, value: amount * 2 }] }] });`,
+      },
+      parameterHost(),
+    );
+    expect(nonfinite.pipelineDiagnostics).toEqual([]);
+    expect(() =>
+      bindSourceCompilationCircuit(nonfinite, [
+        {
+          parameter: listSourceCompilationParameters(nonfinite)[0]!.parameter,
+          value: Number.MAX_VALUE,
+        },
+      ]),
+    ).toThrowError(expect.objectContaining({ code: 'CP1000' }));
+  });
+
+  test('valid overrides are checked against the final derived Constant count', () => {
+    const fractionalText = `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: A, value: amount * 0.5 }] }] });`;
+    const fractional = compileSourceProgram(
+      { path: 'constant-fractional-final-count.factorio.ts', text: fractionalText },
+      parameterHost(),
+    );
+    const callStart = fractionalText.indexOf('Constant(');
+    const callEnd = fractionalText.lastIndexOf(';');
+    expect(fractional.pipelineDiagnostics).toHaveLength(1);
+    expect(fractional.pipelineDiagnostics[0]).toMatchObject({
+      severity: 'error',
+      span: {
+        fileId: fractional.fileId,
+        start: callStart,
+        end: callEnd,
+      },
+    });
+    expect(fractional.plan).toBeUndefined();
+
+    for (const [index, factor, binding] of [
+      [0, '1e16', 1],
+      [1, '1e308', 2],
+    ] as const) {
+      const compilation = compileSourceProgram(
+        {
+          path: `constant-invalid-final-count-${index}.factorio.ts`,
+          text: `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 0);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: A, value: amount * ${factor} }] }] });`,
+        },
+        parameterHost(),
+      );
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      const baseline = bindSourceCompilationCircuit(compilation);
+      expect(baseline.plan.producers[0]).toMatchObject({
+        configuration: { sections: [{ filters: [{ value: 0 }] }] },
+      });
+      const snapshot = structuredClone(baseline);
+      expect(() =>
+        bindSourceCompilationCircuit(compilation, [
+          { parameter: listSourceCompilationParameters(compilation)[0]!.parameter, value: binding },
+        ]),
+      ).toThrowError(expect.objectContaining({ code: 'CP1000' }));
+      expect(baseline).toEqual(snapshot);
+      expect(bindSourceCompilationCircuit(compilation)).toEqual(baseline);
+    }
+  });
+
   test('keeps shared roots and both nominal dependencies while enforcing expression result bounds', () => {
     const sharedText = `const amount = Param.number('Amount', 5);
 const offset = Param.number('Offset', 3);
@@ -1656,12 +1896,11 @@ result.value;`,
         anchor: 'amount + 1',
       },
       {
-        name: 'unreviewed Constant slot',
-        text: `const A = Signal('virtual', 'signal-A');
-const amount = Param.number('Amount', 5);
-const result = amount + 1;
-Constant({ sections: [{ filters: [{ signal: A, value: result }] }] });`,
-        anchor: 'value: result',
+        name: 'unsupported Constant control field',
+        text: `const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Constant({ sections: [{ active: amount + 1 }] });`,
+        anchor: 'active: amount + 1',
       },
       {
         name: 'compact arithmetic input',
@@ -1694,6 +1933,33 @@ output += input + result;`,
       expect(diagnosticSpan.start, item.name).toBeLessThan(anchorStart + item.anchor.length);
       expect(diagnosticSpan.end, item.name).toBeGreaterThan(anchorStart);
     }
+  });
+
+  test('compiles derived expressions in exact Constant filter-count and multiplier slots', () => {
+    const compilation = compileSourceProgram(
+      {
+        path: 'derived-constant-slots.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5);
+const scale = Param.number('Scale', 2);
+const output = new Network();
+output += Constant({ sections: [{ multiplier: scale * 0.5, filters: [{ signal: A, value: amount - amount }] }] });`,
+      },
+      parameterHost(),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.plan?.producers[0]).toMatchObject({
+      configuration: { sections: [{ multiplier: 1, filters: [{ value: 0 }] }] },
+    });
+    const [amount, scale] = listSourceCompilationParameters(compilation);
+    expect(
+      bindSourceCompilationCircuit(compilation, [
+        { parameter: amount!.parameter, value: 8 },
+        { parameter: scale!.parameter, value: 3 },
+      ]).plan.producers[0],
+    ).toMatchObject({
+      configuration: { sections: [{ multiplier: 1.5, filters: [{ value: 0 }] }] },
+    });
   });
 
   test('preserves parameter-free JavaScript arithmetic, comparison and short-circuit order', () => {

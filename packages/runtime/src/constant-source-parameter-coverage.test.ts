@@ -103,6 +103,69 @@ function execute(
 }
 
 describe('exact Constant source parameter capture', () => {
+  test('binds a Signal parameter independently of a derived count in the same Constant row', () => {
+    const compilation = compileSourceProgram(
+      {
+        path: 'constant-signal-and-expression.factorio.ts',
+        text: `const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: amount + 1 }] }] });`,
+      },
+      environment(),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const [channel, amount] = listSourceCompilationParameters(compilation);
+    const defaults = bindSourceCompilationCircuit(compilation);
+    expect(defaults.plan.producers[0]).toMatchObject({
+      configuration: {
+        sections: [{ filters: [{ signal: { type: 'virtual', name: 'signal-A' }, value: 6 }] }],
+      },
+    });
+    const bound = bindSourceCompilationCircuit(compilation, [
+      { parameter: channel!.parameter, value: signal('virtual', 'signal-B', 'excellent') },
+      { parameter: amount!.parameter, value: 9 },
+    ]);
+    expect(bound.plan.producers[0]).toMatchObject({
+      configuration: {
+        sections: [
+          {
+            filters: [
+              { signal: { type: 'virtual', name: 'signal-B', quality: 'excellent' }, value: 10 },
+            ],
+          },
+        ],
+      },
+    });
+    expect(bindSourceCompilationCircuit(compilation, []).plan.producers[0]).toEqual(
+      defaults.plan.producers[0],
+    );
+  });
+
+  test('captures registered numeric expressions in direct filter counts and multipliers', () => {
+    const text = `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5);
+const scale = Param.number('Scale', 2);
+const output = new Network();
+output += Constant({ sections: [{ multiplier: scale * 0.5, filters: [{ signal: A, value: amount + 1 }] }] });`;
+    const compilation = compileSourceProgram(
+      { path: 'constant-numeric-expression-baseline.factorio.ts', text },
+      environment(),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.plan!.producers[0]).toMatchObject({
+      configuration: {
+        sections: [{ multiplier: 1, filters: [{ signal: { name: 'signal-A' }, value: 6 }] }],
+      },
+    });
+    const captured = execute(text);
+    expect(captured.constantTemplates).toHaveLength(1);
+    expect(captured.constantTemplates[0]!.template.sections[0]).toMatchObject({
+      multiplier: { kind: 'binary' },
+      filters: [{ value: { kind: 'binary' } }],
+    });
+  });
+
   test.each([1, 0.5])(
     'normal source compilation captures multiplier-only default %s on one linked Constant',
     (defaultValue) => {
@@ -351,7 +414,8 @@ const amount = ${runtime}.declareBlueprintNumberParameter('amount', 5, undefined
 
   test('reports a wrong-kind direct filter slot at its Constant call span', () => {
     const text = `
-const exact = Constant({ sections: [{ filters: [{ signal: amount, value: 1 }] }] });`;
+const count = Param.number('Count', 5);
+const exact = Constant({ sections: [{ filters: [{ signal: amount, value: count + 1 }] }] });`;
     const parsed = parseFile({ path: sourceFile, text });
     const callStart = text.indexOf('Constant(');
     const callEnd = text.indexOf(';', callStart);
@@ -373,7 +437,64 @@ const exact = Constant({ sections: [{ filters: [{ signal: amount, value: 1 }] }]
       'message',
       expect.stringContaining('expected a signal parameter'),
     );
+    expect(caught).toHaveProperty(
+      'message',
+      expect.stringContaining('$.configuration.sections[0].filters[0].signal:'),
+    );
   });
+
+  test.each([
+    [
+      'foreign',
+      'comblang.test.foreign-constant-signal',
+      'parameter belongs to a different parameter session',
+    ],
+    ['forged', 'comblang.test.forged-constant-signal', 'unregistered parameter-like object'],
+  ] as const)(
+    'validates a %s Signal independently of a derived Constant count',
+    (_kind, symbolKey, message) => {
+      const key = Symbol.for(symbolKey);
+      const globalRecord = globalThis as Record<PropertyKey, unknown>;
+      const previous = {
+        had: Object.hasOwn(globalRecord, key),
+        value: globalRecord[key],
+      };
+      globalRecord[key] =
+        _kind === 'foreign'
+          ? createBlueprintParameterSession().signal('Foreign', {
+              defaultValue: signal('virtual', 'signal-A'),
+            })
+          : { kind: 'signal', label: 'Forged', defaultValue: signal('virtual', 'signal-A') };
+      try {
+        const text = `const channel = globalThis[Symbol.for('${symbolKey}')];
+const amount = Param.number('Amount', 5);
+const exact = Constant({ sections: [{ filters: [{ signal: channel, value: amount + 1 }] }] });`;
+        const parsed = parseFile({ path: sourceFile, text });
+        let caught: unknown;
+        try {
+          execute(text);
+        } catch (error) {
+          caught = error;
+        }
+        expect(caught).toMatchObject({
+          code: 'RT2027',
+          span: {
+            fileId: parsed.id,
+            start: text.indexOf('Constant('),
+            end: text.lastIndexOf(';'),
+          },
+        });
+        expect(caught).toHaveProperty(
+          'message',
+          expect.stringContaining('$.configuration.sections[0].filters[0].signal:'),
+        );
+        expect(caught).toHaveProperty('message', expect.stringContaining(message));
+      } finally {
+        if (previous.had) globalRecord[key] = previous.value;
+        else delete globalRecord[key];
+      }
+    },
+  );
 
   test.each([
     [

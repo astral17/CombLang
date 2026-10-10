@@ -199,16 +199,19 @@ const limit = Param.number('Limit', 100);
 ```
 
 `Param` is reserved. Supported slots are an exact Arithmetic configuration's
-direct numeric operand, a derived local numeric expression or direct Signal output, an exact Constant filter's direct
-Signal or count and a section's direct numeric multiplier, an
+direct numeric operand, a derived local numeric expression or direct Signal
+output, an exact Constant filter's direct Signal or count (direct number
+parameter or derived expression) and a section's direct numeric multiplier
+(direct number parameter or derived expression), an
 exact Decider condition's direct right-hand numeric threshold, and exact
 Selector `select`'s `index` (number or Signal) or `count`'s `output` (Signal).
 Selector `selectMax` remains concrete; other Selector operations and slots are
 not parameterized. The defaults compile once into an ordinary concrete Plan
 and NCIR. Parameters are not JavaScript numbers, booleans, or loop bounds.
 Derived source expressions are limited to `+`, `-`, `*` and unary `-` and may
-only be consumed in exact Arithmetic numeric constant operands; they remain
-opaque and cannot be used for control flow, coercion or comparisons. Unsupported declaration forms report a source diagnostic
+only be consumed in exact Arithmetic numeric constant operands or direct
+Constant filter-count/multiplier slots; they remain opaque and cannot be used
+for control flow, coercion or comparisons. Unsupported declaration forms report a source diagnostic
 (`CL1050` for malformed syntax; `CP1000` for an invalid concrete default or metadata).
 
 ### Constant multiplier parameters
@@ -259,12 +262,13 @@ numeric simulation result. Non-unit multipliers retain the existing sparse-bus
 This does not implement Factorio multiplier/group semantics, native substitution
 or rounding. `parameter * Section(...)`, CC convenience scaling, symbolic
 `isOn`/`active`/`group` and parameter keys remain unsupported. Local numeric
-source expressions are limited to exact Arithmetic constant operands and do not
-create native formulas.
+source expressions may occupy only exact Arithmetic constant operands and
+direct Constant filter-count/multiplier slots; they do not create native formulas.
 
 Explicit native parameter metadata export rejects symbolic multipliers with
 located `CP1002`, even at default 1 or when the same handle is a supported filter
-count. A fractional declaration can fail the existing native original-int32 check
+count. Derived Constant count and multiplier expressions also fail native export
+with `CP1002`, including zero/one defaults. A fractional declaration can fail the existing native original-int32 check
 first. Ordinary concrete CLI/Worker export retains the default multiplier;
 native-export failure is separate from successful compilation. The
 [browser parameter controls](blueprint-json.md#optional-worker-local-parameter-binding)
@@ -449,9 +453,9 @@ are rejected at the second declaration, with a reference to the first.
 For valid captured compilations, unsupported declarations or uses fail
 atomically with `CP1002`, a declaration or Constant/device-call source span,
 and a semantic path. Signal and unused parameters, symbolic Decider outputs (including else outputs),
-Selector Signal indices/count outputs, symbolic multipliers and numeric
-expressions are outside this subset; a derived Arithmetic value still fails with
-`CP1002` even when its local result is constant-equivalent. A marked Decider threshold is tracked by its
+Selector Signal indices/count outputs, symbolic multipliers and derived numeric
+expressions are outside this subset; derived Arithmetic and Constant values fail
+with `CP1002` even when their local results are constant-equivalent. A marked Decider threshold is tracked by its
 exact comparison-leaf path in the authenticated capture and concrete producer.
 The existing bounded native condition expansion identifies every emitted row of
 that leaf, including duplicated rows; each must retain the declared original.

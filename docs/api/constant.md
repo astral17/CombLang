@@ -177,8 +177,11 @@ overflow are errors. Exact records accept only the listed semantic fields;
 Section options do not accept raw `multiplier` or `filters` fields. No additional
 native slot-capacity or placement guarantee is implied by these examples.
 
-Exact filter Signal/count fields and section multipliers also accept direct
-parameters; CC rows and Section scaling do not gain parameter arithmetic.
+Exact filter Signal fields accept direct Signal parameters; filter counts and
+section multipliers accept direct number parameters or local numeric expressions
+from owning number parameters. Count results must be safe integers before
+int32 normalization, while multipliers remain finite doubles. CC rows and
+Section scaling do not gain parameter arithmetic.
 See [Param](parameters.md#supported-fields) for local binding, numeric field
 rules and the separate native-template export subset.
 Related: [Decider output rows](decider.md#conditions-and-outputs), [Network](network.md),

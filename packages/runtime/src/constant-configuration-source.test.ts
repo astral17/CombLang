@@ -1,12 +1,15 @@
 import { describe, expect, test } from 'vitest';
 import { signal, type SignalId } from '@comblang/factorio';
+import { sourceFileId } from '@comblang/shared';
 import { createBlueprintParameterSession } from '../../compiler/src/blueprint-parameters.js';
+import { createBlueprintNumericExpression } from '../../compiler/src/blueprint-numeric-expression.js';
 
 import {
   normalizeConstantConfigurationSource,
   normalizeConstantConfigurationSourceWithParameters,
   ConstantConfigurationSourceError,
 } from './constant-configuration-source.js';
+import { createSourceNumericExpressionView } from './source-numeric-expressions.js';
 
 const A = signal('virtual', 'signal-A');
 const B = signal('virtual', 'signal-B', 'excellent');
@@ -15,7 +18,83 @@ const context = {
   isSignalValue: (_value: unknown): _value is never => false,
 };
 
+function expressionView(session: ReturnType<typeof createBlueprintParameterSession>, value = 2) {
+  const amount = session.number('Amount', { defaultValue: value });
+  const expression = createBlueprintNumericExpression(session, {
+    kind: 'binary',
+    operator: 'add',
+    left: { kind: 'parameter', parameter: amount },
+    right: { kind: 'literal', value: 1 },
+  });
+  return {
+    expression,
+    view: createSourceNumericExpressionView(session, expression, {
+      fileId: sourceFileId('constant-configuration-source-test.ts'),
+      start: 0,
+      end: 1,
+    }),
+  };
+}
+
 describe('exact Constant source configuration', () => {
+  test('evaluates registered count and multiplier defaults while retaining their host roots', () => {
+    const session = createBlueprintParameterSession();
+    const count = expressionView(session, 5);
+    const multiplier = expressionView(session, 2);
+    const normalized = normalizeConstantConfigurationSourceWithParameters(
+      {
+        sections: [
+          {
+            multiplier: multiplier.view,
+            filters: [{ signal: A, value: count.view }],
+          },
+        ],
+      },
+      context,
+      session,
+    );
+
+    expect(normalized.configuration.sections[0]).toMatchObject({
+      multiplier: 3,
+      filters: [{ signal: A, value: 6 }],
+    });
+    expect(normalized.templateConfiguration).toEqual({
+      isOn: true,
+      sections: [
+        {
+          active: true,
+          multiplier: multiplier.expression,
+          filters: [{ signal: A, value: count.expression }],
+        },
+      ],
+    });
+  });
+
+  test.each(['count', 'multiplier'] as const)(
+    'rejects a %s expression without its owning consuming session at the field path',
+    (field) => {
+      const owner = createBlueprintParameterSession();
+      const { view } = expressionView(owner);
+      const value =
+        field === 'count'
+          ? { sections: [{ filters: [{ signal: A, value: view }] }] }
+          : { sections: [{ multiplier: view }] };
+      const path =
+        field === 'count' ? '$.sections[0].filters[0].value' : '$.sections[0].multiplier';
+
+      for (const session of [undefined, createBlueprintParameterSession()]) {
+        expect(() =>
+          normalizeConstantConfigurationSourceWithParameters(value, context, session),
+        ).toThrowError(
+          expect.objectContaining({
+            name: 'ConstantConfigurationSourceError',
+            path,
+          }),
+        );
+      }
+    },
+  );
+
   test.each([1, 0.5, -0, 2147483648, 1e100])(
     'retains parameter multiplier default %s as finite double, including multiplier-only capture',
     (value) => {

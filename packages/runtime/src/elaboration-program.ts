@@ -4272,7 +4272,7 @@ class ElaborationRecorder {
   #rejectDerivedNumericExpression(value: unknown, rawSpan: RawSpan): void {
     if (findSourceNumericExpressionView(value) === undefined) return;
     throw new ElaborationExecutionError(
-      'A derived source numeric expression can only be consumed in an exact Arithmetic left or right operand.',
+      'A derived source numeric expression can only be consumed in an exact Arithmetic operand or Constant filter-count/multiplier slot.',
       this.#span(rawSpan),
       'RT2029',
     );

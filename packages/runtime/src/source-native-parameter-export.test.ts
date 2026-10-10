@@ -953,6 +953,41 @@ output += Arithmetic({ left: input[A], operation: 'add', right: constantEquivale
 
   test.each([
     [
+      'zero-default filter count',
+      `const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-A'), value: amount - amount }] }] });`,
+      'filter',
+    ],
+    [
+      'unit-default section multiplier',
+      `const scale = Param.number('Scale', 2);
+const output = new Network();
+output += Constant({ sections: [{ multiplier: scale * 0.5, filters: [] }] });`,
+      'multiplier',
+    ],
+  ])(
+    'keeps a derived Constant %s root local and rejects native formula export',
+    (_name, body, slot) => {
+      const compilation = compile(body);
+      const parameter = sourceApi.listSourceCompilationParameters(compilation)[0]!.parameter;
+      const bound = sourceApi.bindSourceCompilationCircuit(compilation, [
+        { parameter, value: slot === 'filter' ? 9 : 3 },
+      ]);
+      expect(bound.plan.producers[0]).toMatchObject(
+        slot === 'filter'
+          ? { configuration: { sections: [{ multiplier: 1, filters: [{ value: 0 }] }] } }
+          : { configuration: { sections: [{ multiplier: 1.5, filters: [] }] } },
+      );
+      expect(exportFailure(compilation)).toMatchObject({
+        code: 'CP1002',
+        span: expect.objectContaining({ fileId: compilation.fileId }),
+      });
+    },
+  );
+
+  test.each([
+    [
       'Decider({ condition: input[A] > amount, outputs: [amount * A] })',
       'RT2027',
       'Numeric expressions accept only finite numbers and owning number parameters.',
@@ -965,7 +1000,7 @@ output += Arithmetic({ left: input[A], operation: 'add', right: constantEquivale
     [
       'Decider({ condition: input[A] > (amount + 1), outputs: [input[A]] })',
       'RT2029',
-      'A derived source numeric expression can only be consumed in an exact Arithmetic left or right operand.',
+      'A derived source numeric expression can only be consumed in an exact Arithmetic operand or Constant filter-count/multiplier slot.',
     ],
     [
       "Selector({ input, operation: 'select', index: amount + 1 })",

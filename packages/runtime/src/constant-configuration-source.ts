@@ -11,18 +11,23 @@ import {
   type BlueprintSignalParameterHandle,
 } from '../../compiler/src/blueprint-parameters.js';
 import { lookupBlueprintParameterSlot } from '../../compiler/src/blueprint-parameter-validation.js';
+import {
+  evaluateBlueprintNumericExpression,
+  type BlueprintNumericExpression,
+} from '../../compiler/src/blueprint-numeric-expression.js';
 
 import {
   normalizeSignalValueSources,
   SignalValueSourceError,
   type SignalValueSourceContext,
 } from './constant-signal-values.js';
+import { findSourceNumericExpressionView } from './source-numeric-expressions.js';
 
 type DataRecord = Record<string, unknown>;
 
 interface ConstantFilterParameterSlots {
   readonly signal?: BlueprintSignalParameterHandle;
-  readonly value?: BlueprintNumberParameterHandle;
+  readonly value?: BlueprintNumberParameterHandle | BlueprintNumericExpression;
 }
 
 interface NormalizedConstantFilters {
@@ -129,6 +134,24 @@ function snapshotSignal(signal: {
   });
 }
 
+function evaluateExpressionDefault(
+  expression: BlueprintNumericExpression,
+  session: BlueprintParameterSession,
+  path: string,
+): number {
+  try {
+    return evaluateBlueprintNumericExpression(session, expression);
+  } catch (error) {
+    if (error instanceof BlueprintParameterError) {
+      const message = error.message.startsWith(`${error.path}: `)
+        ? error.message.slice(error.path.length + 2)
+        : error.message;
+      fail(path, message);
+    }
+    throw error;
+  }
+}
+
 function isDirectFilterCandidate(candidate: unknown): candidate is DataRecord {
   if (candidate === null || typeof candidate !== 'object' || Array.isArray(candidate)) return false;
   const prototype = Object.getPrototypeOf(candidate);
@@ -190,9 +213,9 @@ function normalizeFilters(
     let rawSignal = row.signal;
     let signalSlot: BlueprintSignalParameterHandle | undefined;
     let rawCount = row.value;
-    let numberSlot: BlueprintNumberParameterHandle | undefined;
-    if (session !== undefined) {
-      try {
+    let numberSlot: BlueprintNumberParameterHandle | BlueprintNumericExpression | undefined;
+    try {
+      if (session !== undefined) {
         const slot = lookupBlueprintParameterSlot(
           rawSignal,
           'signal',
@@ -206,6 +229,29 @@ function normalizeFilters(
           signalSlot = slot.handle as BlueprintSignalParameterHandle;
           rawSignal = formatSignalRef(slot.registration.defaultValue as SignalId);
         }
+      }
+
+      const expressionView = findSourceNumericExpressionView(rawCount);
+      if (expressionView !== undefined) {
+        if (session === undefined) {
+          fail(
+            `${rowPath}.value`,
+            'source numeric expression requires its owning parameter session.',
+          );
+        }
+        if (expressionView.session !== session) {
+          fail(
+            `${rowPath}.value`,
+            'source numeric expression belongs to a different parameter session.',
+          );
+        }
+        numberSlot = expressionView.expression;
+        rawCount = evaluateExpressionDefault(
+          expressionView.expression,
+          session,
+          `${rowPath}.value`,
+        );
+      } else if (session !== undefined) {
         const countSlot = lookupBlueprintParameterSlot(
           rawCount,
           'number',
@@ -219,16 +265,16 @@ function normalizeFilters(
           numberSlot = countSlot.handle as BlueprintNumberParameterHandle;
           rawCount = countSlot.registration.defaultValue;
         }
-      } catch (error) {
-        if (error instanceof ConstantConfigurationSourceError) throw error;
-        if (error instanceof BlueprintParameterError) {
-          const message = error.message.startsWith(`${error.path}: `)
-            ? error.message.slice(error.path.length + 2)
-            : error.message;
-          fail(error.path, message);
-        }
-        throw error;
       }
+    } catch (error) {
+      if (error instanceof ConstantConfigurationSourceError) throw error;
+      if (error instanceof BlueprintParameterError) {
+        const message = error.message.startsWith(`${error.path}: `)
+          ? error.message.slice(error.path.length + 2)
+          : error.message;
+        fail(error.path, message);
+      }
+      throw error;
     }
     const [entry] = normalizeSignalValues([[rawSignal, rawCount]], context, rowPath);
     if (entry === undefined) fail(rowPath, 'expected one direct filter row.');
@@ -277,14 +323,36 @@ export function normalizeConstantConfigurationSourceWithParameters(
   const sectionsValue =
     'sections' in record ? ownDataArray(record.sections, `${path}.sections`) : [];
   const parameterSlots: (readonly ConstantFilterParameterSlots[])[] = [];
-  const multiplierSlots: (BlueprintNumberParameterHandle | undefined)[] = [];
+  const multiplierSlots: (
+    BlueprintNumberParameterHandle | BlueprintNumericExpression | undefined
+  )[] = [];
   let hasParameterSlots = false;
   const sections = sectionsValue.map((section, index) => {
     const sectionPath = `${path}.sections[${index}]`;
     const source = ownDataRecord(section, sectionPath);
-    let multiplierSlot: BlueprintNumberParameterHandle | undefined;
+    let multiplierSlot: BlueprintNumberParameterHandle | BlueprintNumericExpression | undefined;
     let multiplier = source.multiplier;
-    if (Object.hasOwn(source, 'multiplier') && session !== undefined) {
+    const expressionView = findSourceNumericExpressionView(multiplier);
+    if (expressionView !== undefined) {
+      if (session === undefined) {
+        fail(
+          `${sectionPath}.multiplier`,
+          'source numeric expression requires its owning parameter session.',
+        );
+      }
+      if (expressionView.session !== session) {
+        fail(
+          `${sectionPath}.multiplier`,
+          'source numeric expression belongs to a different parameter session.',
+        );
+      }
+      multiplierSlot = expressionView.expression;
+      multiplier = evaluateExpressionDefault(
+        expressionView.expression,
+        session,
+        `${sectionPath}.multiplier`,
+      );
+    } else if (Object.hasOwn(source, 'multiplier') && session !== undefined) {
       try {
         const slot = lookupBlueprintParameterSlot(
           multiplier,

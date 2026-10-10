@@ -261,10 +261,11 @@ metadata properties or reflection; the owning host can list numeric `metadata`.
 
 Owning number parameters may also form opaque local expressions with finite
 numbers via binary `+`, `-`, `*` and unary `-`. A derived expression is consumed
-only by an exact Arithmetic numeric `left` or `right` slot and is evaluated by
-the registered host DAG during default compilation and binding. Direct
-parameter slots and direct-number circuit comparisons remain separate supported
-forms. Derived expressions do not produce booleans, circuit Conditions or native
+only by an exact Arithmetic numeric `left` or `right` slot, a direct Constant
+filter count, or a Constant section multiplier and is evaluated by the
+registered host DAG during default compilation and binding. Direct parameter
+slots and direct-number circuit comparisons remain separate supported forms.
+Derived expressions do not produce booleans, circuit Conditions or native
 formula strings.
 
 Native formula strings are opaque, distinct from internal host numeric DAGs.
@@ -670,8 +671,9 @@ defaults are normalized immediately into the concrete configuration; host-local
 binding may override the output SignalID and numeric operands without changing
 hardware or topology. A bare Signal parameter is not a Network selection and
 remains invalid as `left` or `right`. Derived numeric expressions are limited
-to exact Arithmetic constant operands; they do not enable parameter keys,
-compact Decider outputs, or expressions in other configuration families.
+to exact Arithmetic constant operands and direct Constant filter-count/multiplier
+slots; they do not enable parameter keys, compact Decider outputs, or expressions
+in other configuration families.
 Explicit native metadata export still
 rejects Signal declarations with located `CP1002`. Ordinary compilation uses
 defaults; concrete parameter controls and CLI overrides use chosen bound values.

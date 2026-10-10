@@ -33,16 +33,17 @@ CLI, browser controls or the embedding API instead.
 
 ## Supported fields
 
-Use parameters in these exact configurations; only Arithmetic accepts the
-limited derived source expressions described below:
+Use parameters in these exact configurations. Arithmetic operands and the two
+direct Constant numeric slots also accept the limited derived source
+expressions described below:
 
 | Constructor                           | Field                                                                               | Accepted source value              |
 | ------------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------- |
 | `Arithmetic`                          | `left`, `right` as constant operands                                                | Number or local numeric expression |
 | `Arithmetic`                          | `output`                                                                            | Signal                             |
-| `Constant`                            | `sections[].filters[].value`                                                        | Number                             |
+| `Constant`                            | `sections[].filters[].value`                                                        | Number or local numeric expression |
 | `Constant`                            | `sections[].filters[].signal`                                                       | Signal                             |
-| `Constant`                            | `sections[].multiplier`                                                             | Number                             |
+| `Constant`                            | `sections[].multiplier`                                                             | Number or local numeric expression |
 | `Decider`                             | Right-hand numeric comparison threshold in `condition`, including nested conditions | Number                             |
 | `Selector` with `operation: 'select'` | `index`                                                                             | Number or Signal                   |
 | `Selector` with `operation: 'count'`  | `output`                                                                            | Signal                             |
@@ -56,11 +57,12 @@ are not rounded or clamped to make a failed binding pass.
 A number parameter may form a local source expression with finite numbers and
 other owning number parameters using binary `+`, `-`, `*` or unary `-`. The
 opaque result is evaluated by the registered numeric DAG only when it occupies
-an exact Arithmetic `left` or `right` constant slot; it creates no device and
-does not re-execute source during binding. Direct parameter support in the other
-rows above is unchanged. Parameter-free JavaScript arithmetic remains ordinary
-JavaScript. Derived expressions are not booleans, circuit Conditions or native
-formula strings.
+an exact Arithmetic `left` or `right` constant slot, a direct Constant filter
+count, or a Constant section multiplier; it creates no device and does not
+re-execute source during binding. Count results must be finite safe integers
+before existing signed-int32 normalization; multipliers remain finite doubles.
+Parameter-free JavaScript arithmetic remains ordinary JavaScript. Derived
+expressions are not booleans, circuit Conditions or native formula strings.
 
 A Signal parameter in a Selector index changes which input Signal provides the
 index count; it does not specify the selected output. A Signal parameter is not
@@ -180,8 +182,8 @@ Native-template export supports number declarations used directly as Constant
 filter counts, Arithmetic constants, Decider right-hand thresholds or numeric
 Selector select indices. All originals must fit signed int32 and remain present
 in the exported fields. Signal declarations, symbolic section multipliers,
-derived Arithmetic expressions, unused declarations and equal originals
-belonging to distinct parameters fail explicitly in that mode. Native replacement may also affect ordinary literals
+derived Arithmetic or Constant expressions, unused declarations and equal
+originals belonging to distinct parameters fail explicitly in that mode. Native replacement may also affect ordinary literals
 equal to an original; nominal independence in local binding does not establish
 independence in Factorio placement.
 
@@ -216,11 +218,12 @@ types, accessors and custom inherited records are rejected.
 Parameter handles and derived expressions are opaque configuration values, not
 JavaScript numbers, booleans, Signal handles or loop bounds. Derived values may
 be retained in locals, arrays, objects and return values, but may only be
-consumed in the exact Arithmetic numeric constant slots described above. Do not
-use derived expressions for division/modulo/power/bitwise operations,
-comparisons, truthiness, coercion, property access, parameter keys, compact
-arithmetic, `Constant`/`Decider`/`Selector` fields or Section scaling. Direct
-number-parameter circuit comparisons remain supported where listed above.
+consumed in exact Arithmetic numeric constant slots or direct Constant filter
+count/multiplier slots described above. Do not use derived expressions for
+division/modulo/power/bitwise operations, comparisons, truthiness, coercion,
+property access, parameter keys, compact arithmetic, other Constant fields,
+Decider/Selector fields or Section scaling. Direct number-parameter circuit
+comparisons remain supported where listed above.
 Internal host numeric-expression APIs and opaque native formula metadata are
 separate from locally evaluated source expressions.
 
@@ -238,7 +241,7 @@ verify the implemented model, not native formula, replacement or placement behav
 See also [Signal](signal.md), [Decider](decider.md), [Constant](constant.md),
 [Selector](selector.md) and the [embedding parameter APIs](../native-objects-deciders-and-parameters.md#descriptor-based-local-binding).
 
-## Local numeric expressions in exact Arithmetic slots
+## Local numeric expressions in exact Arithmetic and Constant slots
 
 This complete example uses only two physical devices. The derived value is
 evaluated locally into the exact Arithmetic constant slot; it is not emitted as
@@ -264,3 +267,28 @@ Amount to 9 gives 0, 20 and 23 at those ticks. Reset restores the original
 default snapshot. Native numeric-template export rejects this derived expression
 with located `CP1002`; direct number parameters in supported native slots remain
 a separate feature.
+
+This complete source example also uses one physical Constant. The count
+expression is evaluated locally, while a bound non-unit multiplier remains a
+concrete configuration and keeps the existing simulator limitation:
+
+```ts
+const amount = Param.number('Amount', 5);
+const factor = Param.number('Factor', 2);
+const scale = Param.number('Scale', 2);
+const output = new Network();
+output += Constant({
+  sections: [
+    {
+      multiplier: scale * 0.5,
+      filters: [{ signal: Signal('virtual', 'signal-A'), value: (amount + 1) * factor }],
+    },
+  ],
+});
+```
+
+The default is multiplier 1 and count 12. Binding Amount to 9, Factor to 3,
+and Scale to 3 produces multiplier 1.5 and count 30 without changing the
+Constant or its topology. Non-unit multiplier simulation remains unsupported
+(`FC1003`/Unknown), and native numeric-template export rejects both derived
+Constant slots with `CP1002`; neither result claims Factorio formula semantics.

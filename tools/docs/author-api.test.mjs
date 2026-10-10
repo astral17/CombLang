@@ -95,8 +95,9 @@ describe('author API documentation', () => {
     [0, 2],
     [1, 1],
     [2, 2],
+    [3, 1],
   ])('compiles literal parameter example %i with %i physical devices', async (index, count) => {
-    expect(blocks('parameters')).toHaveLength(3);
+    expect(blocks('parameters')).toHaveLength(4);
     const text = blocks('parameters')[index];
     expect(text).not.toMatch(/\b(import|await)\s/);
     expect(compile(text, await bundled).resolvedCircuit.ir.producers).toHaveLength(count);
@@ -152,6 +153,41 @@ tick(); expectSignal(output, A).toBe(15);`,
         .control_behavior.arithmetic_conditions,
     ).toMatchObject({ second_constant: 20 });
     expect(generateBlueprintJson(session.bind([]).resolvedCircuit.ir)).toEqual(original);
+  });
+
+  test('executes, binds and exports the direct Constant expression example', async () => {
+    const compilation = compile(blocks('parameters')[3], await bundled);
+    run(
+      compilation,
+      `tick();
+expectSignal(network('output'), Signal('virtual', 'signal-A')).toBe(12);
+tick(); expectSignal(network('output'), Signal('virtual', 'signal-A')).toBe(12);`,
+    );
+    const session = createSourceParameterBindingSession(compilation);
+    expect(session.parameters).toMatchObject([
+      { id: 0, kind: 'number', label: 'Amount', defaultValue: 5 },
+      { id: 1, kind: 'number', label: 'Factor', defaultValue: 2 },
+      { id: 2, kind: 'number', label: 'Scale', defaultValue: 2 },
+    ]);
+    const original = generateBlueprintJson(compilation.resolvedCircuit.ir);
+    const bound = session.bind([
+      { id: 0, value: 9 },
+      { id: 1, value: 3 },
+      { id: 2, value: 3 },
+    ]);
+    expect(bound.resolvedCircuit.ir.entities).toHaveLength(1);
+    expect(generateBlueprintJson(bound.resolvedCircuit.ir).blueprint.entities[0]).toMatchObject({
+      control_behavior: {
+        sections: { sections: [{ multiplier: 1.5, filters: [{ count: 30 }] }] },
+      },
+    });
+    expect(generateBlueprintJson(session.bind([]).resolvedCircuit.ir)).toEqual(original);
+    expect(() =>
+      exportSourceCompilationNativeBlueprint(compilation, {
+        label: 'Derived Constant parameters',
+        maxDeciderConditionRows: 1024,
+      }),
+    ).toThrow(expect.objectContaining({ code: 'CP1002' }));
   });
 
   test('binds the literal documented ID values and resets against original defaults', async () => {
