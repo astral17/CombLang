@@ -632,6 +632,7 @@ describe('blueprint source import CLI', () => {
     });
     await expect(stat(verificationOutput)).rejects.toMatchObject({ code: 'ENOENT' });
     expect(JSON.stringify(reportAt(log))).not.toContain('severity":"error"');
+    expect(JSON.stringify(reportAt(log))).not.toContain('diagnosticContext');
 
     const { error } = capture();
     expect(await run(['blueprint', 'import', negativeZeroInput], host.environment)).toBe(2);

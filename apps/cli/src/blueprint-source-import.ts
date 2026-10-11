@@ -1,18 +1,13 @@
 import { resolve } from 'node:path';
 
 import { DEFAULT_BLUEPRINT_CODEC_LIMITS } from '@comblang/blueprint';
-import { classifyBlueprintDocument } from '@comblang/blueprint/classification';
-import { parseLosslessJson } from '@comblang/blueprint/document';
-import {
-  analyzeBlueprintImport,
-  type BlueprintImportEntity,
-} from '@comblang/blueprint/import-analysis';
-import { generateCanonicalBlueprintSource } from '@comblang/compiler/blueprint-import-source-assembly';
-import { verifyCanonicalBlueprintSourceRoundTrip } from '@comblang/compiler/blueprint-import-source-verification';
-import type { TrustedEntityReplayContext } from '@comblang/compiler/entity-replay-context';
-import type { Diagnostic, SourceSpan } from '@comblang/shared';
+import type { Diagnostic } from '@comblang/shared';
 import { offsetToPosition } from '@comblang/shared';
-import { compileSourceProgram } from '@comblang/runtime/source-compilation';
+import {
+  importCanonicalBlueprintSource,
+  type BlueprintSourceImportDiagnostic,
+  type BlueprintSourceImportDiagnosticContext,
+} from '@comblang/runtime/blueprint-source-import';
 
 import { BlueprintCliError, readBoundedUtf8File, writeExclusiveText } from './blueprint-command.js';
 import type { CliCompilationEnvironment } from './main.js';
@@ -28,15 +23,13 @@ export interface SourceBlueprintImportOptions {
   readonly prototypeIdentity?: string;
 }
 
-type ProfileSelection = Parameters<typeof generateCanonicalBlueprintSource>[1][number];
-
 interface ImportErrorReport {
   readonly code: string;
   readonly message: string;
   readonly path?: string;
 }
 
-type ImportDiagnostic = object & { readonly message?: unknown };
+type ImportDiagnostic = BlueprintSourceImportDiagnostic;
 type SourceImportDiagnosticFormatter = (diagnostic: Diagnostic) => string;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -236,6 +229,7 @@ function refuseDiagnostics(
     diagnostics.find(
       (diagnostic) => diagnosticCategory(diagnostic) === 'source-verification-mismatch',
     ) ??
+    diagnostics.find((diagnostic) => diagnosticCategory(diagnostic) !== undefined) ??
     diagnostics[0];
   if (first === undefined) return { code: 'CLIBP1006', message: fallbackMessage };
   const path = diagnosticPath(first);
@@ -253,87 +247,7 @@ function refuseDiagnostics(
   };
 }
 
-function inventoryDiagnostics(
-  analysis: ReturnType<typeof analyzeBlueprintImport>,
-): ImportDiagnostic[] {
-  return [...analysis.diagnostics, ...analysis.coverage];
-}
-
-function inventoryRefusal(analysis: ReturnType<typeof analyzeBlueprintImport>): {
-  readonly error: ImportErrorReport;
-  readonly diagnostics: readonly ImportDiagnostic[];
-} {
-  const diagnostics = inventoryDiagnostics(analysis);
-  return {
-    error: refuseDiagnostics(diagnostics, 'Blueprint inventory is incomplete or unsupported.'),
-    diagnostics,
-  };
-}
-
-interface ProfileSelectionIssue {
-  readonly category:
-    'unsupported-canonical-family' | 'missing-profile-selection' | 'ambiguous-canonical-profile';
-  readonly message: string;
-  readonly path: string;
-  readonly entityNumber: number;
-}
-
-function selectCanonicalProfiles(
-  entities: readonly BlueprintImportEntity[],
-  context: TrustedEntityReplayContext,
-): {
-  readonly selections: readonly ProfileSelection[];
-  readonly issues: readonly ProfileSelectionIssue[];
-} {
-  const profilesByPrototypeKey = new Map<string, (typeof context.profiles)[number][]>();
-  for (const profile of context.profiles) {
-    const key = profile.ref.prototypeKey as string;
-    const bucket = profilesByPrototypeKey.get(key);
-    if (bucket === undefined) profilesByPrototypeKey.set(key, [profile]);
-    else bucket.push(profile);
-  }
-
-  const selections: ProfileSelection[] = [];
-  const issues: ProfileSelectionIssue[] = [];
-  for (const entity of entities) {
-    const prototypeKey =
-      entity.name === 'constant-combinator' || entity.name === 'arithmetic-combinator'
-        ? `entity:${entity.name}`
-        : undefined;
-    if (prototypeKey === undefined) {
-      issues.push({
-        category: 'unsupported-canonical-family',
-        message: `Blueprint prototype ${entity.name} is outside the Constant/Arithmetic import subset.`,
-        path: `${entity.path}.name`,
-        entityNumber: entity.entityNumber,
-      });
-      continue;
-    }
-    const candidates = profilesByPrototypeKey.get(prototypeKey) ?? [];
-    if (candidates.length === 0) {
-      issues.push({
-        category: 'missing-profile-selection',
-        message: `No trusted profile has the exact canonical key ${prototypeKey}.`,
-        path: `${entity.path}.name`,
-        entityNumber: entity.entityNumber,
-      });
-      continue;
-    }
-    if (candidates.length > 1) {
-      issues.push({
-        category: 'ambiguous-canonical-profile',
-        message: `The trusted replay context contains multiple profiles with the exact key ${prototypeKey}.`,
-        path: `${entity.path}.name`,
-        entityNumber: entity.entityNumber,
-      });
-      continue;
-    }
-    selections.push({ entityNumber: entity.entityNumber, profile: candidates[0]!.ref });
-  }
-  return { selections, issues };
-}
-
-/** Imports one native JSON document through the existing source assembly and verifier seams. */
+/** Reads and presents one file; the host-neutral runtime owns semantic import. */
 export async function runSourceBlueprintImport(
   options: SourceBlueprintImportOptions,
   environment: CliCompilationEnvironment,
@@ -343,8 +257,7 @@ export async function runSourceBlueprintImport(
   ) => string,
 ): Promise<number> {
   let diagnostics: readonly ImportDiagnostic[] = [];
-  let sourceForFormatting:
-    { readonly path: string; readonly text: string; readonly fileId: string } | undefined;
+  let sourceForFormatting: BlueprintSourceImportDiagnosticContext | undefined;
   let format: SourceImportDiagnosticFormatter | undefined;
   try {
     const inputPath = resolve(options.inputPath);
@@ -352,79 +265,16 @@ export async function runSourceBlueprintImport(
       inputPath,
       DEFAULT_BLUEPRINT_CODEC_LIMITS.maxDecompressedBytes,
     );
-    const document = parseLosslessJson(input);
-    const classification = classifyBlueprintDocument(document);
-    const analysis = analyzeBlueprintImport(classification);
-    if (
-      analysis.kind !== 'blueprint' ||
-      analysis.entities === undefined ||
-      analysis.wires === undefined ||
-      analysis.partial ||
-      analysis.diagnostics.length > 0 ||
-      analysis.coverage.length > 0
-    ) {
-      const refusal = inventoryRefusal(analysis);
-      return publishFailure(refusal.error, options.json, refusal.diagnostics);
-    }
-
-    const context = environment.trustedEntityReplayContext;
-    if (context === undefined) {
-      throw new BlueprintCliError(
-        'CLIBP1006',
-        'Blueprint import requires a trusted Entity replay context, including for an empty blueprint.',
-      );
-    }
-    const profileSelection = selectCanonicalProfiles(analysis.entities, context);
-    if (profileSelection.issues.length > 0) {
-      const refusal = refuseDiagnostics(
-        profileSelection.issues,
-        'Blueprint entities do not have unique trusted canonical profiles.',
-      );
-      return publishFailure(refusal, options.json, profileSelection.issues);
-    }
-
     const sourcePath = resolve(options.output ?? `${inputPath}.factorio.ts`);
-    const assembled = generateCanonicalBlueprintSource(
-      analysis,
-      profileSelection.selections,
-      context,
-      { path: sourcePath },
-    );
-    if (assembled.state === 'blocked') {
-      diagnostics = [...assembled.retainedMetadata, ...assembled.diagnostics];
-      return publishFailure(
-        refuseDiagnostics(assembled.diagnostics, 'Blueprint source assembly was blocked.'),
-        options.json,
-        diagnostics,
-      );
+    const result = importCanonicalBlueprintSource(input, { path: sourcePath }, environment);
+    diagnostics = result.diagnostics;
+    sourceForFormatting = result.diagnosticContext;
+    if (sourceForFormatting !== undefined) {
+      format = (diagnostic) => formatSourceDiagnostic(diagnostic, sourceForFormatting!);
     }
-
-    const compilation = compileSourceProgram(assembled.source, environment);
-    sourceForFormatting = {
-      ...assembled.source,
-      fileId: compilation.fileId,
-    };
-    format = (diagnostic) => formatSourceDiagnostic(diagnostic, sourceForFormatting!);
-    const verification = verifyCanonicalBlueprintSourceRoundTrip(
-      assembled,
-      {
-        source: assembled.source,
-        ...(compilation.plan === undefined ? {} : { plan: compilation.plan }),
-        ...(compilation.resolvedCircuit === undefined
-          ? {}
-          : { resolvedCircuit: compilation.resolvedCircuit }),
-        diagnostics: compilation.pipelineDiagnostics,
-      },
-      profileSelection.selections,
-      context,
-    );
-    diagnostics = [...assembled.retainedMetadata, ...verification.diagnostics];
-    if (verification.state !== 'verified') {
+    if (result.state === 'blocked') {
       return publishFailure(
-        refuseDiagnostics(
-          verification.diagnostics,
-          'Compiled source did not verify against the imported blueprint.',
-        ),
+        refuseDiagnostics(diagnostics, 'Blueprint source import was blocked.'),
         options.json,
         diagnostics,
         sourceForFormatting,
@@ -435,16 +285,12 @@ export async function runSourceBlueprintImport(
     const destination =
       options.output === undefined
         ? undefined
-        : await writeExclusiveText(sourcePath, assembled.source.text);
+        : await writeExclusiveText(sourcePath, result.source.text);
     const response = {
       ok: true,
-      source: assembled.source,
-      correspondence: assembled.correspondence,
-      verification: {
-        state: 'verified' as const,
-        entityCount: verification.entities.length,
-        networkCount: verification.networks.length,
-      },
+      source: result.source,
+      correspondence: result.correspondence,
+      verification: result.verification,
       ...(diagnostics.length === 0 ? {} : { diagnostics }),
       ...(destination === undefined ? {} : { output: destination }),
     };
@@ -453,7 +299,7 @@ export async function runSourceBlueprintImport(
       for (const diagnostic of diagnostics) {
         console.error(formatImportDiagnostic(diagnostic, sourceForFormatting, format));
       }
-      console.log(destination === undefined ? assembled.source.text : `Wrote ${destination}`);
+      console.log(destination === undefined ? result.source.text : `Wrote ${destination}`);
     }
     return 0;
   } catch (error) {

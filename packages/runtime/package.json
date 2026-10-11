@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./blueprint-source-import": "./src/blueprint-source-import.ts",
     "./resolved-circuit": "./src/resolved-circuit.ts",
     "./entity-plan-validation": "./src/entity-plan-validation.ts",
     "./entity-provisioning": "./src/entity-provisioning.ts",
@@ -13,6 +14,7 @@
     "./source-parameter-binding": "./src/source-parameter-binding.ts"
   },
   "dependencies": {
+    "@comblang/blueprint": "0.0.0",
     "@comblang/compiler": "0.0.0",
     "@comblang/factorio": "0.0.0",
     "@comblang/language": "0.0.0",
