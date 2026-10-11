@@ -6,8 +6,9 @@ import {
   compilerWorkerRequestTimeoutReason,
   SOURCE_PROFILE_COMPILER_WORKER_TIMEOUT_MS,
   WARM_COMPILER_WORKER_REQUEST_TIMEOUT_MS,
+  BLUEPRINT_IMPORT_COMPILER_WORKER_TIMEOUT_MS,
 } from './compiler-worker-budget.js';
-import type { CompilerWorkerBindRequest } from './worker-protocol.js';
+import type { CompilerWorkerBindRequest, CompilerWorkerImportRequest } from './worker-protocol.js';
 
 const ordinaryRequest = {} as const;
 const identityOnlyRequest = { prototypeProfile: { identity: 'profile-v1' } } as const;
@@ -18,6 +19,15 @@ const bindingRequest: CompilerWorkerBindRequest = {
   sourceRevision: 3,
   token: 'binding-token',
 };
+const importRequest = (
+  prototypeProfile?: CompilerWorkerImportRequest['prototypeProfile'],
+): CompilerWorkerImportRequest => ({
+  kind: 'import-blueprint',
+  revision: 5,
+  document: { text: '{"blueprint":{"entities":[],"wires":[]}}' },
+  sourcePath: 'virtual/import.ts',
+  ...(prototypeProfile === undefined ? {} : { prototypeProfile }),
+});
 
 describe('compiler Worker timeout policy', () => {
   test('gives ordinary cold execution the cold budget', () => {
@@ -47,6 +57,29 @@ describe('compiler Worker timeout policy', () => {
     );
     expect(compilerWorkerRequestTimeoutMs(sourceProfileRequest, false)).toBe(
       SOURCE_PROFILE_COMPILER_WORKER_TIMEOUT_MS,
+    );
+  });
+
+  test('gives blueprint imports a fixed watchdog regardless of warmth or profile selection', () => {
+    const cases = [
+      importRequest(),
+      importRequest({ identity: 'profile-v1' }),
+      importRequest({ source: '{"schemaVersion":1}' }),
+    ];
+    for (const request of cases) {
+      expect(compilerWorkerRequestTimeoutMs(request, true)).toBe(
+        BLUEPRINT_IMPORT_COMPILER_WORKER_TIMEOUT_MS,
+      );
+      expect(compilerWorkerRequestTimeoutMs(request, false)).toBe(
+        BLUEPRINT_IMPORT_COMPILER_WORKER_TIMEOUT_MS,
+      );
+    }
+    expect(BLUEPRINT_IMPORT_COMPILER_WORKER_TIMEOUT_MS).toBe(15000);
+    expect(compilerWorkerRequestTimeoutReason(importRequest(), 15000)).toBe(
+      'Blueprint import exceeded the 15000 ms worker budget.',
+    );
+    expect(compilerWorkerRequestTimeoutReason(importRequest(), 15000, 'transport')).toBe(
+      'Blueprint import exceeded the 15000 ms worker budget. (last reported phase: transport)',
     );
   });
 

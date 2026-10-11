@@ -1,7 +1,8 @@
 import type {
   CompilerWorkerBindRequest,
   CompilerWorkerBoundResponse,
-  CompilerWorkerOperationRequest,
+  CompilerWorkerImportedResponse,
+  CompilerWorkerMessageRequest,
   CompilerWorkerParsedResponse,
   CompilerWorkerRequest,
 } from './worker-protocol.js';
@@ -23,7 +24,7 @@ export interface CompilerWorkerBindingCapture {
 }
 
 export interface CompilerWorkerDispatch {
-  readonly request: CompilerWorkerOperationRequest;
+  readonly request: CompilerWorkerMessageRequest;
   readonly isCold: boolean;
 }
 
@@ -32,8 +33,8 @@ export class CompilerWorkerScheduler {
   #nextWorkerId = 0;
   #currentWorkerId: number | undefined;
   #phase: CompilerWorkerSchedulerPhase = 'absent';
-  #queuedRequest: CompilerWorkerOperationRequest | undefined;
-  #activeRequest: CompilerWorkerOperationRequest | undefined;
+  #queuedRequest: CompilerWorkerMessageRequest | undefined;
+  #activeRequest: CompilerWorkerMessageRequest | undefined;
   #bindingCapture: CompilerWorkerBindingCapture | undefined;
   #completedParse = false;
 
@@ -45,7 +46,7 @@ export class CompilerWorkerScheduler {
     return this.#activeRequest?.revision;
   }
 
-  get activeRequest(): CompilerWorkerOperationRequest | undefined {
+  get activeRequest(): CompilerWorkerMessageRequest | undefined {
     return this.#activeRequest;
   }
 
@@ -63,7 +64,12 @@ export class CompilerWorkerScheduler {
     this.#currentWorkerId = workerId;
     this.#phase = 'booting';
     this.#bindingCapture = undefined;
-    if (this.#queuedRequest?.kind === 'bind-parameters') this.#queuedRequest = undefined;
+    if (
+      this.#queuedRequest?.kind === 'bind-parameters' ||
+      this.#queuedRequest?.kind === 'import-blueprint'
+    ) {
+      this.#queuedRequest = undefined;
+    }
     this.#completedParse = false;
     return workerId;
   }
@@ -75,6 +81,24 @@ export class CompilerWorkerScheduler {
   enqueue(request: CompilerWorkerRequest): void {
     this.#queuedRequest = request;
     this.#bindingCapture = undefined;
+  }
+
+  enqueueImport(
+    request: Extract<CompilerWorkerMessageRequest, { kind: 'import-blueprint' }>,
+  ): boolean {
+    const canQueue =
+      this.#phase === 'ready' ||
+      (this.#phase === 'busy' && this.#activeRequest?.kind === 'import-blueprint');
+    if (
+      !canQueue ||
+      this.#currentWorkerId === undefined ||
+      this.#queuedRequest?.kind === 'parse' ||
+      this.#queuedRequest?.kind === 'bind-parameters'
+    ) {
+      return false;
+    }
+    this.#queuedRequest = request;
+    return true;
   }
 
   enqueueBinding(request: CompilerWorkerBindRequest): boolean {
@@ -89,7 +113,8 @@ export class CompilerWorkerScheduler {
       capture.workerId !== this.#currentWorkerId ||
       capture.sourceRevision !== request.sourceRevision ||
       capture.token !== request.token ||
-      this.#queuedRequest?.kind === 'parse'
+      this.#queuedRequest?.kind === 'parse' ||
+      this.#queuedRequest?.kind === 'import-blueprint'
     ) {
       return false;
     }
@@ -118,7 +143,8 @@ export class CompilerWorkerScheduler {
 
   complete(
     workerId: number,
-    response: CompilerWorkerParsedResponse | CompilerWorkerBoundResponse,
+    response:
+      CompilerWorkerParsedResponse | CompilerWorkerBoundResponse | CompilerWorkerImportedResponse,
   ): CompilerWorkerCompletionOutcome {
     const active = this.#activeRequest;
     if (
@@ -127,6 +153,7 @@ export class CompilerWorkerScheduler {
       active === undefined ||
       active.revision !== response.revision ||
       (active.kind === 'parse' && response.kind !== 'parsed') ||
+      (active.kind === 'import-blueprint' && response.kind !== 'blueprint-imported') ||
       (active.kind === 'bind-parameters' &&
         (response.kind !== 'bound' || response.sourceRevision !== active.sourceRevision))
     ) {
@@ -170,7 +197,12 @@ export class CompilerWorkerScheduler {
     this.#phase = 'absent';
     this.#activeRequest = undefined;
     this.#bindingCapture = undefined;
-    if (this.#queuedRequest?.kind === 'bind-parameters') this.#queuedRequest = undefined;
+    if (
+      this.#queuedRequest?.kind === 'bind-parameters' ||
+      this.#queuedRequest?.kind === 'import-blueprint'
+    ) {
+      this.#queuedRequest = undefined;
+    }
     this.#completedParse = false;
     return true;
   }

@@ -52,9 +52,9 @@ import type { TestWorkerRequest, TestWorkerResponse } from './test-worker-protoc
 import { buildDetailTimeline, buildOverviewTimeline, signalLabel } from './timeline-view.js';
 import type {
   CompilerWorkerBindRequest,
-  CompilerWorkerOperationRequest,
+  CompilerWorkerMessageRequest,
+  CompilerWorkerMessageResponse,
   CompilerWorkerRequest,
-  CompilerWorkerResponse,
 } from './worker-protocol.js';
 import './styles.css';
 
@@ -1165,7 +1165,7 @@ function submitParameterReset(): void {
 }
 
 function handleWorkerMessage(
-  event: MessageEvent<CompilerWorkerResponse>,
+  event: MessageEvent<CompilerWorkerMessageResponse>,
   worker: Worker,
   workerId: number,
 ): void {
@@ -1179,7 +1179,12 @@ function handleWorkerMessage(
   }
   if (event.data.kind === 'progress') {
     const activeRequest = compilerWorkerScheduler.activeRequest;
-    if (activeRequest?.kind !== 'parse' || activeRequest.revision !== event.data.revision) return;
+    if (
+      (activeRequest?.kind !== 'parse' && activeRequest?.kind !== 'import-blueprint') ||
+      activeRequest.revision !== event.data.revision
+    ) {
+      return;
+    }
     compilerWorkerProgress.report(workerId, event.data.revision, event.data.stage);
     return;
   }
@@ -1190,6 +1195,10 @@ function handleWorkerMessage(
   workerTimeout = undefined;
   if (event.data.kind === 'parsed') warmOfflineCache();
   if (completion === 'stale') {
+    pumpCompilerWorker();
+    return;
+  }
+  if (event.data.kind === 'blueprint-imported') {
     pumpCompilerWorker();
     return;
   }
@@ -1509,7 +1518,15 @@ function handleWorkerError(event: ErrorEvent, worker: Worker, workerId: number):
   workerPrototypeIdentity = undefined;
   compilerWorkerScheduler.fail(workerId);
   const failureMessage = event.message || 'the compiler Worker crashed.';
-  if (parameterSourceRevision === currentRevision) {
+  const importFailed = failedRequest?.kind === 'import-blueprint';
+  if (importFailed) {
+    parameterSourceRevision = undefined;
+    parameterPanel.setAvailability(
+      false,
+      `${failureMessage} Recompile source to continue.`,
+      'invalid',
+    );
+  } else if (parameterSourceRevision === currentRevision) {
     parameterSourceRevision = undefined;
     parameterPanel.setAvailability(
       false,
@@ -1518,9 +1535,10 @@ function handleWorkerError(event: ErrorEvent, worker: Worker, workerId: number):
     );
   }
   const bindingFailed = failedRequest?.kind === 'bind-parameters';
-  const rolledBack = bindingFailed
-    ? false
-    : rollbackPendingPrototypeProfile(`Worker failed: ${failureMessage}`);
+  const rolledBack =
+    bindingFailed || importFailed
+      ? false
+      : rollbackPendingPrototypeProfile(`Worker failed: ${failureMessage}`);
   if (wasBooting) {
     const bootstrapFailure = `Compiler Worker failed before readiness: ${failureMessage}`;
     status.textContent = 'Compiler Worker failed to start';
@@ -1589,7 +1607,7 @@ function ensureCompilerWorker(): Worker {
   parserWorker = worker;
   const workerId = compilerWorkerScheduler.createWorker();
   parserWorkerId = workerId;
-  worker.addEventListener('message', (event: MessageEvent<CompilerWorkerResponse>) =>
+  worker.addEventListener('message', (event: MessageEvent<CompilerWorkerMessageResponse>) =>
     handleWorkerMessage(event, worker, workerId),
   );
   worker.addEventListener('error', (event) => handleWorkerError(event, worker, workerId));
@@ -1607,9 +1625,9 @@ function pumpCompilerWorker(): void {
   if (compilerWorkerScheduler.phase !== 'ready') return;
   const dispatch = compilerWorkerScheduler.takeForDispatch();
   if (dispatch === undefined) return;
-  let request: CompilerWorkerOperationRequest = dispatch.request;
+  let request: CompilerWorkerMessageRequest = dispatch.request;
   if (
-    request.kind === 'parse' &&
+    (request.kind === 'parse' || request.kind === 'import-blueprint') &&
     request.prototypeProfile !== undefined &&
     'identity' in request.prototypeProfile &&
     request.prototypeProfile.identity !== workerPrototypeIdentity &&
@@ -1635,7 +1653,9 @@ function pumpCompilerWorker(): void {
   const workerId = parserWorkerId;
   if (workerId === undefined)
     throw new Error('Compiler Worker scheduler lost its Worker identity.');
-  if (request.kind === 'parse') compilerWorkerProgress.begin(workerId, request.revision);
+  if (request.kind === 'parse' || request.kind === 'import-blueprint') {
+    compilerWorkerProgress.begin(workerId, request.revision);
+  }
   worker.postMessage(request);
   const timeoutMs = compilerWorkerRequestTimeoutMs(request, dispatch.isCold);
   workerTimeout = setTimeout(() => {
@@ -1649,7 +1669,7 @@ function pumpCompilerWorker(): void {
       return;
     }
     const lastStage =
-      request.kind === 'parse'
+      request.kind === 'parse' || request.kind === 'import-blueprint'
         ? compilerWorkerProgress.lastStage(workerId, request.revision)
         : undefined;
     worker.terminate();
@@ -1673,6 +1693,16 @@ function pumpCompilerWorker(): void {
           'invalid',
         );
       }
+      pumpCompilerWorker();
+      return;
+    }
+    if (request.kind === 'import-blueprint') {
+      parameterSourceRevision = undefined;
+      parameterPanel.setAvailability(
+        false,
+        `${timeoutReason} Recompile source to continue.`,
+        'invalid',
+      );
       pumpCompilerWorker();
       return;
     }

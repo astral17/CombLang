@@ -11,6 +11,7 @@ import {
 import type {
   CompilerWorkerBindRequest,
   CompilerWorkerBoundResponse,
+  CompilerWorkerImportedResponse,
   CompilerWorkerParsedResponse,
   CompilerWorkerRequest,
 } from './worker-protocol.js';
@@ -24,6 +25,29 @@ function request(
     revision,
     file: { path: 'main.factorio.ts', text: `const revision = ${revision};` },
     ...(prototypeProfile === undefined ? {} : { prototypeProfile }),
+  };
+}
+
+function importRequest(revision: number) {
+  return {
+    kind: 'import-blueprint' as const,
+    revision,
+    document: { text: '{"blueprint":{"entities":[],"wires":[]}}' },
+    sourcePath: 'virtual/import.ts',
+  };
+}
+
+function importedResponse(
+  revision: number,
+  state: 'verified' | 'blocked' = 'blocked',
+): CompilerWorkerImportedResponse {
+  return {
+    kind: 'blueprint-imported',
+    revision,
+    result:
+      state === 'blocked'
+        ? { state: 'blocked', diagnostics: [] }
+        : ({ state: 'verified' } as unknown as CompilerWorkerImportedResponse['result']),
   };
 }
 
@@ -149,6 +173,126 @@ describe('compiler Worker readiness scheduler', () => {
     scheduler.enqueue(request(8));
     scheduler.markReady(replacementWorkerId);
     expect(scheduler.takeForDispatch()?.isCold).toBe(true);
+  });
+
+  test('admits imports only in a ready Worker slot without disturbing queued work or capture', () => {
+    const absent = new CompilerWorkerScheduler();
+    expect(absent.enqueueImport(importRequest(130))).toBe(false);
+    expect(absent.hasQueuedRequest).toBe(false);
+
+    const booting = new CompilerWorkerScheduler();
+    booting.createWorker();
+    expect(booting.enqueueImport(importRequest(131))).toBe(false);
+    expect(booting.phase).toBe('booting');
+    expect(booting.hasQueuedRequest).toBe(false);
+
+    const withCapture = readyWithCapture(132, 'capture-132');
+    expect(withCapture.scheduler.enqueueImport(importRequest(133))).toBe(true);
+    expect(withCapture.scheduler.bindingCapture).toEqual({
+      workerId: withCapture.workerId,
+      sourceRevision: withCapture.sourceRevision,
+      token: withCapture.token,
+    });
+
+    const busyParse = new CompilerWorkerScheduler();
+    const parseWorker = busyParse.createWorker();
+    busyParse.enqueue(request(134));
+    busyParse.markReady(parseWorker);
+    busyParse.takeForDispatch();
+    expect(busyParse.enqueueImport(importRequest(135))).toBe(false);
+    expect(busyParse.activeRequest).toMatchObject({ kind: 'parse', revision: 134 });
+    expect(busyParse.hasQueuedRequest).toBe(false);
+
+    const withBinding = readyWithCapture(136, 'capture-136');
+    withBinding.scheduler.enqueueBinding(
+      bindingRequest(137, withBinding.sourceRevision, withBinding.token),
+    );
+    expect(withBinding.scheduler.enqueueImport(importRequest(138))).toBe(false);
+    expect(withBinding.scheduler.takeForDispatch()?.request.kind).toBe('bind-parameters');
+    expect(withBinding.scheduler.enqueueImport(importRequest(139))).toBe(false);
+    expect(withBinding.scheduler.activeRequest).toMatchObject({ kind: 'bind-parameters' });
+    expect(withBinding.scheduler.hasQueuedRequest).toBe(false);
+    expect(withBinding.scheduler.bindingCapture).toEqual({
+      workerId: withBinding.workerId,
+      sourceRevision: withBinding.sourceRevision,
+      token: withBinding.token,
+    });
+  });
+
+  test('coalesces imports while one is active and keeps the capture across stale completion', () => {
+    const { scheduler, workerId, sourceRevision, token } = readyWithCapture(139, 'capture-139');
+    expect(scheduler.enqueueImport(importRequest(140))).toBe(true);
+    expect(scheduler.takeForDispatch()?.request).toEqual(importRequest(140));
+    expect(scheduler.enqueueImport(importRequest(141))).toBe(true);
+    expect(scheduler.enqueueImport(importRequest(142))).toBe(true);
+
+    expect(scheduler.complete(workerId, importedResponse(140))).toBe('stale');
+    expect(scheduler.bindingCapture).toEqual({ workerId, sourceRevision, token });
+    expect(scheduler.takeForDispatch()?.request).toEqual(importRequest(142));
+    expect(scheduler.complete(workerId, importedResponse(142, 'verified'))).toBe('accepted');
+    expect(scheduler.bindingCapture).toEqual({ workerId, sourceRevision, token });
+  });
+
+  test('associates both import terminal states by kind, revision, and Worker generation', () => {
+    for (const [index, state] of (['blocked', 'verified'] as const).entries()) {
+      const scheduler = new CompilerWorkerScheduler();
+      const workerId = scheduler.createWorker();
+      scheduler.markReady(workerId);
+      expect(scheduler.enqueueImport(importRequest(143 + index))).toBe(true);
+      expect(scheduler.takeForDispatch()?.isCold).toBe(false);
+
+      expect(scheduler.complete(workerId + 1, importedResponse(143 + index, state))).toBe(
+        'ignored',
+      );
+      expect(scheduler.complete(workerId, importedResponse(143 + index, state))).toBe('accepted');
+      expect(scheduler.bindingCapture).toBeUndefined();
+
+      scheduler.enqueue(request(145 + index));
+      expect(scheduler.takeForDispatch()?.isCold).toBe(true);
+    }
+
+    const { scheduler, workerId, sourceRevision, token } = readyWithCapture(147, 'capture-147');
+    scheduler.enqueueImport(importRequest(148));
+    scheduler.takeForDispatch();
+    expect(scheduler.complete(workerId, parsed(148))).toBe('ignored');
+    expect(scheduler.complete(workerId, bound(148, sourceRevision))).toBe('ignored');
+    expect(scheduler.activeRequest).toMatchObject({ kind: 'import-blueprint', revision: 148 });
+    expect(scheduler.bindingCapture).toEqual({ workerId, sourceRevision, token });
+    expect(scheduler.complete(workerId, importedResponse(148))).toBe('accepted');
+    expect(scheduler.bindingCapture).toEqual({ workerId, sourceRevision, token });
+  });
+
+  test('parse supersedes queued import and survives Worker loss without retrying the import', () => {
+    const scheduler = new CompilerWorkerScheduler();
+    const workerId = scheduler.createWorker();
+    scheduler.markReady(workerId);
+    scheduler.enqueueImport(importRequest(149));
+    scheduler.takeForDispatch();
+    scheduler.enqueueImport(importRequest(150));
+    scheduler.enqueue(request(151));
+    expect(scheduler.enqueueImport(importRequest(154))).toBe(false);
+
+    expect(scheduler.complete(workerId, importedResponse(149))).toBe('stale');
+    expect(scheduler.bindingCapture).toBeUndefined();
+    expect(scheduler.fail(workerId)).toBe(true);
+    expect(scheduler.complete(workerId, importedResponse(150))).toBe('ignored');
+
+    const replacement = scheduler.createWorker();
+    expect(scheduler.markReady(replacement)).toBe(true);
+    expect(scheduler.takeForDispatch()).toMatchObject({
+      request: { kind: 'parse', revision: 151 },
+      isCold: true,
+    });
+    expect(scheduler.complete(replacement, parsed(151))).toBe('accepted');
+
+    scheduler.enqueueImport(importRequest(152));
+    scheduler.takeForDispatch();
+    scheduler.enqueueImport(importRequest(153));
+    expect(scheduler.fail(replacement)).toBe(true);
+    expect(scheduler.hasQueuedRequest).toBe(false);
+    const nextWorker = scheduler.createWorker();
+    expect(scheduler.markReady(nextWorker)).toBe(true);
+    expect(scheduler.takeForDispatch()).toBeUndefined();
   });
 
   test('keeps bootstrap and request timeout reasons distinct', () => {
