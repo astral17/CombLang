@@ -112,11 +112,16 @@ returns an inert Entity. It creates no computation Producer, output Network or
 simulator device by itself. Configuration validation and callable capabilities
 are separate; see [Entity source API](../language-reference.md#provider--and-host-bound-entities).
 The structural catalog's select default does not make exact `operation` optional.
+The Factorio 2.1.21 structural catalog also documents `select.index_comparator`
+and `quality-select.select_highest_quality`; these fields do not extend the exact
+Selector computation API or imply simulator/native behavior for either feature.
+Their documented structural defaults are `"="` and `true`, respectively; the
+exact computation continues to use its existing deterministic rank/index rules.
 
 ## Restrictions
 
 Only select/count computation is implemented. Exact `random`, `stack-size`,
-`rocket-capacity`, `quality-filter`, `quality-transfer` and any other operation
+`rocket-capacity`, `quality-filter`, `quality-transfer`, `quality-select` and any other operation
 are rejected, even when structural schema fields exist. No `Select`, `Count`,
 `Random`, `QualityFilter`, `QualityTransfer` or `Time` computation helper is
 introduced by this page. Unsupported field mixtures, missing output/input,

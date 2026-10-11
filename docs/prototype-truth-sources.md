@@ -21,10 +21,11 @@ them ahead of compilation. No CombLang mod, scenario, headless runner or live
 connection is required. See the [loading guide](prototype-environment.md) for
 user import and maintainer asset generation.
 
-The [pinned Factorio 2.1.17 API inputs](../tools/factorio-api/README.md) and shipped
-Base + Space Age asset provide structural provenance. Hashes prove byte identity,
-not the truth of metadata declarations or native conformance. Coverage flags
-describe available facts, not their evidence quality.
+The [pinned Factorio 2.1.21 API inputs](../tools/factorio-api/README.md) and the
+shipped Base + Space Age Factorio 2.1.17 asset provide distinct structural
+provenance. Hashes prove byte identity, not the truth of metadata declarations or
+native conformance. Coverage flags describe available facts, not their evidence
+quality; updating API schemas does not update the shipped prototype data.
 
 The simulator consumes lowered devices and buses. It is not a factory simulator
 and does not use prototype geometry to infer Entity computation.

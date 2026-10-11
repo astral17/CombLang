@@ -1,11 +1,11 @@
 # Blueprint schema catalog
 
 `@comblang/prototypes` exports a validated, read-only catalog generated from
-the pinned Factorio 2.1.17 API snapshot. It describes the documented
+the pinned Factorio 2.1.21 API snapshot. It describes the documented
 `BlueprintEntity` common fields, all 62 documented entity variants, the 47
 variants that declare a `control_behavior` field, their 37 concrete behavior
 tables, and the recursive named-schema closure. The built-in loader pins the
-catalog to the independently reviewed Factorio 2.1.17 source identity and
+catalog to the independently reviewed Factorio 2.1.21 source identity and
 checks behavior schemas and variant links before exposing the data.
 
 The catalog is structural data only. Its `documented` status means that the
@@ -53,7 +53,7 @@ coercion hooks.
 
 Table descriptors may also carry data-only variant metadata. For example,
 `SelectorCombinatorParameters` keeps common `operation` in its fields and
-records the six documented operation groups separately. Validation selects the
+records the seven documented operation groups separately. Validation selects the
 explicit discriminator value or its documented default; a field from another
 group is rejected, while documented values without a group such as
 `rocket-capacity` and `stack-size` remain common-only. This records API shape
@@ -64,8 +64,22 @@ separate from this catalog surface. It currently supports only deterministic
 `select` and `count`, lowers through the canonical Entity pipeline, and uses the
 simulator/model and Blueprint preview boundaries documented in
 [Entity pipeline](entity-pipeline.md). The
-catalog's checked/raw structural configuration remains available for other
-operation groups; neither surface is native Selector conformance evidence.
+catalog's checked/raw structural configuration also records
+`select.index_comparator` and `quality-select.select_highest_quality`; neither
+field adds exact computation. The structural catalog remains available for other
+operation groups, and neither surface is native Selector conformance evidence.
+The API documents `index_comparator` as optional with default `"="`, and
+`select_highest_quality` as optional with default `true`; the catalog records
+these defaults but validation does not materialize them or infer their behavior.
+The 2.1.21 API also documents optional `read_empty_slots` (default `false`) and
+`empty_slots_signal` fields on Container, LogisticContainer, ProxyContainer,
+CargoLandingPad, and SpacePlatformHub behaviors, plus optional `read_launched`
+(default `false`) and `launched_signal` on RocketSilo. Reactor's
+`temperature_signal` is optional in this snapshot. These remain structural
+schema facts; exact simulator behavior is unchanged. The documented
+ProxyContainer `circuit_connector` array and `Sprite4Way` picture shape are
+recorded for a separate future prototype-normalization audit, not implemented
+here.
 
 ## Schema-family coverage
 
@@ -84,7 +98,11 @@ compatibility claim:
 | Recipes            | Full generated variant/reference graph                                | `assembling-machine` recipe and control behavior                                    | Available    | Not captured    |
 | Transport settings | Full generated variant/reference graph                                | `loader` connection type, filter mode, and filters                                  | Available    | Not captured    |
 | Labs               | `lab` and `LabBlueprintControlBehavior` reference `ResearchCondition` | `read_contents` and `technology_level_signal` SignalID through source `Entity(...)` | Available    | Not captured    |
-| Selector           | `SelectorCombinatorParameters` with six exact groups                  | `select`, `count`, `random`, `time`, and group rejection                            | Available    | Not captured    |
+| Containers         | Full generated variant/reference graph                                | `container` empty-slot flag and SignalID                                            | Available    | Not captured    |
+| Space platforms    | Full generated variant/reference graph                                | `space-platform-hub` empty-slot flag and SignalID                                   | Available    | Not captured    |
+| Rocket silos       | Full generated variant/reference graph                                | `rocket-silo` launched flag and SignalID                                            | Available    | Not captured    |
+| Reactors           | Full generated variant/reference graph                                | `reactor` fragment with omitted optional temperature Signal                         | Available    | Not captured    |
+| Selector           | `SelectorCombinatorParameters` with seven exact groups                | `select`, `count`, `random`, `time`, new fields and operation-group rejection       | Available    | Not captured    |
 
 These representatives are table-driven tests against the generated descriptors,
 not a claim that every field is implemented. Known scalar families are checked
@@ -104,7 +122,7 @@ connectors, evaluate research, or claim native Factorio behavior.
 
 ## Regeneration
 
-The generator verifies the SHA-256 manifest for the checked-in 2.1.17 runtime
+The generator verifies the SHA-256 manifest for the checked-in 2.1.21 runtime
 and prototype API fixtures before reading them. It emits the inventory and the
 catalog with locale-independent ordering:
 

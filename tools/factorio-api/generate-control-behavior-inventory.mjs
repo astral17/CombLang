@@ -8,7 +8,7 @@ const toolDirectory = new URL('./', import.meta.url);
 const reviewUrl = new URL('control-behavior-review.json', toolDirectory);
 const outputUrl = new URL('generated/control-behaviors.json', toolDirectory);
 const catalogOutputUrl = new URL(
-  '../../packages/prototypes/generated/blueprint-schema-catalog-2.1.17.json',
+  '../../packages/prototypes/generated/blueprint-schema-catalog-2.1.21.json',
   toolDirectory,
 );
 

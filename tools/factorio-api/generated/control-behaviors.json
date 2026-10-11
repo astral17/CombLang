@@ -2,11 +2,11 @@
   "format": "comblang-control-behavior-inventory",
   "version": 1,
   "source": {
-    "snapshot": "fixtures/2.1.17",
-    "applicationVersion": "2.1.17",
+    "snapshot": "fixtures/2.1.21",
+    "applicationVersion": "2.1.21",
     "apiVersion": 6,
-    "runtimeSha256": "2e1fd436404b712af6fe7b6c53e21a8f5688092a9e132fd2a5571327a96e5211",
-    "prototypeSha256": "156f33cb4bc7ee2c538bb93f291f5270f2cdc45be654bbe6f226e402bf8f5368"
+    "runtimeSha256": "f21602449ec6c077afb4a26311ef075af7aedb8c067d53b9cc87efccca4d761f",
+    "prototypeSha256": "5abe17bc8797770ab6c7ceb0cbe4348ab3b716efef59c7ee3e539596337132e6"
   },
   "counts": {
     "classes": 40,
@@ -2015,8 +2015,16 @@
       ],
       "ownRuntimeAttributes": [
         {
+          "name": "empty_slots_signal",
+          "order": 2,
+          "description": "",
+          "read_type": "SignalID",
+          "write_type": "SignalID",
+          "optional": true
+        },
+        {
           "name": "object_name",
-          "order": 3,
+          "order": 5,
           "description": "The class name of this object. Available even when `valid` is false. For LuaStruct objects it may also be suffixed with a dotted path to a member of the struct.",
           "read_type": "string",
           "optional": false
@@ -2030,7 +2038,7 @@
           "optional": false
         },
         {
-          "name": "set_requests",
+          "name": "read_empty_slots",
           "order": 1,
           "description": "",
           "read_type": "boolean",
@@ -2038,14 +2046,31 @@
           "optional": false
         },
         {
+          "name": "set_requests",
+          "order": 3,
+          "description": "",
+          "read_type": "boolean",
+          "write_type": "boolean",
+          "optional": false
+        },
+        {
           "name": "valid",
-          "order": 2,
+          "order": 4,
           "description": "Is this object valid? This Lua object holds a reference to an object within the game engine. It is possible that the game-engine object is removed whilst a mod still holds the corresponding Lua object. If that happens, the object becomes invalid, i.e. this attribute will be `false`. Mods are advised to check for object validity if any change to the game state might have occurred between the creation of the Lua object and its access.",
           "read_type": "boolean",
           "optional": false
         }
       ],
       "effectiveRuntimeAttributes": [
+        {
+          "name": "empty_slots_signal",
+          "order": 2,
+          "description": "",
+          "read_type": "SignalID",
+          "write_type": "SignalID",
+          "optional": true,
+          "declaredOn": "LuaCargoLandingPadControlBehavior"
+        },
         {
           "name": "entity",
           "order": 3,
@@ -2065,7 +2090,7 @@
         },
         {
           "name": "object_name",
-          "order": 3,
+          "order": 5,
           "description": "The class name of this object. Available even when `valid` is false. For LuaStruct objects it may also be suffixed with a dotted path to a member of the struct.",
           "read_type": "string",
           "optional": false,
@@ -2090,8 +2115,17 @@
           "declaredOn": "LuaCargoLandingPadControlBehavior"
         },
         {
-          "name": "set_requests",
+          "name": "read_empty_slots",
           "order": 1,
+          "description": "",
+          "read_type": "boolean",
+          "write_type": "boolean",
+          "optional": false,
+          "declaredOn": "LuaCargoLandingPadControlBehavior"
+        },
+        {
+          "name": "set_requests",
+          "order": 3,
           "description": "",
           "read_type": "boolean",
           "write_type": "boolean",
@@ -2108,7 +2142,7 @@
         },
         {
           "name": "valid",
-          "order": 2,
+          "order": 4,
           "description": "Is this object valid? This Lua object holds a reference to an object within the game engine. It is possible that the game-engine object is removed whilst a mod still holds the corresponding Lua object. If that happens, the object becomes invalid, i.e. this attribute will be `false`. Mods are advised to check for object validity if any change to the game state might have occurred between the creation of the Lua object and its access.",
           "read_type": "boolean",
           "optional": false,
@@ -2147,6 +2181,13 @@
         "complex_type": "table",
         "parameters": [
           {
+            "name": "empty_slots_signal",
+            "order": 4,
+            "description": "",
+            "type": "SignalID",
+            "optional": true
+          },
+          {
             "name": "input_networks",
             "order": 0,
             "description": "",
@@ -2168,8 +2209,15 @@
             "optional": true
           },
           {
-            "name": "set_requests",
+            "name": "read_empty_slots",
             "order": 3,
+            "description": "Defaults to `false`.",
+            "type": "boolean",
+            "optional": true
+          },
+          {
+            "name": "set_requests",
+            "order": 5,
             "description": "Defaults to `false`.",
             "type": "boolean",
             "optional": true
@@ -2629,8 +2677,16 @@
       ],
       "ownRuntimeAttributes": [
         {
-          "name": "object_name",
+          "name": "empty_slots_signal",
           "order": 2,
+          "description": "",
+          "read_type": "SignalID",
+          "write_type": "SignalID",
+          "optional": true
+        },
+        {
+          "name": "object_name",
+          "order": 4,
           "description": "The class name of this object. Available even when `valid` is false. For LuaStruct objects it may also be suffixed with a dotted path to a member of the struct.",
           "read_type": "string",
           "optional": false
@@ -2644,14 +2700,31 @@
           "optional": false
         },
         {
-          "name": "valid",
+          "name": "read_empty_slots",
           "order": 1,
+          "description": "",
+          "read_type": "boolean",
+          "write_type": "boolean",
+          "optional": false
+        },
+        {
+          "name": "valid",
+          "order": 3,
           "description": "Is this object valid? This Lua object holds a reference to an object within the game engine. It is possible that the game-engine object is removed whilst a mod still holds the corresponding Lua object. If that happens, the object becomes invalid, i.e. this attribute will be `false`. Mods are advised to check for object validity if any change to the game state might have occurred between the creation of the Lua object and its access.",
           "read_type": "boolean",
           "optional": false
         }
       ],
       "effectiveRuntimeAttributes": [
+        {
+          "name": "empty_slots_signal",
+          "order": 2,
+          "description": "",
+          "read_type": "SignalID",
+          "write_type": "SignalID",
+          "optional": true,
+          "declaredOn": "LuaContainerControlBehavior"
+        },
         {
           "name": "entity",
           "order": 3,
@@ -2671,7 +2744,7 @@
         },
         {
           "name": "object_name",
-          "order": 2,
+          "order": 4,
           "description": "The class name of this object. Available even when `valid` is false. For LuaStruct objects it may also be suffixed with a dotted path to a member of the struct.",
           "read_type": "string",
           "optional": false,
@@ -2696,6 +2769,15 @@
           "declaredOn": "LuaContainerControlBehavior"
         },
         {
+          "name": "read_empty_slots",
+          "order": 1,
+          "description": "",
+          "read_type": "boolean",
+          "write_type": "boolean",
+          "optional": false,
+          "declaredOn": "LuaContainerControlBehavior"
+        },
+        {
           "name": "type",
           "order": 2,
           "description": "The concrete type of this control behavior.",
@@ -2705,7 +2787,7 @@
         },
         {
           "name": "valid",
-          "order": 1,
+          "order": 3,
           "description": "Is this object valid? This Lua object holds a reference to an object within the game engine. It is possible that the game-engine object is removed whilst a mod still holds the corresponding Lua object. If that happens, the object becomes invalid, i.e. this attribute will be `false`. Mods are advised to check for object validity if any change to the game state might have occurred between the creation of the Lua object and its access.",
           "read_type": "boolean",
           "optional": false,
@@ -2744,6 +2826,13 @@
         "complex_type": "table",
         "parameters": [
           {
+            "name": "empty_slots_signal",
+            "order": 3,
+            "description": "",
+            "type": "SignalID",
+            "optional": true
+          },
+          {
             "name": "output_networks",
             "order": 0,
             "description": "",
@@ -2754,6 +2843,13 @@
             "name": "read_contents",
             "order": 1,
             "description": "Defaults to `true`.",
+            "type": "boolean",
+            "optional": true
+          },
+          {
+            "name": "read_empty_slots",
+            "order": 2,
+            "description": "Defaults to `false`.",
             "type": "boolean",
             "optional": true
           }
@@ -6314,8 +6410,16 @@
           "optional": false
         },
         {
-          "name": "object_name",
+          "name": "empty_slots_signal",
           "order": 5,
+          "description": "",
+          "read_type": "SignalID",
+          "write_type": "SignalID",
+          "optional": true
+        },
+        {
+          "name": "object_name",
+          "order": 7,
           "description": "The class name of this object. Available even when `valid` is false. For LuaStruct objects it may also be suffixed with a dotted path to a member of the struct.",
           "read_type": "string",
           "optional": false
@@ -6324,6 +6428,14 @@
           "name": "read_contents",
           "order": 3,
           "description": "`true` if this logistic container is sending its content to a circuit network.",
+          "read_type": "boolean",
+          "write_type": "boolean",
+          "optional": false
+        },
+        {
+          "name": "read_empty_slots",
+          "order": 4,
+          "description": "",
           "read_type": "boolean",
           "write_type": "boolean",
           "optional": false
@@ -6338,7 +6450,7 @@
         },
         {
           "name": "valid",
-          "order": 4,
+          "order": 6,
           "description": "Is this object valid? This Lua object holds a reference to an object within the game engine. It is possible that the game-engine object is removed whilst a mod still holds the corresponding Lua object. If that happens, the object becomes invalid, i.e. this attribute will be `false`. Mods are advised to check for object validity if any change to the game state might have occurred between the creation of the Lua object and its access.",
           "read_type": "boolean",
           "optional": false
@@ -6364,6 +6476,15 @@
           "declaredOn": "LuaLogisticContainerControlBehavior"
         },
         {
+          "name": "empty_slots_signal",
+          "order": 5,
+          "description": "",
+          "read_type": "SignalID",
+          "write_type": "SignalID",
+          "optional": true,
+          "declaredOn": "LuaLogisticContainerControlBehavior"
+        },
+        {
           "name": "entity",
           "order": 3,
           "description": "The entity this control behavior belongs to.",
@@ -6382,7 +6503,7 @@
         },
         {
           "name": "object_name",
-          "order": 5,
+          "order": 7,
           "description": "The class name of this object. Available even when `valid` is false. For LuaStruct objects it may also be suffixed with a dotted path to a member of the struct.",
           "read_type": "string",
           "optional": false,
@@ -6407,6 +6528,15 @@
           "declaredOn": "LuaLogisticContainerControlBehavior"
         },
         {
+          "name": "read_empty_slots",
+          "order": 4,
+          "description": "",
+          "read_type": "boolean",
+          "write_type": "boolean",
+          "optional": false,
+          "declaredOn": "LuaLogisticContainerControlBehavior"
+        },
+        {
           "name": "set_requests",
           "order": 2,
           "description": "`true` if this logistic container has its requests set by a circuit network.\n\nCan only be set to `true` on containers whose [logistic_mode](runtime:LuaEntityPrototype::logistic_mode) or [override_logistic_mode](runtime:LuaEntity::override_logistic_mode) is set to `\"requester\"` or `\"buffer\"`.",
@@ -6425,7 +6555,7 @@
         },
         {
           "name": "valid",
-          "order": 4,
+          "order": 6,
           "description": "Is this object valid? This Lua object holds a reference to an object within the game engine. It is possible that the game-engine object is removed whilst a mod still holds the corresponding Lua object. If that happens, the object becomes invalid, i.e. this attribute will be `false`. Mods are advised to check for object validity if any change to the game state might have occurred between the creation of the Lua object and its access.",
           "read_type": "boolean",
           "optional": false,
@@ -6465,16 +6595,23 @@
         "parameters": [
           {
             "name": "circuit_condition",
-            "order": 5,
+            "order": 7,
             "description": "",
             "type": "CircuitCondition",
             "optional": true
           },
           {
             "name": "circuit_condition_enabled",
-            "order": 4,
+            "order": 6,
             "description": "Defaults to `false`.",
             "type": "boolean",
+            "optional": true
+          },
+          {
+            "name": "empty_slots_signal",
+            "order": 4,
+            "description": "",
+            "type": "SignalID",
             "optional": true
           },
           {
@@ -6499,8 +6636,15 @@
             "optional": true
           },
           {
-            "name": "set_requests",
+            "name": "read_empty_slots",
             "order": 3,
+            "description": "Defaults to `false`.",
+            "type": "boolean",
+            "optional": true
+          },
+          {
+            "name": "set_requests",
+            "order": 5,
             "description": "Defaults to `false`.",
             "type": "boolean",
             "optional": true
@@ -7132,8 +7276,16 @@
       ],
       "ownRuntimeAttributes": [
         {
-          "name": "object_name",
+          "name": "empty_slots_signal",
           "order": 2,
+          "description": "",
+          "read_type": "SignalID",
+          "write_type": "SignalID",
+          "optional": true
+        },
+        {
+          "name": "object_name",
+          "order": 4,
           "description": "The class name of this object. Available even when `valid` is false. For LuaStruct objects it may also be suffixed with a dotted path to a member of the struct.",
           "read_type": "string",
           "optional": false
@@ -7147,14 +7299,31 @@
           "optional": false
         },
         {
-          "name": "valid",
+          "name": "read_empty_slots",
           "order": 1,
+          "description": "",
+          "read_type": "boolean",
+          "write_type": "boolean",
+          "optional": false
+        },
+        {
+          "name": "valid",
+          "order": 3,
           "description": "Is this object valid? This Lua object holds a reference to an object within the game engine. It is possible that the game-engine object is removed whilst a mod still holds the corresponding Lua object. If that happens, the object becomes invalid, i.e. this attribute will be `false`. Mods are advised to check for object validity if any change to the game state might have occurred between the creation of the Lua object and its access.",
           "read_type": "boolean",
           "optional": false
         }
       ],
       "effectiveRuntimeAttributes": [
+        {
+          "name": "empty_slots_signal",
+          "order": 2,
+          "description": "",
+          "read_type": "SignalID",
+          "write_type": "SignalID",
+          "optional": true,
+          "declaredOn": "LuaProxyContainerControlBehavior"
+        },
         {
           "name": "entity",
           "order": 3,
@@ -7174,7 +7343,7 @@
         },
         {
           "name": "object_name",
-          "order": 2,
+          "order": 4,
           "description": "The class name of this object. Available even when `valid` is false. For LuaStruct objects it may also be suffixed with a dotted path to a member of the struct.",
           "read_type": "string",
           "optional": false,
@@ -7199,6 +7368,15 @@
           "declaredOn": "LuaProxyContainerControlBehavior"
         },
         {
+          "name": "read_empty_slots",
+          "order": 1,
+          "description": "",
+          "read_type": "boolean",
+          "write_type": "boolean",
+          "optional": false,
+          "declaredOn": "LuaProxyContainerControlBehavior"
+        },
+        {
           "name": "type",
           "order": 2,
           "description": "The concrete type of this control behavior.",
@@ -7208,7 +7386,7 @@
         },
         {
           "name": "valid",
-          "order": 1,
+          "order": 3,
           "description": "Is this object valid? This Lua object holds a reference to an object within the game engine. It is possible that the game-engine object is removed whilst a mod still holds the corresponding Lua object. If that happens, the object becomes invalid, i.e. this attribute will be `false`. Mods are advised to check for object validity if any change to the game state might have occurred between the creation of the Lua object and its access.",
           "read_type": "boolean",
           "optional": false,
@@ -7247,6 +7425,13 @@
         "complex_type": "table",
         "parameters": [
           {
+            "name": "empty_slots_signal",
+            "order": 3,
+            "description": "",
+            "type": "SignalID",
+            "optional": true
+          },
+          {
             "name": "output_networks",
             "order": 0,
             "description": "",
@@ -7257,6 +7442,13 @@
             "name": "read_contents",
             "order": 1,
             "description": "Defaults to `true`.",
+            "type": "boolean",
+            "optional": true
+          },
+          {
+            "name": "read_empty_slots",
+            "order": 2,
+            "description": "Defaults to `false`.",
             "type": "boolean",
             "optional": true
           }
@@ -8258,7 +8450,7 @@
             "order": 3,
             "description": "",
             "type": "SignalID",
-            "optional": false
+            "optional": true
           }
         ]
       },
@@ -8622,10 +8814,26 @@
       ],
       "ownRuntimeAttributes": [
         {
-          "name": "object_name",
+          "name": "launched_signal",
           "order": 2,
+          "description": "",
+          "read_type": "SignalID",
+          "write_type": "SignalID",
+          "optional": true
+        },
+        {
+          "name": "object_name",
+          "order": 4,
           "description": "The class name of this object. Available even when `valid` is false. For LuaStruct objects it may also be suffixed with a dotted path to a member of the struct.",
           "read_type": "string",
+          "optional": false
+        },
+        {
+          "name": "read_launched",
+          "order": 1,
+          "description": "",
+          "read_type": "boolean",
+          "write_type": "boolean",
           "optional": false
         },
         {
@@ -8638,7 +8846,7 @@
         },
         {
           "name": "valid",
-          "order": 1,
+          "order": 3,
           "description": "Is this object valid? This Lua object holds a reference to an object within the game engine. It is possible that the game-engine object is removed whilst a mod still holds the corresponding Lua object. If that happens, the object becomes invalid, i.e. this attribute will be `false`. Mods are advised to check for object validity if any change to the game state might have occurred between the creation of the Lua object and its access.",
           "read_type": "boolean",
           "optional": false
@@ -8663,8 +8871,17 @@
           "declaredOn": "LuaControlBehavior"
         },
         {
-          "name": "object_name",
+          "name": "launched_signal",
           "order": 2,
+          "description": "",
+          "read_type": "SignalID",
+          "write_type": "SignalID",
+          "optional": true,
+          "declaredOn": "LuaRocketSiloControlBehavior"
+        },
+        {
+          "name": "object_name",
+          "order": 4,
           "description": "The class name of this object. Available even when `valid` is false. For LuaStruct objects it may also be suffixed with a dotted path to a member of the struct.",
           "read_type": "string",
           "optional": false,
@@ -8678,6 +8895,15 @@
           "write_type": "CircuitNetworkSelection",
           "optional": true,
           "declaredOn": "LuaControlBehavior"
+        },
+        {
+          "name": "read_launched",
+          "order": 1,
+          "description": "",
+          "read_type": "boolean",
+          "write_type": "boolean",
+          "optional": false,
+          "declaredOn": "LuaRocketSiloControlBehavior"
         },
         {
           "name": "read_mode",
@@ -8698,7 +8924,7 @@
         },
         {
           "name": "valid",
-          "order": 1,
+          "order": 3,
           "description": "Is this object valid? This Lua object holds a reference to an object within the game engine. It is possible that the game-engine object is removed whilst a mod still holds the corresponding Lua object. If that happens, the object becomes invalid, i.e. this attribute will be `false`. Mods are advised to check for object validity if any change to the game state might have occurred between the creation of the Lua object and its access.",
           "read_type": "boolean",
           "optional": false,
@@ -8737,6 +8963,13 @@
         "complex_type": "table",
         "parameters": [
           {
+            "name": "launched_signal",
+            "order": 3,
+            "description": "",
+            "type": "SignalID",
+            "optional": true
+          },
+          {
             "name": "output_networks",
             "order": 0,
             "description": "",
@@ -8748,6 +8981,13 @@
             "order": 1,
             "description": "Defaults to `logistic_inventory`.",
             "type": "defines.control_behavior.rocket_silo.read_mode",
+            "optional": true
+          },
+          {
+            "name": "read_launched",
+            "order": 2,
+            "description": "Defaults to `false`.",
+            "type": "boolean",
             "optional": true
           }
         ]
@@ -9000,6 +9240,20 @@
             ]
           },
           {
+            "name": "quality-select",
+            "order": 6,
+            "description": "",
+            "parameters": [
+              {
+                "name": "select_highest_quality",
+                "order": 0,
+                "description": "Defaults to `true`.",
+                "type": "boolean",
+                "optional": true
+              }
+            ]
+          },
+          {
             "name": "quality-transfer",
             "order": 4,
             "description": "",
@@ -9053,6 +9307,13 @@
             "order": 0,
             "description": "",
             "parameters": [
+              {
+                "name": "index_comparator",
+                "order": 3,
+                "description": "Defaults to `\"=\"`.",
+                "type": "ComparatorString",
+                "optional": true
+              },
               {
                 "name": "index_constant",
                 "order": 2,
@@ -9387,15 +9648,23 @@
       "ownRuntimeAttributes": [
         {
           "name": "damage_taken_signal",
-          "order": 8,
+          "order": 10,
           "description": "Signal to be transmitted with platform's damage taken value.",
           "read_type": "SignalID",
           "write_type": "SignalID",
           "optional": true
         },
         {
+          "name": "empty_slots_signal",
+          "order": 2,
+          "description": "",
+          "read_type": "SignalID",
+          "write_type": "SignalID",
+          "optional": true
+        },
+        {
           "name": "object_name",
-          "order": 10,
+          "order": 12,
           "description": "The class name of this object. Available even when `valid` is false. For LuaStruct objects it may also be suffixed with a dotted path to a member of the struct.",
           "read_type": "string",
           "optional": false
@@ -9410,46 +9679,14 @@
         },
         {
           "name": "read_damage_taken",
-          "order": 7,
+          "order": 9,
           "description": "Whether damage taken by the space platform is sent to circuit network.",
           "read_type": "boolean",
           "write_type": "boolean",
           "optional": false
         },
         {
-          "name": "read_moving_from",
-          "order": 3,
-          "description": "Whether current connection \"from\" end is sent to circuit network.",
-          "read_type": "boolean",
-          "write_type": "boolean",
-          "optional": false
-        },
-        {
-          "name": "read_moving_to",
-          "order": 4,
-          "description": "Whether current connection \"to\" end is sent to circuit network.",
-          "read_type": "boolean",
-          "write_type": "boolean",
-          "optional": false
-        },
-        {
-          "name": "read_speed",
-          "order": 5,
-          "description": "Whether current speed of space platform is sent to circuit network.",
-          "read_type": "boolean",
-          "write_type": "boolean",
-          "optional": false
-        },
-        {
-          "name": "send_to_platform",
-          "order": 2,
-          "description": "Whether the signals are used for circuit conditions in the platform's schedule",
-          "read_type": "boolean",
-          "write_type": "boolean",
-          "optional": false
-        },
-        {
-          "name": "set_requests",
+          "name": "read_empty_slots",
           "order": 1,
           "description": "",
           "read_type": "boolean",
@@ -9457,8 +9694,48 @@
           "optional": false
         },
         {
-          "name": "speed_signal",
+          "name": "read_moving_from",
+          "order": 5,
+          "description": "Whether current connection \"from\" end is sent to circuit network.",
+          "read_type": "boolean",
+          "write_type": "boolean",
+          "optional": false
+        },
+        {
+          "name": "read_moving_to",
           "order": 6,
+          "description": "Whether current connection \"to\" end is sent to circuit network.",
+          "read_type": "boolean",
+          "write_type": "boolean",
+          "optional": false
+        },
+        {
+          "name": "read_speed",
+          "order": 7,
+          "description": "Whether current speed of space platform is sent to circuit network.",
+          "read_type": "boolean",
+          "write_type": "boolean",
+          "optional": false
+        },
+        {
+          "name": "send_to_platform",
+          "order": 4,
+          "description": "Whether the signals are used for circuit conditions in the platform's schedule",
+          "read_type": "boolean",
+          "write_type": "boolean",
+          "optional": false
+        },
+        {
+          "name": "set_requests",
+          "order": 3,
+          "description": "",
+          "read_type": "boolean",
+          "write_type": "boolean",
+          "optional": false
+        },
+        {
+          "name": "speed_signal",
+          "order": 8,
           "description": "Signal to be transmitted with platform's current speed.",
           "read_type": "SignalID",
           "write_type": "SignalID",
@@ -9466,7 +9743,7 @@
         },
         {
           "name": "valid",
-          "order": 9,
+          "order": 11,
           "description": "Is this object valid? This Lua object holds a reference to an object within the game engine. It is possible that the game-engine object is removed whilst a mod still holds the corresponding Lua object. If that happens, the object becomes invalid, i.e. this attribute will be `false`. Mods are advised to check for object validity if any change to the game state might have occurred between the creation of the Lua object and its access.",
           "read_type": "boolean",
           "optional": false
@@ -9475,8 +9752,17 @@
       "effectiveRuntimeAttributes": [
         {
           "name": "damage_taken_signal",
-          "order": 8,
+          "order": 10,
           "description": "Signal to be transmitted with platform's damage taken value.",
+          "read_type": "SignalID",
+          "write_type": "SignalID",
+          "optional": true,
+          "declaredOn": "LuaSpacePlatformHubControlBehavior"
+        },
+        {
+          "name": "empty_slots_signal",
+          "order": 2,
+          "description": "",
           "read_type": "SignalID",
           "write_type": "SignalID",
           "optional": true,
@@ -9501,7 +9787,7 @@
         },
         {
           "name": "object_name",
-          "order": 10,
+          "order": 12,
           "description": "The class name of this object. Available even when `valid` is false. For LuaStruct objects it may also be suffixed with a dotted path to a member of the struct.",
           "read_type": "string",
           "optional": false,
@@ -9527,7 +9813,7 @@
         },
         {
           "name": "read_damage_taken",
-          "order": 7,
+          "order": 9,
           "description": "Whether damage taken by the space platform is sent to circuit network.",
           "read_type": "boolean",
           "write_type": "boolean",
@@ -9535,43 +9821,7 @@
           "declaredOn": "LuaSpacePlatformHubControlBehavior"
         },
         {
-          "name": "read_moving_from",
-          "order": 3,
-          "description": "Whether current connection \"from\" end is sent to circuit network.",
-          "read_type": "boolean",
-          "write_type": "boolean",
-          "optional": false,
-          "declaredOn": "LuaSpacePlatformHubControlBehavior"
-        },
-        {
-          "name": "read_moving_to",
-          "order": 4,
-          "description": "Whether current connection \"to\" end is sent to circuit network.",
-          "read_type": "boolean",
-          "write_type": "boolean",
-          "optional": false,
-          "declaredOn": "LuaSpacePlatformHubControlBehavior"
-        },
-        {
-          "name": "read_speed",
-          "order": 5,
-          "description": "Whether current speed of space platform is sent to circuit network.",
-          "read_type": "boolean",
-          "write_type": "boolean",
-          "optional": false,
-          "declaredOn": "LuaSpacePlatformHubControlBehavior"
-        },
-        {
-          "name": "send_to_platform",
-          "order": 2,
-          "description": "Whether the signals are used for circuit conditions in the platform's schedule",
-          "read_type": "boolean",
-          "write_type": "boolean",
-          "optional": false,
-          "declaredOn": "LuaSpacePlatformHubControlBehavior"
-        },
-        {
-          "name": "set_requests",
+          "name": "read_empty_slots",
           "order": 1,
           "description": "",
           "read_type": "boolean",
@@ -9580,8 +9830,53 @@
           "declaredOn": "LuaSpacePlatformHubControlBehavior"
         },
         {
-          "name": "speed_signal",
+          "name": "read_moving_from",
+          "order": 5,
+          "description": "Whether current connection \"from\" end is sent to circuit network.",
+          "read_type": "boolean",
+          "write_type": "boolean",
+          "optional": false,
+          "declaredOn": "LuaSpacePlatformHubControlBehavior"
+        },
+        {
+          "name": "read_moving_to",
           "order": 6,
+          "description": "Whether current connection \"to\" end is sent to circuit network.",
+          "read_type": "boolean",
+          "write_type": "boolean",
+          "optional": false,
+          "declaredOn": "LuaSpacePlatformHubControlBehavior"
+        },
+        {
+          "name": "read_speed",
+          "order": 7,
+          "description": "Whether current speed of space platform is sent to circuit network.",
+          "read_type": "boolean",
+          "write_type": "boolean",
+          "optional": false,
+          "declaredOn": "LuaSpacePlatformHubControlBehavior"
+        },
+        {
+          "name": "send_to_platform",
+          "order": 4,
+          "description": "Whether the signals are used for circuit conditions in the platform's schedule",
+          "read_type": "boolean",
+          "write_type": "boolean",
+          "optional": false,
+          "declaredOn": "LuaSpacePlatformHubControlBehavior"
+        },
+        {
+          "name": "set_requests",
+          "order": 3,
+          "description": "",
+          "read_type": "boolean",
+          "write_type": "boolean",
+          "optional": false,
+          "declaredOn": "LuaSpacePlatformHubControlBehavior"
+        },
+        {
+          "name": "speed_signal",
+          "order": 8,
           "description": "Signal to be transmitted with platform's current speed.",
           "read_type": "SignalID",
           "write_type": "SignalID",
@@ -9598,7 +9893,7 @@
         },
         {
           "name": "valid",
-          "order": 9,
+          "order": 11,
           "description": "Is this object valid? This Lua object holds a reference to an object within the game engine. It is possible that the game-engine object is removed whilst a mod still holds the corresponding Lua object. If that happens, the object becomes invalid, i.e. this attribute will be `false`. Mods are advised to check for object validity if any change to the game state might have occurred between the creation of the Lua object and its access.",
           "read_type": "boolean",
           "optional": false,
@@ -9638,7 +9933,14 @@
         "parameters": [
           {
             "name": "damage_taken_signal",
-            "order": 10,
+            "order": 12,
+            "description": "",
+            "type": "SignalID",
+            "optional": true
+          },
+          {
+            "name": "empty_slots_signal",
+            "order": 4,
             "description": "",
             "type": "SignalID",
             "optional": true
@@ -9666,49 +9968,56 @@
           },
           {
             "name": "read_damage_taken",
-            "order": 9,
+            "order": 11,
             "description": "Defaults to `false`.",
             "type": "boolean",
             "optional": true
           },
           {
-            "name": "read_moving_from",
-            "order": 5,
-            "description": "Defaults to `false`.",
-            "type": "boolean",
-            "optional": true
-          },
-          {
-            "name": "read_moving_to",
-            "order": 6,
-            "description": "Defaults to `false`.",
-            "type": "boolean",
-            "optional": true
-          },
-          {
-            "name": "read_speed",
-            "order": 7,
-            "description": "Defaults to `false`.",
-            "type": "boolean",
-            "optional": true
-          },
-          {
-            "name": "send_to_platform",
-            "order": 4,
-            "description": "Defaults to `true`.",
-            "type": "boolean",
-            "optional": true
-          },
-          {
-            "name": "set_requests",
+            "name": "read_empty_slots",
             "order": 3,
             "description": "Defaults to `false`.",
             "type": "boolean",
             "optional": true
           },
           {
-            "name": "speed_signal",
+            "name": "read_moving_from",
+            "order": 7,
+            "description": "Defaults to `false`.",
+            "type": "boolean",
+            "optional": true
+          },
+          {
+            "name": "read_moving_to",
             "order": 8,
+            "description": "Defaults to `false`.",
+            "type": "boolean",
+            "optional": true
+          },
+          {
+            "name": "read_speed",
+            "order": 9,
+            "description": "Defaults to `false`.",
+            "type": "boolean",
+            "optional": true
+          },
+          {
+            "name": "send_to_platform",
+            "order": 6,
+            "description": "Defaults to `true`.",
+            "type": "boolean",
+            "optional": true
+          },
+          {
+            "name": "set_requests",
+            "order": 5,
+            "description": "Defaults to `false`.",
+            "type": "boolean",
+            "optional": true
+          },
+          {
+            "name": "speed_signal",
+            "order": 10,
             "description": "",
             "type": "SignalID",
             "optional": true
@@ -12053,7 +12362,7 @@
     },
     {
       "name": "BeltConnectionType",
-      "order": 9,
+      "order": 8,
       "description": "",
       "type": {
         "complex_type": "union",
@@ -12074,7 +12383,7 @@
     },
     {
       "name": "BlueprintEntity",
-      "order": 170,
+      "order": 169,
       "description": "The representation of an entity inside of a blueprint.",
       "type": {
         "complex_type": "table",
@@ -14033,6 +14342,20 @@
         "complex_type": "table",
         "parameters": [
           {
+            "name": "buffer_size",
+            "order": 4,
+            "description": "Only used for equipment of type `\"electric-energy-interface-equipment\"`.",
+            "type": "double",
+            "optional": true
+          },
+          {
+            "name": "burner_fuel_inventory",
+            "order": 5,
+            "description": "Only used for equipment of type `\"generator-equipment\"` that has a burner energy source.",
+            "type": "BlueprintInventoryWithFilters",
+            "optional": true
+          },
+          {
             "name": "equipment",
             "order": 0,
             "description": "",
@@ -14045,6 +14368,20 @@
             "description": "",
             "type": "EquipmentPosition",
             "optional": false
+          },
+          {
+            "name": "power_production",
+            "order": 2,
+            "description": "Only used for equipment of type `\"electric-energy-interface-equipment\"`.",
+            "type": "double",
+            "optional": true
+          },
+          {
+            "name": "power_usage",
+            "order": 3,
+            "description": "Only used for equipment of type `\"electric-energy-interface-equipment\"`.",
+            "type": "double",
+            "optional": true
           }
         ]
       }
@@ -14102,13 +14439,13 @@
     },
     {
       "name": "BlueprintInventory",
-      "order": 197,
+      "order": 195,
       "description": "",
       "type": "table"
     },
     {
       "name": "BlueprintInventoryWithFilters",
-      "order": 196,
+      "order": 194,
       "description": "",
       "type": {
         "complex_type": "table",
@@ -14135,7 +14472,7 @@
     },
     {
       "name": "BlueprintItemFilter",
-      "order": 195,
+      "order": 193,
       "description": "",
       "type": {
         "complex_type": "table",
@@ -14368,7 +14705,7 @@
     },
     {
       "name": "BlueprintRollingStockConnection",
-      "order": 169,
+      "order": 168,
       "description": "",
       "type": {
         "complex_type": "table",
@@ -14549,7 +14886,7 @@
     },
     {
       "name": "BlueprintWire",
-      "order": 171,
+      "order": 170,
       "description": "Describes a single wire in the blueprint. The members of the tuple are, in order:\n\n- `source_entity_number`\n\n- `source_wire_connector_id`\n\n- `target_entity_number`\n\n- `target_wire_connector_id`",
       "type": {
         "complex_type": "tuple",
@@ -14628,6 +14965,13 @@
         "complex_type": "table",
         "parameters": [
           {
+            "name": "empty_slots_signal",
+            "order": 4,
+            "description": "",
+            "type": "SignalID",
+            "optional": true
+          },
+          {
             "name": "input_networks",
             "order": 0,
             "description": "",
@@ -14649,8 +14993,15 @@
             "optional": true
           },
           {
-            "name": "set_requests",
+            "name": "read_empty_slots",
             "order": 3,
+            "description": "Defaults to `false`.",
+            "type": "boolean",
+            "optional": true
+          },
+          {
+            "name": "set_requests",
+            "order": 5,
             "description": "Defaults to `false`.",
             "type": "boolean",
             "optional": true
@@ -14767,7 +15118,7 @@
     },
     {
       "name": "Color",
-      "order": 167,
+      "order": 166,
       "description": "Red, green, blue and alpha values, all in range [0, 1] or all in range [0, 255] if any value is > 1. All values here are optional. Color channels default to `0`, the alpha channel defaults to `1`.\n\nSimilar to [MapPosition](runtime:MapPosition), Color allows the short-hand notation of passing an array of exactly 3 or 4 numbers. The game usually expects colors to be in pre-multiplied form (color channels are pre-multiplied by alpha).",
       "examples": [
         "```\nred1 = {r = 0.5, g = 0, b = 0, a = 0.5}  -- Half-opacity red\nred2 = {r = 0.5, a = 0.5}                -- Same color as red1\nblack = {}                               -- All channels omitted: black\nred1_short = {0.5, 0, 0, 0.5}            -- Same color as red1 in short-hand notation\n```"
@@ -14823,7 +15174,7 @@
     },
     {
       "name": "ComparatorString",
-      "order": 15,
+      "order": 14,
       "description": "A string that specifies how the inputs should be compared.\n\nWhile the API accepts both versions for `\"less/greater than or equal to\"` and `\"not equal\"`, it'll always return `\"≥\"`, `\"≤\"` or `\"≠\"` respectively when reading them back.",
       "type": {
         "complex_type": "union",
@@ -14909,6 +15260,13 @@
         "complex_type": "table",
         "parameters": [
           {
+            "name": "empty_slots_signal",
+            "order": 3,
+            "description": "",
+            "type": "SignalID",
+            "optional": true
+          },
+          {
             "name": "output_networks",
             "order": 0,
             "description": "",
@@ -14919,6 +15277,13 @@
             "name": "read_contents",
             "order": 1,
             "description": "Defaults to `true`.",
+            "type": "boolean",
+            "optional": true
+          },
+          {
+            "name": "read_empty_slots",
+            "order": 2,
+            "description": "Defaults to `false`.",
             "type": "boolean",
             "optional": true
           }
@@ -15145,7 +15510,7 @@
     },
     {
       "name": "EquipmentID",
-      "order": 128,
+      "order": 127,
       "description": "An equipment prototype may be specified in one of three ways.",
       "type": {
         "complex_type": "union",
@@ -15171,7 +15536,7 @@
     },
     {
       "name": "EquipmentIDAndQualityIDPair",
-      "order": 130,
+      "order": 129,
       "description": "An equipment prototype with optional quality specification.",
       "type": {
         "complex_type": "table",
@@ -15236,7 +15601,7 @@
     },
     {
       "name": "EquipmentWithQualityID",
-      "order": 129,
+      "order": 128,
       "description": "An equipment prototype with optional quality specification.",
       "type": {
         "complex_type": "union",
@@ -15730,13 +16095,13 @@
     },
     {
       "name": "ItemCountType",
-      "order": 14,
+      "order": 13,
       "description": "",
       "type": "uint32"
     },
     {
       "name": "ItemFilter",
-      "order": 46,
+      "order": 45,
       "description": "An item filter may be specified in two ways, either as a string which is an item prototype name or as a table.",
       "type": {
         "complex_type": "union",
@@ -15774,7 +16139,7 @@
     },
     {
       "name": "ItemID",
-      "order": 112,
+      "order": 111,
       "description": "An item prototype may be specified in one of four ways.",
       "type": {
         "complex_type": "union",
@@ -15832,7 +16197,7 @@
     },
     {
       "name": "ItemStackIndex",
-      "order": 11,
+      "order": 10,
       "description": "",
       "type": "uint16"
     },
@@ -16119,16 +16484,23 @@
         "parameters": [
           {
             "name": "circuit_condition",
-            "order": 5,
+            "order": 7,
             "description": "",
             "type": "CircuitCondition",
             "optional": true
           },
           {
             "name": "circuit_condition_enabled",
-            "order": 4,
+            "order": 6,
             "description": "Defaults to `false`.",
             "type": "boolean",
+            "optional": true
+          },
+          {
+            "name": "empty_slots_signal",
+            "order": 4,
+            "description": "",
+            "type": "SignalID",
             "optional": true
           },
           {
@@ -16153,8 +16525,15 @@
             "optional": true
           },
           {
-            "name": "set_requests",
+            "name": "read_empty_slots",
             "order": 3,
+            "description": "Defaults to `false`.",
+            "type": "boolean",
+            "optional": true
+          },
+          {
+            "name": "set_requests",
+            "order": 5,
             "description": "Defaults to `false`.",
             "type": "boolean",
             "optional": true
@@ -16164,7 +16543,7 @@
     },
     {
       "name": "LogisticFilterIndex",
-      "order": 12,
+      "order": 11,
       "description": "",
       "type": "uint16"
     },
@@ -16254,7 +16633,7 @@
     },
     {
       "name": "LogisticSectionIndex",
-      "order": 13,
+      "order": 12,
       "description": "",
       "type": "uint8"
     },
@@ -16287,8 +16666,8 @@
     },
     {
       "name": "MapPosition",
-      "order": 166,
-      "description": "Coordinates on a surface, for example of an entity. MapPositions may be specified either as a dictionary with `x`, `y` as keys, or simply as an array with two elements.\n\nThe coordinates are saved as a fixed-size 32 bit integer, with 8 bits reserved for decimal precision, meaning the smallest value step is `1/2^8 = 0.00390625` tiles.",
+      "order": 165,
+      "description": "Coordinates on a surface, for example of an entity. MapPositions may be specified either as a dictionary with `x`, `y` as keys, or simply as an array with two elements. When reading this is always a dictionary.\n\nThe coordinates are saved as a fixed-size 32 bit integer, with 8 bits reserved for decimal precision, meaning the smallest value step is `1/2^8 = 0.00390625` tiles.",
       "examples": [
         "```\n-- Explicit definition\n{x = 5.5, y = 2}\n{y = 2.25, x = 5.125}\n```",
         "```\n-- Shorthand\n{1.625, 2.375}\n```"
@@ -16565,7 +16944,7 @@
     },
     {
       "name": "PrototypeFilterMode",
-      "order": 190,
+      "order": 188,
       "description": "",
       "type": {
         "complex_type": "union",
@@ -16597,6 +16976,13 @@
         "complex_type": "table",
         "parameters": [
           {
+            "name": "empty_slots_signal",
+            "order": 3,
+            "description": "",
+            "type": "SignalID",
+            "optional": true
+          },
+          {
             "name": "output_networks",
             "order": 0,
             "description": "",
@@ -16607,6 +16993,13 @@
             "name": "read_contents",
             "order": 1,
             "description": "Defaults to `true`.",
+            "type": "boolean",
+            "optional": true
+          },
+          {
+            "name": "read_empty_slots",
+            "order": 2,
+            "description": "Defaults to `false`.",
             "type": "boolean",
             "optional": true
           }
@@ -16667,7 +17060,7 @@
     },
     {
       "name": "QualityCondition",
-      "order": 151,
+      "order": 150,
       "description": "An item filter may be specified in two ways, either as a string which is a quality prototype name or as a table.",
       "type": {
         "complex_type": "union",
@@ -16698,7 +17091,7 @@
     },
     {
       "name": "QualityID",
-      "order": 122,
+      "order": 121,
       "description": "A quality prototype may be specified in one of two ways.",
       "type": {
         "complex_type": "union",
@@ -16847,20 +17240,20 @@
             "order": 3,
             "description": "",
             "type": "SignalID",
-            "optional": false
+            "optional": true
           }
         ]
       }
     },
     {
       "name": "RealOrientation",
-      "order": 164,
+      "order": 163,
       "description": "The smooth orientation. It is a `float` in the range `[0, 1)` that covers a full circle, starting at the top and going clockwise.\n\nThis means a value of `0` indicates \"north\", a value of `0.5` indicates \"south\". For example then, a value of `0.625` would indicate \"south-west\", and a value of `0.875` would indicate \"north-west\".",
       "type": "float"
     },
     {
       "name": "RequestFromLocation",
-      "order": 161,
+      "order": 160,
       "description": "",
       "type": {
         "complex_type": "union",
@@ -16989,6 +17382,13 @@
         "complex_type": "table",
         "parameters": [
           {
+            "name": "launched_signal",
+            "order": 3,
+            "description": "",
+            "type": "SignalID",
+            "optional": true
+          },
+          {
             "name": "output_networks",
             "order": 0,
             "description": "",
@@ -17000,6 +17400,13 @@
             "order": 1,
             "description": "Defaults to `logistic_inventory`.",
             "type": "defines.control_behavior.rocket_silo.read_mode",
+            "optional": true
+          },
+          {
+            "name": "read_launched",
+            "order": 2,
+            "description": "Defaults to `false`.",
+            "type": "boolean",
             "optional": true
           }
         ]
@@ -17051,6 +17458,11 @@
             "complex_type": "literal",
             "value": "time",
             "description": ""
+          },
+          {
+            "complex_type": "literal",
+            "value": "quality-select",
+            "description": ""
           }
         ],
         "full_format": true
@@ -17096,6 +17508,20 @@
                 "order": 0,
                 "description": "The quality condition to use. Defaults to `null`.",
                 "type": "QualityCondition",
+                "optional": true
+              }
+            ]
+          },
+          {
+            "name": "quality-select",
+            "order": 6,
+            "description": "",
+            "parameters": [
+              {
+                "name": "select_highest_quality",
+                "order": 0,
+                "description": "Defaults to `true`.",
+                "type": "boolean",
                 "optional": true
               }
             ]
@@ -17154,6 +17580,13 @@
             "order": 0,
             "description": "",
             "parameters": [
+              {
+                "name": "index_comparator",
+                "order": 3,
+                "description": "Defaults to `\"=\"`.",
+                "type": "ComparatorString",
+                "optional": true
+              },
               {
                 "name": "index_constant",
                 "order": 2,
@@ -17410,7 +17843,14 @@
         "parameters": [
           {
             "name": "damage_taken_signal",
-            "order": 10,
+            "order": 12,
+            "description": "",
+            "type": "SignalID",
+            "optional": true
+          },
+          {
+            "name": "empty_slots_signal",
+            "order": 4,
             "description": "",
             "type": "SignalID",
             "optional": true
@@ -17438,49 +17878,56 @@
           },
           {
             "name": "read_damage_taken",
-            "order": 9,
+            "order": 11,
             "description": "Defaults to `false`.",
             "type": "boolean",
             "optional": true
           },
           {
-            "name": "read_moving_from",
-            "order": 5,
-            "description": "Defaults to `false`.",
-            "type": "boolean",
-            "optional": true
-          },
-          {
-            "name": "read_moving_to",
-            "order": 6,
-            "description": "Defaults to `false`.",
-            "type": "boolean",
-            "optional": true
-          },
-          {
-            "name": "read_speed",
-            "order": 7,
-            "description": "Defaults to `false`.",
-            "type": "boolean",
-            "optional": true
-          },
-          {
-            "name": "send_to_platform",
-            "order": 4,
-            "description": "Defaults to `true`.",
-            "type": "boolean",
-            "optional": true
-          },
-          {
-            "name": "set_requests",
+            "name": "read_empty_slots",
             "order": 3,
             "description": "Defaults to `false`.",
             "type": "boolean",
             "optional": true
           },
           {
-            "name": "speed_signal",
+            "name": "read_moving_from",
+            "order": 7,
+            "description": "Defaults to `false`.",
+            "type": "boolean",
+            "optional": true
+          },
+          {
+            "name": "read_moving_to",
             "order": 8,
+            "description": "Defaults to `false`.",
+            "type": "boolean",
+            "optional": true
+          },
+          {
+            "name": "read_speed",
+            "order": 9,
+            "description": "Defaults to `false`.",
+            "type": "boolean",
+            "optional": true
+          },
+          {
+            "name": "send_to_platform",
+            "order": 6,
+            "description": "Defaults to `true`.",
+            "type": "boolean",
+            "optional": true
+          },
+          {
+            "name": "set_requests",
+            "order": 5,
+            "description": "Defaults to `false`.",
+            "type": "boolean",
+            "optional": true
+          },
+          {
+            "name": "speed_signal",
+            "order": 10,
             "description": "",
             "type": "SignalID",
             "optional": true
@@ -17863,7 +18310,7 @@
     },
     {
       "name": "Vector",
-      "order": 42,
+      "order": 41,
       "description": "A vector is a two-element array or dictionary containing the `x` and `y` components. The game will always provide the array format. Positive x goes east, positive y goes south.",
       "examples": [
         "```\nright = {1.0, 0.0}\n```"

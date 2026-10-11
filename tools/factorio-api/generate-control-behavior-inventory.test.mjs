@@ -34,10 +34,10 @@ afterEach(async () => {
 });
 
 describe('pinned Factorio API inventory', () => {
-  it('retains the reviewed 2.1.17 baseline', () => {
+  it('retains the reviewed 2.1.21 baseline', () => {
     expect(inventory.source).toMatchObject({
-      snapshot: 'fixtures/2.1.17',
-      applicationVersion: '2.1.17',
+      snapshot: 'fixtures/2.1.21',
+      applicationVersion: '2.1.21',
       apiVersion: 6,
     });
     expect(inventory.counts).toEqual({
@@ -47,6 +47,35 @@ describe('pinned Factorio API inventory', () => {
       entityVariants: 47,
       referencedConcepts: 120,
     });
+  });
+
+  it('keeps the previous 2.1.17 source snapshot byte-pinned', async () => {
+    const fixtureDirectory = new URL('fixtures/2.1.17/', import.meta.url);
+    const manifest = JSON.parse(await readFile(new URL('manifest.json', fixtureDirectory), 'utf8'));
+    for (const [name, descriptor] of Object.entries(manifest.files)) {
+      await expect(
+        verifyFileHash(new URL(name, fixtureDirectory), descriptor.sha256),
+      ).resolves.toBeDefined();
+    }
+  });
+
+  it('records the added circuit members on their reviewed runtime classes', () => {
+    const additions = new Map([
+      ['LuaContainerControlBehavior', ['empty_slots_signal', 'read_empty_slots']],
+      ['LuaLogisticContainerControlBehavior', ['empty_slots_signal', 'read_empty_slots']],
+      ['LuaProxyContainerControlBehavior', ['empty_slots_signal', 'read_empty_slots']],
+      ['LuaCargoLandingPadControlBehavior', ['empty_slots_signal', 'read_empty_slots']],
+      ['LuaSpacePlatformHubControlBehavior', ['empty_slots_signal', 'read_empty_slots']],
+      ['LuaRocketSiloControlBehavior', ['launched_signal', 'read_launched']],
+      ['LuaReactorControlBehavior', ['temperature_signal']],
+    ]);
+    for (const [className, expectedNames] of additions) {
+      const behavior = inventory.behaviors.find(({ name }) => name === className);
+      expect(
+        behavior?.ownRuntimeAttributes.map(({ name }) => name),
+        className,
+      ).toEqual(expect.arrayContaining(expectedNames));
+    }
   });
 
   it('uses repository-relative provenance and deterministic serialization', async () => {
@@ -106,8 +135,8 @@ describe('pinned Factorio API inventory', () => {
 describe('pinned Blueprint schema catalog', () => {
   it('retains the reviewed schema baseline', () => {
     expect(catalog.source).toMatchObject({
-      snapshot: 'fixtures/2.1.17',
-      applicationVersion: '2.1.17',
+      snapshot: 'fixtures/2.1.21',
+      applicationVersion: '2.1.21',
       apiVersion: 6,
     });
     expect(catalog.counts).toEqual({
@@ -152,6 +181,7 @@ describe('pinned Blueprint schema catalog', () => {
         groups: [
           { value: 'count' },
           { value: 'quality-filter' },
+          { value: 'quality-select' },
           { value: 'quality-transfer' },
           { value: 'random' },
           { value: 'select' },
@@ -159,13 +189,30 @@ describe('pinned Blueprint schema catalog', () => {
         ],
       },
     });
-    expect(selector?.type.kind === 'object' && selector.type.variant?.groups).toHaveLength(6);
+    expect(selector?.type.kind === 'object' && selector.type.variant?.groups).toHaveLength(7);
     expect(
       selector?.type.kind === 'object' &&
         selector.type.variant?.groups
           .find(({ value }) => value === 'select')
           ?.fields.map(({ name }) => name),
-    ).toEqual(['index_constant', 'index_signal', 'select_max']);
+    ).toEqual(['index_comparator', 'index_constant', 'index_signal', 'select_max']);
+    expect(
+      selector?.type.kind === 'object' &&
+        selector.type.variant?.groups
+          .find(({ value }) => value === 'select')
+          ?.fields.find(({ name }) => name === 'index_comparator'),
+    ).toMatchObject({ default: '=' });
+    expect(
+      selector?.type.kind === 'object' &&
+        selector.type.variant?.groups.find(({ value }) => value === 'quality-select')?.fields,
+    ).toMatchObject([
+      {
+        name: 'select_highest_quality',
+        type: { kind: 'scalar', name: 'boolean' },
+        optional: true,
+        default: true,
+      },
+    ]);
   });
 
   it.each([
@@ -188,7 +235,7 @@ describe('pinned Blueprint schema catalog', () => {
     const directory = await mkdtemp(join(tmpdir(), 'comblang-api-variant-inference-'));
     temporaryDirectories.push(directory);
     const fixtureDirectory = join(directory, 'fixture');
-    await cp(fileURLToPath(new URL('fixtures/2.1.17/', import.meta.url)), fixtureDirectory, {
+    await cp(fileURLToPath(new URL('fixtures/2.1.21/', import.meta.url)), fixtureDirectory, {
       recursive: true,
     });
     const runtimePath = join(fixtureDirectory, 'runtime-api.json');

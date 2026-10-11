@@ -1,4 +1,4 @@
-import generatedCatalog from '../generated/blueprint-schema-catalog-2.1.17.json';
+import generatedCatalog from '../generated/blueprint-schema-catalog-2.1.21.json';
 
 import {
   blueprintSchemaCatalogFormat,
@@ -20,11 +20,11 @@ export const blueprintSchemaCatalogMaxJsonBytes = 262_144;
  * catalog cannot make its own provenance claim authoritative.
  */
 export const blueprintSchemaCatalogReviewedSourceIdentity = Object.freeze({
-  snapshot: 'fixtures/2.1.17',
-  applicationVersion: '2.1.17',
+  snapshot: 'fixtures/2.1.21',
+  applicationVersion: '2.1.21',
   apiVersion: 6,
-  runtimeSha256: '2e1fd436404b712af6fe7b6c53e21a8f5688092a9e132fd2a5571327a96e5211',
-  prototypeSha256: '156f33cb4bc7ee2c538bb93f291f5270f2cdc45be654bbe6f226e402bf8f5368',
+  runtimeSha256: 'f21602449ec6c077afb4a26311ef075af7aedb8c067d53b9cc87efccca4d761f',
+  prototypeSha256: '5abe17bc8797770ab6c7ceb0cbe4348ab3b716efef59c7ee3e539596337132e6',
 } satisfies BlueprintSchemaSourceIdentity);
 
 const sourceIdentityKeys = [

@@ -523,7 +523,7 @@ function descriptor(
         );
       }
     }
-    for (const field of schema.fields) {
+    for (const field of fields.values()) {
       if (!keys.includes(field.name)) continue;
       if (field.ownership === 'compiler') {
         return invalid(

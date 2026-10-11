@@ -564,6 +564,180 @@ describe('Blueprint Entity schema validation', () => {
     });
   });
 
+  test('validates the 2.1.21 Selector fields as structural data only', () => {
+    expect(
+      validateBlueprintEntityFragment(
+        {
+          control_behavior: {
+            operation: 'select',
+            index_comparator: '=',
+            index_constant: 0,
+          },
+        },
+        { type: 'selector-combinator' },
+      ),
+    ).toEqual({ status: 'valid', structuralStatus: 'documented' });
+    expect(
+      validateBlueprintEntityFragment(
+        { control_behavior: { operation: 'quality-select', select_highest_quality: false } },
+        { type: 'selector-combinator' },
+      ),
+    ).toEqual({ status: 'valid', structuralStatus: 'documented' });
+
+    expect(
+      validateBlueprintEntityFragment(
+        { control_behavior: { operation: 'quality-select', index_comparator: '=' } },
+        { type: 'selector-combinator' },
+      ),
+    ).toMatchObject({ status: 'invalid', path: '$.control_behavior.index_comparator' });
+    expect(
+      validateBlueprintEntityFragment(
+        { control_behavior: { operation: 'select', index_comparator: 'approximately' } },
+        { type: 'selector-combinator' },
+      ),
+    ).toMatchObject({
+      status: 'invalid',
+      code: 'BSV1002',
+      path: '$.control_behavior.index_comparator',
+    });
+    expect(
+      validateBlueprintEntityFragment(
+        { control_behavior: { operation: 'quality-select', select_highest_quality: 'true' } },
+        { type: 'selector-combinator' },
+      ),
+    ).toMatchObject({
+      status: 'invalid',
+      code: 'BSV1002',
+      path: '$.control_behavior.select_highest_quality',
+    });
+
+    for (const index_comparator of ['!=', '<', '<=', '=', '>', '>=', '≠', '≤', '≥']) {
+      expect(
+        validateBlueprintEntityFragment(
+          { control_behavior: { operation: 'select', index_comparator } },
+          { type: 'selector-combinator' },
+        ),
+        index_comparator,
+      ).toEqual({ status: 'valid', structuralStatus: 'documented' });
+    }
+    expect(
+      validateBlueprintEntityFragment(
+        { control_behavior: { operation: 'quality-select' } },
+        { type: 'selector-combinator' },
+      ),
+    ).toEqual({ status: 'valid', structuralStatus: 'documented' });
+    expect(
+      validateBlueprintEntityFragment(
+        { control_behavior: { index_comparator: 'approximately' } },
+        { type: 'selector-combinator' },
+      ),
+    ).toMatchObject({
+      status: 'invalid',
+      code: 'BSV1002',
+      path: '$.control_behavior.index_comparator',
+    });
+  });
+
+  test('validates selected Selector fields recursively within the shared safety budget', () => {
+    expect(
+      validateBlueprintEntityFragment(
+        { control_behavior: { operation: 'select', index_constant: 2_147_483_648 } },
+        { type: 'selector-combinator' },
+      ),
+    ).toMatchObject({
+      status: 'invalid',
+      code: 'BSV1003',
+      path: '$.control_behavior.index_constant',
+    });
+    expect(
+      validateBlueprintEntityFragment(
+        {
+          control_behavior: {
+            operation: 'count',
+            count_signal: { name: 'signal-A', unexpected: true },
+          },
+        },
+        { type: 'selector-combinator' },
+      ),
+    ).toMatchObject({
+      status: 'invalid',
+      code: 'BSV1001',
+      path: '$.control_behavior.count_signal.unexpected',
+    });
+
+    let getterExecuted = false;
+    const indexSignal: Record<string, unknown> = {};
+    Object.defineProperty(indexSignal, 'name', {
+      enumerable: true,
+      get() {
+        getterExecuted = true;
+        return 'signal-A';
+      },
+    });
+    expect(
+      validateBlueprintEntityFragment(
+        { control_behavior: { operation: 'select', index_signal: indexSignal } },
+        { type: 'selector-combinator' },
+      ),
+    ).toMatchObject({
+      status: 'invalid',
+      code: 'BSV1005',
+      path: '$.control_behavior.index_signal.name',
+    });
+    expect(getterExecuted).toBe(false);
+
+    expect(
+      validateBlueprintEntityFragment(
+        { control_behavior: { operation: 'select', index_signal: { name: 'signal-A' } } },
+        { type: 'selector-combinator' },
+        { limits: { maxDepth: 32, maxNodes: 4, maxBytes: 262_144 } },
+      ),
+    ).toMatchObject({
+      status: 'invalid',
+      code: 'BSV1005',
+      path: '$.control_behavior.index_signal.name',
+    });
+  });
+
+  test('validates the 2.1.21 circuit additions without native-behavior claims', () => {
+    for (const [prototypeType, controlBehavior] of [
+      ['container', { read_empty_slots: true, empty_slots_signal: { name: 'signal-A' } }],
+      [
+        'space-platform-hub',
+        { read_empty_slots: false, empty_slots_signal: { type: 'virtual', name: 'signal-A' } },
+      ],
+      ['rocket-silo', { read_launched: true, launched_signal: { name: 'signal-A' } }],
+      ['reactor', { read_temperature: true }],
+    ] as const) {
+      expect(
+        validateBlueprintEntityFragment(
+          { control_behavior: controlBehavior },
+          { type: prototypeType },
+        ),
+        prototypeType,
+      ).toEqual({ status: 'valid', structuralStatus: 'documented' });
+    }
+
+    expect(
+      validateBlueprintEntityFragment(
+        { control_behavior: { read_empty_slots: 'yes' } },
+        { type: 'container' },
+      ),
+    ).toMatchObject({ status: 'invalid', path: '$.control_behavior.read_empty_slots' });
+    expect(
+      validateBlueprintEntityFragment(
+        { control_behavior: { read_launched: 1 } },
+        { type: 'rocket-silo' },
+      ),
+    ).toMatchObject({ status: 'invalid', path: '$.control_behavior.read_launched' });
+    expect(
+      validateBlueprintEntityFragment(
+        { control_behavior: { launched_signal: false } },
+        { type: 'rocket-silo' },
+      ),
+    ).toMatchObject({ status: 'invalid', path: '$.control_behavior.launched_signal' });
+  });
+
   test('does not execute accessors while selecting a SelectorCombinator variant', () => {
     const controlBehavior: Record<string, unknown> = {};
     Object.defineProperty(controlBehavior, 'operation', {

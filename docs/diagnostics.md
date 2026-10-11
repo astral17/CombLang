@@ -276,10 +276,12 @@ Factorio `data.raw` dump after parsing once. Normalized validation keeps its
 malformed raw metadata respectively. A raw dump never invents environment fields.
 
 Entity records are recognized only for concrete prototype type names from the
-checked-in Factorio 2.1.17 API catalog. A recognized Entity without both ordinary
-footprint axes is retained with `tileWidth` and `tileHeight` omitted; no `1x1`,
-zero, selection-box, or runtime-probe fallback is fabricated. In normalized v1,
-the two footprint fields are all-or-nothing when present.
+checked-in prototype-type list, which remains based on Factorio 2.1.17. The
+separate 2.1.21 Blueprint API schema catalog does not change prototype or dump
+identity. A recognized Entity without both ordinary footprint axes is retained
+with `tileWidth` and `tileHeight` omitted; no `1x1`, zero, selection-box, or
+runtime-probe fallback is fabricated. In normalized v1, the two footprint
+fields are all-or-nothing when present.
 
 Schema-checked Entity fragments use the data-only `@comblang/prototypes`
 validator. `BSV1000` identifies a malformed schema or unresolved reference,

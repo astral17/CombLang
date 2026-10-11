@@ -8,7 +8,7 @@ import {
 
 describe('Node Blueprint schema catalog consumer', () => {
   test('loads the validated catalog through the prototypes package entry point', () => {
-    expect(blueprintSchemaCatalog.source.applicationVersion).toBe('2.1.17');
+    expect(blueprintSchemaCatalog.source.applicationVersion).toBe('2.1.21');
     expect(blueprintSchemaCatalog.counts.entityVariants).toBe(62);
     expect(lookupBlueprintEntityVariant('container').kind).toBe('known');
     expect(lookupBlueprintEntityVariant('locomotive').kind).toBe('known');

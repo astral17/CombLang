@@ -5,6 +5,7 @@ import {
   blueprintSchemaCatalogMaxDepth,
   blueprintSchemaCatalogMaxJsonBytes,
   blueprintSchemaCatalogMaxNodes,
+  blueprintSchemaCatalogReviewedSourceIdentity,
   loadBlueprintSchemaCatalog,
   loadBlueprintSchemaCatalogJson,
 } from './blueprint-schema-loader.js';
@@ -16,6 +17,13 @@ function mutableCatalog(): Record<string, any> {
 describe('Blueprint schema catalog loader', () => {
   test('loads the pinned catalog as detached deeply frozen data', () => {
     expect(blueprintSchemaCatalog.version).toBe(2);
+    expect(blueprintSchemaCatalogReviewedSourceIdentity).toEqual({
+      snapshot: 'fixtures/2.1.21',
+      applicationVersion: '2.1.21',
+      apiVersion: 6,
+      runtimeSha256: 'f21602449ec6c077afb4a26311ef075af7aedb8c067d53b9cc87efccca4d761f',
+      prototypeSha256: '5abe17bc8797770ab6c7ceb0cbe4348ab3b716efef59c7ee3e539596337132e6',
+    });
     expect(blueprintSchemaCatalog.counts).toEqual({
       entityVariants: 62,
       controlBehaviors: 37,
@@ -46,17 +54,91 @@ describe('Blueprint schema catalog loader', () => {
     expect(selector.variant.groups.map(({ value }) => value)).toEqual([
       'count',
       'quality-filter',
+      'quality-select',
       'quality-transfer',
       'random',
       'select',
       'time',
     ]);
+    const selectGroup = selector.variant.groups.find(({ value }) => value === 'select');
+    const qualitySelectGroup = selector.variant.groups.find(
+      ({ value }) => value === 'quality-select',
+    );
+    expect(selectGroup?.fields.map(({ name }) => name)).toEqual([
+      'index_comparator',
+      'index_constant',
+      'index_signal',
+      'select_max',
+    ]);
+    expect(selectGroup?.fields.find(({ name }) => name === 'index_comparator')).toMatchObject({
+      optional: true,
+      default: '=',
+    });
+    expect(qualitySelectGroup?.fields).toMatchObject([
+      {
+        name: 'select_highest_quality',
+        type: { kind: 'scalar', name: 'boolean' },
+        optional: true,
+        default: true,
+      },
+    ]);
+    const comparatorString = loaded.references.find(
+      ({ name }) => name === 'ComparatorString',
+    )?.type;
+    expect(comparatorString).toMatchObject({
+      kind: 'union',
+      options: [
+        { kind: 'literal', value: '!=' },
+        { kind: 'literal', value: '<' },
+        { kind: 'literal', value: '<=' },
+        { kind: 'literal', value: '=' },
+        { kind: 'literal', value: '>' },
+        { kind: 'literal', value: '>=' },
+        { kind: 'literal', value: '≠' },
+        { kind: 'literal', value: '≤' },
+        { kind: 'literal', value: '≥' },
+      ],
+    });
+    const container = loaded.references.find(
+      ({ name }) => name === 'ContainerBlueprintControlBehavior',
+    )?.type;
+    const rocketSilo = loaded.references.find(
+      ({ name }) => name === 'RocketSiloBlueprintControlBehavior',
+    )?.type;
+    const reactor = loaded.references.find(
+      ({ name }) => name === 'ReactorBlueprintControlBehavior',
+    )?.type;
+    expect(container?.kind).toBe('object');
+    if (container?.kind !== 'object') throw new Error('Missing container schema.');
+    expect(container.fields.find(({ name }) => name === 'read_empty_slots')).toMatchObject({
+      type: { kind: 'scalar', name: 'boolean' },
+      optional: true,
+      default: false,
+    });
+    expect(container.fields.find(({ name }) => name === 'empty_slots_signal')).toMatchObject({
+      optional: true,
+    });
+    expect(rocketSilo?.kind).toBe('object');
+    if (rocketSilo?.kind !== 'object') throw new Error('Missing Rocket Silo schema.');
+    expect(rocketSilo.fields.find(({ name }) => name === 'read_launched')).toMatchObject({
+      type: { kind: 'scalar', name: 'boolean' },
+      optional: true,
+      default: false,
+    });
+    expect(rocketSilo.fields.find(({ name }) => name === 'launched_signal')).toMatchObject({
+      optional: true,
+    });
+    expect(reactor?.kind).toBe('object');
+    if (reactor?.kind !== 'object') throw new Error('Missing Reactor schema.');
+    expect(reactor.fields.find(({ name }) => name === 'temperature_signal')).toMatchObject({
+      optional: true,
+    });
     expect(Object.isFrozen(selector.variant)).toBe(true);
   });
 
   test.each([
-    ['snapshot', 'fixtures/2.1.18'],
-    ['applicationVersion', '2.1.18'],
+    ['snapshot', 'fixtures/2.1.17'],
+    ['applicationVersion', '2.1.17'],
     ['apiVersion', 7],
     ['runtimeSha256', '0'.repeat(64)],
     ['prototypeSha256', 'f'.repeat(64)],
