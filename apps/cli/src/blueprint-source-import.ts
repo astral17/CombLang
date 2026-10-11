@@ -1,6 +1,11 @@
 import { resolve } from 'node:path';
 
-import { DEFAULT_BLUEPRINT_CODEC_LIMITS } from '@comblang/blueprint';
+import {
+  BLUEPRINT_EXCHANGE_MARKER,
+  DEFAULT_BLUEPRINT_CODEC_LIMITS,
+  decodeBlueprintExchange,
+  stringifyLosslessJson,
+} from '@comblang/blueprint';
 import type { Diagnostic } from '@comblang/shared';
 import { offsetToPosition } from '@comblang/shared';
 import {
@@ -13,7 +18,7 @@ import { BlueprintCliError, readBoundedUtf8File, writeExclusiveText } from './bl
 import type { CliCompilationEnvironment } from './main.js';
 
 export const sourceBlueprintImportUsage = `Usage:
-  factorio-dsl blueprint import [--json] [--output <source.factorio.ts>] [--prototypes <database.json>] [--prototype-identity <id>] <document.json>`;
+  factorio-dsl blueprint import [--json] [--output <source.factorio.ts>] [--prototypes <database.json>] [--prototype-identity <id>] <blueprint-file>`;
 
 export interface SourceBlueprintImportOptions {
   readonly inputPath: string;
@@ -105,7 +110,7 @@ export function parseSourceBlueprintImportOptions(
   }
 
   if (positional.length !== 1 || positional[0]!.trim().length === 0) {
-    throw new BlueprintCliError('CLIBP1001', 'import requires exactly one JSON document path.');
+    throw new BlueprintCliError('CLIBP1001', 'import requires exactly one blueprint file path.');
   }
   const inputPath = positional[0]!;
   const output = values.get('--output');
@@ -261,10 +266,13 @@ export async function runSourceBlueprintImport(
   let format: SourceImportDiagnosticFormatter | undefined;
   try {
     const inputPath = resolve(options.inputPath);
-    const input = await readBoundedUtf8File(
+    const inputText = await readBoundedUtf8File(
       inputPath,
       DEFAULT_BLUEPRINT_CODEC_LIMITS.maxDecompressedBytes,
     );
+    const input = inputText.startsWith(BLUEPRINT_EXCHANGE_MARKER)
+      ? stringifyLosslessJson(await decodeBlueprintExchange(inputText.replace(/\r?\n$/, '')))
+      : inputText;
     const sourcePath = resolve(options.output ?? `${inputPath}.factorio.ts`);
     const result = importCanonicalBlueprintSource(input, { path: sourcePath }, environment);
     diagnostics = result.diagnostics;

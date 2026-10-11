@@ -3,10 +3,17 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 
 import {
+  DEFAULT_BLUEPRINT_CODEC_LIMITS,
+  encodeBlueprintExchange,
+  parseLosslessJson,
+  stringifyLosslessJson,
+} from '@comblang/blueprint';
+import {
   createTrustedEntityReplayContext,
   syntheticZeroPortEntityProfile,
 } from '@comblang/compiler';
 import type { EntityProfile, EntityProfileId } from '@comblang/compiler/entity';
+import * as blueprintImportApi from '@comblang/runtime/blueprint-source-import';
 import * as sourceApi from '@comblang/runtime/source-compilation';
 import { loadPrototypeDatabase, syntheticPrototypeDatabase } from '@comblang/prototypes';
 import { afterEach, describe, expect, test, vi } from 'vitest';
@@ -116,6 +123,11 @@ async function temporaryFile(name: string, content: string | Uint8Array): Promis
   return path;
 }
 
+async function exchangeFile(name: string, documentText: string, ending = ''): Promise<string> {
+  const exchange = await encodeBlueprintExchange(parseLosslessJson(documentText));
+  return temporaryFile(name, `${exchange}${ending}`);
+}
+
 async function canonicalHost() {
   const database = structuredClone(syntheticPrototypeDatabase()) as {
     entities: Array<Record<string, unknown>>;
@@ -182,6 +194,7 @@ function reportAt(log: ReturnType<typeof capture>['log'], index = 0): Record<str
 
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true })));
 });
 
@@ -230,6 +243,9 @@ describe('blueprint source import CLI', () => {
         expect.objectContaining({ code: 'CLIBP1001' }),
       );
     }
+    expect(() => parseSourceBlueprintImportOptions([])).toThrowError(
+      'import requires exactly one blueprint file path.',
+    );
   });
 
   test('validates invalid arguments and sole help before provider access or compilation', async () => {
@@ -248,7 +264,10 @@ describe('blueprint source import CLI', () => {
     ).toBe(2);
     expect(reportAt(log)).toMatchObject({ ok: false, error: { code: 'CLIBP1001' } });
     expect(await run(['blueprint', 'import', '--help'], environment)).toBe(0);
-    expect(String(log.mock.calls[1]?.[0])).toContain('blueprint import');
+    expect(String(log.mock.calls[1]?.[0])).toContain('<blueprint-file>');
+    expect(String(log.mock.calls[1]?.[0])).not.toContain('<document.json>');
+    expect(await run(['--help'], environment)).toBe(0);
+    expect(String(log.mock.calls[2]?.[0])).toContain('<blueprint-file>');
     expect(providerReads).toBe(0);
     expect(compile).not.toHaveBeenCalled();
   });
@@ -336,6 +355,172 @@ describe('blueprint source import CLI', () => {
     );
     expect(arithmetic?.kind).toBe('arithmetic');
     expect(arithmetic?.provenance.source).toBeDefined();
+  });
+
+  test('imports JSON and exchange files through the same core once with equal verified results', async () => {
+    const host = await canonicalHost();
+    const sourceText = blueprintDocument({ metadata: true });
+    const jsonPath = await temporaryFile('equal.json', sourceText);
+    const exchange = await encodeBlueprintExchange(parseLosslessJson(sourceText));
+    const { log } = capture();
+    const importCore = vi.spyOn(blueprintImportApi, 'importCanonicalBlueprintSource');
+    const compile = vi.spyOn(sourceApi, 'compileSourceProgram');
+
+    expect(await run(['blueprint', 'import', '--json', jsonPath], host.environment)).toBe(0);
+    const jsonReport = reportAt(log);
+    await writeFile(jsonPath, exchange);
+    log.mockClear();
+    expect(await run(['blueprint', 'import', '--json', jsonPath], host.environment)).toBe(0);
+    const exchangeReport = reportAt(log);
+
+    expect(importCore).toHaveBeenCalledTimes(2);
+    expect(importCore.mock.calls[0]?.[0]).toBe(sourceText);
+    expect(importCore.mock.calls[1]?.[0]).toBe(
+      stringifyLosslessJson(parseLosslessJson(sourceText)),
+    );
+    expect(compile).toHaveBeenCalledTimes(2);
+    expect(exchangeReport.source.text).toBe(jsonReport.source.text);
+    expect(exchangeReport.correspondence).toEqual(jsonReport.correspondence);
+    expect(exchangeReport.verification).toEqual(jsonReport.verification);
+    expect(exchangeReport.diagnostics).toEqual(jsonReport.diagnostics);
+  });
+
+  test('accepts only the exchange file terminal-newline exception and preserves JSON whitespace', async () => {
+    const host = await canonicalHost();
+    const sourceText = blueprintDocument();
+    const exchange = await encodeBlueprintExchange(parseLosslessJson(sourceText));
+    const { log } = capture();
+    const importCore = vi.spyOn(blueprintImportApi, 'importCanonicalBlueprintSource');
+
+    for (const [name, ending] of [
+      ['bare.exchange', ''],
+      ['lf.exchange', '\n'],
+      ['crlf.exchange', '\r\n'],
+    ] as const) {
+      const path = await temporaryFile(name, `${exchange}${ending}`);
+      expect(await run(['blueprint', 'import', '--json', path], host.environment)).toBe(0);
+      log.mockClear();
+    }
+
+    const jsonWithWhitespace = ` \n${sourceText}\t `;
+    const jsonPath = await temporaryFile('whitespace.json', jsonWithWhitespace);
+    expect(await run(['blueprint', 'import', '--json', jsonPath], host.environment)).toBe(0);
+    expect(importCore.mock.calls[3]?.[0]).toBe(jsonWithWhitespace);
+
+    for (const [name, text, code] of [
+      ['two-newlines.exchange', `${exchange}\n\n`, 'BEX1002'],
+      ['leading-space.exchange', ` ${exchange}`, 'BPD1001'],
+      ['wrapped.exchange', `${exchange.slice(0, 8)}\n${exchange.slice(8)}`, 'BEX1002'],
+    ] as const) {
+      const path = await temporaryFile(name, text);
+      log.mockClear();
+      expect(await run(['blueprint', 'import', '--json', path], host.environment)).toBe(2);
+      expect(reportAt(log)).toMatchObject({ ok: false, error: { code, path: '$' } });
+      expect(reportAt(log)).not.toHaveProperty('source');
+    }
+  });
+
+  test('preserves exchange codec failures and paths without compiling or creating output', async () => {
+    const host = await canonicalHost();
+    const oversized = `0${'A'.repeat(DEFAULT_BLUEPRINT_CODEC_LIMITS.maxEncodedCharacters)}`;
+    const cases = [
+      ['malformed-base64.exchange', '0!', 'BEX1002'],
+      ['malformed-deflate.exchange', '0AAAAAA==', 'BEX1005'],
+      ['over-encoded-limit.exchange', oversized, 'BEX1003'],
+    ] as const;
+    const { log, error } = capture();
+    const importCore = vi.spyOn(blueprintImportApi, 'importCanonicalBlueprintSource');
+    const compile = vi.spyOn(sourceApi, 'compileSourceProgram');
+
+    for (const [name, text, code] of cases) {
+      const input = await temporaryFile(name, text);
+      const output = join(dirname(input), `${name}.factorio.ts`);
+      expect(
+        await run(['blueprint', 'import', '--json', '--output', output, input], host.environment),
+      ).toBe(2);
+      expect(reportAt(log)).toMatchObject({ ok: false, error: { code, path: '$' } });
+      expect(reportAt(log)).not.toHaveProperty('source');
+      expect(reportAt(log)).not.toHaveProperty('correspondence');
+      await expect(stat(output)).rejects.toMatchObject({ code: 'ENOENT' });
+      log.mockClear();
+    }
+
+    expect(importCore).not.toHaveBeenCalled();
+    expect(compile).not.toHaveBeenCalled();
+
+    const malformedPath = await temporaryFile('plain-malformed.exchange', '0!');
+    expect(await run(['blueprint', 'import', malformedPath], host.environment)).toBe(2);
+    expect(error.mock.calls.map(([line]) => String(line)).join('\n')).toContain('BEX1002 $:');
+  });
+
+  test('keeps decoded refusals located, avoids partial output, and leaves JSON independent of streams', async () => {
+    const host = await canonicalHost();
+    const unsupportedRoot = await exchangeFile('book.exchange', '{"blueprint_book":{}}');
+    const negativeZero = await exchangeFile(
+      'negative-zero.exchange',
+      blueprintDocument().replace('"multiplier":1,', '"multiplier":-0,'),
+    );
+    const validExchange = await exchangeFile('stream-capability.exchange', blueprintDocument());
+    const { log } = capture();
+
+    const unsupportedOutput = join(dirname(unsupportedRoot), 'unsupported.factorio.ts');
+    expect(
+      await run(
+        ['blueprint', 'import', '--json', '--output', unsupportedOutput, unsupportedRoot],
+        host.environment,
+      ),
+    ).toBe(2);
+    expect(reportAt(log)).toMatchObject({
+      error: { code: 'CLIBP1006', path: '$.blueprint_book' },
+    });
+    expect(reportAt(log)).not.toHaveProperty('source');
+    await expect(stat(unsupportedOutput)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const negativeOutput = join(dirname(negativeZero), 'negative-zero.factorio.ts');
+    log.mockClear();
+    expect(
+      await run(
+        ['blueprint', 'import', '--json', '--output', negativeOutput, negativeZero],
+        host.environment,
+      ),
+    ).toBe(2);
+    expect(reportAt(log)).toMatchObject({
+      error: { code: 'CLIBP1006', path: '$.blueprint.entities[1]' },
+    });
+    expect(reportAt(log)).not.toHaveProperty('source');
+    await expect(stat(negativeOutput)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    vi.stubGlobal('CompressionStream', undefined);
+    vi.stubGlobal('DecompressionStream', undefined);
+    log.mockClear();
+    expect(await run(['blueprint', 'import', '--json', validExchange], host.environment)).toBe(2);
+    expect(reportAt(log)).toMatchObject({ error: { code: 'BEX1004', path: '$' } });
+    log.mockClear();
+    const jsonPath = await temporaryFile('without-streams.json', blueprintDocument());
+    expect(await run(['blueprint', 'import', '--json', jsonPath], host.environment)).toBe(0);
+    expect(reportAt(log)).toMatchObject({ ok: true, verification: { state: 'verified' } });
+  });
+
+  test('writes successful exchange output exclusively and preserves existing bytes', async () => {
+    const host = await canonicalHost();
+    const input = await exchangeFile('exclusive.exchange', blueprintDocument());
+    const output = join(dirname(input), 'exchange.factorio.ts');
+    const { log } = capture();
+
+    expect(
+      await run(['blueprint', 'import', '--json', '--output', output, input], host.environment),
+    ).toBe(0);
+    const success = reportAt(log);
+    expect(success).toMatchObject({ ok: true, output: resolve(output) });
+    expect(await readFile(output, 'utf8')).toBe(success.source.text);
+
+    await writeFile(output, 'keep-existing');
+    log.mockClear();
+    expect(
+      await run(['blueprint', 'import', '--json', '--output', output, input], host.environment),
+    ).toBe(2);
+    expect(reportAt(log)).toMatchObject({ error: { code: 'CLIBP1003', path: resolve(output) } });
+    expect(await readFile(output, 'utf8')).toBe('keep-existing');
   });
 
   test('prints only the generated source to stdout and uses a virtual default source path', async () => {

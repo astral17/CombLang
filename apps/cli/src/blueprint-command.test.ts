@@ -26,6 +26,15 @@ afterEach(async () => {
 });
 
 describe('blueprint codec CLI', () => {
+  test('shows a neutral file argument for source import in blueprint help', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    expect(await run(['blueprint', '--help'])).toBe(0);
+    const help = String(log.mock.calls[0]?.[0]);
+    const importUsage = help.split('\n').find((line) => line.includes('blueprint import'));
+    expect(importUsage).toContain('<blueprint-file>');
+    expect(importUsage).not.toContain('<document.json>');
+  });
+
   test('encodes JSON files and decodes raw exchange strings with lossless machine output', async () => {
     const source = '{"blueprint":{"item":"blueprint","version":9007199254740993}}';
     const inputPath = await temporaryFile('blueprint.json', source);

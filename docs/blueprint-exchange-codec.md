@@ -72,29 +72,45 @@ multiple roots and incorrect root/header shapes fail with typed errors and paths
 ```text
 factorio-dsl blueprint decode [--json] [--input-file <exchange.txt> | <exchange-string>] [--output <document.json>]
 factorio-dsl blueprint encode [--json] [--output <exchange.txt>] <document.json>
-factorio-dsl blueprint import [--json] [--output <source.factorio.ts>] [--prototypes <database.json>] [--prototype-identity <id>] <document.json>
+factorio-dsl blueprint import [--json] [--output <source.factorio.ts>] [--prototypes <database.json>] [--prototype-identity <id>] <blueprint-file>
 ```
 
-For a source circuit, first create native JSON with the separate
-[source export command](blueprint-json.md#source-export-cli), then encode that
-document:
+For a source circuit, create native JSON with the separate
+[source export command](blueprint-json.md#source-export-cli), then either import
+the JSON file directly or encode it and import the resulting exchange file:
 
 ```sh
 node apps/cli/dist/main.js blueprint export --output simple.json simple.factorio.ts
-node apps/cli/dist/main.js blueprint encode --output simple.txt simple.json
 node apps/cli/dist/main.js blueprint export --prototypes database.json --parameters --output numeric.json numeric.factorio.ts
+node apps/cli/dist/main.js blueprint import --prototypes database.json --output imported.factorio.ts simple.json
+node apps/cli/dist/main.js blueprint encode --output simple.txt simple.json
+node apps/cli/dist/main.js blueprint import --prototypes database.json --output imported-exchange.factorio.ts simple.txt
 node apps/cli/dist/main.js blueprint encode --output numeric.txt numeric.json
 ```
 
-### Import JSON as CombLang source
+### Import JSON or exchange files as CombLang source
 
-Import accepts exactly one native JSON document, not an exchange string, book,
-project, source file, stdin, or parameter overrides. Decode an exchange string
-first, then import the resulting JSON and check the generated source with the
-same prototype database:
+Import accepts exactly one UTF-8 blueprint file. If its untouched first
+character is the existing `0` exchange marker, the CLI decodes it with the
+public lossless codec and sends the resulting lossless JSON to the same canonical
+source importer. Otherwise, the original file text is passed as JSON without
+normalization. Import does not accept books, projects, source files, stdin, or
+parameter overrides. The separate `blueprint decode` command remains available
+when a standalone JSON document is wanted.
+
+For exchange files only, one terminal LF or CRLF is removed before strict codec
+framing, matching `decode --input-file`. The CLI does not otherwise trim the
+file, strip a BOM or leading whitespace, unwrap Base64, or remove multiple line
+endings. A leading space before the marker therefore selects JSON, two final
+newlines leave one newline for strict decoding and fail, and malformed exchange
+data is never retried as JSON. JSON text, including valid surrounding
+whitespace, is passed unchanged. The file reader remains bounded, and the codec
+independently applies its encoded, compressed, decompressed, depth, node, and
+string limits.
+
+Import and check the generated source with the same prototype database:
 
 ```sh
-node apps/cli/dist/main.js blueprint decode --input-file simple.txt --output simple.json
 node apps/cli/dist/main.js blueprint import --prototypes database.json --output imported.factorio.ts simple.json
 node apps/cli/dist/main.js check --prototypes database.json imported.factorio.ts
 ```

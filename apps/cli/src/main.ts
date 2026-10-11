@@ -96,7 +96,7 @@ Usage:
   factorio-dsl prototypes evidence [--json] <database.json> <evidence.json>
   factorio-dsl blueprint decode [--json] [--input-file <exchange.txt> | <exchange-string>] [--output <document.json>]
   factorio-dsl blueprint encode [--json] [--output <exchange.txt>] <document.json>
-  factorio-dsl blueprint import [--json] [--output <source.factorio.ts>] [--prototypes <database.json>] [--prototype-identity <id>] <document.json>
+  factorio-dsl blueprint import [--json] [--output <source.factorio.ts>] [--prototypes <database.json>] [--prototype-identity <id>] <blueprint-file>
   factorio-dsl blueprint export [--json] [--parameters | --overrides <values.json>] [--label <text>] [--output <document.json>] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts>
   factorio-dsl blueprint export [--json] [--parameters | --overrides <values.json>] [--label <text>] [--output <document.json>] --project <comblang.json> [--prototype-identity <id>] [source.factorio.ts]
 
