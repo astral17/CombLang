@@ -12,12 +12,13 @@ import {
 } from '@comblang/blueprint';
 
 const blueprintUsage = `Usage:
+  factorio-dsl blueprint import [--json] [--output <source.factorio.ts>] [--prototypes <database.json>] [--prototype-identity <id>] <document.json>
   factorio-dsl blueprint export [--json] [--parameters | --overrides <values.json>] [--label <text>] [--output <document.json>] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts>
   factorio-dsl blueprint decode [--json] [--input-file <exchange.txt> | <exchange-string>] [--output <document.json>]
   factorio-dsl blueprint encode [--json] [--output <exchange.txt>] <document.json>`;
 
 type BlueprintCliErrorCode =
-  'CLIBP1000' | 'CLIBP1001' | 'CLIBP1002' | 'CLIBP1003' | 'CLIBP1004' | 'CLIBP1005';
+  'CLIBP1000' | 'CLIBP1001' | 'CLIBP1002' | 'CLIBP1003' | 'CLIBP1004' | 'CLIBP1005' | 'CLIBP1006';
 
 export class BlueprintCliError extends Error {
   readonly code: BlueprintCliErrorCode;

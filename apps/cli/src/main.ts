@@ -67,6 +67,13 @@ import {
   sourceExportJsonHint,
   sourceExportUsage,
 } from './blueprint-source-export.js';
+import {
+  parseSourceBlueprintImportOptions,
+  reportSourceBlueprintImportFailure,
+  runSourceBlueprintImport,
+  sourceBlueprintImportJsonHint,
+  sourceBlueprintImportUsage,
+} from './blueprint-source-import.js';
 
 import {
   CliInputError,
@@ -89,6 +96,7 @@ Usage:
   factorio-dsl prototypes evidence [--json] <database.json> <evidence.json>
   factorio-dsl blueprint decode [--json] [--input-file <exchange.txt> | <exchange-string>] [--output <document.json>]
   factorio-dsl blueprint encode [--json] [--output <exchange.txt>] <document.json>
+  factorio-dsl blueprint import [--json] [--output <source.factorio.ts>] [--prototypes <database.json>] [--prototype-identity <id>] <document.json>
   factorio-dsl blueprint export [--json] [--parameters | --overrides <values.json>] [--label <text>] [--output <document.json>] [--prototypes <database.json>] [--prototype-identity <id>] <source.factorio.ts>
   factorio-dsl blueprint export [--json] [--parameters | --overrides <values.json>] [--label <text>] [--output <document.json>] --project <comblang.json> [--prototype-identity <id>] [source.factorio.ts]
 
@@ -617,6 +625,34 @@ export async function run(
     return 0;
   }
   if (command === 'blueprint') {
+    if (rest[0] === 'import') {
+      const importArgs = rest.slice(1);
+      if (importArgs.length === 1 && (importArgs[0] === '--help' || importArgs[0] === '-h')) {
+        console.log(sourceBlueprintImportUsage);
+        return 0;
+      }
+      const json = sourceBlueprintImportJsonHint(importArgs);
+      try {
+        const parsed = parseSourceBlueprintImportOptions(importArgs);
+        const prototypes = await selectPrototypeProvider(
+          {
+            files: [parsed.inputPath],
+            json: parsed.json,
+            ...(parsed.prototypePath === undefined ? {} : { prototypePath: parsed.prototypePath }),
+            ...(parsed.prototypeIdentity === undefined
+              ? {}
+              : { prototypeIdentity: parsed.prototypeIdentity }),
+          },
+          environment.prototypes,
+        );
+        const selected = provisionCliEnvironment(environment, prototypes);
+        return await runSourceBlueprintImport(parsed, selected, (diagnostic, source) =>
+          formatDiagnostic(diagnostic, new Map([[source.fileId, source]])),
+        );
+      } catch (error) {
+        return reportSourceBlueprintImportFailure(error, json);
+      }
+    }
     if (rest[0] !== 'export') return runBlueprintCommand(rest);
     const exportArgs = rest.slice(1);
     if (exportArgs.length === 1 && (exportArgs[0] === '--help' || exportArgs[0] === '-h')) {

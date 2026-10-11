@@ -72,6 +72,7 @@ multiple roots and incorrect root/header shapes fail with typed errors and paths
 ```text
 factorio-dsl blueprint decode [--json] [--input-file <exchange.txt> | <exchange-string>] [--output <document.json>]
 factorio-dsl blueprint encode [--json] [--output <exchange.txt>] <document.json>
+factorio-dsl blueprint import [--json] [--output <source.factorio.ts>] [--prototypes <database.json>] [--prototype-identity <id>] <document.json>
 ```
 
 For a source circuit, first create native JSON with the separate
@@ -84,6 +85,41 @@ node apps/cli/dist/main.js blueprint encode --output simple.txt simple.json
 node apps/cli/dist/main.js blueprint export --prototypes database.json --parameters --output numeric.json numeric.factorio.ts
 node apps/cli/dist/main.js blueprint encode --output numeric.txt numeric.json
 ```
+
+### Import JSON as CombLang source
+
+Import accepts exactly one native JSON document, not an exchange string, book,
+project, source file, stdin, or parameter overrides. Decode an exchange string
+first, then import the resulting JSON and check the generated source with the
+same prototype database:
+
+```sh
+node apps/cli/dist/main.js blueprint decode --input-file simple.txt --output simple.json
+node apps/cli/dist/main.js blueprint import --prototypes database.json --output imported.factorio.ts simple.json
+node apps/cli/dist/main.js check --prototypes database.json imported.factorio.ts
+```
+
+`--prototype-identity <id>` can pin the selected database; use the same pin for
+the subsequent `check`. The host must provide a trusted Entity replay context
+with exactly one profile for each imported canonical Constant or Arithmetic
+prototype. Import never selects profiles by type, position, or approximate name;
+missing/ambiguous profiles, modded names, opaque roots, partial inventories,
+unsupported fields, and unsupported placement are refusals. The supported source
+subset requires explicit direction, exact x/y placement, and top-level four-value
+wire tuples; legacy per-entity connections, object-shaped wires, and unknown
+outer fields are not silently dropped. Root metadata may be reported as
+retained-only, but it is not emitted into the generated source.
+
+Without `--output`, source text alone is printed and its reported source path is
+virtual; no file is created. With `--output`, the path is resolved absolutely and
+created exclusively, so an existing file is never replaced. `--json` emits one
+response envelope containing the source snapshot, correspondence, verification
+counts, diagnostics, and optional output path; that envelope is not the TS file.
+Compiler warnings remain visible in diagnostics and on stderr in plain mode.
+Import success means that ordinary compilation and the structural native JSON
+re-import verifier agree; it does not claim native Factorio acceptance or
+electrical compatibility. In particular, negative-zero Constant multipliers are
+refused when native JSON serialization normalizes `-0` to `0`.
 
 The source examples and provider requirements are in the linked guide. Default
 source export is concrete; `--parameters` explicitly requests supported numeric
@@ -100,7 +136,7 @@ may have one terminal LF or CRLF, which is removed before strict framing checks.
 Exchange errors use `BEX1001`–`BEX1007` (marker, Base64, budget, capability,
 deflate, UTF-8, cancellation). Document errors use `BPD1001`–`BPD1008` (JSON
 syntax, duplicate key, Unicode, budget, unsafe node, number lexeme, root shape,
-header shape). CLI file/argument errors use `CLIBP1000`–`CLIBP1005`.
+header shape). CLI file/argument errors use `CLIBP1000`–`CLIBP1006`.
 
 ## Evidence provenance
 
