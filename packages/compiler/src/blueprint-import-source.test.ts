@@ -11,6 +11,7 @@ import { decodeBlueprintArithmeticControlBehavior } from './blueprint-import-ari
 import { decodeBlueprintConstantControlBehavior } from './blueprint-import-constant.js';
 import type { ArithmeticProducerConfig } from './ir.js';
 import {
+  createBlueprintArithmeticExpressionPrinter,
   printBlueprintArithmeticExpression,
   printBlueprintConstantExpression,
 } from './blueprint-import-source.js';
@@ -141,6 +142,51 @@ describe('blueprint import source expressions', () => {
     );
   });
 
+  test('prepares an independent positional map once and snapshots the caller network order', () => {
+    const single = decodeArithmetic(
+      {
+        first_signal: { name: 'signal-A' },
+        first_signal_networks: { red: true, green: false },
+        operation: '+',
+        second_constant: 2,
+        output_signal: { name: 'signal-result' },
+      },
+      { red, green },
+    );
+    const pair = decodeArithmetic(
+      {
+        first_signal: { name: 'signal-A' },
+        first_signal_networks: { red: true, green: true },
+        operation: '*',
+        second_constant: 3,
+        output_signal: { name: 'signal-result' },
+      },
+      { red, green },
+    );
+    const mutableOrder: NetworkId[] = [green, red];
+    const prepared = createBlueprintArithmeticExpressionPrinter(mutableOrder);
+    const expectedSingle = printBlueprintArithmeticExpression(single, [green, red]);
+
+    expect(prepared(single)).toBe(expectedSingle);
+    expect(prepared(pair)).toBe(printBlueprintArithmeticExpression(pair, [green, red]));
+    mutableOrder[0] = red;
+    mutableOrder[1] = red;
+    expect(prepared(single)).toBe(expectedSingle);
+    expect(() => printBlueprintArithmeticExpression(single, mutableOrder)).toThrow(TypeError);
+
+    const independent = createBlueprintArithmeticExpressionPrinter([red, green]);
+    expect(independent(single)).toBe(printBlueprintArithmeticExpression(single, [red, green]));
+    expect(independent(single)).not.toBe(prepared(single));
+    expect(() => createBlueprintArithmeticExpressionPrinter([])(single)).toThrow(
+      /missing from networkOrder/,
+    );
+    expect(() => createBlueprintArithmeticExpressionPrinter([red, red])).toThrow(TypeError);
+    expect(() => createBlueprintArithmeticExpressionPrinter(['' as NetworkId])).toThrow(TypeError);
+    expect(() => createBlueprintArithmeticExpressionPrinter([42 as unknown as NetworkId])).toThrow(
+      TypeError,
+    );
+  });
+
   test('rejects malformed references, identifiers, operations, kinds, and constant domains', () => {
     const valid = decodeArithmetic(bothConstantConditions('+'));
     expect(() => printBlueprintArithmeticExpression(valid, [red, red])).toThrow(TypeError);
@@ -247,11 +293,20 @@ describe('blueprint import source expressions', () => {
     };
     const source = printBlueprintArithmeticExpression(exact, []);
     expect(new TextEncoder().encode(source).byteLength).toBe(constantConfigurationLimits.maxBytes);
+    const preparedPrinter = createBlueprintArithmeticExpressionPrinter([]);
+    expect(preparedPrinter(exact)).toBe(source);
+    expect(preparedPrinter(exact)).toBe(source);
     expect(() =>
       printBlueprintArithmeticExpression(
         { ...exact, output: { kind: 'signal', signal: Signal('virtual', `${name}x`) } },
         [],
       ),
+    ).toThrow(RangeError);
+    expect(() =>
+      preparedPrinter({
+        ...exact,
+        output: { kind: 'signal', signal: Signal('virtual', `${name}x`) },
+      }),
     ).toThrow(RangeError);
 
     expect(() =>

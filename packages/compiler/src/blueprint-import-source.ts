@@ -297,11 +297,7 @@ function appendArithmeticOutput(
   appendSignal(builder, config.output.signal);
 }
 
-/** Prints one bounded, literal DSL Arithmetic constructor expression. */
-export function printBlueprintArithmeticExpression(
-  configuration: ArithmeticProducerConfig,
-  networkOrder: readonly NetworkId[],
-): string {
+function validateArithmeticConfiguration(configuration: ArithmeticProducerConfig): void {
   if (typeof configuration !== 'object' || configuration === null) {
     throw new TypeError('Arithmetic configuration must be a record.');
   }
@@ -311,7 +307,13 @@ export function printBlueprintArithmeticExpression(
   ) {
     throw new TypeError('Unsupported Arithmetic operation.');
   }
-  const networks = validateNetworkOrder(networkOrder);
+}
+
+function printArithmeticExpression(
+  configuration: ArithmeticProducerConfig,
+  networks: ReadonlyMap<string, string>,
+): string {
+  validateArithmeticConfiguration(configuration);
   const builder = new BoundedSourceBuilder();
   builder.append('Arithmetic({left:');
   appendOperand(builder, configuration.left, networks);
@@ -323,4 +325,22 @@ export function printBlueprintArithmeticExpression(
   appendArithmeticOutput(builder, configuration);
   builder.append('})');
   return builder.finish();
+}
+
+/** Prepares one private positional network map for repeated bounded Arithmetic printing. */
+export function createBlueprintArithmeticExpressionPrinter(
+  networkOrder: readonly NetworkId[],
+): (configuration: ArithmeticProducerConfig) => string {
+  const networks = validateNetworkOrder(networkOrder);
+  return (configuration) => printArithmeticExpression(configuration, networks);
+}
+
+/** Prints one bounded, literal DSL Arithmetic constructor expression. */
+export function printBlueprintArithmeticExpression(
+  configuration: ArithmeticProducerConfig,
+  networkOrder: readonly NetworkId[],
+): string {
+  // Preserve validation order for the standalone API while using the same renderer.
+  validateArithmeticConfiguration(configuration);
+  return createBlueprintArithmeticExpressionPrinter(networkOrder)(configuration);
 }
