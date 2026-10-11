@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import { readFile } from 'node:fs/promises';
 import { BlueprintImportAnalysisError } from '@comblang/blueprint/import-analysis';
 import * as blueprintImportApi from '@comblang/runtime/blueprint-source-import';
 import * as prototypeApi from '@comblang/prototypes';
@@ -119,6 +120,51 @@ function blueprintDocument(multiplier = '0.5') {
   });
 }
 
+function builtinBlueprintDocument() {
+  return JSON.stringify({
+    blueprint: {
+      entities: [
+        {
+          entity_number: 400,
+          name: 'constant-combinator',
+          position: { x: 8, y: -1 },
+          direction: 15,
+          control_behavior: {
+            is_on: true,
+            sections: {
+              sections: [
+                {
+                  index: 1,
+                  active: true,
+                  multiplier: 1,
+                  filters: [
+                    {
+                      index: 1,
+                      name: 'signal-A',
+                      type: 'virtual',
+                      quality: 'normal',
+                      comparator: '=',
+                      count: 3,
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        {
+          entity_number: 11,
+          name: 'arithmetic-combinator',
+          position: { x: -2, y: 1 },
+          direction: 0,
+          control_behavior: arithmeticBehavior('signal-A', true, false),
+        },
+      ],
+      wires: [[400, 1, 11, 1]],
+    },
+  });
+}
+
 async function canonicalHost() {
   const database = structuredClone(syntheticPrototypeDatabase()) as {
     entities: Array<Record<string, unknown>>;
@@ -203,6 +249,56 @@ function request(
 afterEach(() => vi.restoreAllMocks());
 
 describe('compiler Worker blueprint import endpoint', () => {
+  test('uses default provisioning with the builtin asset and reuses its identity reference', async () => {
+    const [source, assetManifest] = await Promise.all([
+      readFile(
+        new URL('../../../packages/prototypes/generated/space-age-2.1.17.json', import.meta.url),
+        'utf8',
+      ),
+      readFile(
+        new URL(
+          '../../../packages/prototypes/generated/space-age-2.1.17.json.manifest.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ]);
+    const load = vi.spyOn(prototypeApi, 'loadPrototypeAsset');
+    const worker = new CompilerWorkerRuntime();
+    const documentText = builtinBlueprintDocument();
+    const first = await worker.handleImport({
+      kind: 'import-blueprint',
+      revision: 99,
+      document: { text: documentText },
+      sourcePath: 'main.factorio.ts',
+      prototypeProfile: { kind: 'builtin', source, assetManifest },
+    });
+
+    expect(first.result.state).toBe('verified');
+    expect(first.result).toMatchObject({
+      state: 'verified',
+      verification: { state: 'verified', entityCount: 2 },
+      correspondence: { entities: [{ entityNumber: 400 }, { entityNumber: 11 }] },
+    });
+    if (first.result.state !== 'verified') throw new Error('Expected default-provisioned import.');
+    expect(first.result.source.text).toContain('= Constant(');
+    expect(first.result.source.text).toContain('= Arithmetic(');
+    expect(first.result.source.path).toBe('main.factorio.ts');
+    expect(first.prototypeEnvironment?.identity).toBeDefined();
+
+    const second = await worker.handleImport({
+      kind: 'import-blueprint',
+      revision: 100,
+      document: { text: documentText },
+      sourcePath: 'main.factorio.ts',
+      prototypeProfile: { kind: 'builtin', identity: first.prototypeEnvironment!.identity },
+    });
+
+    expect(second.result.state).toBe('verified');
+    expect(second.prototypeEnvironment?.identity).toBe(first.prototypeEnvironment?.identity);
+    expect(load).toHaveBeenCalledOnce();
+  });
+
   test('uses one host import and one real source compilation for canonical synthetic data', async () => {
     const importCore = vi.spyOn(blueprintImportApi, 'importCanonicalBlueprintSource');
     const compile = vi.spyOn(sourceCompilation, 'compileSourceProgram');

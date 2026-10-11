@@ -110,6 +110,29 @@ wire tuples; legacy per-entity connections, object-shaped wires, and unknown
 outer fields are not silently dropped. Root metadata may be reported as
 retained-only, but it is not emitted into the generated source.
 
+#### Browser workflow
+
+The web workbench accepts pasted, uncompressed JSON for one `blueprint` only.
+It does not decode exchange strings, blueprint books, or files. Select and wait
+for a validated prototype environment first; conversion reuses that selected
+profile. The current source importer supports its reviewed Constant and
+Arithmetic subset, with explicit placements and supported top-level wire tuples.
+Unsupported fields, incomplete coverage, missing or ambiguous canonical
+profiles, and failed verification are shown as refusals with native JSON paths
+and generated-source locations where available. A refusal never presents
+partial generated source.
+
+Only a verified preview enables **Replace source**. After a separate browser
+confirmation, generated `main.factorio.ts` replaces the current source and is
+compiled through the normal workbench path; the circuit test draft is left
+unchanged. Editing the JSON or source, changing the profile, or losing the
+compiler Worker makes the preview stale, so convert again before applying.
+Warnings and metadata retained only in the original document are shown, but
+that metadata is not reconstructed in source. Verification means structural
+source compilation and native-JSON round-trip agreement for the supported
+subset; it does not establish Factorio acceptance, electrical compatibility,
+or lossless preservation of every document field.
+
 Without `--output`, source text alone is printed and its reported source path is
 virtual; no file is created. With `--output`, the path is resolved absolutely and
 created exclusively, so an existing file is never replaced. `--json` emits one

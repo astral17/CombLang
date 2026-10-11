@@ -992,6 +992,150 @@ code {
   box-shadow: 0 24px 70px rgb(0 0 0 / 0.25);
 }
 
+.blueprint-import-panel {
+  display: grid;
+  gap: 10px;
+  margin-top: 18px;
+  padding: 16px;
+  border: 1px solid #304038;
+  border-radius: 12px;
+  background: #18201b;
+}
+
+.blueprint-import-header,
+.blueprint-import-actions {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 9px;
+}
+
+.blueprint-import-panel .section-kicker {
+  margin-bottom: 5px;
+  font-size: 0.62rem;
+}
+
+.blueprint-import-panel h2 {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
+.blueprint-import-actions output {
+  max-width: 34rem;
+  color: #a7b5ac;
+  font-size: 0.68rem;
+  overflow-wrap: anywhere;
+}
+
+.blueprint-import-actions button {
+  min-height: 36px;
+  padding: 0 12px;
+  border: 1px solid #4a5c51;
+  border-radius: 7px;
+  color: #d7dfda;
+  background: #202b24;
+  font:
+    600 0.68rem ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+  cursor: pointer;
+}
+
+.blueprint-import-actions button:hover:not(:disabled) {
+  border-color: #8b7651;
+  background: #2a3127;
+}
+
+.blueprint-import-actions button:focus-visible,
+#blueprint-import-json:focus-visible,
+#blueprint-import-preview:focus-visible {
+  outline: 2px solid #c59770;
+  outline-offset: 2px;
+}
+
+.blueprint-import-actions button:disabled {
+  color: #65736b;
+  cursor: not-allowed;
+  opacity: 0.68;
+}
+
+.blueprint-import-label {
+  color: #c1cdc5;
+  font-size: 0.7rem;
+}
+
+#blueprint-import-json {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  min-height: 96px;
+  max-height: 176px;
+  resize: vertical;
+  overflow: auto;
+  padding: 10px;
+  border: 1px solid #3d5045;
+  border-radius: 7px;
+  color: #dfe9e2;
+  background: #101612;
+  font:
+    0.72rem/1.5 'Cascadia Code',
+    'SFMono-Regular',
+    Consolas,
+    monospace;
+  white-space: pre;
+}
+
+.blueprint-import-hint {
+  margin: 0;
+  color: #87958c;
+  font-size: 0.64rem;
+  line-height: 1.5;
+}
+
+.blueprint-import-diagnostics {
+  display: grid;
+  max-height: 132px;
+  gap: 5px;
+  overflow: auto;
+  margin: 0;
+  padding: 0 0 0 20px;
+  color: #c4b59b;
+  font-size: 0.66rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.blueprint-import-preview {
+  min-height: 0;
+  max-height: 300px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid #304038;
+  border-radius: 7px;
+  color: #dfe9e2;
+  font-size: 0.72rem;
+  white-space: pre;
+}
+
+.blueprint-import-preview[hidden] {
+  display: none;
+}
+
+.blueprint-import-actions output[data-state='valid'] {
+  color: #9dceb0;
+}
+
+.blueprint-import-actions output[data-state='invalid'] {
+  color: #dda095;
+}
+
+.blueprint-import-actions output[data-state='warning'] {
+  color: #e8ac4a;
+}
+
 .blueprint-panel .result-header {
   min-height: 72px;
   flex-wrap: wrap;
@@ -1298,6 +1442,19 @@ output[data-state='warning'] {
 }
 
 @media (max-width: 480px) {
+  .blueprint-import-header {
+    align-items: flex-start;
+  }
+  .blueprint-import-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .blueprint-import-actions output {
+    flex: 1 1 100%;
+  }
+  .blueprint-import-actions button {
+    flex: 1 1 auto;
+  }
   .blueprint-panel .result-header {
     align-items: flex-start;
     flex-direction: column;

@@ -166,6 +166,51 @@
         </div>
       </section>
 
+      <section class="blueprint-import-panel" aria-labelledby="blueprint-import-title">
+        <div class="blueprint-import-header">
+          <div>
+            <p class="section-kicker">Explicit import · uncompressed JSON only</p>
+            <h2 id="blueprint-import-title">Blueprint JSON to source</h2>
+          </div>
+          <div class="blueprint-import-actions">
+            <output id="blueprint-import-status" data-state="pending" aria-live="polite">
+              Select a validated prototype profile to convert.
+            </output>
+            <button id="blueprint-import-convert" type="button" disabled>Convert to source</button>
+            <button id="blueprint-import-apply" type="button" disabled>Replace source…</button>
+          </div>
+        </div>
+        <label class="blueprint-import-label" for="blueprint-import-json">
+          Paste one uncompressed single-blueprint JSON document
+        </label>
+        <textarea
+          id="blueprint-import-json"
+          rows="5"
+          spellcheck="false"
+          autocapitalize="off"
+          autocomplete="off"
+          autocorrect="off"
+          wrap="off"
+          aria-describedby="blueprint-import-hint"
+        ></textarea>
+        <p id="blueprint-import-hint" class="blueprint-import-hint">
+          Exchange strings, books, and files are not accepted. Conversion uses the selected
+          prototype environment and shows only verified generated source.
+        </p>
+        <ul
+          id="blueprint-import-diagnostics"
+          class="blueprint-import-diagnostics"
+          aria-live="polite"
+        ></ul>
+        <pre
+          id="blueprint-import-preview"
+          class="blueprint-import-preview"
+          tabindex="0"
+          aria-label="Verified generated TypeScript preview"
+          hidden
+        ></pre>
+      </section>
+
       <section class="workbench" aria-label="Compiler workbench">
         <div class="pane">
           <div class="pane-header">

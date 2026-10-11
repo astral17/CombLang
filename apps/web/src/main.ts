@@ -45,13 +45,23 @@ import {
   type SourceCircuitSummary,
 } from './source-demo.js';
 import { createSourceCircuitArtifact } from './source-circuit-artifact.js';
+import {
+  BlueprintImportSession,
+  type BlueprintImportSnapshot,
+} from './blueprint-import-session.js';
+import {
+  renderBlueprintImportPanel,
+  selectBlueprintImportPanel,
+} from './blueprint-import-panel.js';
 import { ParameterPanel } from './parameter-panel.js';
 import { loadTestDraft, saveTestDraft } from './test-draft.js';
 import { TestTracePanel } from './test-trace-panel.js';
 import type { TestWorkerRequest, TestWorkerResponse } from './test-worker-protocol.js';
 import { buildDetailTimeline, buildOverviewTimeline, signalLabel } from './timeline-view.js';
 import type {
+  BrowserPrototypeProfile,
   CompilerWorkerBindRequest,
+  CompilerWorkerImportRequest,
   CompilerWorkerMessageRequest,
   CompilerWorkerMessageResponse,
   CompilerWorkerRequest,
@@ -193,9 +203,25 @@ const addTest = requiredElement<HTMLButtonElement>('#add-test');
 const prototypeProfileFile = requiredElement<HTMLInputElement>('#prototype-profile-file');
 const prototypeProfileClear = requiredElement<HTMLButtonElement>('#prototype-profile-clear');
 const prototypeProfileStatus = requiredElement<HTMLOutputElement>('#prototype-profile-status');
+const blueprintImportInput = requiredElement<HTMLTextAreaElement>('#blueprint-import-json');
+const blueprintImportConvert = requiredElement<HTMLButtonElement>('#blueprint-import-convert');
+const blueprintImportApply = requiredElement<HTMLButtonElement>('#blueprint-import-apply');
+const blueprintImportStatus = requiredElement<HTMLOutputElement>('#blueprint-import-status');
+const blueprintImportPreview = requiredElement<HTMLPreElement>('#blueprint-import-preview');
+const blueprintImportDiagnostics = requiredElement<HTMLUListElement>(
+  '#blueprint-import-diagnostics',
+);
+const blueprintImportPanelElements = {
+  convert: blueprintImportConvert,
+  apply: blueprintImportApply,
+  status: blueprintImportStatus,
+  preview: blueprintImportPreview,
+  diagnostics: blueprintImportDiagnostics,
+};
 let parserWorker: Worker | undefined;
 const compilerWorkerScheduler = new CompilerWorkerScheduler();
 const compilerWorkerProgress = new CompilerWorkerProgressTracker();
+const blueprintImportSession = new BlueprintImportSession();
 let parserWorkerId: number | undefined;
 let workerBootstrapTimeout: ReturnType<typeof setTimeout> | undefined;
 let workerTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -233,6 +259,10 @@ let profileSelectionRevision = 0;
 let profileReady = false;
 let profileRestoreError: string | undefined;
 let profileNotice: string | undefined;
+let blueprintImportInputEditGeneration = 0;
+let blueprintImportRequestRevision = 0;
+let blueprintImportProfileWarnings: readonly string[] = [];
+let parameterImportNoticeShown = false;
 let sourceEditor = createSourceEditor(sourceHost, initialSource, scheduleRender);
 let testEditor = createSourceEditor(
   testHost,
@@ -1034,7 +1064,11 @@ function scheduleTestRender(): void {
 }
 
 function render(): void {
-  if (!profileReady) return;
+  if (!profileReady) {
+    refreshBlueprintImportPanel();
+    return;
+  }
+  invalidateBlueprintImportPreview('Source/profile recompilation started; convert again.');
   if (profileRestoreError !== undefined) {
     status.textContent = 'Profile unavailable';
     status.dataset.state = 'invalid';
@@ -1046,36 +1080,14 @@ function render(): void {
   parameterSourceRevision = undefined;
   parameterPanel.setParameters(undefined);
   parameterPanel.setAvailability(false, 'Waiting for source compilation.', 'pending');
+  const prototypeProfile = selectedPrototypeProfileRequest();
   const request: CompilerWorkerRequest = {
     kind: 'parse',
     revision: currentRevision,
     file: { path: 'main.factorio.ts', text: sourceEditor.getValue() },
     parameterBinding: true,
     ...blueprintExportRequest(includeNumericParameters.checked),
-    ...(activePrototypeProfile === undefined
-      ? {}
-      : {
-          prototypeProfile:
-            workerPrototypeIdentity !== undefined &&
-            workerPrototypeIdentity === activePrototypeProfile.identity
-              ? {
-                  identity: workerPrototypeIdentity,
-                  kind: activePrototypeProfileIsBuiltin ? 'builtin' : 'custom',
-                }
-              : {
-                  source: activePrototypeProfile.source,
-                  kind: activePrototypeProfileIsBuiltin ? 'builtin' : 'custom',
-                  ...(activePrototypeProfile.factorioDumpMetadata === undefined
-                    ? {}
-                    : { factorioDumpMetadata: activePrototypeProfile.factorioDumpMetadata }),
-                  ...(activePrototypeProfile.assetManifest === undefined
-                    ? {}
-                    : { assetManifest: activePrototypeProfile.assetManifest }),
-                  ...(activePrototypeProfile.identity === undefined
-                    ? {}
-                    : { expectedIdentity: activePrototypeProfile.identity }),
-                },
-        }),
+    ...(prototypeProfile === undefined ? {} : { prototypeProfile }),
   };
   status.textContent = 'Parsing…';
   status.dataset.state = 'pending';
@@ -1085,6 +1097,7 @@ function render(): void {
 
 function scheduleRender(saveDraft = true): void {
   if (saveDraft) saveSourceDraft(draftStorage, sourceEditor.getValue());
+  invalidateBlueprintImportPreview('Source or profile changed; convert again.');
   currentRevision = ++operationCounter;
   parameterSourceRevision = undefined;
   parameterPanel.setParameters(undefined);
@@ -1109,11 +1122,178 @@ function scheduleRender(saveDraft = true): void {
     renderTimer = undefined;
     render();
   }, 180);
+  refreshBlueprintImportPanel();
 }
 
 includeNumericParameters.addEventListener('change', () => {
   scheduleRender(false);
 });
+
+function selectedPrototypeProfileRequest(): BrowserPrototypeProfile | undefined {
+  const profile = activePrototypeProfile;
+  if (profile === undefined) return undefined;
+  const kind = activePrototypeProfileIsBuiltin ? 'builtin' : 'custom';
+  if (workerPrototypeIdentity !== undefined && workerPrototypeIdentity === profile.identity) {
+    return { identity: workerPrototypeIdentity, kind };
+  }
+  return {
+    source: profile.source,
+    kind,
+    ...(profile.factorioDumpMetadata === undefined
+      ? {}
+      : { factorioDumpMetadata: profile.factorioDumpMetadata }),
+    ...(profile.assetManifest === undefined ? {} : { assetManifest: profile.assetManifest }),
+    ...(profile.identity === undefined ? {} : { expectedIdentity: profile.identity }),
+  };
+}
+
+function blueprintImportAvailability(): { readonly available: boolean; readonly message: string } {
+  if (!profileReady) return { available: false, message: 'Waiting for the selected profile.' };
+  if (profileRestoreError !== undefined) {
+    return { available: false, message: 'Resolve the prototype profile error before converting.' };
+  }
+  if (pendingProfileSelection) {
+    return { available: false, message: 'Wait for the selected prototype profile to validate.' };
+  }
+  if (activePrototypeProfile === undefined) {
+    return { available: false, message: 'Select a validated prototype profile to convert.' };
+  }
+  if ((activePrototypeProfile.identity ?? workerPrototypeIdentity) === undefined) {
+    return { available: false, message: 'Wait for the selected profile identity to be confirmed.' };
+  }
+  if (renderTimer !== undefined) {
+    return { available: false, message: 'Wait for the current source/profile change to settle.' };
+  }
+  const workerId = parserWorkerId;
+  if (
+    parserWorker === undefined ||
+    workerId === undefined ||
+    !compilerWorkerScheduler.isCurrent(workerId)
+  ) {
+    return {
+      available: false,
+      message: 'Use Recompile source to start the compiler Worker first.',
+    };
+  }
+  const phase = compilerWorkerScheduler.phase;
+  const acceptsImport =
+    phase === 'ready' ||
+    (phase === 'busy' && compilerWorkerScheduler.activeRequest?.kind === 'import-blueprint');
+  if (!acceptsImport || compilerWorkerScheduler.hasQueuedRequest) {
+    return { available: false, message: 'Wait for the current compiler operation to finish.' };
+  }
+  return { available: true, message: 'Paste one uncompressed blueprint JSON document.' };
+}
+
+function currentBlueprintImportSnapshot(): BlueprintImportSnapshot | undefined {
+  const workerId = parserWorkerId;
+  const profile = activePrototypeProfile;
+  const profileIdentity = profile?.identity ?? workerPrototypeIdentity;
+  if (workerId === undefined || profile === undefined || profileIdentity === undefined) {
+    return undefined;
+  }
+  return {
+    requestRevision: blueprintImportRequestRevision,
+    workerId,
+    sourceRevision: currentRevision,
+    profileSelectionRevision,
+    profileIdentity,
+    inputEditGeneration: blueprintImportInputEditGeneration,
+  };
+}
+
+function refreshBlueprintImportPanel(): void {
+  const availability = blueprintImportAvailability();
+  const snapshot = currentBlueprintImportSnapshot();
+  renderBlueprintImportPanel(
+    blueprintImportPanelElements,
+    selectBlueprintImportPanel(
+      blueprintImportSession.state,
+      availability.available,
+      blueprintImportSession.canApply(snapshot),
+      availability.message,
+      blueprintImportProfileWarnings,
+    ),
+  );
+}
+
+function invalidateBlueprintImportPreview(message: string): void {
+  blueprintImportProfileWarnings = [];
+  blueprintImportSession.invalidate(message);
+  refreshBlueprintImportPanel();
+}
+
+function submitBlueprintImport(): void {
+  const availability = blueprintImportAvailability();
+  if (!availability.available) {
+    refreshBlueprintImportPanel();
+    return;
+  }
+  const revision = ++operationCounter;
+  blueprintImportRequestRevision = revision;
+  const snapshot = currentBlueprintImportSnapshot();
+  const prototypeProfile = selectedPrototypeProfileRequest();
+  if (snapshot === undefined || prototypeProfile === undefined) {
+    blueprintImportSession.invalidate('The selected profile or Worker changed; convert again.');
+    refreshBlueprintImportPanel();
+    return;
+  }
+  blueprintImportProfileWarnings = [];
+  blueprintImportSession.begin(snapshot);
+  refreshBlueprintImportPanel();
+  const request: CompilerWorkerImportRequest = {
+    kind: 'import-blueprint',
+    revision,
+    document: { text: blueprintImportInput.value },
+    sourcePath: 'main.factorio.ts',
+    prototypeProfile,
+  };
+  if (!compilerWorkerScheduler.enqueueImport(request)) {
+    blueprintImportSession.fail(
+      snapshot,
+      'The compiler Worker no longer has an import slot; wait and convert again.',
+    );
+    refreshBlueprintImportPanel();
+    return;
+  }
+  refreshBlueprintImportPanel();
+  pumpCompilerWorker();
+}
+
+function applyBlueprintImport(): void {
+  const beforeConfirmation = currentBlueprintImportSnapshot();
+  if (!blueprintImportSession.canApply(beforeConfirmation)) {
+    refreshBlueprintImportPanel();
+    return;
+  }
+  if (
+    !window.confirm(
+      'Replace the current main.factorio.ts source with this verified generated source? The circuit test draft will remain unchanged.',
+    )
+  ) {
+    return;
+  }
+  const generated = blueprintImportSession.consume(currentBlueprintImportSnapshot());
+  if (generated === undefined) {
+    refreshBlueprintImportPanel();
+    return;
+  }
+  const editorKind = sourceEditor.kind;
+  sourceEditor.destroy();
+  sourceEditor = createSourceEditor(sourceHost, generated.source.text, scheduleRender, editorKind);
+  updateEditorModeUi();
+  blueprintImportProfileWarnings = [];
+  refreshBlueprintImportPanel();
+  scheduleRender();
+}
+
+blueprintImportInput.addEventListener('input', () => {
+  blueprintImportInputEditGeneration += 1;
+  invalidateBlueprintImportPreview('Blueprint JSON changed; convert again.');
+});
+blueprintImportConvert.addEventListener('click', submitBlueprintImport);
+blueprintImportApply.addEventListener('click', applyBlueprintImport);
+refreshBlueprintImportPanel();
 
 function submitParameterBinding(overrides: readonly SourceParameterOverride[]): void {
   const capture = compilerWorkerScheduler.bindingCapture;
@@ -1132,6 +1312,17 @@ function submitParameterBinding(overrides: readonly SourceParameterOverride[]): 
       includeNumericParameters.checked
         ? 'Turn off Include numeric parameters to bind concrete values.'
         : 'The parameter capture is unavailable; recompile source to continue.',
+      'warning',
+    );
+    return;
+  }
+  if (
+    compilerWorkerScheduler.phase === 'busy' &&
+    compilerWorkerScheduler.activeRequest?.kind === 'import-blueprint'
+  ) {
+    parameterImportNoticeShown = true;
+    parameterPanel.setStatus(
+      'Blueprint conversion is in progress; the current parameter values and capture are retained.',
       'warning',
     );
     return;
@@ -1158,6 +1349,22 @@ function submitParameterBinding(overrides: readonly SourceParameterOverride[]): 
   setTestsWaiting('Binding parameters; tests will rerun on the resulting circuit.');
   parameterPanel.setPending();
   pumpCompilerWorker();
+}
+
+function restoreParameterPanelAfterImport(): void {
+  if (!parameterImportNoticeShown) return;
+  parameterImportNoticeShown = false;
+  const capture = compilerWorkerScheduler.bindingCapture;
+  if (
+    parameterSourceRevision === currentRevision &&
+    capture?.sourceRevision === currentRevision &&
+    !includeNumericParameters.checked
+  ) {
+    parameterPanel.setStatus(
+      'Edit values and Apply, or Reset to the original source defaults.',
+      'valid',
+    );
+  }
 }
 
 function submitParameterReset(): void {
@@ -1199,6 +1406,18 @@ function handleWorkerMessage(
     return;
   }
   if (event.data.kind === 'blueprint-imported') {
+    const requested = blueprintImportSession.activeSnapshot;
+    const completed =
+      requested !== undefined &&
+      requested.requestRevision === event.data.revision &&
+      requested.workerId === workerId &&
+      blueprintImportSession.complete(requested, event.data, currentBlueprintImportSnapshot());
+    if (completed) {
+      blueprintImportProfileWarnings = (event.data.prototypeEnvironment?.warnings ?? []).map(
+        ({ code, path, message }) => `Profile warning · ${code} · ${path} · ${message}`,
+      );
+    }
+    restoreParameterPanelAfterImport();
     pumpCompilerWorker();
     return;
   }
@@ -1490,6 +1709,7 @@ function handleWorkerBootstrapTimeout(worker: Worker, workerId: number): void {
   parserWorkerId = undefined;
   workerPrototypeIdentity = undefined;
   compilerWorkerScheduler.fail(workerId);
+  invalidateBlueprintImportPreview('Compiler Worker was lost; convert again after recompilation.');
   const bootstrapFailure = compilerWorkerBootstrapTimeoutReason();
   const rolledBack = rollbackPendingPrototypeProfile(
     `Worker bootstrap timeout: ${bootstrapFailure}`,
@@ -1520,6 +1740,26 @@ function handleWorkerError(event: ErrorEvent, worker: Worker, workerId: number):
   const failureMessage = event.message || 'the compiler Worker crashed.';
   const importFailed = failedRequest?.kind === 'import-blueprint';
   if (importFailed) {
+    const pending = blueprintImportSession.activeSnapshot;
+    if (
+      pending !== undefined &&
+      failedRequest?.kind === 'import-blueprint' &&
+      pending.requestRevision === failedRequest.revision
+    ) {
+      blueprintImportSession.fail(pending, failureMessage);
+      blueprintImportProfileWarnings = [];
+    } else {
+      invalidateBlueprintImportPreview(
+        'Compiler Worker was lost before the queued conversion completed; convert again after recompilation.',
+      );
+    }
+  } else {
+    invalidateBlueprintImportPreview(
+      'Compiler Worker was lost; convert again after recompilation.',
+    );
+  }
+  if (importFailed) {
+    parameterImportNoticeShown = false;
     parameterSourceRevision = undefined;
     parameterPanel.setAvailability(
       false,
@@ -1619,6 +1859,7 @@ function ensureCompilerWorker(): Worker {
 
 function pumpCompilerWorker(): void {
   if (!compilerWorkerScheduler.hasQueuedRequest || compilerWorkerScheduler.phase === 'busy') {
+    refreshBlueprintImportPanel();
     return;
   }
   const worker = ensureCompilerWorker();
@@ -1657,6 +1898,7 @@ function pumpCompilerWorker(): void {
     compilerWorkerProgress.begin(workerId, request.revision);
   }
   worker.postMessage(request);
+  refreshBlueprintImportPanel();
   const timeoutMs = compilerWorkerRequestTimeoutMs(request, dispatch.isCold);
   workerTimeout = setTimeout(() => {
     const activeRequest = compilerWorkerScheduler.activeRequest;
@@ -1697,12 +1939,23 @@ function pumpCompilerWorker(): void {
       return;
     }
     if (request.kind === 'import-blueprint') {
+      const pending = blueprintImportSession.activeSnapshot;
+      if (pending !== undefined && pending.requestRevision === request.revision) {
+        blueprintImportSession.fail(pending, timeoutReason);
+        blueprintImportProfileWarnings = [];
+      } else if (pending !== undefined) {
+        invalidateBlueprintImportPreview(
+          'Compiler Worker timed out before the newer queued conversion completed; convert again after recompilation.',
+        );
+      }
+      parameterImportNoticeShown = false;
       parameterSourceRevision = undefined;
       parameterPanel.setAvailability(
         false,
         `${timeoutReason} Recompile source to continue.`,
         'invalid',
       );
+      refreshBlueprintImportPanel();
       pumpCompilerWorker();
       return;
     }
@@ -1731,6 +1984,7 @@ prototypeProfileFile.addEventListener('change', () => {
   const files = [...(prototypeProfileFile.files ?? [])];
   if (files.length === 0) return;
   const selectionRevision = ++profileSelectionRevision;
+  invalidateBlueprintImportPreview('Prototype profile selection changed; convert again.');
   profileBeforeSelection = activePrototypeProfile;
   profileBeforeSelectionIsBuiltin = activePrototypeProfileIsBuiltin;
   workerIdentityBeforeSelection = workerPrototypeIdentity;
@@ -1820,6 +2074,7 @@ prototypeProfileFile.addEventListener('change', () => {
 
 prototypeProfileClear.addEventListener('click', () => {
   profileSelectionRevision += 1;
+  invalidateBlueprintImportPreview('Prototype profile selection changed; convert again.');
   profileReady = true;
   profileRestoreError = undefined;
   profileNotice = undefined;
