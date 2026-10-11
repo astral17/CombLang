@@ -3,13 +3,15 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 import type {
   CompilerWorkerBindRequest,
   CompilerWorkerBoundResponse,
-  CompilerWorkerOperationRequest,
+  CompilerWorkerImportRequest,
+  CompilerWorkerImportedResponse,
+  CompilerWorkerMessageRequest,
   CompilerWorkerResponse,
   CompilerWorkerParsedResponse,
   CompilerWorkerRequest,
 } from './worker-protocol.js';
 
-type WorkerMessageListener = (event: MessageEvent<CompilerWorkerOperationRequest>) => void;
+type WorkerMessageListener = (event: MessageEvent<CompilerWorkerMessageRequest>) => void;
 
 async function installWorker() {
   vi.resetModules();
@@ -61,7 +63,7 @@ describe('compiler parser Worker operation routing', () => {
       'handleBinding',
     );
 
-    worker.messageListener({ data: request } as MessageEvent<CompilerWorkerOperationRequest>);
+    worker.messageListener({ data: request } as MessageEvent<CompilerWorkerMessageRequest>);
     await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalledTimes(3));
 
     expect(worker.postMessage.mock.calls.map(([message]) => message)).toEqual([
@@ -102,7 +104,7 @@ describe('compiler parser Worker operation routing', () => {
       .spyOn(worker.runtimeModule.CompilerWorkerRuntime.prototype, 'handleBinding')
       .mockReturnValue(response);
 
-    worker.messageListener({ data: request } as MessageEvent<CompilerWorkerOperationRequest>);
+    worker.messageListener({ data: request } as MessageEvent<CompilerWorkerMessageRequest>);
 
     expect(handleBinding).toHaveBeenCalledOnce();
     expect(handleBinding).toHaveBeenCalledWith(request);
@@ -124,7 +126,7 @@ describe('compiler parser Worker operation routing', () => {
         },
         parameterBinding: true,
       },
-    } as MessageEvent<CompilerWorkerOperationRequest>);
+    } as MessageEvent<CompilerWorkerMessageRequest>);
     await vi.waitFor(() =>
       expect(
         worker.postMessage.mock.calls.some(
@@ -146,7 +148,7 @@ describe('compiler parser Worker operation routing', () => {
         sourceRevision: 20,
         token: 'wrong-token',
       },
-    } as MessageEvent<CompilerWorkerOperationRequest>);
+    } as MessageEvent<CompilerWorkerMessageRequest>);
 
     expect(worker.postMessage).toHaveBeenCalledOnce();
     expect(worker.postMessage).toHaveBeenCalledWith(
@@ -162,5 +164,77 @@ describe('compiler parser Worker operation routing', () => {
         }),
       }),
     );
+  });
+
+  test('routes import to one imported terminal response without parse or bind handlers', async () => {
+    const worker = await installWorker();
+    worker.postMessage.mockClear();
+    const request: CompilerWorkerImportRequest = {
+      kind: 'import-blueprint',
+      revision: 31,
+      document: { text: '{"blueprint":{"entities":[],"wires":[]}}' },
+      sourcePath: 'virtual/imported.factorio.ts',
+    };
+    const response: CompilerWorkerImportedResponse = {
+      kind: 'blueprint-imported',
+      revision: 31,
+      result: { state: 'blocked', diagnostics: [] },
+    };
+    const handle = vi.spyOn(worker.runtimeModule.CompilerWorkerRuntime.prototype, 'handle');
+    const handleBinding = vi.spyOn(
+      worker.runtimeModule.CompilerWorkerRuntime.prototype,
+      'handleBinding',
+    );
+    const handleImport = vi
+      .spyOn(worker.runtimeModule.CompilerWorkerRuntime.prototype, 'handleImport')
+      .mockImplementation(async (_request, observe) => {
+        observe?.('receive');
+        observe?.('profile');
+        return response;
+      });
+
+    worker.messageListener({ data: request } as MessageEvent<CompilerWorkerMessageRequest>);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalledTimes(4));
+
+    expect(worker.postMessage.mock.calls.map(([message]) => message)).toEqual([
+      { kind: 'progress', revision: 31, stage: 'receive' },
+      { kind: 'progress', revision: 31, stage: 'profile' },
+      { kind: 'progress', revision: 31, stage: 'transport' },
+      response,
+    ]);
+    expect(
+      worker.postMessage.mock.calls.filter(
+        ([message]) => (message as CompilerWorkerImportedResponse).kind === 'blueprint-imported',
+      ),
+    ).toHaveLength(1);
+    expect(handleImport).toHaveBeenCalledOnce();
+    expect(handle).not.toHaveBeenCalled();
+    expect(handleBinding).not.toHaveBeenCalled();
+  });
+
+  test('turns a rejected import handler into one blocked response without an unhandled rejection', async () => {
+    const worker = await installWorker();
+    worker.postMessage.mockClear();
+    const request: CompilerWorkerImportRequest = {
+      kind: 'import-blueprint',
+      revision: 32,
+      document: { text: '{}' },
+      sourcePath: 'virtual/imported.factorio.ts',
+    };
+    vi.spyOn(
+      worker.runtimeModule.CompilerWorkerRuntime.prototype,
+      'handleImport',
+    ).mockRejectedValue(new Error('unexpected endpoint rejection'));
+
+    worker.messageListener({ data: request } as MessageEvent<CompilerWorkerMessageRequest>);
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalledTimes(2));
+    expect(worker.postMessage.mock.calls.at(-1)?.[0]).toMatchObject({
+      kind: 'blueprint-imported',
+      revision: 32,
+      result: {
+        state: 'blocked',
+        error: { code: 'WP1010', message: 'unexpected endpoint rejection' },
+      },
+    });
   });
 });

@@ -15,6 +15,8 @@ import {
   PrototypeValidationError,
   type LoadedPrototypeInput,
 } from '@comblang/prototypes';
+import { BlueprintDocumentError } from '@comblang/blueprint';
+import { BlueprintImportAnalysisError } from '@comblang/blueprint/import-analysis';
 import { parseDiagnosticPolicy, type Diagnostic, type DiagnosticPolicy } from '@comblang/shared';
 import type { EntityPrototypeResolver } from '@comblang/runtime/entity-registry';
 import type { SourceCompilationEnvironment } from '@comblang/runtime/source-compilation';
@@ -30,9 +32,17 @@ import {
   conservativeEntityProvisioningPolicy,
   EntityProvisioningService,
 } from '@comblang/runtime/entity-provisioning';
+import { importCanonicalBlueprintSource } from '@comblang/runtime/blueprint-source-import';
 import { BlueprintParameterError } from '../../../packages/compiler/src/blueprint-parameters.js';
 
 import { compileOwnedSource } from './compile-source.js';
+import {
+  blockedBlueprintImportResponse,
+  blueprintImportResponseRevision,
+  CompilerWorkerBlueprintImportRequestError,
+  projectBlueprintImportResult,
+  readCompilerWorkerImportRequest,
+} from './blueprint-import.js';
 import {
   BrowserBlueprintExportRequestError,
   readBlueprintExportOptions,
@@ -46,6 +56,9 @@ import type {
   CompilerWorkerParameterBindingResult,
   CompilerWorkerBindRequest,
   CompilerWorkerBoundResponse,
+  BrowserPrototypeProfile,
+  CompilerWorkerImportRequest,
+  CompilerWorkerImportedResponse,
 } from './worker-protocol.js';
 
 class BrowserPrototypeSelectionError extends Error {
@@ -134,6 +147,11 @@ interface WorkerCompileOptions {
   readonly prototypeEnvironment?: BrowserPrototypeEnvironmentReport;
 }
 
+interface WorkerResolvedEnvironment {
+  readonly environment: SourceCompilationEnvironment;
+  readonly prototypeEnvironment?: BrowserPrototypeEnvironmentReport;
+}
+
 export class CompilerWorkerRuntime {
   readonly #profiles = new Map<string, LoadedPrototypeInput>();
   readonly #entityProvisioning = new EntityProvisioningService();
@@ -215,171 +233,14 @@ export class CompilerWorkerRuntime {
         blueprintExport,
       });
     }
-    let entityReplayContext: EntityReplayContextTransport | undefined;
-    let entityHostContext: CompilerWorkerEntityHostContext | undefined;
+    let resolved: WorkerResolvedEnvironment;
     try {
-      entityReplayContext =
-        request.entityReplayContext === undefined
-          ? undefined
-          : cloneEntityReplayContextTransport(request.entityReplayContext);
-      if (entityReplayContext !== undefined && this.#resolveEntityReplayContext !== undefined) {
-        entityHostContext = this.#resolveEntityReplayContext(entityReplayContext);
-        if (entityHostContext !== undefined) {
-          const trustedTransport = entityReplayContextTransport(
-            entityHostContext.trustedEntityReplayContext,
-          );
-          if (
-            entityReplayContextIdentity(trustedTransport) !==
-            entityReplayContextIdentity(entityReplayContext)
-          ) {
-            throw new EntityReplayContextError(
-              'ER1001',
-              '$.entityReplayContext',
-              'host-bound trusted context does not match the request transport.',
-            );
-          }
-        }
-      }
-    } catch (error) {
-      return this.#compileResponse({
-        epoch,
-        revision,
-        file,
-        parameterBinding,
-        preflightDiagnostics: [profileFailure(error)],
+      resolved = await this.#resolveEnvironment(
+        request.prototypeProfile,
+        request.entityReplayContext,
+        diagnosticPolicy,
         observe,
-        blueprintExport,
-      });
-    }
-    if (request.prototypeProfile === undefined) {
-      return this.#compileResponse({
-        epoch,
-        revision,
-        file,
-        parameterBinding,
-        environment: {
-          ...(diagnosticPolicy === undefined ? {} : { diagnosticPolicy }),
-          ...(entityReplayContext === undefined ? {} : { entityReplayContext }),
-          ...(entityHostContext === undefined
-            ? {}
-            : {
-                trustedEntityReplayContext: entityHostContext.trustedEntityReplayContext,
-                ...(entityHostContext.entityPrototypeResolver === undefined
-                  ? {}
-                  : { entityPrototypeResolver: entityHostContext.entityPrototypeResolver }),
-              }),
-        },
-        observe,
-        blueprintExport,
-      });
-    }
-    let compileEnvironment: SourceCompilationEnvironment;
-    let prototypeEnvironment: BrowserPrototypeEnvironmentReport;
-    try {
-      const profile = request.prototypeProfile;
-      observe?.('profile');
-      if (
-        'source' in profile &&
-        profile.assetManifest !== undefined &&
-        profile.factorioDumpMetadata !== undefined
-      ) {
-        throw new BrowserPrototypeSelectionError(
-          'A prototype profile cannot combine raw-dump metadata with a generated-asset manifest.',
-        );
-      }
-      const referenceIdentity = 'identity' in profile ? profile.identity : undefined;
-      const loaded =
-        'source' in profile
-          ? profile.assetManifest === undefined
-            ? await loadPrototypeInputJson(profile.source, {
-                ...(profile.factorioDumpMetadata === undefined
-                  ? {}
-                  : { factorioDumpMetadata: profile.factorioDumpMetadata }),
-              })
-            : {
-                ...(await loadPrototypeAsset(profile.source, profile.assetManifest)),
-                format: 'normalized' as const,
-                warnings: Object.freeze([]),
-              }
-          : this.#profiles.get(profile.identity);
-      if (loaded === undefined) {
-        throw new BrowserPrototypeCacheMissError(
-          `Prototype environment ${referenceIdentity} is not loaded in this Worker; send its database JSON again.`,
-        );
-      }
-      if ('source' in profile) {
-        if (
-          profile.expectedIdentity !== undefined &&
-          profile.expectedIdentity !== loaded.prototypes.identity
-        ) {
-          throw new BrowserPrototypeSelectionError(
-            `Prototype identity mismatch: expected ${profile.expectedIdentity}, loaded ${loaded.prototypes.identity}.`,
-          );
-        }
-        this.#profiles.set(loaded.prototypes.identity, loaded);
-      }
-      const environment: BrowserPrototypeEnvironmentReport = Object.freeze({
-        identity: loaded.prototypes.identity,
-        format: loaded.format,
-        factorioVersion: loaded.prototypes.environment.factorioVersion,
-        expansions: loaded.prototypes.environment.expansions,
-        mods: loaded.prototypes.environment.mods,
-        capabilities: loaded.prototypes.capabilities,
-        warnings: loaded.warnings,
-      });
-      const provisioned = this.#entityProvisioning.provision(
-        loaded.prototypes,
-        conservativeEntityProvisioningPolicy,
       );
-      if (entityHostContext !== undefined) {
-        const trustedDatabase = entityHostContext.trustedEntityReplayContext.database;
-        if (
-          trustedDatabase.schemaVersion !== loaded.prototypes.schemaVersion ||
-          trustedDatabase.identity !== loaded.prototypes.identity
-        ) {
-          throw new EntityReplayContextError(
-            'ER1001',
-            '$.entityReplayContext.database',
-            'host-bound Entity context does not match the selected provider.',
-          );
-        }
-        entityHostContext = {
-          trustedEntityReplayContext: entityHostContext.trustedEntityReplayContext,
-          entityPrototypeResolver:
-            entityHostContext.entityPrototypeResolver ?? provisioned.entityPrototypeResolver,
-        };
-      } else {
-        if (
-          entityReplayContext !== undefined &&
-          entityReplayContextIdentity(entityReplayContext) !==
-            entityReplayContextIdentity(provisioned.entityReplayContext)
-        ) {
-          throw new EntityReplayContextError(
-            'ER1001',
-            '$.entityReplayContext',
-            'selected Entity replay identity does not match the loaded provider.',
-          );
-        }
-        entityReplayContext = provisioned.entityReplayContext;
-        entityHostContext = {
-          trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
-          entityPrototypeResolver: provisioned.entityPrototypeResolver,
-        };
-      }
-      prototypeEnvironment = environment;
-      compileEnvironment = {
-        prototypes: loaded.prototypes,
-        ...(diagnosticPolicy === undefined ? {} : { diagnosticPolicy }),
-        ...(entityReplayContext === undefined ? {} : { entityReplayContext }),
-        ...(entityHostContext === undefined
-          ? {}
-          : {
-              trustedEntityReplayContext: entityHostContext.trustedEntityReplayContext,
-              ...(entityHostContext.entityPrototypeResolver === undefined
-                ? {}
-                : { entityPrototypeResolver: entityHostContext.entityPrototypeResolver }),
-            }),
-      };
     } catch (error) {
       return this.#compileResponse({
         epoch,
@@ -396,11 +257,242 @@ export class CompilerWorkerRuntime {
       revision,
       file,
       parameterBinding,
-      environment: compileEnvironment,
+      environment: resolved.environment,
       observe,
       blueprintExport,
-      prototypeEnvironment,
+      ...(resolved.prototypeEnvironment === undefined
+        ? {}
+        : { prototypeEnvironment: resolved.prototypeEnvironment }),
     });
+  }
+
+  async handleImport(
+    input: unknown,
+    observe?: (stage: CompilerWorkerProgressStage) => void,
+  ): Promise<CompilerWorkerImportedResponse> {
+    const revision = blueprintImportResponseRevision(input);
+    observe?.('receive');
+    let request: CompilerWorkerImportRequest;
+    try {
+      request = readCompilerWorkerImportRequest(input);
+    } catch (error) {
+      const requestError =
+        error instanceof CompilerWorkerBlueprintImportRequestError
+          ? error
+          : new CompilerWorkerBlueprintImportRequestError('$', 'invalid import request.');
+      return blockedBlueprintImportResponse(
+        revision,
+        requestError.code,
+        requestError.message,
+        requestError.path,
+      );
+    }
+
+    let resolved: WorkerResolvedEnvironment;
+    try {
+      resolved = await this.#resolveEnvironment(
+        request.prototypeProfile,
+        request.entityReplayContext,
+        undefined,
+        observe,
+      );
+    } catch (error) {
+      const diagnostic = profileFailure(error);
+      const path =
+        error !== null &&
+        typeof error === 'object' &&
+        'path' in error &&
+        typeof error.path === 'string'
+          ? error.path
+          : undefined;
+      return blockedBlueprintImportResponse(
+        request.revision,
+        diagnostic.code,
+        diagnostic.message,
+        path,
+      );
+    }
+
+    try {
+      const result = importCanonicalBlueprintSource(
+        request.document.text,
+        { path: request.sourcePath },
+        resolved.environment,
+      );
+      const response: CompilerWorkerImportedResponse = {
+        kind: 'blueprint-imported',
+        revision: request.revision,
+        result: projectBlueprintImportResult(result),
+        ...(resolved.prototypeEnvironment === undefined
+          ? {}
+          : { prototypeEnvironment: resolved.prototypeEnvironment }),
+      };
+      return response;
+    } catch (error) {
+      const typedImportError =
+        error instanceof BlueprintDocumentError || error instanceof BlueprintImportAnalysisError;
+      const code = typedImportError ? error.code : 'WP1010';
+      const message =
+        error instanceof Error && error.message.length > 0
+          ? error.message
+          : 'Unexpected Worker blueprint import failure.';
+      const path = typedImportError ? error.path : undefined;
+      return blockedBlueprintImportResponse(request.revision, code, message, path);
+    }
+  }
+
+  async #resolveEnvironment(
+    profile: BrowserPrototypeProfile | undefined,
+    transportedEntityReplayContext: EntityReplayContextTransport | undefined,
+    diagnosticPolicy: DiagnosticPolicy | undefined,
+    observe: ((stage: CompilerWorkerProgressStage) => void) | undefined,
+  ): Promise<WorkerResolvedEnvironment> {
+    let entityReplayContext =
+      transportedEntityReplayContext === undefined
+        ? undefined
+        : cloneEntityReplayContextTransport(transportedEntityReplayContext);
+    let entityHostContext: CompilerWorkerEntityHostContext | undefined;
+    if (entityReplayContext !== undefined && this.#resolveEntityReplayContext !== undefined) {
+      entityHostContext = this.#resolveEntityReplayContext(entityReplayContext);
+      if (entityHostContext !== undefined) {
+        const trustedTransport = entityReplayContextTransport(
+          entityHostContext.trustedEntityReplayContext,
+        );
+        if (
+          entityReplayContextIdentity(trustedTransport) !==
+          entityReplayContextIdentity(entityReplayContext)
+        ) {
+          throw new EntityReplayContextError(
+            'ER1001',
+            '$.entityReplayContext',
+            'host-bound trusted context does not match the request transport.',
+          );
+        }
+      }
+    }
+
+    if (profile === undefined) {
+      return {
+        environment: {
+          ...(diagnosticPolicy === undefined ? {} : { diagnosticPolicy }),
+          ...(entityReplayContext === undefined ? {} : { entityReplayContext }),
+          ...(entityHostContext === undefined
+            ? {}
+            : {
+                trustedEntityReplayContext: entityHostContext.trustedEntityReplayContext,
+                ...(entityHostContext.entityPrototypeResolver === undefined
+                  ? {}
+                  : { entityPrototypeResolver: entityHostContext.entityPrototypeResolver }),
+              }),
+        },
+      };
+    }
+
+    observe?.('profile');
+    if (
+      'source' in profile &&
+      profile.assetManifest !== undefined &&
+      profile.factorioDumpMetadata !== undefined
+    ) {
+      throw new BrowserPrototypeSelectionError(
+        'A prototype profile cannot combine raw-dump metadata with a generated-asset manifest.',
+      );
+    }
+    const referenceIdentity = 'identity' in profile ? profile.identity : undefined;
+    const loaded =
+      'source' in profile
+        ? profile.assetManifest === undefined
+          ? await loadPrototypeInputJson(profile.source, {
+              ...(profile.factorioDumpMetadata === undefined
+                ? {}
+                : { factorioDumpMetadata: profile.factorioDumpMetadata }),
+            })
+          : {
+              ...(await loadPrototypeAsset(profile.source, profile.assetManifest)),
+              format: 'normalized' as const,
+              warnings: Object.freeze([]),
+            }
+        : this.#profiles.get(profile.identity);
+    if (loaded === undefined) {
+      throw new BrowserPrototypeCacheMissError(
+        `Prototype environment ${referenceIdentity} is not loaded in this Worker; send its database JSON again.`,
+      );
+    }
+    if ('source' in profile) {
+      if (
+        profile.expectedIdentity !== undefined &&
+        profile.expectedIdentity !== loaded.prototypes.identity
+      ) {
+        throw new BrowserPrototypeSelectionError(
+          `Prototype identity mismatch: expected ${profile.expectedIdentity}, loaded ${loaded.prototypes.identity}.`,
+        );
+      }
+      this.#profiles.set(loaded.prototypes.identity, loaded);
+    }
+    const prototypeEnvironment: BrowserPrototypeEnvironmentReport = Object.freeze({
+      identity: loaded.prototypes.identity,
+      format: loaded.format,
+      factorioVersion: loaded.prototypes.environment.factorioVersion,
+      expansions: loaded.prototypes.environment.expansions,
+      mods: loaded.prototypes.environment.mods,
+      capabilities: loaded.prototypes.capabilities,
+      warnings: loaded.warnings,
+    });
+    const provisioned = this.#entityProvisioning.provision(
+      loaded.prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    if (entityHostContext !== undefined) {
+      const trustedDatabase = entityHostContext.trustedEntityReplayContext.database;
+      if (
+        trustedDatabase.schemaVersion !== loaded.prototypes.schemaVersion ||
+        trustedDatabase.identity !== loaded.prototypes.identity
+      ) {
+        throw new EntityReplayContextError(
+          'ER1001',
+          '$.entityReplayContext.database',
+          'host-bound Entity context does not match the selected provider.',
+        );
+      }
+      entityHostContext = {
+        trustedEntityReplayContext: entityHostContext.trustedEntityReplayContext,
+        entityPrototypeResolver:
+          entityHostContext.entityPrototypeResolver ?? provisioned.entityPrototypeResolver,
+      };
+    } else {
+      if (
+        entityReplayContext !== undefined &&
+        entityReplayContextIdentity(entityReplayContext) !==
+          entityReplayContextIdentity(provisioned.entityReplayContext)
+      ) {
+        throw new EntityReplayContextError(
+          'ER1001',
+          '$.entityReplayContext',
+          'selected Entity replay identity does not match the loaded provider.',
+        );
+      }
+      entityReplayContext = provisioned.entityReplayContext;
+      entityHostContext = {
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      };
+    }
+    return {
+      environment: {
+        prototypes: loaded.prototypes,
+        ...(diagnosticPolicy === undefined ? {} : { diagnosticPolicy }),
+        ...(entityReplayContext === undefined ? {} : { entityReplayContext }),
+        ...(entityHostContext === undefined
+          ? {}
+          : {
+              trustedEntityReplayContext: entityHostContext.trustedEntityReplayContext,
+              ...(entityHostContext.entityPrototypeResolver === undefined
+                ? {}
+                : { entityPrototypeResolver: entityHostContext.entityPrototypeResolver }),
+            }),
+      },
+      prototypeEnvironment,
+    };
   }
 
   bindParameters(token: string, sourceRevision: number, overrides?: unknown) {

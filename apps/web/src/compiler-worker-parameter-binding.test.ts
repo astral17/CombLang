@@ -1385,4 +1385,49 @@ output += Constant({ sections: [{ filters: [{ signal: A, value: 2 }] }] });`,
     expect(older).not.toHaveProperty('parameterBinding');
     expect(() => runtime.bindParameters(newerToken, 58)).not.toThrow();
   });
+
+  test('delayed blueprint import preserves the newer retained parameter capture', async () => {
+    const actualLoad = prototypeApi.loadPrototypeInputJson;
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const source = JSON.stringify(syntheticPrototypeDatabase());
+    vi.spyOn(prototypeApi, 'loadPrototypeInputJson').mockImplementation(async (text, options) => {
+      if (text === source) {
+        entered.resolve();
+        await release.promise;
+      }
+      return actualLoad(text, options);
+    });
+
+    const runtime = parameterRuntime();
+    const importPending = runtime.handleImport({
+      kind: 'import-blueprint',
+      revision: 590,
+      document: { text: '{"blueprint":{"entities":[],"wires":[]}}' },
+      sourcePath: 'virtual/empty-import.ts',
+      prototypeProfile: { source },
+    });
+    await entered.promise;
+
+    const newer = await runtime.handle(parseRequest(591, { parameterBinding: true }));
+    if (newer.parameterBinding?.ok !== true || newer.parameterBinding.token === undefined) {
+      throw new Error('Expected the newer parameter capture.');
+    }
+    const token = newer.parameterBinding.token;
+    release.resolve();
+    const imported = await importPending;
+
+    expect(imported.result.state).toBe('verified');
+    const refused = await runtime.handleImport({
+      kind: 'import-blueprint',
+      revision: 593,
+      document: { text: '{"blueprint_book":{}}' },
+      sourcePath: 'virtual/refused-import.ts',
+    });
+    expect(refused.result.state).toBe('blocked');
+    expect(() => runtime.bindParameters(token, 591)).not.toThrow();
+
+    await runtime.handle(parseRequest(592, { parameterBinding: false }));
+    expect(() => runtime.bindParameters(token, 591)).toThrow(CompilerWorkerParameterBindingError);
+  });
 });
