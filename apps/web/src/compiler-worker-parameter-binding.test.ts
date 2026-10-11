@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import * as prototypeApi from '@comblang/prototypes';
 import { syntheticPrototypeDatabase } from '@comblang/prototypes';
+import { parseLosslessJson } from '@comblang/blueprint/document';
+import { BlueprintExchangeError } from '@comblang/blueprint/errors';
+import * as blueprintExchangeCodec from '@comblang/blueprint/exchange-codec';
 import {
   createTrustedEntityReplayContext,
   entityReplayContextTransport,
@@ -1429,5 +1432,83 @@ output += Constant({ sections: [{ filters: [{ signal: A, value: 2 }] }] });`,
 
     await runtime.handle(parseRequest(592, { parameterBinding: false }));
     expect(() => runtime.bindParameters(token, 591)).toThrow(CompilerWorkerParameterBindingError);
+  });
+
+  test('deferred exchange decode preserves the newer retained parameter capture', async () => {
+    const text = '{"blueprint":{"entities":[],"wires":[]}}';
+    const exchange = await blueprintExchangeCodec.encodeBlueprintExchange(parseLosslessJson(text));
+    const source = JSON.stringify(syntheticPrototypeDatabase());
+    const actualDecode = blueprintExchangeCodec.decodeBlueprintExchange;
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    vi.spyOn(blueprintExchangeCodec, 'decodeBlueprintExchange').mockImplementation(
+      async (input) => {
+        if (input === exchange) {
+          entered.resolve();
+          await release.promise;
+        }
+        return actualDecode(input);
+      },
+    );
+
+    const runtime = parameterRuntime();
+    const importPending = runtime.handleImport({
+      kind: 'import-blueprint',
+      revision: 594,
+      document: { text: exchange, format: 'exchange' },
+      sourcePath: 'virtual/deferred-exchange.ts',
+      prototypeProfile: { source },
+    });
+    await entered.promise;
+
+    const newer = await runtime.handle(parseRequest(595, { parameterBinding: true }));
+    if (newer.parameterBinding?.ok !== true || newer.parameterBinding.token === undefined) {
+      throw new Error('Expected the newer parameter capture.');
+    }
+    const token = newer.parameterBinding.token;
+    release.resolve();
+    const imported = await importPending;
+
+    expect(imported.result.state).toBe('verified');
+    expect(() => runtime.bindParameters(token, 595)).not.toThrow();
+  });
+
+  test('failed deferred exchange decode also preserves the newer parameter capture', async () => {
+    const source = JSON.stringify(syntheticPrototypeDatabase());
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    vi.spyOn(blueprintExchangeCodec, 'decodeBlueprintExchange').mockImplementationOnce(async () => {
+      entered.resolve();
+      await release.promise;
+      throw new BlueprintExchangeError('BEX1001', 'Blueprint exchange marker is missing.', {
+        path: '$',
+      });
+    });
+
+    const runtime = parameterRuntime();
+    const importPending = runtime.handleImport({
+      kind: 'import-blueprint',
+      revision: 596,
+      document: { text: 'malformed', format: 'exchange' },
+      sourcePath: 'virtual/failed-exchange.ts',
+      prototypeProfile: { source },
+    });
+    await entered.promise;
+
+    const newer = await runtime.handle(parseRequest(597, { parameterBinding: true }));
+    if (newer.parameterBinding?.ok !== true || newer.parameterBinding.token === undefined) {
+      throw new Error('Expected the newer parameter capture.');
+    }
+    const token = newer.parameterBinding.token;
+    release.resolve();
+    const refused = await importPending;
+
+    expect(refused.result).toMatchObject({
+      state: 'blocked',
+      error: { code: 'BEX1001', path: '$' },
+    });
+    expect(refused.result).not.toHaveProperty('source');
+    expect(refused.result).not.toHaveProperty('correspondence');
+    expect(() => runtime.bindParameters(token, 597)).not.toThrow();
   });
 });

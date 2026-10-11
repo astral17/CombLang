@@ -42,6 +42,25 @@ describe('blueprint import session apply permission', () => {
     expect(session.canApply({ ...initial, ...change })).toBe(false);
   });
 
+  test('replacing JSON input with exchange text revokes preview permission through the input generation', () => {
+    const session = new BlueprintImportSession();
+    const jsonInput = {
+      ...initial,
+      inputEditGeneration: initial.inputEditGeneration + 1,
+    };
+    session.begin(jsonInput);
+    expect(
+      session.complete(jsonInput, verifiedResponse(jsonInput.requestRevision), jsonInput),
+    ).toBe(true);
+
+    const exchangeInput = {
+      ...jsonInput,
+      inputEditGeneration: jsonInput.inputEditGeneration + 1,
+    };
+    expect(session.canApply(exchangeInput)).toBe(false);
+    expect(session.consume(exchangeInput)).toBeUndefined();
+  });
+
   test('an older reply cannot replace a newer conversion', () => {
     const session = new BlueprintImportSession();
     const newer = {

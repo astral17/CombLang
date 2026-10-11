@@ -2,7 +2,18 @@ import { describe, expect, test } from 'vitest';
 import type { CanonicalBlueprintSourceImportResult } from '@comblang/runtime/blueprint-source-import';
 import type { SourceSpan } from '@comblang/shared';
 
-import { projectBlueprintImportResult } from './blueprint-import.js';
+import { blueprintImportDocumentFormat, projectBlueprintImportResult } from './blueprint-import.js';
+
+describe('blueprint import pasted-format classification', () => {
+  test.each([
+    ['blueprint JSON', '{"blueprint":{}}', 'json'],
+    ['exchange string', '0eNabc', 'exchange'],
+    ['empty input', '', 'json'],
+    ['exchange marker after leading whitespace', ' 0eNabc', 'json'],
+  ] as const)('classifies %s by its untouched leading marker', (_name, text, expected) => {
+    expect(blueprintImportDocumentFormat(text)).toBe(expected);
+  });
+});
 
 describe('Worker blueprint import projection', () => {
   test('projects successful results as cloneable data without host diagnostic context', () => {

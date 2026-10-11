@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, test, vi } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { BlueprintImportAnalysisError } from '@comblang/blueprint/import-analysis';
+import { parseLosslessJson } from '@comblang/blueprint/document';
+import { BlueprintExchangeError } from '@comblang/blueprint/errors';
+import * as blueprintExchangeCodec from '@comblang/blueprint/exchange-codec';
 import * as blueprintImportApi from '@comblang/runtime/blueprint-source-import';
 import * as prototypeApi from '@comblang/prototypes';
 import * as sourceCompilation from '@comblang/runtime/source-compilation';
@@ -14,6 +17,7 @@ import type { EntityProfile, EntityProfileId } from '@comblang/compiler/entity';
 import { loadPrototypeDatabase, syntheticPrototypeDatabase } from '@comblang/prototypes';
 import { CompilerWorkerRuntime } from './compiler-worker-request.js';
 import type { CompilerWorkerImportRequest } from './worker-protocol.js';
+import { blueprintImportDocumentFormat } from './blueprint-import.js';
 
 function arithmeticBehavior(signal: string, red: boolean, green: boolean) {
   return {
@@ -246,7 +250,21 @@ function request(
   };
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+});
+
+function formattedRequest(
+  revision: number,
+  text: string,
+  format: 'json' | 'exchange',
+): CompilerWorkerImportRequest {
+  return {
+    ...request(revision),
+    document: { text, format },
+  } as unknown as CompilerWorkerImportRequest;
+}
 
 describe('compiler Worker blueprint import endpoint', () => {
   test('uses default provisioning with the builtin asset and reuses its identity reference', async () => {
@@ -501,6 +519,162 @@ describe('compiler Worker blueprint import endpoint', () => {
       state: 'blocked',
       error: { code: 'WP1009', path },
     });
+  });
+
+  test.each([
+    ['unknown', 'gzip'],
+    ['null', null],
+    ['number', 1],
+    ['undefined', undefined],
+  ])(
+    'rejects an explicitly supplied %s document format before provider loading',
+    async (_name, value) => {
+      const load = vi.spyOn(prototypeApi, 'loadPrototypeInputJson');
+      const base = request(1081);
+      const document: Record<string, unknown> = { text: base.document.text, format: value };
+      const response = await runtime().handleImport({ ...base, document } as never);
+
+      expect(load).not.toHaveBeenCalled();
+      expect(response.result).toMatchObject({
+        state: 'blocked',
+        error: { code: 'WP1009', path: '$.document.format' },
+      });
+    },
+  );
+
+  test.each(['accessor', 'non-enumerable'] as const)(
+    'rejects a document format %s before provider loading',
+    async (descriptorKind) => {
+      const load = vi.spyOn(prototypeApi, 'loadPrototypeInputJson');
+      const base = request(1082);
+      const document: Record<string, unknown> = { text: base.document.text };
+      Object.defineProperty(
+        document,
+        'format',
+        descriptorKind === 'accessor'
+          ? { enumerable: true, get: () => 'exchange' }
+          : { enumerable: false, value: 'exchange' },
+      );
+      const response = await runtime().handleImport({ ...base, document } as never);
+
+      expect(load).not.toHaveBeenCalled();
+      expect(response.result).toMatchObject({
+        state: 'blocked',
+        error: { code: 'WP1009', path: '$.document.format' },
+      });
+    },
+  );
+
+  test('round-trips exchange input through the lossless codec and imports exactly once per success', async () => {
+    const text = blueprintDocument();
+    const exchange = await blueprintExchangeCodec.encodeBlueprintExchange(parseLosslessJson(text));
+    const importCore = vi.spyOn(blueprintImportApi, 'importCanonicalBlueprintSource');
+    const compile = vi.spyOn(sourceCompilation, 'compileSourceProgram');
+    const worker = runtime();
+    const json = await worker.handleImport(formattedRequest(1083, text, 'json'));
+    const encoded = await worker.handleImport(formattedRequest(1084, exchange, 'exchange'));
+
+    expect(json.result.state).toBe('verified');
+    expect(encoded.result.state).toBe('verified');
+    if (json.result.state !== 'verified' || encoded.result.state !== 'verified') {
+      throw new Error('Expected both JSON and exchange imports to verify.');
+    }
+    expect(encoded.result.source).toEqual(json.result.source);
+    expect(encoded.result.correspondence).toEqual(json.result.correspondence);
+    expect(encoded.result.verification).toEqual(json.result.verification);
+    expect(importCore).toHaveBeenCalledTimes(2);
+    expect(importCore.mock.calls.map(([input]) => input)).toEqual([text, text]);
+    expect(compile).toHaveBeenCalledTimes(2);
+  });
+
+  test.each([
+    { name: 'marker', text: 'xAAAA', code: 'BEX1001' },
+    { name: 'Base64', text: '0A===', code: 'BEX1002' },
+    { name: 'deflate stream', text: '0AAAA', code: 'BEX1005' },
+  ] as const)(
+    'projects an actual malformed exchange $name as a located refusal',
+    async ({ text, code }) => {
+      const importCore = vi.spyOn(blueprintImportApi, 'importCanonicalBlueprintSource');
+      const compile = vi.spyOn(sourceCompilation, 'compileSourceProgram');
+      const response = await runtime().handleImport(formattedRequest(1085, text, 'exchange'));
+
+      expect(response.result).toMatchObject({
+        state: 'blocked',
+        error: { code, path: '$' },
+      });
+      expect(response.result).not.toHaveProperty('source');
+      expect(response.result).not.toHaveProperty('correspondence');
+      expect(importCore).not.toHaveBeenCalled();
+      expect(compile).not.toHaveBeenCalled();
+    },
+  );
+
+  test.each([
+    ['compressed/decompressed budget', 'BEX1003'],
+    ['UTF-8 validation', 'BEX1006'],
+  ] as const)('preserves a typed exchange %s error without compiling', async (_name, code) => {
+    vi.spyOn(blueprintExchangeCodec, 'decodeBlueprintExchange').mockRejectedValueOnce(
+      new BlueprintExchangeError(code, `Synthetic ${code} failure.`, { path: '$' }),
+    );
+    const importCore = vi.spyOn(blueprintImportApi, 'importCanonicalBlueprintSource');
+    const compile = vi.spyOn(sourceCompilation, 'compileSourceProgram');
+    const response = await runtime().handleImport(formattedRequest(1086, '0AAAA', 'exchange'));
+
+    expect(response.result).toMatchObject({
+      state: 'blocked',
+      error: { code, message: `Synthetic ${code} failure.`, path: '$' },
+    });
+    expect(response.result).not.toHaveProperty('source');
+    expect(response.result).not.toHaveProperty('correspondence');
+    expect(importCore).not.toHaveBeenCalled();
+    expect(compile).not.toHaveBeenCalled();
+  });
+
+  test('reports missing Web stream capability while JSON mode remains available', async () => {
+    vi.stubGlobal('CompressionStream', undefined);
+    vi.stubGlobal('DecompressionStream', undefined);
+    const worker = runtime();
+    const exchange = await worker.handleImport(formattedRequest(1087, '0AAAA', 'exchange'));
+
+    expect(exchange.result).toMatchObject({
+      state: 'blocked',
+      error: { code: 'BEX1004', path: '$' },
+    });
+    expect(exchange.result).not.toHaveProperty('source');
+    expect(exchange.result).not.toHaveProperty('correspondence');
+
+    const json = await worker.handleImport(formattedRequest(1088, blueprintDocument(), 'json'));
+    expect(json.result.state).toBe('verified');
+  });
+
+  test.each([
+    ['empty input', ''],
+    ['leading whitespace before the exchange marker', ' 0AAAA'],
+  ])('does not normalize or retry %s as exchange input', async (_name, text) => {
+    const decode = vi.spyOn(blueprintExchangeCodec, 'decodeBlueprintExchange');
+    const importCore = vi.spyOn(blueprintImportApi, 'importCanonicalBlueprintSource');
+    const format = blueprintImportDocumentFormat(text);
+    const response = await runtime().handleImport(formattedRequest(10881, text, format));
+
+    expect(format).toBe('json');
+    expect(response.result).toMatchObject({ state: 'blocked', error: { code: 'BPD1001' } });
+    expect(decode).not.toHaveBeenCalled();
+    expect(importCore).toHaveBeenCalledOnce();
+    expect(importCore.mock.calls[0]?.[0]).toBe(text);
+  });
+
+  test('preserves strict negative-zero verification refusal after exchange decode', async () => {
+    const text = blueprintDocument('0.5').replace('"multiplier":0.5', '"multiplier":-0');
+    const exchange = await blueprintExchangeCodec.encodeBlueprintExchange(parseLosslessJson(text));
+    const response = await runtime().handleImport(formattedRequest(1089, exchange, 'exchange'));
+    const diagnostic = response.result.diagnostics.find(
+      (entry) => 'category' in entry && entry.category === 'source-verification-mismatch',
+    );
+
+    expect(response.result.state).toBe('blocked');
+    expect(diagnostic).toMatchObject({ path: '$.blueprint.entities[1]' });
+    expect(response.result).not.toHaveProperty('source');
+    expect(response.result).not.toHaveProperty('correspondence');
   });
 
   test('preserves the analysis resource-limit code and native path', async () => {

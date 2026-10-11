@@ -65,7 +65,11 @@ export interface CompilerWorkerImportRequest {
   readonly kind: 'import-blueprint';
   /** Request correlation ID, independent of any source compilation revision. */
   readonly revision: number;
-  readonly document: { readonly text: string };
+  readonly document: {
+    readonly text: string;
+    /** Omitted requests remain JSON for compatibility with existing callers. */
+    readonly format?: 'json' | 'exchange';
+  };
   /** Explicit virtual generated TypeScript identity; never resolved as a host path. */
   readonly sourcePath: string;
   readonly prototypeProfile?: BrowserPrototypeProfile;

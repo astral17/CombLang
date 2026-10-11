@@ -49,6 +49,7 @@ import {
   BlueprintImportSession,
   type BlueprintImportSnapshot,
 } from './blueprint-import-session.js';
+import { blueprintImportDocumentFormat } from './blueprint-import.js';
 import {
   renderBlueprintImportPanel,
   selectBlueprintImportPanel,
@@ -1182,7 +1183,10 @@ function blueprintImportAvailability(): { readonly available: boolean; readonly 
   if (!acceptsImport || compilerWorkerScheduler.hasQueuedRequest) {
     return { available: false, message: 'Wait for the current compiler operation to finish.' };
   }
-  return { available: true, message: 'Paste one uncompressed blueprint JSON document.' };
+  return {
+    available: true,
+    message: 'Paste blueprint JSON or a Factorio exchange string.',
+  };
 }
 
 function currentBlueprintImportSnapshot(): BlueprintImportSnapshot | undefined {
@@ -1244,7 +1248,10 @@ function submitBlueprintImport(): void {
   const request: CompilerWorkerImportRequest = {
     kind: 'import-blueprint',
     revision,
-    document: { text: blueprintImportInput.value },
+    document: {
+      text: blueprintImportInput.value,
+      format: blueprintImportDocumentFormat(blueprintImportInput.value),
+    },
     sourcePath: 'main.factorio.ts',
     prototypeProfile,
   };
@@ -1289,7 +1296,7 @@ function applyBlueprintImport(): void {
 
 blueprintImportInput.addEventListener('input', () => {
   blueprintImportInputEditGeneration += 1;
-  invalidateBlueprintImportPreview('Blueprint JSON changed; convert again.');
+  invalidateBlueprintImportPreview('Blueprint input changed; convert again.');
 });
 blueprintImportConvert.addEventListener('click', submitBlueprintImport);
 blueprintImportApply.addEventListener('click', applyBlueprintImport);

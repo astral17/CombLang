@@ -1,4 +1,5 @@
 import { offsetToPosition, type SourceSpan } from '@comblang/shared';
+import { BLUEPRINT_EXCHANGE_MARKER } from '@comblang/blueprint/exchange';
 import type { CanonicalBlueprintSourceImportResult } from '@comblang/runtime/blueprint-source-import';
 import type {
   CompilerWorkerBlueprintImportDiagnostic,
@@ -17,6 +18,11 @@ export class CompilerWorkerBlueprintImportRequestError extends TypeError {
     super(`${path}: ${message}`);
     this.name = 'CompilerWorkerBlueprintImportRequestError';
   }
+}
+
+/** Chooses the explicit Worker document format without normalizing pasted input. */
+export function blueprintImportDocumentFormat(text: string): 'json' | 'exchange' {
+  return text.startsWith(BLUEPRINT_EXCHANGE_MARKER) ? 'exchange' : 'json';
 }
 
 function plainRecord(value: unknown, path: string): Record<string, unknown> {
@@ -80,6 +86,18 @@ export function readCompilerWorkerImportRequest(value: unknown): CompilerWorkerI
     throw new CompilerWorkerBlueprintImportRequestError('$.document.text', 'expected a string.');
   }
 
+  let format: 'json' | 'exchange' | undefined;
+  if (Object.getOwnPropertyDescriptor(document, 'format') !== undefined) {
+    const suppliedFormat = ownDataValue(document, 'format', '$.document.format');
+    if (suppliedFormat !== 'json' && suppliedFormat !== 'exchange') {
+      throw new CompilerWorkerBlueprintImportRequestError(
+        '$.document.format',
+        'expected json or exchange.',
+      );
+    }
+    format = suppliedFormat;
+  }
+
   const sourcePath = ownDataValue(request, 'sourcePath', '$.sourcePath');
   if (
     typeof sourcePath !== 'string' ||
@@ -102,7 +120,7 @@ export function readCompilerWorkerImportRequest(value: unknown): CompilerWorkerI
   return {
     kind: 'import-blueprint',
     revision,
-    document: { text },
+    document: { text, ...(format === undefined ? {} : { format }) },
     sourcePath,
     ...(prototypeProfile === undefined ? {} : { prototypeProfile }),
     ...(entityReplayContext === undefined ? {} : { entityReplayContext }),

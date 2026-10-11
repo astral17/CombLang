@@ -15,7 +15,9 @@ import {
   PrototypeValidationError,
   type LoadedPrototypeInput,
 } from '@comblang/prototypes';
-import { BlueprintDocumentError } from '@comblang/blueprint';
+import { stringifyLosslessJson } from '@comblang/blueprint/document';
+import { BlueprintDocumentError, BlueprintExchangeError } from '@comblang/blueprint/errors';
+import { decodeBlueprintExchange } from '@comblang/blueprint/exchange-codec';
 import { BlueprintImportAnalysisError } from '@comblang/blueprint/import-analysis';
 import { parseDiagnosticPolicy, type Diagnostic, type DiagnosticPolicy } from '@comblang/shared';
 import type { EntityPrototypeResolver } from '@comblang/runtime/entity-registry';
@@ -314,8 +316,12 @@ export class CompilerWorkerRuntime {
     }
 
     try {
+      const documentText =
+        request.document.format === 'exchange'
+          ? stringifyLosslessJson(await decodeBlueprintExchange(request.document.text))
+          : request.document.text;
       const result = importCanonicalBlueprintSource(
-        request.document.text,
+        documentText,
         { path: request.sourcePath },
         resolved.environment,
       );
@@ -330,7 +336,9 @@ export class CompilerWorkerRuntime {
       return response;
     } catch (error) {
       const typedImportError =
-        error instanceof BlueprintDocumentError || error instanceof BlueprintImportAnalysisError;
+        error instanceof BlueprintDocumentError ||
+        error instanceof BlueprintExchangeError ||
+        error instanceof BlueprintImportAnalysisError;
       const code = typedImportError ? error.code : 'WP1010';
       const message =
         error instanceof Error && error.message.length > 0

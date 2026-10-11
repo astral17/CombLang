@@ -112,11 +112,20 @@ retained-only, but it is not emitted into the generated source.
 
 #### Browser workflow
 
-The web workbench accepts pasted, uncompressed JSON for one `blueprint` only.
-It does not decode exchange strings, blueprint books, or files. Select and wait
-for a validated prototype environment first; conversion reuses that selected
-profile. The current source importer supports its reviewed Constant and
-Arithmetic subset, with explicit placements and supported top-level wire tuples.
+The web workbench accepts pasted native JSON for one `blueprint` or one Factorio
+exchange string that decodes to that same supported root. The same field chooses
+exchange mode only when the untouched first character is the existing `0` marker;
+otherwise it sends the text as JSON. Input is never trimmed or normalized. A
+leading space before an exchange marker therefore selects JSON, and a malformed
+exchange string is not retried as JSON. Empty input is also treated as JSON and
+fails its ordinary document parse. Exchange framing is strict: paste the marker
+and Base64 string verbatim without wrapping or adding/removing a terminal newline.
+Exchange decoding uses the standard Web deflate streams and reports `BEX1004`
+when they are unavailable. Editing the pasted text invalidates any pending or
+verified preview. Select and wait for a validated prototype environment first;
+conversion reuses that selected profile.
+The current source importer supports its reviewed Constant and Arithmetic
+subset, with explicit placements and supported top-level wire tuples.
 Unsupported fields, incomplete coverage, missing or ambiguous canonical
 profiles, and failed verification are shown as refusals with native JSON paths
 and generated-source locations where available. A refusal never presents
@@ -125,7 +134,7 @@ partial generated source.
 Only a verified preview enables **Replace source**. After a separate browser
 confirmation, generated `main.factorio.ts` replaces the current source and is
 compiled through the normal workbench path; the circuit test draft is left
-unchanged. Editing the JSON or source, changing the profile, or losing the
+unchanged. Editing the input or source, changing the profile, or losing the
 compiler Worker makes the preview stale, so convert again before applying.
 Warnings and metadata retained only in the original document are shown, but
 that metadata is not reconstructed in source. Verification means structural

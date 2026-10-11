@@ -120,7 +120,7 @@ export function selectBlueprintImportPanel(
     status = 'Source applied · compiling through the normal source path.';
   else
     status = convertAvailable
-      ? 'Paste one uncompressed blueprint JSON document.'
+      ? 'Paste blueprint JSON or a Factorio exchange string.'
       : convertUnavailableMessage;
 
   return {
