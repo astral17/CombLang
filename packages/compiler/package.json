@@ -8,6 +8,7 @@
     "./blueprint-json": "./src/blueprint-json.ts",
     "./blueprint-import-source": "./src/blueprint-import-source.ts",
     "./blueprint-import-source-assembly": "./src/blueprint-import-source-assembly.ts",
+    "./blueprint-import-source-verification": "./src/blueprint-import-source-verification.ts",
     "./circuit-color-constraints": "./src/circuit-color-constraints.ts",
     "./circuit-graph-metrics": "./src/circuit-graph-metrics.ts",
     "./color-solver": "./src/color-solver.ts",
