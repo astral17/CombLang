@@ -9,13 +9,19 @@ import { describe, expect, test } from 'vitest';
 
 import { decodeBlueprintArithmeticControlBehavior } from './blueprint-import-arithmetic.js';
 import { decodeBlueprintConstantControlBehavior } from './blueprint-import-constant.js';
-import type { ArithmeticProducerConfig, DeciderProducerConfig } from './ir.js';
+import type {
+  ArithmeticProducerConfig,
+  DeciderProducerConfig,
+  SelectorProducerConfig,
+} from './ir.js';
 import {
   createBlueprintArithmeticExpressionPrinter,
   createBlueprintDeciderExpressionPrinter,
+  createBlueprintSelectorExpressionPrinter,
   printBlueprintArithmeticExpression,
   printBlueprintConstantExpression,
   printBlueprintDeciderExpression,
+  printBlueprintSelectorExpression,
 } from './blueprint-import-source.js';
 
 const red = 'network:source-red' as NetworkId;
@@ -810,5 +816,197 @@ describe('blueprint import source expressions', () => {
     expect(barrel).not.toContain('blueprint-import-source');
     expect(Object.values(manifest.exports)).not.toContain('./src/blueprint-import-constant.ts');
     expect(Object.values(manifest.exports)).not.toContain('./src/blueprint-import-arithmetic.ts');
+  });
+
+  test('prints bounded Selector Select and Count literals with positional Network references', () => {
+    const numericCases = [
+      [0, false],
+      [-1, true],
+      [-2_147_483_648, false],
+      [2_147_483_647, true],
+    ] as const;
+    for (const [index, selectMax] of numericCases) {
+      const configuration: SelectorProducerConfig = {
+        operation: 'select',
+        input: { refKind: 'single', network: red },
+        selectMax,
+        index,
+      };
+      expect(printBlueprintSelectorExpression(configuration, [green, red])).toBe(
+        `Selector({input:import_network_2,operation:"select",selectMax:${selectMax},index:${index}})`,
+      );
+    }
+
+    const hostileNetwork = 'network]); throw new Error("not source"); //' as NetworkId;
+    const signalSelect: SelectorProducerConfig = {
+      operation: 'select',
+      input: { refKind: 'pair', networks: [hostileNetwork, red] },
+      selectMax: true,
+      index: Signal('virtual', 'index "quoted"\\line\n🚀', 'normal'),
+    };
+    const signalSource = printBlueprintSelectorExpression(signalSelect, [
+      green,
+      hostileNetwork,
+      red,
+    ]);
+    expect(signalSource).toBe(
+      'Selector({input:pair(import_network_2,import_network_3),operation:"select",selectMax:true,index:Signal("virtual","index \\\"quoted\\\"\\\\line\\n🚀","normal")})',
+    );
+    expect(signalSource).not.toContain(hostileNetwork);
+
+    const count: SelectorProducerConfig = {
+      operation: 'count',
+      input: { refKind: 'single', network: green },
+      output: Signal('item', 'iron-plate', 'uncommon'),
+    };
+    expect(printBlueprintSelectorExpression(count, [green, red])).toBe(
+      'Selector({input:import_network_1,operation:"count",output:Signal("item","iron-plate","uncommon")})',
+    );
+
+    const reversedPair: SelectorProducerConfig = {
+      operation: 'count',
+      input: { refKind: 'pair', networks: [green, red] },
+      output: Signal('virtual', 'signal-output'),
+    };
+    expect(printBlueprintSelectorExpression(reversedPair, [red, green])).toBe(
+      'Selector({input:pair(import_network_2,import_network_1),operation:"count",output:Signal("virtual","signal-output")})',
+    );
+  });
+
+  test('snapshots prepared Selector network order and creates a fresh budget for each call', () => {
+    const configuration: SelectorProducerConfig = {
+      operation: 'count',
+      input: { refKind: 'pair', networks: [green, red] },
+      output: Signal('virtual', 'café 🚀 "quoted"\\line\n'),
+    };
+    const mutableOrder: NetworkId[] = [red, green];
+    const prepared = createBlueprintSelectorExpressionPrinter(mutableOrder);
+    const expected = printBlueprintSelectorExpression(configuration, [red, green]);
+    expect(prepared(configuration)).toBe(expected);
+    expect(new TextEncoder().encode(expected).byteLength).toBeGreaterThan(expected.length);
+    mutableOrder[0] = green;
+    mutableOrder[1] = green;
+    expect(prepared(configuration)).toBe(expected);
+
+    const escapedUnicodeName = 'é "quoted"\\line\n🚀';
+    const boundedBase: SelectorProducerConfig = {
+      operation: 'count',
+      input: { refKind: 'single', network: red },
+      output: Signal('virtual', escapedUnicodeName),
+    };
+    const baseBytes = new TextEncoder().encode(
+      printBlueprintSelectorExpression(boundedBase, [red]),
+    ).byteLength;
+    const remaining = constantConfigurationLimits.maxBytes - baseBytes;
+    const exactName =
+      escapedUnicodeName + 'é'.repeat(Math.floor(remaining / 2)) + 'x'.repeat(remaining % 2);
+    const exactLimit: SelectorProducerConfig = {
+      ...boundedBase,
+      output: Signal('virtual', exactName),
+    };
+    const exactSource = prepared(exactLimit);
+    expect(new TextEncoder().encode(exactSource).byteLength).toBe(
+      constantConfigurationLimits.maxBytes,
+    );
+    expect(() => prepared({ ...exactLimit, output: Signal('virtual', `${exactName}x`) })).toThrow(
+      RangeError,
+    );
+    expect(prepared(configuration)).toBe(expected);
+    expect(prepared(configuration)).toBe(expected);
+  });
+
+  test('rejects non-literal Selector shapes, unsafe indices, and unknown or accessor fields', () => {
+    const validSelect: SelectorProducerConfig = {
+      operation: 'select',
+      input: { refKind: 'single', network: red },
+      selectMax: false,
+      index: 0,
+    };
+    const invalidConfigurations: unknown[] = [
+      { ...validSelect, index: -0 },
+      { ...validSelect, index: 1.5 },
+      { ...validSelect, index: 2_147_483_648 },
+      { ...validSelect, index: -2_147_483_649 },
+      { ...validSelect, index: Number.NaN },
+      { ...validSelect, index: Number.POSITIVE_INFINITY },
+      { ...validSelect, selectMax: undefined },
+      { ...validSelect, operation: 'quality-select' },
+      { ...validSelect, output: Signal('item', 'iron-plate') },
+      { ...validSelect, future: true },
+      {
+        operation: 'count',
+        input: { refKind: 'single', network: red },
+        selectMax: false,
+        output: Signal('item', 'iron-plate'),
+      },
+      {
+        operation: 'count',
+        input: { refKind: 'single', network: red },
+        output: Signal('item', 'iron-plate'),
+        future: true,
+      },
+      {
+        operation: 'count',
+        input: { refKind: 'single', network: red },
+        output: { type: 'virtual', name: 'signal-anything' },
+      },
+      { ...validSelect, index: { type: 'virtual', name: 'signal-each' } },
+      { ...validSelect, index: { type: 'virtual', name: 'signal-index', future: true } },
+    ];
+    for (const configuration of invalidConfigurations) {
+      expect(() => printBlueprintSelectorExpression(configuration as never, [red])).toThrow(
+        TypeError,
+      );
+    }
+
+    let reads = 0;
+    const accessor = Object.defineProperty({ ...validSelect }, 'selectMax', {
+      get() {
+        reads += 1;
+        return false;
+      },
+    });
+    expect(() => printBlueprintSelectorExpression(accessor, [red])).toThrow(TypeError);
+    expect(reads).toBe(0);
+
+    const symbolConfig = { ...validSelect, [Symbol('extra')]: true };
+    expect(() => printBlueprintSelectorExpression(symbolConfig, [red])).toThrow(TypeError);
+  });
+
+  test('requires exact Selector input records and dense distinct Network pairs', () => {
+    const base = {
+      operation: 'count',
+      output: Signal('item', 'iron-plate'),
+    } as const;
+    const accessorInput = Object.defineProperty({ refKind: 'single' }, 'network', {
+      get() {
+        throw new Error('must not execute');
+      },
+    });
+    const tupleAccessor = [red, green];
+    Object.defineProperty(tupleAccessor, '1', {
+      get() {
+        throw new Error('must not execute');
+      },
+    });
+    const invalidInputs: unknown[] = [
+      null,
+      [],
+      { refKind: 'single', network: red, networks: [red, green] },
+      { refKind: 'single', network: red, extra: true },
+      { refKind: 'pair', networks: [red, red] },
+      { refKind: 'pair', networks: [red] },
+      { refKind: 'pair', networks: [red, , green] },
+      { refKind: 'pair', networks: Object.assign([red, green], { extra: true }) },
+      { refKind: 'pair', networks: Object.assign([red, green], { [Symbol('extra')]: true }) },
+      { refKind: 'pair', networks: tupleAccessor },
+      accessorInput,
+      { refKind: 'pair', networks: [red, green], [Symbol('extra')]: true },
+    ];
+    for (const input of invalidInputs) {
+      expect(() =>
+        printBlueprintSelectorExpression({ ...base, input } as never, [red, green]),
+      ).toThrow(TypeError);
+    }
   });
 });

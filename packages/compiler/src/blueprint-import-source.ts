@@ -17,6 +17,8 @@ import type {
   LogicalArithmeticOperand,
   LogicalNetworkRef,
   Quantifier,
+  SelectorIndex,
+  SelectorProducerConfig,
 } from './ir.js';
 
 const arithmeticOperations: ReadonlySet<string> = new Set([
@@ -464,6 +466,148 @@ function readSignalId(value: unknown, label: string): SignalId {
     throw new TypeError(`${label} quality must be a string when present.`);
   }
   return record as unknown as SignalId;
+}
+
+function readSelectorSignal(value: unknown, label: string): SignalId {
+  const record = readDataRecord(value, label);
+  assertRecordKeys(record, label, ['type', 'name', 'quality'], ['type', 'name']);
+  const type = dataProperty(record, 'type');
+  const name = dataProperty(record, 'name');
+  const hasQuality = Object.hasOwn(record, 'quality');
+  const quality = dataProperty(record, 'quality');
+  if (typeof type !== 'string' || !signalTypes.includes(type as SignalType)) {
+    throw new TypeError(`${label} must contain a supported Signal type.`);
+  }
+  if (typeof name !== 'string') throw new TypeError(`${label} must contain a Signal name.`);
+  if (hasQuality && typeof quality !== 'string') {
+    throw new TypeError(`${label} quality must be a string when present.`);
+  }
+  return hasQuality
+    ? Signal(type as SignalType, name, quality as string)
+    : Signal(type as SignalType, name);
+}
+
+function readSelectorInput(value: unknown): LogicalNetworkRef {
+  const record = readDataRecord(value, 'Selector input');
+  const refKind = dataProperty(record, 'refKind');
+  if (refKind === 'single') {
+    assertRecordKeys(record, 'Selector input', ['refKind', 'network'], ['refKind', 'network']);
+  } else if (refKind === 'pair') {
+    assertRecordKeys(record, 'Selector input', ['refKind', 'networks'], ['refKind', 'networks']);
+    const pair = readDataArray(dataProperty(record, 'networks'), 'Selector input pair');
+    const keys = Reflect.ownKeys(pair);
+    if (
+      keys.length !== 3 ||
+      !keys.includes('length') ||
+      !keys.includes('0') ||
+      !keys.includes('1')
+    ) {
+      throw new TypeError('Selector input pair must contain only two indexed Network IDs.');
+    }
+    for (const key of keys) {
+      const descriptor = Object.getOwnPropertyDescriptor(pair, key);
+      if (descriptor === undefined || !('value' in descriptor)) {
+        throw new TypeError('Selector input pair entries must be data properties.');
+      }
+    }
+  }
+
+  const input = readNetworkReference(record, 'Selector input');
+  if (input.refKind === 'pair' && input.networks[0] === input.networks[1]) {
+    throw new TypeError('Selector input pair must use distinct Network IDs.');
+  }
+  return input;
+}
+
+function readSelectorConfiguration(value: unknown): SelectorProducerConfig {
+  const record = readDataRecord(value, 'Selector configuration');
+  const operation = dataProperty(record, 'operation');
+  if (operation === 'select') {
+    assertRecordKeys(
+      record,
+      'Selector configuration',
+      ['operation', 'input', 'selectMax', 'index'],
+      ['operation', 'input', 'selectMax', 'index'],
+    );
+    const input = readSelectorInput(dataProperty(record, 'input'));
+    const selectMax = dataProperty(record, 'selectMax');
+    if (typeof selectMax !== 'boolean') {
+      throw new TypeError('Selector selectMax must be a boolean.');
+    }
+    const indexValue = dataProperty(record, 'index');
+    let index: SelectorIndex;
+    if (typeof indexValue === 'number') {
+      if (
+        !Number.isInteger(indexValue) ||
+        indexValue < -2_147_483_648 ||
+        indexValue > 2_147_483_647 ||
+        Object.is(indexValue, -0)
+      ) {
+        throw new TypeError(
+          'Selector numeric indices must be signed int32 integers other than negative zero.',
+        );
+      }
+      index = indexValue;
+    } else {
+      index = readSelectorSignal(indexValue, 'Selector index Signal');
+    }
+    return { operation, input, selectMax, index };
+  }
+  if (operation === 'count') {
+    assertRecordKeys(
+      record,
+      'Selector configuration',
+      ['operation', 'input', 'output'],
+      ['operation', 'input', 'output'],
+    );
+    return {
+      operation,
+      input: readSelectorInput(dataProperty(record, 'input')),
+      output: readSelectorSignal(dataProperty(record, 'output'), 'Selector output Signal'),
+    };
+  }
+  throw new TypeError('Selector operation must be select or count.');
+}
+
+function printSelectorExpression(
+  configuration: SelectorProducerConfig,
+  networks: ReadonlyMap<string, string>,
+): string {
+  const builder = new BoundedSourceBuilder();
+  builder.append('Selector({input:');
+  appendNetworkReference(builder, configuration.input, networks);
+  builder.append(',operation:');
+  builder.appendString(configuration.operation);
+  if (configuration.operation === 'select') {
+    builder.append(',selectMax:');
+    builder.append(configuration.selectMax ? 'true' : 'false');
+    builder.append(',index:');
+    if (typeof configuration.index === 'number') appendNumber(builder, configuration.index);
+    else appendSignal(builder, configuration.index);
+  } else {
+    builder.append(',output:');
+    appendSignal(builder, configuration.output);
+  }
+  builder.append('})');
+  return builder.finish();
+}
+
+/** Prepares one private positional network map for repeated bounded Selector printing. */
+export function createBlueprintSelectorExpressionPrinter(
+  networkOrder: readonly NetworkId[],
+): (configuration: SelectorProducerConfig) => string {
+  const networks = validateNetworkOrder(networkOrder);
+  return (configuration) =>
+    printSelectorExpression(readSelectorConfiguration(configuration), networks);
+}
+
+/** Prints one bounded, literal DSL Selector constructor expression. */
+export function printBlueprintSelectorExpression(
+  configuration: SelectorProducerConfig,
+  networkOrder: readonly NetworkId[],
+): string {
+  const canonical = readSelectorConfiguration(configuration);
+  return printSelectorExpression(canonical, validateNetworkOrder(networkOrder));
 }
 
 function appendDeciderInt32(builder: BoundedSourceBuilder, value: unknown, label: string): void {
