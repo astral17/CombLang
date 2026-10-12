@@ -115,6 +115,42 @@ function blueprintDocument(
   });
 }
 
+function deciderDocument(options: { readonly implicitCopyInput?: boolean } = {}) {
+  return JSON.stringify({
+    blueprint: {
+      entities: [
+        {
+          entity_number: 42,
+          name: 'decider-combinator',
+          position: { x: 0, y: 0 },
+          direction: 0,
+          control_behavior: {
+            decider_conditions: {
+              conditions: [
+                {
+                  first_signal: { type: 'virtual', name: 'signal-A' },
+                  first_signal_networks: { red: true, green: false },
+                  comparator: '>',
+                  constant: 0,
+                  compare_type: 'and',
+                },
+              ],
+              outputs: [
+                {
+                  signal: { type: 'virtual', name: 'signal-B' },
+                  copy_count_from_input: true,
+                  ...(options.implicitCopyInput ? {} : { networks: { red: true, green: false } }),
+                },
+              ],
+            },
+          },
+        },
+      ],
+      wires: [[42, 1, 42, 3]],
+    },
+  });
+}
+
 async function temporaryFile(name: string, content: string | Uint8Array): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'comblang-blueprint-import-'));
   directories.push(directory);
@@ -132,7 +168,7 @@ async function canonicalHost() {
   const database = structuredClone(syntheticPrototypeDatabase()) as {
     entities: Array<Record<string, unknown>>;
   };
-  const families = ['constant-combinator', 'arithmetic-combinator'] as const;
+  const families = ['constant-combinator', 'arithmetic-combinator', 'decider-combinator'] as const;
   database.entities.push(
     ...families.map((family) => ({
       key: `entity:${family}`,
@@ -383,6 +419,67 @@ describe('blueprint source import CLI', () => {
     expect(exchangeReport.correspondence).toEqual(jsonReport.correspondence);
     expect(exchangeReport.verification).toEqual(jsonReport.verification);
     expect(exchangeReport.diagnostics).toEqual(jsonReport.diagnostics);
+  });
+
+  test('imports canonical Decider JSON and exchange with exact exclusive source output', async () => {
+    const host = await canonicalHost();
+    const sourceText = deciderDocument();
+    const jsonInput = await temporaryFile('decider.json', sourceText);
+    const exchangeInput = await exchangeFile('decider.exchange', sourceText);
+    const jsonOutput = join(dirname(jsonInput), 'decider-json.factorio.ts');
+    const exchangeOutput = join(dirname(exchangeInput), 'decider-exchange.factorio.ts');
+    const compile = vi.spyOn(sourceApi, 'compileSourceProgram');
+    const { log, error } = capture();
+
+    for (const [input, output] of [
+      [jsonInput, jsonOutput],
+      [exchangeInput, exchangeOutput],
+    ] as const) {
+      log.mockClear();
+      expect(
+        await run(['blueprint', 'import', '--json', '--output', output, input], host.environment),
+      ).toBe(0);
+      const report = reportAt(log);
+      expect(error).not.toHaveBeenCalled();
+      expect(report).toMatchObject({
+        ok: true,
+        output: resolve(output),
+        source: { path: resolve(output), text: expect.stringContaining('= Decider(') },
+        verification: { state: 'verified', entityCount: 1 },
+        correspondence: { entities: [{ entityNumber: 42, family: 'decider' }] },
+      });
+      expect(await readFile(output, 'utf8')).toBe(report.source.text);
+      expect(compile.mock.calls.at(-1)?.[0]?.text).toBe(report.source.text);
+    }
+
+    expect(compile).toHaveBeenCalledTimes(2);
+  });
+
+  test('refuses an implicit Decider copy-input mask without creating output', async () => {
+    const host = await canonicalHost();
+    const input = await temporaryFile(
+      'decider-implicit-mask.json',
+      deciderDocument({
+        implicitCopyInput: true,
+      }),
+    );
+    const output = join(dirname(input), 'refused-decider.factorio.ts');
+    const compile = vi.spyOn(sourceApi, 'compileSourceProgram');
+    const { log } = capture();
+
+    expect(
+      await run(['blueprint', 'import', '--json', '--output', output, input], host.environment),
+    ).toBe(2);
+    expect(reportAt(log)).toMatchObject({
+      ok: false,
+      error: {
+        code: 'CLIBP1006',
+        path: '$.blueprint.entities[0].control_behavior.decider_conditions.outputs[0]',
+      },
+      diagnostics: [expect.objectContaining({ category: 'unsupported-source-configuration' })],
+    });
+    expect(compile).not.toHaveBeenCalled();
+    await expect(stat(output)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   test('accepts only the exchange file terminal-newline exception and preserves JSON whitespace', async () => {

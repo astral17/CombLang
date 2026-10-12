@@ -122,11 +122,167 @@ function constantDocument(name = 'constant-combinator') {
   });
 }
 
+function deciderDocument(
+  options: { readonly implicitCopyInput?: boolean; readonly wiredUnreadInput?: boolean } = {},
+) {
+  return JSON.stringify({
+    blueprint: {
+      entities: [
+        {
+          entity_number: 42,
+          name: 'decider-combinator',
+          position: { x: 0, y: 0 },
+          direction: 0,
+          control_behavior: {
+            decider_conditions: {
+              conditions: [
+                {
+                  first_signal: { type: 'virtual', name: 'signal-A' },
+                  first_signal_networks: { red: true, green: false },
+                  comparator: '>',
+                  constant: 0,
+                  compare_type: 'and',
+                },
+              ],
+              outputs: [
+                {
+                  signal: { type: 'virtual', name: 'signal-B' },
+                  copy_count_from_input: true,
+                  ...(options.implicitCopyInput ? {} : { networks: { red: true, green: false } }),
+                },
+              ],
+            },
+          },
+        },
+        ...(options.wiredUnreadInput
+          ? [
+              {
+                entity_number: 7,
+                name: 'constant-combinator',
+                position: { x: 4, y: 0 },
+                direction: 0,
+                control_behavior: constantBehavior(),
+              },
+            ]
+          : []),
+      ],
+      wires: [[42, 1, 42, 3], ...(options.wiredUnreadInput ? [[7, 2, 42, 2]] : [])],
+    },
+  });
+}
+
+function mixedFamilyDeciderDocument() {
+  return JSON.stringify({
+    blueprint: {
+      entities: [
+        {
+          entity_number: 1,
+          name: 'constant-combinator',
+          position: { x: 0, y: 0 },
+          direction: 4,
+          control_behavior: constantBehavior(),
+        },
+        {
+          entity_number: 2,
+          name: 'arithmetic-combinator',
+          position: { x: 3, y: 1 },
+          direction: 8,
+          control_behavior: arithmeticBehavior('signal-A', { red: true, green: false }),
+        },
+        {
+          entity_number: 10,
+          name: 'decider-combinator',
+          position: { x: 7, y: 2 },
+          direction: 12,
+          control_behavior: {
+            decider_conditions: {
+              conditions: [
+                {
+                  first_signal: { type: 'virtual', name: 'signal-each' },
+                  first_signal_networks: { red: true, green: true },
+                  comparator: '>',
+                  constant: 0,
+                  compare_type: 'and',
+                },
+                {
+                  first_signal: { type: 'virtual', name: 'signal-A', quality: 'rare' },
+                  first_signal_networks: { red: true, green: false },
+                  comparator: '≥',
+                  second_signal: { type: 'virtual', name: 'signal-B', quality: 'uncommon' },
+                  second_signal_networks: { red: false, green: true },
+                  compare_type: 'or',
+                },
+              ],
+              outputs: [
+                {
+                  signal: { type: 'virtual', name: 'signal-each' },
+                  copy_count_from_input: true,
+                  networks: { red: true, green: false },
+                },
+                {
+                  signal: { type: 'virtual', name: 'signal-C' },
+                  copy_count_from_input: false,
+                  constant: 3,
+                },
+              ],
+              else_outputs: [
+                {
+                  signal: { type: 'virtual', name: 'signal-D' },
+                  copy_count_from_input: true,
+                  networks: { red: false, green: true },
+                },
+                {
+                  signal: { type: 'virtual', name: 'signal-E' },
+                  copy_count_from_input: false,
+                  constant: 5,
+                },
+              ],
+            },
+          },
+        },
+        {
+          entity_number: 11,
+          name: 'decider-combinator',
+          position: { x: 12, y: 3 },
+          direction: 0,
+          control_behavior: {
+            decider_conditions: {
+              conditions: [
+                {
+                  first_signal: { type: 'virtual', name: 'signal-A' },
+                  first_signal_networks: { red: false, green: true },
+                  comparator: '>',
+                  constant: 0,
+                  compare_type: 'and',
+                },
+              ],
+              outputs: [
+                {
+                  signal: { type: 'virtual', name: 'signal-B' },
+                  copy_count_from_input: false,
+                  constant: 1,
+                },
+              ],
+            },
+          },
+        },
+      ],
+      wires: [
+        [1, 1, 2, 1],
+        [2, 3, 10, 1],
+        [10, 3, 1, 1],
+        [1, 2, 10, 2],
+        [10, 4, 1, 2],
+      ],
+    },
+  });
+}
+
 async function canonicalHost() {
   const database = structuredClone(syntheticPrototypeDatabase()) as {
     entities: Array<Record<string, unknown>>;
   };
-  const families = ['constant-combinator', 'arithmetic-combinator'] as const;
+  const families = ['constant-combinator', 'arithmetic-combinator', 'decider-combinator'] as const;
   database.entities.push(
     ...families.map((family) => ({
       key: `entity:${family}`,
@@ -210,6 +366,111 @@ describe('host-neutral canonical blueprint source import', () => {
     expect(Object.isFrozen(result.correspondence.entities)).toBe(true);
     expect(Object.isFrozen(result.diagnostics)).toBe(true);
     expect(result.diagnostics.every(Object.isFrozen)).toBe(true);
+  });
+
+  test('imports exact canonical Decider once and keeps Selector outside the subset', () => {
+    const compile = vi.spyOn(sourceCompilation, 'compileSourceProgram');
+    const result = importCanonicalBlueprintSource(
+      deciderDocument(),
+      { path: 'synthetic/decider.factorio.ts' },
+      host.environment,
+    );
+
+    expect(result.state).toBe('verified');
+    if (result.state !== 'verified') throw new Error('expected canonical Decider source');
+    expect(compile).toHaveBeenCalledOnce();
+    expect(compile.mock.calls[0]?.[0]).toBe(result.source);
+    expect(result.source.text).toContain('= Decider(');
+    expect(result.correspondence.entities).toMatchObject([{ entityNumber: 42, family: 'decider' }]);
+    expect(result.verification).toMatchObject({ state: 'verified', entityCount: 1 });
+
+    const selector = importCanonicalBlueprintSource(
+      constantDocument('selector-combinator'),
+      { path: 'synthetic/selector.factorio.ts' },
+      host.environment,
+    );
+    expect(selector).toMatchObject({
+      state: 'blocked',
+      diagnostics: [expect.objectContaining({ category: 'unsupported-canonical-family' })],
+    });
+    expect(selector).not.toHaveProperty('source');
+    expect(selector).not.toHaveProperty('correspondence');
+    expect(compile).toHaveBeenCalledOnce();
+  });
+
+  test('verifies mixed-family topology with both Decider colors and ordered output branches', () => {
+    const compile = vi.spyOn(sourceCompilation, 'compileSourceProgram');
+    const result = importCanonicalBlueprintSource(
+      mixedFamilyDeciderDocument(),
+      { path: 'synthetic/mixed-decider.factorio.ts' },
+      host.environment,
+    );
+
+    expect(result.state).toBe('verified');
+    if (result.state !== 'verified') throw new Error('expected mixed-family Decider source');
+    expect(compile).toHaveBeenCalledOnce();
+    expect(compile.mock.calls[0]?.[0]).toBe(result.source);
+    expect(result.verification).toMatchObject({ state: 'verified', entityCount: 4 });
+    expect(result.correspondence.entities.map(({ entityNumber }) => entityNumber)).toEqual([
+      1, 2, 10, 11,
+    ]);
+    expect(result.source.text.match(/= Decider\(/g)).toHaveLength(2);
+    expect(result.source.text).toContain('= Constant(');
+    expect(result.source.text).toContain('= Arithmetic(');
+    for (const signal of ['signal-C', 'signal-D', 'signal-E']) {
+      expect(result.source.text).toContain(signal);
+    }
+    expect(result.source.text.indexOf('signal-C')).toBeLessThan(
+      result.source.text.indexOf('signal-D'),
+    );
+    expect(result.source.text.indexOf('signal-D')).toBeLessThan(
+      result.source.text.indexOf('signal-E'),
+    );
+  });
+
+  test('refuses a physically wired Decider input lane that its configuration does not read', () => {
+    const compile = vi.spyOn(sourceCompilation, 'compileSourceProgram');
+    const result = importCanonicalBlueprintSource(
+      deciderDocument({ wiredUnreadInput: true }),
+      { path: 'synthetic/unread-decider.factorio.ts' },
+      host.environment,
+    );
+
+    expect(result).toMatchObject({
+      state: 'blocked',
+      diagnostics: [
+        expect.objectContaining({
+          category: 'unsupported-unread-decider-input',
+          path: '$.blueprint.wires[1][3]',
+          entityNumber: 42,
+        }),
+      ],
+    });
+    expect(result).not.toHaveProperty('source');
+    expect(result).not.toHaveProperty('correspondence');
+    expect(compile).not.toHaveBeenCalled();
+  });
+
+  test('refuses an implicit Decider copy-input mask before source compilation', () => {
+    const compile = vi.spyOn(sourceCompilation, 'compileSourceProgram');
+    const result = importCanonicalBlueprintSource(
+      deciderDocument({ implicitCopyInput: true }),
+      { path: 'synthetic/implicit-mask-decider.factorio.ts' },
+      host.environment,
+    );
+
+    expect(result).toMatchObject({
+      state: 'blocked',
+      diagnostics: [
+        expect.objectContaining({
+          category: 'unsupported-source-configuration',
+          path: '$.blueprint.entities[0].control_behavior.decider_conditions.outputs[0]',
+        }),
+      ],
+    });
+    expect(result).not.toHaveProperty('source');
+    expect(result).not.toHaveProperty('correspondence');
+    expect(compile).not.toHaveBeenCalled();
   });
 
   test('requires trusted authority for empty blueprints and accepts an authorized empty import', () => {
@@ -301,6 +562,7 @@ describe('host-neutral canonical blueprint source import', () => {
   });
 
   test('selects one exact trusted profile and refuses missing, ambiguous, or modded profiles', () => {
+    const compile = vi.spyOn(sourceCompilation, 'compileSourceProgram');
     const missingContext = createTrustedEntityReplayContext({
       database: host.trustedEntityReplayContext.database,
       source: 'synthetic',
@@ -378,6 +640,79 @@ describe('host-neutral canonical blueprint source import', () => {
       state: 'blocked',
       diagnostics: [expect.objectContaining({ category: 'unsupported-canonical-family' })],
     });
+
+    const missingDeciderContext = createTrustedEntityReplayContext({
+      database: host.trustedEntityReplayContext.database,
+      source: 'synthetic',
+      evidenceIdentity: 'missing-decider-blueprint-import-profile',
+      policyIdentity: 'missing-decider-blueprint-import-profile-policy',
+      profiles: host.profiles.slice(0, 2),
+    });
+    const missingDecider = importCanonicalBlueprintSource(
+      deciderDocument(),
+      { path: 'missing-decider.ts' },
+      { ...host.environment, trustedEntityReplayContext: missingDeciderContext },
+    );
+    expect(missingDecider).toMatchObject({
+      state: 'blocked',
+      diagnostics: [
+        expect.objectContaining({
+          category: 'missing-profile-selection',
+          path: '$.blueprint.entities[0].name',
+        }),
+      ],
+    });
+
+    const duplicateDeciderProfile: EntityProfile = {
+      ...host.profiles[2]!,
+      ref: {
+        ...host.profiles[2]!.ref,
+        profileId: 'profile:duplicate-decider-blueprint-import' as EntityProfileId,
+      },
+    };
+    const ambiguousDeciderContext = createTrustedEntityReplayContext({
+      database: host.trustedEntityReplayContext.database,
+      source: 'synthetic',
+      evidenceIdentity: 'ambiguous-decider-blueprint-import-profile',
+      policyIdentity: 'ambiguous-decider-blueprint-import-profile-policy',
+      profiles: [...host.profiles, duplicateDeciderProfile],
+    });
+    const ambiguousDecider = importCanonicalBlueprintSource(
+      deciderDocument(),
+      { path: 'ambiguous-decider.ts' },
+      { ...host.environment, trustedEntityReplayContext: ambiguousDeciderContext },
+    );
+    expect(ambiguousDecider).toMatchObject({
+      state: 'blocked',
+      diagnostics: [expect.objectContaining({ category: 'ambiguous-canonical-profile' })],
+    });
+
+    const moddedDeciderName = 'modded-decider-combinator';
+    const sameTypeModdedDecider: EntityProfile = {
+      ...host.profiles[2]!,
+      ref: {
+        ...host.profiles[2]!.ref,
+        prototypeKey: `entity:${moddedDeciderName}` as EntityProfile['ref']['prototypeKey'],
+        profileId: 'profile:modded-decider-blueprint-import' as EntityProfileId,
+      },
+    };
+    const moddedDeciderContext = createTrustedEntityReplayContext({
+      database: host.trustedEntityReplayContext.database,
+      source: 'synthetic',
+      evidenceIdentity: 'modded-decider-blueprint-import-profile',
+      policyIdentity: 'modded-decider-blueprint-import-profile-policy',
+      profiles: [sameTypeModdedDecider],
+    });
+    const moddedDecider = importCanonicalBlueprintSource(
+      deciderDocument().replace('decider-combinator', moddedDeciderName),
+      { path: 'modded-decider.ts' },
+      { ...host.environment, trustedEntityReplayContext: moddedDeciderContext },
+    );
+    expect(moddedDecider).toMatchObject({
+      state: 'blocked',
+      diagnostics: [expect.objectContaining({ category: 'unsupported-canonical-family' })],
+    });
+    expect(compile).not.toHaveBeenCalled();
   });
 
   test('blocks assembly refusals and preserves negative-zero verifier locations', () => {

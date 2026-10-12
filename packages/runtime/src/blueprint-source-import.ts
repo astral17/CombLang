@@ -114,14 +114,16 @@ function selectCanonicalProfiles(
   const issues: BlueprintSourceImportProfileIssue[] = [];
   for (const entity of entities) {
     const prototypeKey =
-      entity.name === 'constant-combinator' || entity.name === 'arithmetic-combinator'
+      entity.name === 'constant-combinator' ||
+      entity.name === 'arithmetic-combinator' ||
+      entity.name === 'decider-combinator'
         ? `entity:${entity.name}`
         : undefined;
     if (prototypeKey === undefined) {
       issues.push(
         Object.freeze({
           category: 'unsupported-canonical-family',
-          message: `Blueprint prototype ${entity.name} is outside the Constant/Arithmetic import subset.`,
+          message: `Blueprint prototype ${entity.name} is outside the Constant/Arithmetic/Decider import subset.`,
           path: `${entity.path}.name`,
           entityNumber: entity.entityNumber,
         }),

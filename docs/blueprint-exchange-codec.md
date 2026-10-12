@@ -117,14 +117,24 @@ node apps/cli/dist/main.js check --prototypes database.json imported.factorio.ts
 
 `--prototype-identity <id>` can pin the selected database; use the same pin for
 the subsequent `check`. The host must provide a trusted Entity replay context
-with exactly one profile for each imported canonical Constant or Arithmetic
-prototype. Import never selects profiles by type, position, or approximate name;
-missing/ambiguous profiles, modded names, opaque roots, partial inventories,
-unsupported fields, and unsupported placement are refusals. The supported source
-subset requires explicit direction, exact x/y placement, and top-level four-value
-wire tuples; legacy per-entity connections, object-shaped wires, and unknown
-outer fields are not silently dropped. Root metadata may be reported as
-retained-only, but it is not emitted into the generated source.
+with exactly one profile for each imported canonical Constant, Arithmetic, or
+Decider prototype. Decider selection requires the exact base name and key
+`decider-combinator` / `entity:decider-combinator`; a same-type modded name is not
+a substitute. Import never selects profiles by type alone, position, or
+approximate name; missing/ambiguous profiles, modded names, opaque roots, partial
+inventories, unsupported fields, and unsupported placement are refusals. The
+supported source subset requires explicit direction, exact x/y placement, and
+top-level four-value wire tuples; legacy per-entity connections, object-shaped
+wires, and unknown outer fields are not silently dropped. Root metadata may be
+reported as retained-only, but it is not emitted into the generated source.
+
+Decider condition groups and true/else output rows are preserved in order. This
+source subset requires an explicit input-network mask for copied-count outputs;
+constant-count outputs cannot have an input mask, and only `Each` supports a
+constant-count wildcard output. An explicitly empty else branch, a configuration
+with no output rows, and negative-zero condition/output counts are refused rather
+than normalized. A configured Decider with no connected output wire is distinct
+from a Decider configuration with no output rows.
 
 #### Browser workflow
 
@@ -140,8 +150,11 @@ Exchange decoding uses the standard Web deflate streams and reports `BEX1004`
 when they are unavailable. Editing the pasted text invalidates any pending or
 verified preview. Select and wait for a validated prototype environment first;
 conversion reuses that selected profile.
-The current source importer supports its reviewed Constant and Arithmetic
-subset, with explicit placements and supported top-level wire tuples.
+The current source importer supports its reviewed Constant, Arithmetic, and
+Decider subset, with explicit placements and supported top-level wire tuples.
+Decider uses the exact canonical prototype profile and the same representability
+limits described above; modded same-type profiles and unsupported output masks or
+branches are refused.
 Unsupported fields, incomplete coverage, missing or ambiguous canonical
 profiles, and failed verification are shown as refusals with native JSON paths
 and generated-source locations where available. A refusal never presents

@@ -169,6 +169,42 @@ function builtinBlueprintDocument() {
   });
 }
 
+function builtinDeciderBlueprintDocument(options: { readonly implicitCopyInput?: boolean } = {}) {
+  return JSON.stringify({
+    blueprint: {
+      entities: [
+        {
+          entity_number: 42,
+          name: 'decider-combinator',
+          position: { x: 0, y: 0 },
+          direction: 0,
+          control_behavior: {
+            decider_conditions: {
+              conditions: [
+                {
+                  first_signal: { type: 'virtual', name: 'signal-A' },
+                  first_signal_networks: { red: true, green: false },
+                  comparator: '>',
+                  constant: 0,
+                  compare_type: 'and',
+                },
+              ],
+              outputs: [
+                {
+                  signal: { type: 'virtual', name: 'signal-B' },
+                  copy_count_from_input: true,
+                  ...(options.implicitCopyInput ? {} : { networks: { red: true, green: false } }),
+                },
+              ],
+            },
+          },
+        },
+      ],
+      wires: [[42, 1, 42, 3]],
+    },
+  });
+}
+
 async function canonicalHost() {
   const database = structuredClone(syntheticPrototypeDatabase()) as {
     entities: Array<Record<string, unknown>>;
@@ -315,6 +351,92 @@ describe('compiler Worker blueprint import endpoint', () => {
     expect(second.result.state).toBe('verified');
     expect(second.prototypeEnvironment?.identity).toBe(first.prototypeEnvironment?.identity);
     expect(load).toHaveBeenCalledOnce();
+  });
+
+  test('imports canonical Decider JSON and exchange through ordinary builtin provisioning', async () => {
+    const [source, assetManifest] = await Promise.all([
+      readFile(
+        new URL('../../../packages/prototypes/generated/space-age-2.1.17.json', import.meta.url),
+        'utf8',
+      ),
+      readFile(
+        new URL(
+          '../../../packages/prototypes/generated/space-age-2.1.17.json.manifest.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ]);
+    const load = vi.spyOn(prototypeApi, 'loadPrototypeAsset');
+    const compile = vi.spyOn(sourceCompilation, 'compileSourceProgram');
+    const worker = new CompilerWorkerRuntime();
+    const documentText = builtinDeciderBlueprintDocument();
+    const exchange = await blueprintExchangeCodec.encodeBlueprintExchange(
+      parseLosslessJson(documentText),
+    );
+    const json = await worker.handleImport({
+      kind: 'import-blueprint',
+      revision: 1090,
+      document: { text: documentText, format: 'json' },
+      sourcePath: 'decider.factorio.ts',
+      prototypeProfile: { kind: 'builtin', source, assetManifest },
+    });
+
+    expect(json.result.state).toBe('verified');
+    if (json.result.state !== 'verified') throw new Error('Expected builtin Decider JSON import.');
+    expect(structuredClone(json)).toEqual(json);
+    expect(json.result).toMatchObject({
+      verification: { state: 'verified', entityCount: 1 },
+      correspondence: { entities: [{ entityNumber: 42, family: 'decider' }] },
+    });
+    expect(json.result.source.text).toContain('= Decider(');
+    expect(json.result).not.toHaveProperty('diagnosticContext');
+
+    const encoded = await worker.handleImport({
+      kind: 'import-blueprint',
+      revision: 1091,
+      document: { text: exchange, format: 'exchange' },
+      sourcePath: 'decider.factorio.ts',
+      prototypeProfile: { kind: 'builtin', identity: json.prototypeEnvironment!.identity },
+    });
+    expect(encoded.result.state).toBe('verified');
+    if (encoded.result.state !== 'verified') {
+      throw new Error('Expected builtin Decider exchange import.');
+    }
+    expect(structuredClone(encoded)).toEqual(encoded);
+    expect(encoded.result.source).toEqual(json.result.source);
+    expect(encoded.result.correspondence).toEqual(json.result.correspondence);
+    expect(encoded.prototypeEnvironment?.identity).toBe(json.prototypeEnvironment?.identity);
+
+    const refusal = await worker.handleImport({
+      kind: 'import-blueprint',
+      revision: 1092,
+      document: {
+        text: builtinDeciderBlueprintDocument({ implicitCopyInput: true }),
+        format: 'json',
+      },
+      sourcePath: 'decider-refused.factorio.ts',
+      prototypeProfile: { kind: 'builtin', identity: json.prototypeEnvironment!.identity },
+    });
+    expect(structuredClone(refusal)).toEqual(refusal);
+    expect(refusal.result).toMatchObject({
+      state: 'blocked',
+      diagnostics: [
+        expect.objectContaining({
+          category: 'unsupported-source-configuration',
+          path: '$.blueprint.entities[0].control_behavior.decider_conditions.outputs[0]',
+        }),
+      ],
+    });
+    expect(refusal.result).not.toHaveProperty('source');
+    expect(refusal.result).not.toHaveProperty('correspondence');
+    expect(refusal.result).not.toHaveProperty('diagnosticContext');
+    expect(JSON.stringify(refusal)).not.toContain('trustedEntityReplayContext');
+
+    expect(load).toHaveBeenCalledOnce();
+    expect(compile).toHaveBeenCalledTimes(2);
+    expect(compile.mock.calls[0]?.[0]).toEqual(json.result.source);
+    expect(compile.mock.calls[1]?.[0]).toEqual(encoded.result.source);
   });
 
   test('uses one host import and one real source compilation for canonical synthetic data', async () => {
