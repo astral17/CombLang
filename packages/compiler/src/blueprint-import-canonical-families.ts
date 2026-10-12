@@ -27,6 +27,10 @@ import {
   decodeBlueprintDeciderControlBehavior,
   type BlueprintDeciderImportDiagnostic,
 } from './blueprint-import-decider.js';
+import {
+  decodeBlueprintSelectorControlBehavior,
+  type BlueprintSelectorImportDiagnostic,
+} from './blueprint-import-selector.js';
 import type {
   BlueprintImportProfileMappingEntry,
   BlueprintImportProfileMappingOptions,
@@ -35,7 +39,12 @@ import {
   resolveEntityReplayProfile,
   type TrustedEntityReplayContext,
 } from './entity-replay-context.js';
-import type { ArithmeticProducerConfig, CircuitProducerNode, DeciderProducerConfig } from './ir.js';
+import type {
+  ArithmeticProducerConfig,
+  CircuitProducerNode,
+  DeciderProducerConfig,
+  SelectorProducerConfig,
+} from './ir.js';
 import { producerInputNetworkIds } from './producer-network-references.js';
 import type { ProducerId } from '@comblang/shared';
 
@@ -60,6 +69,7 @@ export type CanonicalBlueprintImportDiagnostic =
   | BlueprintConstantImportDiagnostic
   | BlueprintArithmeticImportDiagnostic
   | BlueprintDeciderImportDiagnostic
+  | BlueprintSelectorImportDiagnostic
   | CanonicalBlueprintImportCoverageDiagnostic;
 
 export interface CanonicalBlueprintImportNetwork {
@@ -93,10 +103,20 @@ export interface CanonicalDeciderBlueprintImportEntity {
   readonly outputNetworks: Readonly<{ readonly red?: NetworkId; readonly green?: NetworkId }>;
 }
 
+export interface CanonicalSelectorBlueprintImportEntity {
+  readonly entityNumber: number;
+  readonly path: string;
+  readonly family: 'selector';
+  readonly configuration: SelectorProducerConfig;
+  readonly inputNetworks: Readonly<{ readonly red: NetworkId; readonly green: NetworkId }>;
+  readonly outputNetworks: Readonly<{ readonly red?: NetworkId; readonly green?: NetworkId }>;
+}
+
 export type CanonicalBlueprintImportEntity =
   | CanonicalConstantBlueprintImportEntity
   | CanonicalArithmeticBlueprintImportEntity
-  | CanonicalDeciderBlueprintImportEntity;
+  | CanonicalDeciderBlueprintImportEntity
+  | CanonicalSelectorBlueprintImportEntity;
 
 export interface CanonicalBlueprintImportResult {
   readonly state: 'complete' | 'blocked';
@@ -114,7 +134,7 @@ interface ResolvedOptions {
 
 interface SelectedFamily {
   readonly entity: BlueprintImportEntity;
-  readonly family: 'constant' | 'arithmetic' | 'decider';
+  readonly family: 'constant' | 'arithmetic' | 'decider' | 'selector';
 }
 
 const defaultMaxEndpoints = 100_000;
@@ -385,6 +405,13 @@ function profileFamily(entity: BlueprintImportEntity):
       prototypeType: 'decider-combinator',
     };
   }
+  if (entity.name === 'selector-combinator') {
+    return {
+      family: 'selector',
+      prototypeKey: 'entity:selector-combinator',
+      prototypeType: 'selector-combinator',
+    };
+  }
   return undefined;
 }
 
@@ -497,7 +524,8 @@ export function analyzeCanonicalBlueprintImport(
     if (
       prototypeKey === 'entity:constant-combinator' ||
       prototypeKey === 'entity:arithmetic-combinator' ||
-      prototypeKey === 'entity:decider-combinator'
+      prototypeKey === 'entity:decider-combinator' ||
+      prototypeKey === 'entity:selector-combinator'
     ) {
       canonicalProfileCounts.set(prototypeKey, (canonicalProfileCounts.get(prototypeKey) ?? 0) + 1);
     }
@@ -527,7 +555,7 @@ export function analyzeCanonicalBlueprintImport(
       diagnostics.push(
         coverage(
           'unsupported-canonical-family',
-          `Blueprint prototype ${entity.name} is outside the Constant/Arithmetic/Decider bridge.`,
+          `Blueprint prototype ${entity.name} is outside the Constant/Arithmetic/Decider/Selector bridge.`,
           `${entity.path}.name`,
           entity.entityNumber,
           `$.entries[${selected.index}].profile.prototypeKey`,
@@ -688,6 +716,34 @@ export function analyzeCanonicalBlueprintImport(
             ),
           );
         }
+      }
+      projectedEntities.push(
+        Object.freeze({
+          entityNumber: entity.entityNumber,
+          path: entity.path,
+          family,
+          configuration: decoded.configuration,
+          inputNetworks,
+          outputNetworks: Object.freeze(outputNetworks),
+        }),
+      );
+      continue;
+    }
+    if (family === 'selector') {
+      const decoded = decodeBlueprintSelectorControlBehavior(
+        controlBehavior,
+        {
+          refKind: 'pair',
+          networks: [inputNetworks.red, inputNetworks.green],
+        },
+        {
+          path,
+          ...(resolvedOptions.signal === undefined ? {} : { signal: resolvedOptions.signal }),
+        },
+      );
+      if (decoded.state === 'blocked') {
+        diagnostics.push(...decoded.diagnostics);
+        continue;
       }
       projectedEntities.push(
         Object.freeze({

@@ -14,7 +14,7 @@ import type { BlueprintImportProfileMappingEntry } from './blueprint-import-prof
 import { describe, expect, test } from 'vitest';
 
 function canonicalProfile(
-  family: 'constant' | 'arithmetic' | 'decider',
+  family: 'constant' | 'arithmetic' | 'decider' | 'selector',
   profileId = `profile:canonical-${family}-test`,
 ): EntityProfile {
   const prototypeName = `${family}-combinator`;
@@ -32,9 +32,15 @@ function canonicalProfile(
 const constantProfile = canonicalProfile('constant');
 const arithmeticProfile = canonicalProfile('arithmetic');
 const deciderProfile = canonicalProfile('decider');
+const selectorProfile = canonicalProfile('selector');
 
 function contextFor(
-  profiles: readonly EntityProfile[] = [constantProfile, arithmeticProfile, deciderProfile],
+  profiles: readonly EntityProfile[] = [
+    constantProfile,
+    arithmeticProfile,
+    deciderProfile,
+    selectorProfile,
+  ],
 ): TrustedEntityReplayContext {
   return createTrustedEntityReplayContext({
     database: syntheticZeroPortEntityProfile.ref.database,
@@ -163,7 +169,9 @@ function selectionsFor(entities: readonly FixtureEntity[]): BlueprintImportProfi
         ? arithmeticProfile.ref
         : name === 'decider-combinator'
           ? deciderProfile.ref
-          : constantProfile.ref,
+          : name === 'selector-combinator'
+            ? selectorProfile.ref
+            : constantProfile.ref,
     ),
   );
 }
@@ -178,6 +186,10 @@ function arithmeticEntity(entity_number: number, behavior = arithmeticBehavior()
 
 function deciderEntity(entity_number: number, behavior = deciderBehavior()): FixtureEntity {
   return { entity_number, name: 'decider-combinator', control_behavior: behavior };
+}
+
+function selectorEntity(entity_number: number, behavior: unknown): FixtureEntity {
+  return { entity_number, name: 'selector-combinator', control_behavior: behavior };
 }
 
 function idsFor(result: ReturnType<typeof analyzeCanonicalBlueprintImport>) {
@@ -250,7 +262,7 @@ describe('canonical blueprint family bridge', () => {
 
     const unsupportedEntity: FixtureEntity = {
       entity_number: 2,
-      name: 'selector-combinator',
+      name: 'programmable-speaker',
       control_behavior: {},
     };
     const unsupported = analyzeCanonicalBlueprintImport(
@@ -303,6 +315,192 @@ describe('canonical blueprint family bridge', () => {
     expect(accepted.state).toBe('complete');
     expect(accepted.entities[0]).toMatchObject({ entityNumber: 1, family: 'constant' });
     expect(constantProfile.connectors).toEqual([]);
+  });
+
+  test('bridges only trusted Selector profiles and keeps both isolated input lanes explicit', () => {
+    const selectNumeric = { operation: 'select', select_max: false, index_constant: 3 };
+    const isolated = selectorEntity(20, selectNumeric);
+    const isolatedResult = analyzeCanonicalBlueprintImport(
+      analysisFrom(fixtureSource([isolated])),
+      selectionsFor([isolated]),
+      contextFor(),
+    );
+    expect(isolatedResult.state).toBe('complete');
+    expect(isolatedResult.networks).toHaveLength(4);
+    expect(isolatedResult.entities[0]).toMatchObject({
+      family: 'selector',
+      inputNetworks: {
+        red: 'network:blueprint-import:1',
+        green: 'network:blueprint-import:3',
+      },
+      configuration: {
+        operation: 'select',
+        input: {
+          refKind: 'pair',
+          networks: ['network:blueprint-import:1', 'network:blueprint-import:3'],
+        },
+        selectMax: false,
+        index: 3,
+      },
+      outputNetworks: {},
+    });
+    expect(isolatedResult.networks.map(({ component }) => component.color)).toEqual([
+      'red',
+      'red',
+      'green',
+      'green',
+    ]);
+
+    const signalSelect = selectorEntity(20, {
+      operation: 'select',
+      select_max: true,
+      index_signal: { type: 'virtual', name: 'signal-index', quality: 'rare' },
+    });
+    const redInputFixture = [constantEntity(1), signalSelect];
+    const redInput = analyzeCanonicalBlueprintImport(
+      analysisFrom(fixtureSource(redInputFixture, [[1, 1, 20, 1]])),
+      selectionsFor(redInputFixture),
+      contextFor(),
+    );
+    expect(redInput.state).toBe('complete');
+    const redOnly = redInput.entities.find((candidate) => candidate.entityNumber === 20);
+    if (redOnly?.family !== 'selector') throw new Error('Expected a bridged Selector.');
+    expect(redOnly.configuration).toMatchObject({
+      operation: 'select',
+      input: { refKind: 'pair' },
+      selectMax: true,
+      index: { type: 'virtual', name: 'signal-index', quality: 'rare' },
+    });
+    expect(
+      redInput.networks.find(({ network }) => network === redOnly.inputNetworks.red)?.component
+        .endpoints,
+    ).toEqual([
+      { entityNumber: 1, connectorId: 1 },
+      { entityNumber: 20, connectorId: 1 },
+    ]);
+    expect(
+      redInput.networks.find(({ network }) => network === redOnly.inputNetworks.green)?.component
+        .endpoints,
+    ).toEqual([{ entityNumber: 20, connectorId: 2 }]);
+
+    const count = selectorEntity(20, {
+      operation: 'count',
+      count_signal: { name: 'iron-plate', quality: 'normal' },
+    });
+    const bothInputFixture = [constantEntity(1), constantEntity(2), count];
+    const bothInputs = analyzeCanonicalBlueprintImport(
+      analysisFrom(
+        fixtureSource(bothInputFixture, [
+          [1, 1, 20, 1],
+          [2, 2, 20, 2],
+        ]),
+      ),
+      selectionsFor(bothInputFixture),
+      contextFor(),
+    );
+    expect(bothInputs.state).toBe('complete');
+    const countEntity = bothInputs.entities.find((candidate) => candidate.entityNumber === 20);
+    if (countEntity?.family !== 'selector') throw new Error('Expected a bridged Count Selector.');
+    expect(countEntity.configuration).toMatchObject({
+      operation: 'count',
+      input: {
+        refKind: 'pair',
+        networks: [countEntity.inputNetworks.red, countEntity.inputNetworks.green],
+      },
+      output: { type: 'item', name: 'iron-plate', quality: 'normal' },
+    });
+    if (countEntity.configuration.operation !== 'count') {
+      throw new Error('Expected the decoded Selector Count configuration.');
+    }
+    expect(Object.hasOwn(countEntity.configuration.output, 'quality')).toBe(true);
+
+    const feedback = selectorEntity(30, selectNumeric);
+    const feedbackResult = analyzeCanonicalBlueprintImport(
+      analysisFrom(
+        fixtureSource(
+          [feedback],
+          [
+            [30, 3, 30, 1],
+            [30, 4, 30, 2],
+          ],
+        ),
+      ),
+      selectionsFor([feedback]),
+      contextFor(),
+    );
+    expect(feedbackResult.state).toBe('complete');
+    const feedbackEntity = feedbackResult.entities[0];
+    if (feedbackEntity?.family !== 'selector') throw new Error('Expected a feedback Selector.');
+    expect(feedbackEntity.inputNetworks.red).toBe(feedbackEntity.outputNetworks.red);
+    expect(feedbackEntity.inputNetworks.green).toBe(feedbackEntity.outputNetworks.green);
+  });
+
+  test('rejects ambiguous, mismatched, modded, and unsupported Selector profiles atomically', () => {
+    const selector = selectorEntity(9, {
+      operation: 'count',
+      count_signal: { name: 'iron-plate' },
+    });
+    const analysis = analysisFrom(fixtureSource([selector]));
+    const wrongFamily = analyzeCanonicalBlueprintImport(
+      analysis,
+      [entry(9, arithmeticProfile.ref)],
+      contextFor(),
+    );
+    expect(wrongFamily.diagnostics).toContainEqual(
+      expect.objectContaining({ category: 'canonical-family-mismatch', entityNumber: 9 }),
+    );
+
+    const wrongType = {
+      ...canonicalProfile('selector', 'profile:selector-wrong-type'),
+      prototypeType: 'decider-combinator',
+    };
+    const wrongTypeResult = analyzeCanonicalBlueprintImport(
+      analysis,
+      [entry(9, wrongType.ref)],
+      contextFor([wrongType, arithmeticProfile]),
+    );
+    expect(wrongTypeResult.diagnostics).toContainEqual(
+      expect.objectContaining({ category: 'canonical-family-mismatch', entityNumber: 9 }),
+    );
+
+    const duplicate = canonicalProfile('selector', 'profile:selector-duplicate');
+    const ambiguous = analyzeCanonicalBlueprintImport(
+      analysis,
+      [entry(9)],
+      contextFor([constantProfile, selectorProfile, duplicate]),
+    );
+    expect(ambiguous.diagnostics).toContainEqual(
+      expect.objectContaining({ category: 'ambiguous-canonical-profile', entityNumber: 9 }),
+    );
+
+    const modded = canonicalProfile('selector', 'profile:selector-modded');
+    const moddedRef = { ...modded.ref, prototypeKey: 'entity:my-selector-combinator' };
+    const moddedResult = analyzeCanonicalBlueprintImport(
+      analysis,
+      [entry(9, moddedRef)],
+      contextFor([selectorProfile, { ...modded, ref: moddedRef }]),
+    );
+    expect(moddedResult.diagnostics).toContainEqual(
+      expect.objectContaining({ category: 'canonical-family-mismatch', entityNumber: 9 }),
+    );
+
+    for (const behavior of [
+      { operation: 'random' },
+      { operation: 'select', select_max: true, index_constant: 2, select_highest_quality: true },
+    ]) {
+      const rejected = analyzeCanonicalBlueprintImport(
+        analysisFrom(fixtureSource([selectorEntity(9, behavior)])),
+        [entry(9, selectorProfile.ref)],
+        contextFor(),
+      );
+      expect(rejected.state).toBe('blocked');
+      expect(rejected.components).toEqual([]);
+      expect(rejected.networks).toEqual([]);
+      expect(rejected.entities).toEqual([]);
+      expect(rejected.diagnostics).toContainEqual(
+        expect.objectContaining({ category: 'unsupported-selector-configuration' }),
+      );
+    }
   });
 
   test('uses explicit family endpoint tables and existing deterministic connectivity', () => {

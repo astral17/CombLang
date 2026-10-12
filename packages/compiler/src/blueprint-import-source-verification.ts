@@ -13,7 +13,7 @@ import {
 import { BlueprintJsonError } from './blueprint-native-config.js';
 import { emitNativeBlueprintJson } from './native-blueprint-emitter.js';
 import { buildNativeBlueprintFcir } from './native-blueprint-projector.js';
-import { sameSignal, type ConstantConfiguration } from '@comblang/factorio';
+import { sameSignal, type ConstantConfiguration, type SignalId } from '@comblang/factorio';
 import type { Diagnostic, NetworkId, ProducerId, SourceSpan } from '@comblang/shared';
 
 import {
@@ -46,6 +46,7 @@ import type {
   LogicalScalarOperand,
   LogicalNetworkRef,
   NativeCircuitIr,
+  SelectorProducerConfig,
 } from './ir.js';
 import type { DirectElaborationPlan } from './direct-plan-schema.js';
 import type { EntityId, EntityPhysicalRecord, EntityProfileRef } from './entity.js';
@@ -222,11 +223,20 @@ function sameProfileRef(left: EntityProfileRef, right: EntityProfileRef): boolea
 function canonicalPrototypeName(family: CanonicalBlueprintImportEntity['family']): string {
   if (family === 'constant') return 'constant-combinator';
   if (family === 'arithmetic') return 'arithmetic-combinator';
-  return 'decider-combinator';
+  if (family === 'decider') return 'decider-combinator';
+  return 'selector-combinator';
 }
 
 function sameNumber(left: number, right: number): boolean {
   return Object.is(left, right);
+}
+
+function sameExactSignal(left: SignalId, right: SignalId): boolean {
+  return (
+    sameSignal(left, right) &&
+    Object.hasOwn(left, 'quality') === Object.hasOwn(right, 'quality') &&
+    left.quality === right.quality
+  );
 }
 
 function sameConstantConfiguration(
@@ -323,6 +333,35 @@ function sameArithmeticPhysicalConfiguration(
     sameOperand(left.right, right.right) &&
     sameOutput(left.output, right.output)
   );
+}
+
+function sameSelectorConfiguration(
+  left: SelectorProducerConfig,
+  right: SelectorProducerConfig,
+  remap?: ReadonlyMap<NetworkId, NetworkId>,
+): boolean {
+  if (left.operation !== right.operation || !sameNetworkRef(left.input, right.input, remap)) {
+    return false;
+  }
+  if (left.operation === 'select' && right.operation === 'select') {
+    if (left.selectMax !== right.selectMax) return false;
+    if (typeof left.index === 'number') {
+      return typeof right.index === 'number' && sameNumber(left.index, right.index);
+    }
+    return typeof right.index !== 'number' && sameExactSignal(left.index, right.index);
+  }
+  return (
+    left.operation === 'count' &&
+    right.operation === 'count' &&
+    sameExactSignal(left.output, right.output)
+  );
+}
+
+function sameSelectorPhysicalConfiguration(
+  left: SelectorProducerConfig,
+  right: Extract<EntityPhysicalRecord['configuration'], { mode: 'selector' }>,
+): boolean {
+  return sameSelectorConfiguration(left, right);
 }
 
 function sameDeciderConditionLeft(
@@ -1018,7 +1057,7 @@ export function verifyCanonicalBlueprintSourceRoundTrip(
           correspondence.entityNumber,
         );
       }
-    } else {
+    } else if (imported.family === 'decider') {
       if (
         producer.kind !== 'decider' ||
         !sameDeciderConfiguration(imported.configuration, producer.config, matched.networkMap)
@@ -1040,6 +1079,32 @@ export function verifyCanonicalBlueprintSourceRoundTrip(
           diagnostics,
           correspondence.path,
           'Linked physical Entity Decider configuration differs from its producer.',
+          source,
+          correspondence.entityNumber,
+        );
+      }
+    } else {
+      if (
+        producer.kind !== 'selector' ||
+        !sameSelectorConfiguration(imported.configuration, producer.config, matched.networkMap)
+      ) {
+        appendMismatch(
+          diagnostics,
+          correspondence.path,
+          'Compiled Selector operation, index/output, quality, or input Network references differ from the import.',
+          source,
+          correspondence.entityNumber,
+        );
+      }
+      if (
+        producer.kind !== 'selector' ||
+        physical.configuration?.mode !== 'selector' ||
+        !sameSelectorPhysicalConfiguration(producer.config, physical.configuration)
+      ) {
+        appendMismatch(
+          diagnostics,
+          correspondence.path,
+          'Linked physical Entity Selector configuration differs from its producer.',
           source,
           correspondence.entityNumber,
         );
@@ -1303,14 +1368,22 @@ export function verifyCanonicalBlueprintSourceRoundTrip(
                 actual.configuration,
                 reprojectedNetworkMap,
               )
-            : false;
+            : expected.family === 'selector' && actual.family === 'selector'
+              ? sameSelectorConfiguration(
+                  expected.configuration,
+                  actual.configuration,
+                  reprojectedNetworkMap,
+                )
+              : false;
     if (!configurationMatches) {
       appendMismatch(
         diagnostics,
         expected.path,
         expected.family === 'decider'
           ? 'Reprojected native Decider configuration or input masks differ from the imported source.'
-          : 'Reprojected native configuration or Arithmetic input mask differs from the imported source.',
+          : expected.family === 'selector'
+            ? 'Reprojected native Selector operation, index/output quality, or input Network pair differs from the imported source.'
+            : 'Reprojected native configuration or Arithmetic input mask differs from the imported source.',
         correspondenceByNumber.get(expected.entityNumber)?.constructionSpan,
         expected.entityNumber,
       );

@@ -12,7 +12,9 @@ import { afterEach, describe, expect, test, vi } from 'vitest';
 
 afterEach(() => vi.restoreAllMocks());
 
-function canonicalProfile(family: 'constant' | 'arithmetic' | 'decider'): EntityProfile {
+function canonicalProfile(
+  family: 'constant' | 'arithmetic' | 'decider' | 'selector',
+): EntityProfile {
   const prototypeName = `${family}-combinator`;
   return {
     ...syntheticZeroPortEntityProfile,
@@ -28,12 +30,13 @@ function canonicalProfile(family: 'constant' | 'arithmetic' | 'decider'): Entity
 const profile = canonicalProfile('constant');
 const arithmeticProfile = canonicalProfile('arithmetic');
 const deciderProfile = canonicalProfile('decider');
+const selectorProfile = canonicalProfile('selector');
 const context = createTrustedEntityReplayContext({
   database: profile.ref.database,
   source: 'synthetic',
   evidenceIdentity: 'blueprint-source-assembly-test-evidence',
   policyIdentity: 'blueprint-source-assembly-test-policy',
-  profiles: [profile, arithmeticProfile, deciderProfile],
+  profiles: [profile, arithmeticProfile, deciderProfile, selectorProfile],
 });
 
 function constantEntity(
@@ -72,7 +75,9 @@ function prepareSource(source: string) {
         ? arithmeticProfile.ref
         : name === 'decider-combinator'
           ? deciderProfile.ref
-          : profile.ref,
+          : name === 'selector-combinator'
+            ? selectorProfile.ref
+            : profile.ref,
   }));
   return { analysis, selections };
 }
@@ -114,6 +119,23 @@ function deciderBehavior(overrides: Record<string, unknown> = {}) {
       ],
       ...overrides,
     },
+  };
+}
+
+function selectorBehavior(
+  behavior: Record<string, unknown>,
+  options: {
+    readonly position?: unknown;
+    readonly direction?: number;
+    readonly entityNumber?: number;
+  } = {},
+) {
+  return {
+    entity_number: options.entityNumber ?? 1,
+    name: 'selector-combinator',
+    position: options.position ?? { x: 0, y: 0 },
+    direction: options.direction ?? 0,
+    control_behavior: behavior,
   };
 }
 
@@ -350,6 +372,145 @@ describe('canonical blueprint full-source assembly', () => {
         result.correspondence.entities[2]!.constructionSpan.end,
       ),
     ).toContain('elseOutputs:');
+  });
+
+  test('assembles Select and Count with exact Unicode spans, red feedback, and an outputless Selector', () => {
+    const result = generate({
+      entities: [
+        selectorBehavior(
+          {
+            operation: 'select',
+            select_max: true,
+            index_signal: { type: 'virtual', name: 'signal-🚀', quality: 'rare' },
+          },
+          { entityNumber: 10, position: { x: 2, y: 3 }, direction: 4 },
+        ),
+        selectorBehavior(
+          { operation: 'count', count_signal: { name: 'iron-plate', quality: 'normal' } },
+          { entityNumber: 11, position: { x: 5, y: 7 }, direction: 8 },
+        ),
+      ],
+      wires: [[10, 3, 10, 1]],
+    });
+    expect(result.state).toBe('complete');
+    if (result.state !== 'complete') throw new Error(JSON.stringify(result.diagnostics));
+    expect(result.correspondence.entities.map(({ family }) => family)).toEqual([
+      'selector',
+      'selector',
+    ]);
+    const [select, count] = result.correspondence.entities;
+    if (select === undefined || count === undefined) throw new Error('Expected both Selectors.');
+    const selectExpression = result.source.text.slice(
+      select.constructionSpan.start,
+      select.constructionSpan.end,
+    );
+    expect(selectExpression).toMatch(
+      /^Selector\(\{input:pair\(import_network_\d+,import_network_\d+\),operation:"select",selectMax:true,index:Signal\("virtual","signal-🚀","rare"\)\}\)$/,
+    );
+    expect(result.source.text.slice(select.placementSpan.start, select.placementSpan.end)).toBe(
+      `${select.name}.at(2,3,4)`,
+    );
+    expect(select.attachmentSpans).toHaveLength(1);
+    expect(
+      result.source.text.slice(select.attachmentSpans[0]!.start, select.attachmentSpans[0]!.end),
+    ).toMatch(/\+= import_entity_1;/);
+    const countExpression = result.source.text.slice(
+      count.constructionSpan.start,
+      count.constructionSpan.end,
+    );
+    expect(countExpression).toMatch(
+      /^Selector\(\{input:pair\(import_network_\d+,import_network_\d+\),operation:"count",output:Signal\("item","iron-plate","normal"\)\}\)$/,
+    );
+    expect(result.source.text.slice(count.placementSpan.start, count.placementSpan.end)).toBe(
+      `${count.name}.at(5,7,8)`,
+    );
+    expect(count.attachmentSpans).toEqual([]);
+    expect(result.source.text).not.toContain(`to(${count.name}`);
+  });
+
+  test('turns a late Selector printer TypeError into an all-or-empty source refusal', () => {
+    const source = JSON.stringify({
+      blueprint: {
+        entities: [
+          selectorBehavior(
+            { operation: 'select', select_max: false, index_constant: 1 },
+            {
+              entityNumber: 10,
+            },
+          ),
+          selectorBehavior(
+            { operation: 'count', count_signal: { name: 'iron-plate' } },
+            {
+              entityNumber: 11,
+            },
+          ),
+        ],
+        wires: [],
+      },
+    });
+    let calls = 0;
+    vi.spyOn(blueprintImportSource, 'createBlueprintSelectorExpressionPrinter').mockReturnValue(
+      () => {
+        calls += 1;
+        if (calls === 2) throw new TypeError('fixture refusal');
+        return 'Selector({fixture:true})';
+      },
+    );
+    const result = generateSource(source);
+    expect(calls).toBe(2);
+    expect(result.state).toBe('blocked');
+    expect(result.source).toBeUndefined();
+    expect(result.correspondence).toBeUndefined();
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        category: 'unsupported-source-configuration',
+        path: '$.blueprint.entities[1].control_behavior',
+        entityNumber: 11,
+      }),
+    );
+  });
+
+  test('propagates Selector printer resource, abort, and unexpected failures', () => {
+    const source = JSON.stringify({
+      blueprint: {
+        entities: [selectorBehavior({ operation: 'count', count_signal: { name: 'iron-plate' } })],
+        wires: [],
+      },
+    });
+    const errors = [
+      new RangeError('source budget'),
+      new DOMException('aborted', 'AbortError'),
+      new Error('unexpected printer failure'),
+    ];
+    for (const error of errors) {
+      const printer = vi
+        .spyOn(blueprintImportSource, 'createBlueprintSelectorExpressionPrinter')
+        .mockReturnValue(() => {
+          throw error;
+        });
+      expect(() => generateSource(source)).toThrow(error);
+      printer.mockRestore();
+    }
+  });
+
+  test('refuses decoded Selector negative zero at its exact native field before source output', () => {
+    const source = JSON.stringify({
+      blueprint: {
+        entities: [selectorBehavior({ operation: 'select', select_max: false, index_constant: 0 })],
+        wires: [],
+      },
+    }).replace('"index_constant":0', '"index_constant":-0');
+    const result = generateSource(source);
+    expect(result.state).toBe('blocked');
+    expect(result.source).toBeUndefined();
+    expect(result.correspondence).toBeUndefined();
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({
+        category: 'unsupported-source-configuration',
+        path: '$.blueprint.entities[0].control_behavior.index_constant',
+        entityNumber: 1,
+      }),
+    );
   });
 
   test('blocks known Decider source refusals without partial source or correspondence', () => {
