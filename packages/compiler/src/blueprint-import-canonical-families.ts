@@ -23,6 +23,10 @@ import {
   decodeBlueprintConstantControlBehavior,
   type BlueprintConstantImportDiagnostic,
 } from './blueprint-import-constant.js';
+import {
+  decodeBlueprintDeciderControlBehavior,
+  type BlueprintDeciderImportDiagnostic,
+} from './blueprint-import-decider.js';
 import type {
   BlueprintImportProfileMappingEntry,
   BlueprintImportProfileMappingOptions,
@@ -31,7 +35,9 @@ import {
   resolveEntityReplayProfile,
   type TrustedEntityReplayContext,
 } from './entity-replay-context.js';
-import type { ArithmeticProducerConfig } from './ir.js';
+import type { ArithmeticProducerConfig, CircuitProducerNode, DeciderProducerConfig } from './ir.js';
+import { producerInputNetworkIds } from './producer-network-references.js';
+import type { ProducerId } from '@comblang/shared';
 
 export interface CanonicalBlueprintImportCoverageDiagnostic {
   readonly category:
@@ -39,7 +45,8 @@ export interface CanonicalBlueprintImportCoverageDiagnostic {
     | 'unsupported-canonical-family'
     | 'canonical-family-mismatch'
     | 'ambiguous-canonical-profile'
-    | 'unsupported-unread-arithmetic-input';
+    | 'unsupported-unread-arithmetic-input'
+    | 'unsupported-unread-decider-input';
   readonly message: string;
   readonly path: string;
   readonly entityNumber: number;
@@ -52,6 +59,7 @@ export type CanonicalBlueprintImportDiagnostic =
   | BlueprintConnectivityDiagnostic
   | BlueprintConstantImportDiagnostic
   | BlueprintArithmeticImportDiagnostic
+  | BlueprintDeciderImportDiagnostic
   | CanonicalBlueprintImportCoverageDiagnostic;
 
 export interface CanonicalBlueprintImportNetwork {
@@ -76,8 +84,19 @@ export interface CanonicalArithmeticBlueprintImportEntity {
   readonly outputNetworks: Readonly<{ readonly red?: NetworkId; readonly green?: NetworkId }>;
 }
 
+export interface CanonicalDeciderBlueprintImportEntity {
+  readonly entityNumber: number;
+  readonly path: string;
+  readonly family: 'decider';
+  readonly configuration: DeciderProducerConfig;
+  readonly inputNetworks: Readonly<{ readonly red: NetworkId; readonly green: NetworkId }>;
+  readonly outputNetworks: Readonly<{ readonly red?: NetworkId; readonly green?: NetworkId }>;
+}
+
 export type CanonicalBlueprintImportEntity =
-  CanonicalConstantBlueprintImportEntity | CanonicalArithmeticBlueprintImportEntity;
+  | CanonicalConstantBlueprintImportEntity
+  | CanonicalArithmeticBlueprintImportEntity
+  | CanonicalDeciderBlueprintImportEntity;
 
 export interface CanonicalBlueprintImportResult {
   readonly state: 'complete' | 'blocked';
@@ -95,7 +114,7 @@ interface ResolvedOptions {
 
 interface SelectedFamily {
   readonly entity: BlueprintImportEntity;
-  readonly family: 'constant' | 'arithmetic';
+  readonly family: 'constant' | 'arithmetic' | 'decider';
 }
 
 const defaultMaxEndpoints = 100_000;
@@ -359,6 +378,13 @@ function profileFamily(entity: BlueprintImportEntity):
       prototypeType: 'arithmetic-combinator',
     };
   }
+  if (entity.name === 'decider-combinator') {
+    return {
+      family: 'decider',
+      prototypeKey: 'entity:decider-combinator',
+      prototypeType: 'decider-combinator',
+    };
+  }
   return undefined;
 }
 
@@ -395,6 +421,17 @@ function arithmeticOperandContains(
     }
   }
   return false;
+}
+
+function deciderInputNetworks(configuration: DeciderProducerConfig): readonly NetworkId[] {
+  const producer: CircuitProducerNode = {
+    id: 'producer:blueprint-import-decider-inputs' as ProducerId,
+    kind: 'decider',
+    config: configuration,
+    destinations: [],
+    provenance: { instancePath: [], expansionStack: [] },
+  };
+  return producerInputNetworkIds(producer);
 }
 
 function hasWiredEndpoint(
@@ -459,7 +496,8 @@ export function analyzeCanonicalBlueprintImport(
     const prototypeKey = profile.ref.prototypeKey;
     if (
       prototypeKey === 'entity:constant-combinator' ||
-      prototypeKey === 'entity:arithmetic-combinator'
+      prototypeKey === 'entity:arithmetic-combinator' ||
+      prototypeKey === 'entity:decider-combinator'
     ) {
       canonicalProfileCounts.set(prototypeKey, (canonicalProfileCounts.get(prototypeKey) ?? 0) + 1);
     }
@@ -489,7 +527,7 @@ export function analyzeCanonicalBlueprintImport(
       diagnostics.push(
         coverage(
           'unsupported-canonical-family',
-          `Blueprint prototype ${entity.name} is outside the Constant/Arithmetic bridge.`,
+          `Blueprint prototype ${entity.name} is outside the Constant/Arithmetic/Decider bridge.`,
           `${entity.path}.name`,
           entity.entityNumber,
           `$.entries[${selected.index}].profile.prototypeKey`,
@@ -621,6 +659,48 @@ export function analyzeCanonicalBlueprintImport(
       red: networkRef(entity.entityNumber, 1, endpointNetworks),
       green: networkRef(entity.entityNumber, 2, endpointNetworks),
     });
+    if (family === 'decider') {
+      const decoded = decodeBlueprintDeciderControlBehavior(controlBehavior, inputNetworks, {
+        path,
+        ...(resolvedOptions.signal === undefined ? {} : { signal: resolvedOptions.signal }),
+      });
+      if (decoded.state === 'blocked') {
+        diagnostics.push(...decoded.diagnostics);
+        continue;
+      }
+      const usedInputs = deciderInputNetworks(decoded.configuration);
+      for (const [connectorId, network] of [
+        [1, inputNetworks.red],
+        [2, inputNetworks.green],
+      ] as const) {
+        checkAborted(resolvedOptions.signal);
+        if (
+          hasWiredEndpoint(entity.entityNumber, connectorId, wiredEndpoints) &&
+          !usedInputs.includes(network)
+        ) {
+          diagnostics.push(
+            coverage(
+              'unsupported-unread-decider-input',
+              `Physically wired Decider input connector ${connectorId} is not selected by any condition operand or output input mask.`,
+              wireEndpointPaths.get(endpointKey(entity.entityNumber, connectorId)) ??
+                `${entity.path}.control_behavior`,
+              entity.entityNumber,
+            ),
+          );
+        }
+      }
+      projectedEntities.push(
+        Object.freeze({
+          entityNumber: entity.entityNumber,
+          path: entity.path,
+          family,
+          configuration: decoded.configuration,
+          inputNetworks,
+          outputNetworks: Object.freeze(outputNetworks),
+        }),
+      );
+      continue;
+    }
     const decoded = decodeBlueprintArithmeticControlBehavior(controlBehavior, inputNetworks, {
       path,
       ...(resolvedOptions.signal === undefined ? {} : { signal: resolvedOptions.signal }),

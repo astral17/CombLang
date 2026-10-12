@@ -36,8 +36,14 @@ import {
 import type {
   ArithmeticProducerConfig,
   CircuitProducerNode,
+  DeciderProducerConfig,
+  LogicalConditionLeft,
   LogicalArithmeticOperand,
   LogicalArithmeticOutput,
+  LogicalDeciderCondition,
+  LogicalDeciderOutput,
+  LogicalDeciderOutputSignal,
+  LogicalScalarOperand,
   LogicalNetworkRef,
   NativeCircuitIr,
 } from './ir.js';
@@ -213,6 +219,12 @@ function sameProfileRef(left: EntityProfileRef, right: EntityProfileRef): boolea
   );
 }
 
+function canonicalPrototypeName(family: CanonicalBlueprintImportEntity['family']): string {
+  if (family === 'constant') return 'constant-combinator';
+  if (family === 'arithmetic') return 'arithmetic-combinator';
+  return 'decider-combinator';
+}
+
 function sameNumber(left: number, right: number): boolean {
   return Object.is(left, right);
 }
@@ -311,6 +323,138 @@ function sameArithmeticPhysicalConfiguration(
     sameOperand(left.right, right.right) &&
     sameOutput(left.output, right.output)
   );
+}
+
+function sameDeciderConditionLeft(
+  left: LogicalConditionLeft,
+  right: LogicalConditionLeft,
+  remap?: ReadonlyMap<NetworkId, NetworkId>,
+): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === 'wildcard' && right.kind === 'wildcard') {
+    return left.value === right.value && sameNetworkRef(left, right, remap);
+  }
+  if (left.kind === 'signal' && right.kind === 'signal') {
+    return sameSignal(left.signal, right.signal) && sameNetworkRef(left, right, remap);
+  }
+  return false;
+}
+
+function sameDeciderScalarOperand(
+  left: LogicalScalarOperand,
+  right: LogicalScalarOperand,
+  remap?: ReadonlyMap<NetworkId, NetworkId>,
+): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === 'constant' && right.kind === 'constant') {
+    return sameNumber(left.value, right.value);
+  }
+  if (left.kind === 'signal' && right.kind === 'signal') {
+    return sameSignal(left.signal, right.signal) && sameNetworkRef(left, right, remap);
+  }
+  return false;
+}
+
+function sameDeciderCondition(
+  left: LogicalDeciderCondition,
+  right: LogicalDeciderCondition,
+  remap?: ReadonlyMap<NetworkId, NetworkId>,
+): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === 'compare' && right.kind === 'compare') {
+    return (
+      sameDeciderConditionLeft(left.left, right.left, remap) &&
+      left.comparator === right.comparator &&
+      sameDeciderScalarOperand(left.right, right.right, remap)
+    );
+  }
+  if (
+    (left.kind === 'and' || left.kind === 'or') &&
+    (right.kind === 'and' || right.kind === 'or')
+  ) {
+    if (left.conditions.length !== right.conditions.length) return false;
+    for (let index = 0; index < left.conditions.length; index += 1) {
+      if (!sameDeciderCondition(left.conditions[index]!, right.conditions[index]!, remap)) {
+        return false;
+      }
+    }
+    return true;
+  }
+  return false;
+}
+
+function sameDeciderOutputSignal(
+  left: LogicalDeciderOutputSignal,
+  right: LogicalDeciderOutputSignal,
+): boolean {
+  if (left.kind !== right.kind) return false;
+  return left.kind === 'wildcard' && right.kind === 'wildcard'
+    ? left.value === right.value
+    : left.kind === 'signal' && right.kind === 'signal' && sameSignal(left.signal, right.signal);
+}
+
+function sameDeciderOutputRows(
+  left: readonly LogicalDeciderOutput[],
+  right: readonly LogicalDeciderOutput[],
+  remap?: ReadonlyMap<NetworkId, NetworkId>,
+): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    const leftRow = left[index]!;
+    const rightRow = right[index]!;
+    const leftHasInput = Object.hasOwn(leftRow, 'input');
+    const rightHasInput = Object.hasOwn(rightRow, 'input');
+    if (
+      leftRow.mode !== rightRow.mode ||
+      !sameDeciderOutputSignal(leftRow.signal, rightRow.signal) ||
+      leftHasInput !== rightHasInput ||
+      (leftRow.input === undefined) !== (rightRow.input === undefined)
+    ) {
+      return false;
+    }
+    if (
+      leftRow.input !== undefined &&
+      rightRow.input !== undefined &&
+      !sameNetworkRef(leftRow.input, rightRow.input, remap)
+    ) {
+      return false;
+    }
+    if (
+      leftRow.mode === 'constant' &&
+      rightRow.mode === 'constant' &&
+      !sameNumber(leftRow.value, rightRow.value)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function sameDeciderConfiguration(
+  left: DeciderProducerConfig,
+  right: DeciderProducerConfig,
+  remap?: ReadonlyMap<NetworkId, NetworkId>,
+): boolean {
+  const leftHasElseOutputs = Object.hasOwn(left, 'elseOutputs');
+  const rightHasElseOutputs = Object.hasOwn(right, 'elseOutputs');
+  if (
+    leftHasElseOutputs !== rightHasElseOutputs ||
+    (left.elseOutputs === undefined) !== (right.elseOutputs === undefined) ||
+    !sameDeciderCondition(left.condition, right.condition, remap) ||
+    !sameDeciderOutputRows(left.outputs, right.outputs, remap)
+  ) {
+    return false;
+  }
+  if (left.elseOutputs === undefined && right.elseOutputs === undefined) return true;
+  if (left.elseOutputs === undefined || right.elseOutputs === undefined) return false;
+  return sameDeciderOutputRows(left.elseOutputs, right.elseOutputs, remap);
+}
+
+function sameDeciderPhysicalConfiguration(
+  left: DeciderProducerConfig,
+  right: Extract<EntityPhysicalRecord['configuration'], { mode: 'decider' }>,
+): boolean {
+  return sameDeciderConfiguration(left, right);
 }
 
 function finiteNumber(value: unknown): number | undefined {
@@ -810,8 +954,7 @@ export function verifyCanonicalBlueprintSourceRoundTrip(
     }
     const expectedProfile = resolveEntityReplayProfile(selected.profile, context);
     if (
-      physical.prototypeName !==
-        (imported.family === 'constant' ? 'constant-combinator' : 'arithmetic-combinator') ||
+      physical.prototypeName !== canonicalPrototypeName(imported.family) ||
       !sameProfileRef(physical.profile, expectedProfile.ref)
     ) {
       appendMismatch(
@@ -849,7 +992,7 @@ export function verifyCanonicalBlueprintSourceRoundTrip(
           correspondence.entityNumber,
         );
       }
-    } else {
+    } else if (imported.family === 'arithmetic') {
       if (
         producer.kind !== 'arithmetic' ||
         !sameArithmeticConfiguration(imported.configuration, producer.config, matched.networkMap)
@@ -871,6 +1014,32 @@ export function verifyCanonicalBlueprintSourceRoundTrip(
           diagnostics,
           correspondence.path,
           'Linked physical Entity Arithmetic configuration differs from its producer.',
+          source,
+          correspondence.entityNumber,
+        );
+      }
+    } else {
+      if (
+        producer.kind !== 'decider' ||
+        !sameDeciderConfiguration(imported.configuration, producer.config, matched.networkMap)
+      ) {
+        appendMismatch(
+          diagnostics,
+          correspondence.path,
+          'Compiled Decider producer conditions, outputs, or Network masks differ from the import.',
+          source,
+          correspondence.entityNumber,
+        );
+      }
+      if (
+        producer.kind !== 'decider' ||
+        physical.configuration?.mode !== 'decider' ||
+        !sameDeciderPhysicalConfiguration(producer.config, physical.configuration)
+      ) {
+        appendMismatch(
+          diagnostics,
+          correspondence.path,
+          'Linked physical Entity Decider configuration differs from its producer.',
           source,
           correspondence.entityNumber,
         );
@@ -914,7 +1083,8 @@ export function verifyCanonicalBlueprintSourceRoundTrip(
   try {
     fcir = buildNativeBlueprintFcir(resolved.ir, {
       label: 'Canonical blueprint source verification',
-      maxDeciderConditionRows: 1,
+      // The source importer bounds this family at 1024 rows and prints its exact OR-of-AND form.
+      maxDeciderConditionRows: 1024,
     });
     emitted = emitNativeBlueprintJson(fcir);
   } catch (error) {
@@ -1127,12 +1297,20 @@ export function verifyCanonicalBlueprintSourceRoundTrip(
               actual.configuration,
               reprojectedNetworkMap,
             )
-          : false;
+          : expected.family === 'decider' && actual.family === 'decider'
+            ? sameDeciderConfiguration(
+                expected.configuration,
+                actual.configuration,
+                reprojectedNetworkMap,
+              )
+            : false;
     if (!configurationMatches) {
       appendMismatch(
         diagnostics,
         expected.path,
-        'Reprojected native configuration or Arithmetic input mask differs from the imported source.',
+        expected.family === 'decider'
+          ? 'Reprojected native Decider configuration or input masks differ from the imported source.'
+          : 'Reprojected native configuration or Arithmetic input mask differs from the imported source.',
         correspondenceByNumber.get(expected.entityNumber)?.constructionSpan,
         expected.entityNumber,
       );

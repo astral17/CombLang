@@ -14,7 +14,7 @@ import type { BlueprintImportProfileMappingEntry } from './blueprint-import-prof
 import { describe, expect, test } from 'vitest';
 
 function canonicalProfile(
-  family: 'constant' | 'arithmetic',
+  family: 'constant' | 'arithmetic' | 'decider',
   profileId = `profile:canonical-${family}-test`,
 ): EntityProfile {
   const prototypeName = `${family}-combinator`;
@@ -31,9 +31,10 @@ function canonicalProfile(
 
 const constantProfile = canonicalProfile('constant');
 const arithmeticProfile = canonicalProfile('arithmetic');
+const deciderProfile = canonicalProfile('decider');
 
 function contextFor(
-  profiles: readonly EntityProfile[] = [constantProfile, arithmeticProfile],
+  profiles: readonly EntityProfile[] = [constantProfile, arithmeticProfile, deciderProfile],
 ): TrustedEntityReplayContext {
   return createTrustedEntityReplayContext({
     database: syntheticZeroPortEntityProfile.ref.database,
@@ -96,6 +97,41 @@ function arithmeticBehavior(
   return { arithmetic_conditions: conditions };
 }
 
+function deciderBehavior(
+  options: {
+    readonly conditionRed?: boolean;
+    readonly conditionGreen?: boolean;
+    readonly outputNetworks?: { readonly red: boolean; readonly green: boolean };
+    readonly elseOutputs?: readonly unknown[];
+  } = {},
+) {
+  return {
+    decider_conditions: {
+      conditions: [
+        {
+          first_signal: { type: 'virtual', name: 'signal-A', quality: 'rare' },
+          first_signal_networks: {
+            red: options.conditionRed ?? true,
+            green: options.conditionGreen ?? false,
+          },
+          comparator: '>',
+          constant: 2,
+          compare_type: 'and',
+        },
+      ],
+      outputs: [
+        {
+          signal: { type: 'virtual', name: 'signal-B' },
+          copy_count_from_input: options.outputNetworks !== undefined,
+          ...(options.outputNetworks === undefined ? {} : { networks: options.outputNetworks }),
+          ...(options.outputNetworks === undefined ? { constant: 0 } : {}),
+        },
+      ],
+      ...(options.elseOutputs === undefined ? {} : { else_outputs: options.elseOutputs }),
+    },
+  };
+}
+
 interface FixtureEntity {
   readonly entity_number: number;
   readonly name: string;
@@ -123,7 +159,11 @@ function selectionsFor(entities: readonly FixtureEntity[]): BlueprintImportProfi
   return entities.map(({ entity_number, name }) =>
     entry(
       entity_number,
-      name === 'arithmetic-combinator' ? arithmeticProfile.ref : constantProfile.ref,
+      name === 'arithmetic-combinator'
+        ? arithmeticProfile.ref
+        : name === 'decider-combinator'
+          ? deciderProfile.ref
+          : constantProfile.ref,
     ),
   );
 }
@@ -134,6 +174,10 @@ function constantEntity(entity_number: number): FixtureEntity {
 
 function arithmeticEntity(entity_number: number, behavior = arithmeticBehavior()): FixtureEntity {
   return { entity_number, name: 'arithmetic-combinator', control_behavior: behavior };
+}
+
+function deciderEntity(entity_number: number, behavior = deciderBehavior()): FixtureEntity {
+  return { entity_number, name: 'decider-combinator', control_behavior: behavior };
 }
 
 function idsFor(result: ReturnType<typeof analyzeCanonicalBlueprintImport>) {
@@ -206,7 +250,7 @@ describe('canonical blueprint family bridge', () => {
 
     const unsupportedEntity: FixtureEntity = {
       entity_number: 2,
-      name: 'decider-combinator',
+      name: 'selector-combinator',
       control_behavior: {},
     };
     const unsupported = analyzeCanonicalBlueprintImport(
@@ -319,6 +363,130 @@ describe('canonical blueprint family bridge', () => {
     expect(conflictResult.diagnostics).toContainEqual(
       expect.objectContaining({ category: 'incompatible-mapping' }),
     );
+  });
+
+  test('requires explicit trusted Decider authority and maps isolated input/output color lanes', () => {
+    const rows = [deciderEntity(10)];
+    const analysis = analysisFrom(fixtureSource(rows));
+    const accepted = analyzeCanonicalBlueprintImport(analysis, selectionsFor(rows), contextFor());
+    expect(accepted.state).toBe('complete');
+    expect(accepted.networks).toHaveLength(4);
+    expect(accepted.networks.map(({ component }) => component.color)).toEqual([
+      'red',
+      'red',
+      'green',
+      'green',
+    ]);
+    expect(accepted.entities[0]).toMatchObject({
+      entityNumber: 10,
+      family: 'decider',
+      inputNetworks: {
+        red: 'network:blueprint-import:1',
+        green: 'network:blueprint-import:3',
+      },
+      configuration: {
+        condition: {
+          kind: 'compare',
+          left: {
+            kind: 'signal',
+            signal: { type: 'virtual', name: 'signal-A', quality: 'rare' },
+            refKind: 'single',
+            network: 'network:blueprint-import:1',
+          },
+          comparator: '>',
+          right: { kind: 'constant', value: 2 },
+        },
+      },
+    });
+    const importedDecider = accepted.entities[0]!;
+    expect(Object.isFrozen(accepted)).toBe(true);
+    expect(Object.isFrozen(accepted.entities)).toBe(true);
+    expect(Object.isFrozen(importedDecider)).toBe(true);
+    if (importedDecider.family !== 'decider') throw new Error('Expected a Decider bridge entity.');
+    expect(Object.isFrozen(importedDecider.configuration)).toBe(true);
+    expect(Object.isFrozen(importedDecider.configuration.condition)).toBe(true);
+    expect(Object.isFrozen(importedDecider.configuration.outputs)).toBe(true);
+
+    const malformedEntity: FixtureEntity = {
+      entity_number: 21,
+      name: 'decider-combinator',
+      control_behavior: {
+        decider_conditions: {
+          ...deciderBehavior().decider_conditions,
+          outputs: null,
+        },
+      },
+    };
+    const malformed = analyzeCanonicalBlueprintImport(
+      analysisFrom(fixtureSource([malformedEntity])),
+      selectionsFor([malformedEntity]),
+      contextFor(),
+    );
+    expect(malformed.state).toBe('blocked');
+    expect(malformed.networks).toEqual([]);
+    expect(malformed.entities).toEqual([]);
+    expect(malformed.diagnostics).toContainEqual(
+      expect.objectContaining({
+        category: 'unsupported-decider-configuration',
+        path: '$.blueprint.entities[0].control_behavior.decider_conditions.outputs',
+      }),
+    );
+
+    const missing = analyzeCanonicalBlueprintImport(analysis, [], contextFor());
+    expect(missing.diagnostics).toContainEqual(
+      expect.objectContaining({ category: 'missing-profile-selection', entityNumber: 10 }),
+    );
+    const mismatched = analyzeCanonicalBlueprintImport(
+      analysis,
+      [entry(10, arithmeticProfile.ref)],
+      contextFor(),
+    );
+    expect(mismatched.diagnostics).toContainEqual(
+      expect.objectContaining({ category: 'canonical-family-mismatch', entityNumber: 10 }),
+    );
+    const duplicate = canonicalProfile('decider', 'profile:duplicate-decider-test');
+    const ambiguous = analyzeCanonicalBlueprintImport(
+      analysis,
+      selectionsFor(rows),
+      contextFor([deciderProfile, duplicate]),
+    );
+    expect(ambiguous.diagnostics).toContainEqual(
+      expect.objectContaining({ category: 'ambiguous-canonical-profile', entityNumber: 10 }),
+    );
+
+    const mixed = [
+      constantEntity(1),
+      constantEntity(2),
+      deciderEntity(
+        10,
+        deciderBehavior({
+          conditionRed: true,
+          conditionGreen: true,
+          outputNetworks: { red: false, green: true },
+        }),
+      ),
+    ];
+    const topology = analyzeCanonicalBlueprintImport(
+      analysisFrom(
+        fixtureSource(mixed, [
+          [1, 1, 10, 1],
+          [2, 2, 10, 2],
+          [10, 3, 10, 1],
+          [10, 4, 2, 2],
+        ]),
+      ),
+      selectionsFor(mixed),
+      contextFor(),
+    );
+    expect(topology.state).toBe('complete');
+    const decider = topology.entities.find((candidate) => candidate.entityNumber === 10);
+    expect(decider).toMatchObject({
+      family: 'decider',
+      outputNetworks: {
+        red: 'network:blueprint-import:1',
+        green: 'network:blueprint-import:4',
+      },
+    });
   });
 
   test('decodes configurations with entity paths and host component IDs without rewriting lossless input', () => {
@@ -517,6 +685,60 @@ describe('canonical blueprint family bridge', () => {
       red: 'network:blueprint-import:1',
       green: 'network:blueprint-import:3',
     });
+  });
+
+  test('counts Decider output masks as input use and refuses only wired unread color lanes', () => {
+    const conditionOnly = [constantEntity(1), deciderEntity(10)];
+    const conditionResult = analyzeCanonicalBlueprintImport(
+      analysisFrom(fixtureSource(conditionOnly, [[1, 1, 10, 1]])),
+      selectionsFor(conditionOnly),
+      contextFor(),
+    );
+    expect(conditionResult.state).toBe('complete');
+
+    const copyOutputOnly = [
+      constantEntity(1),
+      deciderEntity(10, deciderBehavior({ outputNetworks: { red: false, green: true } })),
+    ];
+    const copyOutputResult = analyzeCanonicalBlueprintImport(
+      analysisFrom(fixtureSource(copyOutputOnly, [[1, 2, 10, 2]])),
+      selectionsFor(copyOutputOnly),
+      contextFor(),
+    );
+    expect(copyOutputResult.state).toBe('complete');
+
+    const paired = [
+      constantEntity(1),
+      deciderEntity(10, deciderBehavior({ conditionRed: true, conditionGreen: true })),
+    ];
+    const pairedResult = analyzeCanonicalBlueprintImport(
+      analysisFrom(
+        fixtureSource(paired, [
+          [1, 1, 10, 1],
+          [1, 2, 10, 2],
+        ]),
+      ),
+      selectionsFor(paired),
+      contextFor(),
+    );
+    expect(pairedResult.state).toBe('complete');
+
+    const unread = analyzeCanonicalBlueprintImport(
+      analysisFrom(fixtureSource(conditionOnly, [[1, 2, 10, 2]])),
+      selectionsFor(conditionOnly),
+      contextFor(),
+    );
+    expect(unread.state).toBe('blocked');
+    expect(unread.components).toEqual([]);
+    expect(unread.entities).toEqual([]);
+    expect(unread.diagnostics).toContainEqual(
+      expect.objectContaining({
+        category: 'unsupported-unread-decider-input',
+        path: '$.blueprint.wires[0][3]',
+        entityNumber: 10,
+        message: expect.stringContaining('connector 2'),
+      }),
+    );
   });
 
   test('returns detached frozen snapshots and observes pre-abort and own-loop cancellation', () => {

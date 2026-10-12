@@ -19,9 +19,14 @@ import {
 } from './blueprint-import-canonical-families.js';
 import {
   createBlueprintArithmeticExpressionPrinter,
+  createBlueprintDeciderExpressionPrinter,
   printBlueprintConstantExpression,
 } from './blueprint-import-source.js';
-import type { ArithmeticProducerConfig } from './ir.js';
+import type {
+  ArithmeticProducerConfig,
+  DeciderProducerConfig,
+  LogicalDeciderCondition,
+} from './ir.js';
 import type { BlueprintImportProfileMappingEntry } from './blueprint-import-profile-mappings.js';
 import type { TrustedEntityReplayContext } from './entity-replay-context.js';
 
@@ -33,7 +38,10 @@ export interface GenerateCanonicalBlueprintSourceOptions {
 }
 
 export interface BlueprintSourceAssemblyDiagnostic {
-  readonly category: 'unsupported-source-field' | 'unsupported-source-placement';
+  readonly category:
+    | 'unsupported-source-field'
+    | 'unsupported-source-placement'
+    | 'unsupported-source-configuration';
   readonly message: string;
   readonly path: string;
   readonly entityNumber?: number;
@@ -54,7 +62,7 @@ export interface BlueprintSourceEntityCorrespondence {
   readonly entityNumber: number;
   readonly path: string;
   readonly name: string;
-  readonly family: 'constant' | 'arithmetic';
+  readonly family: 'constant' | 'arithmetic' | 'decider';
   readonly constructionSpan: SourceSpan;
   readonly placementSpan: SourceSpan;
   readonly attachmentSpans: readonly SourceSpan[];
@@ -447,12 +455,102 @@ class BoundedSourceBuilder {
 function constructorExpression(
   entity: CanonicalBlueprintImportEntity,
   arithmeticPrinter: ((configuration: ArithmeticProducerConfig) => string) | undefined,
+  deciderPrinter: ((configuration: DeciderProducerConfig) => string) | undefined,
 ): string {
   if (entity.family === 'constant') return printBlueprintConstantExpression(entity.configuration);
-  if (arithmeticPrinter === undefined) {
-    throw new Error('Arithmetic source printer was not prepared for an Arithmetic entity.');
+  if (entity.family === 'arithmetic') {
+    if (arithmeticPrinter === undefined) {
+      throw new Error('Arithmetic source printer was not prepared for an Arithmetic entity.');
+    }
+    return arithmeticPrinter(entity.configuration);
   }
-  return arithmeticPrinter(entity.configuration);
+  if (deciderPrinter === undefined) {
+    throw new Error('Decider source printer was not prepared for a Decider entity.');
+  }
+  return deciderPrinter(entity.configuration);
+}
+
+function deciderConditionRows(
+  condition: LogicalDeciderCondition,
+  rows: Extract<LogicalDeciderCondition, { kind: 'compare' }>[],
+): void {
+  if (condition.kind === 'compare') {
+    rows.push(condition);
+    return;
+  }
+  for (const child of condition.conditions) deciderConditionRows(child, rows);
+}
+
+function deciderRepresentabilityRefusal(
+  entity: Extract<CanonicalBlueprintImportEntity, { family: 'decider' }>,
+): { readonly path: string; readonly message: string } | undefined {
+  const nativePath = `${entity.path}.control_behavior.decider_conditions`;
+  const hasElseOutputs = Object.hasOwn(entity.configuration, 'elseOutputs');
+  const elseOutputs = entity.configuration.elseOutputs;
+  if (hasElseOutputs && elseOutputs?.length === 0) {
+    return {
+      path: `${nativePath}.else_outputs`,
+      message: 'An explicitly present empty Decider else_outputs branch cannot round-trip.',
+    };
+  }
+  if (entity.configuration.outputs.length + (elseOutputs?.length ?? 0) === 0) {
+    return {
+      path: `${nativePath}.outputs`,
+      message: 'A Decider configuration without output rows cannot be represented in source.',
+    };
+  }
+
+  const conditionRows: Extract<LogicalDeciderCondition, { kind: 'compare' }>[] = [];
+  deciderConditionRows(entity.configuration.condition, conditionRows);
+  for (let index = 0; index < conditionRows.length; index += 1) {
+    const row = conditionRows[index]!;
+    if (row.right.kind === 'constant' && Object.is(row.right.value, -0)) {
+      return {
+        path: `${nativePath}.conditions[${index}].constant`,
+        message: 'Negative zero in a Decider condition cannot round-trip through source.',
+      };
+    }
+  }
+
+  for (const [branch, rows] of [
+    ['outputs', entity.configuration.outputs],
+    ['else_outputs', entity.configuration.elseOutputs ?? []],
+  ] as const) {
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index]!;
+      const path = `${nativePath}.${branch}[${index}]`;
+      if (row.mode === 'copy' && row.input === undefined) {
+        return {
+          path,
+          message:
+            'A copied-count Decider output without an explicit input mask cannot round-trip.',
+        };
+      }
+      if (row.mode === 'constant' && row.input !== undefined) {
+        return {
+          path,
+          message: 'A masked constant-count Decider output cannot round-trip.',
+        };
+      }
+      if (
+        row.mode === 'constant' &&
+        row.signal.kind === 'wildcard' &&
+        row.signal.value !== 'each'
+      ) {
+        return {
+          path: `${path}.signal`,
+          message: 'Only EACH supports a constant-count Decider output.',
+        };
+      }
+      if (row.mode === 'constant' && Object.is(row.value, -0)) {
+        return {
+          path: `${path}.constant`,
+          message: 'Negative zero in a Decider output cannot round-trip through source.',
+        };
+      }
+    }
+  }
+  return undefined;
 }
 
 function sourceForNetworkColor(color: 'red' | 'green'): 'R' | 'G' {
@@ -490,12 +588,39 @@ export function generateCanonicalBlueprintSource(
     });
   }
 
+  const representabilityDiagnostics: BlueprintSourceAssemblyDiagnostic[] = [];
+  for (const entity of bridge.entities) {
+    checkAborted(resolved.signal);
+    if (entity.family !== 'decider') continue;
+    const refusal = deciderRepresentabilityRefusal(entity);
+    if (refusal !== undefined) {
+      representabilityDiagnostics.push(
+        sourceDiagnostic(
+          'unsupported-source-configuration',
+          refusal.path,
+          refusal.message,
+          entity.entityNumber,
+        ),
+      );
+    }
+  }
+  if (representabilityDiagnostics.length > 0) {
+    return Object.freeze({
+      state: 'blocked',
+      analysis,
+      source: undefined,
+      correspondence: undefined,
+      diagnostics: Object.freeze(representabilityDiagnostics),
+      retainedMetadata: retained,
+    });
+  }
+
   const fileId = sourceFileId(resolved.path);
-  const builder = new BoundedSourceBuilder(resolved.maxSourceBytes);
   const networkRows: BlueprintSourceNetworkCorrespondence[] = [];
   const entityRows: BlueprintSourceEntityCorrespondence[] = [];
   const networkOrder: NetworkId[] = [];
   let hasArithmetic = false;
+  let hasDecider = false;
   for (const network of bridge.networks) {
     checkAborted(resolved.signal);
     networkOrder.push(network.network);
@@ -503,10 +628,16 @@ export function generateCanonicalBlueprintSource(
   for (const entity of bridge.entities) {
     checkAborted(resolved.signal);
     if (entity.family === 'arithmetic') hasArithmetic = true;
+    if (entity.family === 'decider') hasDecider = true;
   }
   const arithmeticPrinter = hasArithmetic
     ? createBlueprintArithmeticExpressionPrinter(networkOrder)
     : undefined;
+  const deciderPrinter = hasDecider
+    ? createBlueprintDeciderExpressionPrinter(networkOrder)
+    : undefined;
+
+  const builder = new BoundedSourceBuilder(resolved.maxSourceBytes);
   const networkNames = new Map<NetworkId, string>();
   for (let index = 0; index < bridge.networks.length; index += 1) {
     checkAborted(resolved.signal);
@@ -532,9 +663,29 @@ export function generateCanonicalBlueprintSource(
     const entity = bridge.entities[index]!;
     const name = `import_entity_${index + 1}`;
     entityNames.set(entity.entityNumber, name);
-    const expression = constructorExpression(entity, arithmeticPrinter);
     builder.append(`const ${name} = `);
     const constructionStart = builder.offset;
+    let expression: string;
+    try {
+      expression = constructorExpression(entity, arithmeticPrinter, deciderPrinter);
+    } catch (error) {
+      if (entity.family !== 'decider' || !(error instanceof TypeError)) throw error;
+      return Object.freeze({
+        state: 'blocked',
+        analysis,
+        source: undefined,
+        correspondence: undefined,
+        diagnostics: Object.freeze([
+          sourceDiagnostic(
+            'unsupported-source-configuration',
+            `${entity.path}.control_behavior`,
+            `Decider configuration is not representable in literal source: ${error.message}`,
+            entity.entityNumber,
+          ),
+        ]),
+        retainedMetadata: retained,
+      });
+    }
     builder.append(expression);
     const constructionSpan = builder.span(fileId, constructionStart);
     builder.append(';\n');

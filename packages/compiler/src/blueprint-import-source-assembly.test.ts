@@ -6,28 +6,34 @@ import { createTrustedEntityReplayContext } from './entity-replay-context.js';
 import type { EntityProfile, EntityProfileId } from './entity.js';
 import { syntheticZeroPortEntityProfile } from './entity-fixtures.js';
 import { generateCanonicalBlueprintSource } from './blueprint-import-source-assembly.js';
+import * as blueprintImportSource from './blueprint-import-source.js';
 
-import { describe, expect, test } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
-function canonicalProfile(): EntityProfile {
+afterEach(() => vi.restoreAllMocks());
+
+function canonicalProfile(family: 'constant' | 'arithmetic' | 'decider'): EntityProfile {
+  const prototypeName = `${family}-combinator`;
   return {
     ...syntheticZeroPortEntityProfile,
     ref: {
       ...syntheticZeroPortEntityProfile.ref,
-      prototypeKey: 'entity:constant-combinator',
-      profileId: 'profile:canonical-constant-assembly-test' as EntityProfileId,
+      prototypeKey: `entity:${prototypeName}`,
+      profileId: `profile:canonical-${family}-assembly-test` as EntityProfileId,
     },
-    prototypeType: 'constant-combinator',
+    prototypeType: prototypeName,
   };
 }
 
-const profile = canonicalProfile();
+const profile = canonicalProfile('constant');
+const arithmeticProfile = canonicalProfile('arithmetic');
+const deciderProfile = canonicalProfile('decider');
 const context = createTrustedEntityReplayContext({
   database: profile.ref.database,
   source: 'synthetic',
   evidenceIdentity: 'blueprint-source-assembly-test-evidence',
   policyIdentity: 'blueprint-source-assembly-test-policy',
-  profiles: [profile],
+  profiles: [profile, arithmeticProfile, deciderProfile],
 });
 
 function constantEntity(
@@ -59,16 +65,56 @@ function prepare(blueprint: Record<string, unknown>) {
 
 function prepareSource(source: string) {
   const analysis = analyzeBlueprintImport(classifyBlueprintDocument(parseLosslessJson(source)));
-  const selections = (analysis.entities ?? []).map(({ entityNumber }) => ({
+  const selections = (analysis.entities ?? []).map(({ entityNumber, name }) => ({
     entityNumber,
-    profile: profile.ref,
+    profile:
+      name === 'arithmetic-combinator'
+        ? arithmeticProfile.ref
+        : name === 'decider-combinator'
+          ? deciderProfile.ref
+          : profile.ref,
   }));
   return { analysis, selections };
 }
 
 function generate(blueprint: Record<string, unknown>, path = 'assembly-test.factorio.ts') {
-  const { analysis, selections } = prepare(blueprint);
-  return generateCanonicalBlueprintSource(analysis, selections, context, { path });
+  return generateSource(JSON.stringify({ blueprint }), path);
+}
+
+function generateSource(
+  source: string,
+  path = 'assembly-test.factorio.ts',
+  maxSourceBytes?: number,
+) {
+  const { analysis, selections } = prepareSource(source);
+  return generateCanonicalBlueprintSource(analysis, selections, context, {
+    path,
+    ...(maxSourceBytes === undefined ? {} : { maxSourceBytes }),
+  });
+}
+
+function deciderBehavior(overrides: Record<string, unknown> = {}) {
+  return {
+    decider_conditions: {
+      conditions: [
+        {
+          first_signal: { type: 'virtual', name: 'signal-🧪' },
+          first_signal_networks: { red: true, green: false },
+          comparator: '>',
+          constant: 2,
+          compare_type: 'and',
+        },
+      ],
+      outputs: [
+        {
+          signal: { type: 'virtual', name: 'signal-🧪' },
+          copy_count_from_input: true,
+          networks: { red: true, green: false },
+        },
+      ],
+      ...overrides,
+    },
+  };
 }
 
 describe('canonical blueprint full-source assembly', () => {
@@ -198,6 +244,247 @@ describe('canonical blueprint full-source assembly', () => {
       source: { text: '' },
       correspondence: { networks: [], entities: [] },
     });
+  });
+
+  test('renders constructors incrementally and stops after the source byte budget is exceeded', () => {
+    const blueprint = {
+      entities: [constantEntity(1), constantEntity(2), constantEntity(3)],
+      wires: [],
+    };
+    const baseline = generate(blueprint);
+    expect(baseline.state).toBe('complete');
+    if (baseline.state !== 'complete') throw new Error('Expected the baseline source.');
+    const first = baseline.correspondence.entities[0]!;
+    const firstExpression = baseline.source.text.slice(
+      first.constructionSpan.start,
+      first.constructionSpan.end,
+    );
+    const encoder = new TextEncoder();
+    const prefixBytes = encoder.encode(
+      baseline.source.text.slice(0, first.constructionSpan.start),
+    ).byteLength;
+    const firstExpressionBytes = encoder.encode(firstExpression).byteLength;
+    const maxSourceBytes = prefixBytes + firstExpressionBytes - 1;
+    const printConstant = vi.spyOn(blueprintImportSource, 'printBlueprintConstantExpression');
+
+    expect(() =>
+      generateSource(JSON.stringify({ blueprint }), 'budget.factorio.ts', maxSourceBytes),
+    ).toThrow(RangeError);
+    expect(printConstant).toHaveBeenCalledTimes(1);
+  });
+
+  test('assembles mixed Constant, Arithmetic, and Unicode Decider spans with exact topology', () => {
+    const result = generate({
+      entities: [
+        constantEntity(1, { position: { x: 1, y: 2 }, direction: 4 }),
+        {
+          entity_number: 2,
+          name: 'arithmetic-combinator',
+          position: { x: 3, y: 4 },
+          direction: 8,
+          control_behavior: {
+            arithmetic_conditions: {
+              first_signal: { type: 'virtual', name: 'signal-A' },
+              first_signal_networks: { red: true, green: false },
+              operation: '+',
+              second_constant: 2,
+              output_signal: { type: 'virtual', name: 'signal-B' },
+            },
+          },
+        },
+        {
+          entity_number: 3,
+          name: 'decider-combinator',
+          position: { x: 5, y: 6 },
+          direction: 12,
+          control_behavior: deciderBehavior({
+            else_outputs: [
+              {
+                signal: { name: 'iron-plate' },
+                copy_count_from_input: false,
+                constant: 2,
+              },
+            ],
+          }),
+        },
+      ],
+      wires: [
+        [1, 1, 2, 1],
+        [2, 3, 3, 1],
+        [3, 3, 1, 1],
+        [3, 4, 1, 2],
+      ],
+    });
+    expect(result.state).toBe('complete');
+    if (result.state !== 'complete') throw new Error(JSON.stringify(result.diagnostics));
+    expect(result.source.text).toContain('Decider({condition:');
+    expect(result.source.text).toContain('signal-🧪');
+    expect(result.correspondence.entities.map(({ family }) => family)).toEqual([
+      'constant',
+      'arithmetic',
+      'decider',
+    ]);
+    const expectedConstructors = [
+      ['constant', /^Constant\(/],
+      ['arithmetic', /^Arithmetic\(/],
+      ['decider', /^Decider\(/],
+    ] as const;
+    for (const [entity, [family, expression]] of result.correspondence.entities.map(
+      (entity, index) => [entity, expectedConstructors[index]!] as const,
+    )) {
+      expect(entity.family).toBe(family);
+      expect(
+        result.source.text.slice(entity.constructionSpan.start, entity.constructionSpan.end),
+      ).toMatch(expression);
+      expect(
+        result.source.text.slice(entity.placementSpan.start, entity.placementSpan.end),
+      ).toMatch(new RegExp(`^${entity.name}\\.at\\(`));
+      expect(entity.attachmentSpans).toHaveLength(1);
+      expect(
+        result.source.text.slice(entity.attachmentSpans[0]!.start, entity.attachmentSpans[0]!.end),
+      ).toMatch(/\+=|to\(/);
+    }
+    expect(
+      result.source.text.slice(
+        result.correspondence.entities[2]!.constructionSpan.start,
+        result.correspondence.entities[2]!.constructionSpan.end,
+      ),
+    ).toContain('elseOutputs:');
+  });
+
+  test('blocks known Decider source refusals without partial source or correspondence', () => {
+    const base = deciderBehavior().decider_conditions;
+    const cases: readonly {
+      readonly label: string;
+      readonly behavior: unknown;
+      readonly suffix: string;
+      readonly source?: string;
+    }[] = [
+      {
+        label: 'unmasked copy output',
+        behavior: {
+          ...base,
+          outputs: [{ signal: { name: 'signal-A' }, copy_count_from_input: true }],
+        },
+        suffix: '.outputs[0]',
+      },
+      {
+        label: 'masked constant output',
+        behavior: {
+          ...base,
+          outputs: [
+            {
+              signal: { name: 'signal-A' },
+              copy_count_from_input: false,
+              constant: 1,
+              networks: { red: true, green: false },
+            },
+          ],
+        },
+        suffix: '.outputs[0]',
+      },
+      {
+        label: 'empty explicit else branch',
+        behavior: { ...base, else_outputs: [] },
+        suffix: '.else_outputs',
+      },
+      {
+        label: 'constant wildcard output',
+        behavior: {
+          ...base,
+          outputs: [
+            {
+              signal: { type: 'virtual', name: 'signal-anything' },
+              copy_count_from_input: false,
+              constant: 1,
+            },
+          ],
+        },
+        suffix: '.outputs[0].signal',
+      },
+      {
+        label: 'no output rows',
+        behavior: { ...base, outputs: [] },
+        suffix: '.outputs',
+      },
+      {
+        label: 'negative-zero output',
+        behavior: {
+          ...base,
+          outputs: [{ signal: { name: 'signal-A' }, copy_count_from_input: false, constant: 0 }],
+        },
+        suffix: '.outputs[0].constant',
+        source: JSON.stringify({
+          blueprint: {
+            entities: [
+              {
+                ...constantEntity(1),
+                name: 'decider-combinator',
+                control_behavior: {
+                  decider_conditions: {
+                    ...base,
+                    outputs: [
+                      { signal: { name: 'signal-A' }, copy_count_from_input: false, constant: -0 },
+                    ],
+                  },
+                },
+              },
+            ],
+            wires: [],
+          },
+        }).replace('"constant":0', '"constant":-0'),
+      },
+      {
+        label: 'negative-zero condition',
+        behavior: base,
+        suffix: '.conditions[0].constant',
+        source: JSON.stringify({
+          blueprint: {
+            entities: [
+              {
+                ...constantEntity(1),
+                name: 'decider-combinator',
+                control_behavior: {
+                  decider_conditions: {
+                    ...base,
+                    conditions: [{ ...base.conditions[0], constant: -0 }],
+                  },
+                },
+              },
+            ],
+            wires: [],
+          },
+        }).replace('"constant":0', '"constant":-0'),
+      },
+    ];
+    for (const item of cases) {
+      const source =
+        item.source ??
+        JSON.stringify({
+          blueprint: {
+            entities: [
+              {
+                ...constantEntity(1),
+                name: 'decider-combinator',
+                control_behavior: {
+                  decider_conditions: item.behavior,
+                },
+              },
+            ],
+            wires: [],
+          },
+        });
+      const result = generateSource(source);
+      expect(result.state, item.label).toBe('blocked');
+      expect(result.source, item.label).toBeUndefined();
+      expect(result.correspondence, item.label).toBeUndefined();
+      expect(result.diagnostics, item.label).toContainEqual(
+        expect.objectContaining({
+          category: 'unsupported-source-configuration',
+          path: `$.blueprint.entities[0].control_behavior.decider_conditions${item.suffix}`,
+        }),
+      );
+    }
   });
 
   test('returns immutable UTF-16 source correspondence and enforces byte limits atomically', () => {
