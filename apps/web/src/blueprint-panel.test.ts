@@ -251,12 +251,6 @@ output += Constant({ sections: [{ multiplier: scale, filters: [{ signal: A, valu
 
   test.each([
     [
-      'Constant filter',
-      '',
-      'Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] })',
-      5,
-    ],
-    [
       'Arithmetic output',
       '',
       "Arithmetic({ left: 2, operation: 'add', right: 5, output: channel })",
@@ -460,7 +454,7 @@ describe('blueprint panel browser wiring contract', () => {
     expect(checkbox).toContain('type="checkbox"');
     expect(checkbox).not.toContain('checked');
     expect(html).toContain('for="blueprint-parameters"');
-    expect(html).toContain('Include numeric parameters');
+    expect(html).toContain('Include parameters');
     expect(css.match(/\.blueprint-actions\s*\{([^}]+)\}/)?.[1]).toContain('flex-wrap: wrap');
     expect(css).toContain('.blueprint-parameter-option');
   });

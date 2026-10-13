@@ -18,7 +18,8 @@ The existing compiler Worker `parse` request accepts optional cloneable
 `blueprintExport: { parameters?: boolean; label?: string }` data. Omitting it
 preserves the previous response shape and performs no extra native projection.
 An empty record requests concrete JSON; `parameters: true` requests the same
-supported numeric metadata as the CLI, from the exact Worker-local compilation.
+supported numeric and bounded Constant Signal metadata as the CLI, from the
+exact Worker-local compilation.
 With no declarations, both requested modes return an ordinary concrete document.
 The default label is `CombLang generated circuit` and the expansion bound remains
 1024 rows. Explicit `false` and an empty label are accepted.
@@ -50,7 +51,7 @@ or trusted replay authority. Opaque native formula strings are ordinary document
 data, not executable expressions.
 
 Export happens before local capture is stripped, with a single source execution.
-Failure of an explicit numeric/native export returns diagnostics and no fallback
+Failure of an explicit native parameter export returns diagnostics and no fallback
 document, without adding errors to an otherwise successful compilation pipeline.
 Its concrete Plan/ResolvedCircuit remains usable for tests and simulation. In
 particular, a derived Decider threshold can be bound locally but is not a native

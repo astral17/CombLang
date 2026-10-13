@@ -1006,16 +1006,72 @@ output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-
     expect(JSON.parse(String(log.mock.calls[0]?.[0])).blueprint).not.toHaveProperty('parameters');
   });
 
+  test('exports native Constant Signal parameters through the existing opt-in CLI route', async () => {
+    const { environment } = await parameterHost();
+    const path =
+      await sourceFile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: channel, value: 5 },
+  { signal: Signal('virtual', 'signal-A'), value: 13 },
+  { signal: Signal('item', 'iron-plate'), value: 7 },
+] }] });`);
+    const nativePath = join(dirname(path), 'constant-signal-parameters.json');
+    const concretePath = join(dirname(path), 'constant-signal-concrete.json');
+    const { log, error } = capture();
+    expect(
+      await run(
+        ['blueprint', 'export', '--parameters', '--json', '--output', nativePath, path],
+        environment,
+      ),
+    ).toBe(0);
+    const native = JSON.parse(await readFile(nativePath, 'utf8'));
+    expect(native.blueprint.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Channel',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    expect(native.blueprint.entities[0].control_behavior.sections.sections[0].filters).toEqual([
+      { index: 1, name: 'parameter-0', quality: 'normal', comparator: '=', count: 5 },
+      { index: 2, name: 'parameter-0', quality: 'normal', comparator: '=', count: 13 },
+      { index: 3, name: 'iron-plate', quality: 'normal', comparator: '=', count: 7 },
+    ]);
+
+    expect(
+      await run(['blueprint', 'export', '--json', '--output', concretePath, path], environment),
+    ).toBe(0);
+    const concrete = JSON.parse(await readFile(concretePath, 'utf8'));
+    expect(concrete.blueprint).not.toHaveProperty('parameters');
+    expect(concrete.blueprint.entities[0].control_behavior.sections.sections[0].filters).toEqual([
+      {
+        index: 1,
+        type: 'virtual',
+        name: 'signal-A',
+        quality: 'normal',
+        comparator: '=',
+        count: 5,
+      },
+      {
+        index: 2,
+        type: 'virtual',
+        name: 'signal-A',
+        quality: 'normal',
+        comparator: '=',
+        count: 13,
+      },
+      { index: 3, name: 'iron-plate', quality: 'normal', comparator: '=', count: 7 },
+    ]);
+    expect(error).not.toHaveBeenCalled();
+  });
+
   test.each([
     [
       "const amount = Param.number('Scale', 1);",
       'Constant({ sections: [{ multiplier: amount, filters: [{ signal: A, value: 3 }] }] })',
       '$.constantTemplates[0].sections[0].multiplier',
-    ],
-    [
-      "const amount = Param.signal('Channel', A);",
-      'Constant({ sections: [{ filters: [{ signal: amount, value: 5 }] }] })',
-      '$.parameters[0]',
     ],
     [
       "const amount = Param.signal('Channel', A);",

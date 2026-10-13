@@ -61,8 +61,8 @@ Entity-capable prototype environment.
 Default export uses concrete defaults and emits no parameter metadata, even
 when the source declares parameters. The label defaults to `CombLang generated
 circuit`; Decider expansion retains the 1024-row limit. Explicit `--parameters`
-requests numeric native metadata from that same owning compilation; it never
-falls back to concrete output after rejection. Without declarations, both modes
+requests supported numeric and bounded Constant Signal native metadata from
+that same owning compilation; it never falls back to concrete output after rejection. Without declarations, both modes
 produce an ordinary document without empty parameter rows. Concrete
 `--overrides` mode accepts only an empty array when there are no declarations.
 
@@ -154,9 +154,12 @@ export and native-template mode use original defaults; concrete `--overrides`
 export uses the chosen bound values. Neither mode evaluates formula metadata.
 Numeric `variable`, `formula`
 and `dependent` fields are preserved opaquely. Native formula validity,
-original-value substitution and placement are not verified. Signal declarations,
-unsupported slots/expressions, unused parameters, ambiguous equal originals and
-non-int32 originals fail explicitly in `--parameters` native-metadata mode. See
+original-value substitution and placement are not verified. Signal parameters
+are supported only for concrete virtual defaults with normal quality in direct
+Constant filter Signal slots, subject to the bounded placeholder and circuit
+rules in the Param reference. Other Signal slots/defaults, unsupported
+expressions, unused parameters, ambiguous equal originals and non-int32 numeric
+originals fail explicitly in `--parameters` native-metadata mode. See
 the [supported source slots](api/parameters.md#supported-fields) and
 [native-metadata export limits](api/parameters.md#formula-metadata-and-export-modes).
 
@@ -260,15 +263,15 @@ browser-local binding behavior does not establish native Factorio acceptance.
 
 ### Web blueprint panel
 
-The labelled **Include numeric parameters** checkbox is off by default and is
+The labelled **Include parameters** checkbox is off by default and is
 not saved across reloads. Turning it on recompiles the current source through
 the existing Worker and displays its exact native export document. **Copy
 blueprint** copies that displayed readable JSON, not an exchange string or an
 export-result envelope. With no declarations, the result is ordinary concrete
 JSON in either mode. Turning the checkbox off restores concrete artifact export.
 
-Only the supported native numeric slots described in the Param API are exported. Unsupported
-Signal parameters or other export failures show located diagnostics in the
+Only the supported native numeric slots and bounded Constant Signal role
+described in the Param API are exported. Unsupported Signal parameters or other export failures show located diagnostics in the
 blueprint panel and disable copy; a missing Worker export result is also an
 explicit unavailable error, never a concrete fallback. Successful compilation
 still permits concrete simulation and circuit tests. Pending recompilation,
@@ -276,7 +279,7 @@ source/profile errors and mode changes immediately clear the previous copy
 payload. Changing the checkbox does not edit source or test drafts; recompilation
 uses the existing fresh-simulation behavior rather than migrating tick state.
 
-While **Include numeric parameters** is checked, Apply/Reset are disabled: this
+While **Include parameters** is checked, Apply/Reset are disabled: this
 mode exports the original source template, rather than a bound circuit. Turning it
 on recompiles source and resets local parameter edits to the declaration defaults.
 Turn it off to edit and bind concrete values again. Native formula strings are

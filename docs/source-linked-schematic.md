@@ -26,16 +26,21 @@ Cross-revision edits need re-resolved anchors and explicit ambiguity checks.
 
 Support automatically carrying associated `//` comments into combinator
 descriptions, without treating comment text as executable instructions. Collect
-comments from the original source before TS erasure. Define and test attachment
-rules for preceding comment blocks and same-line trailing comments; do not simply
-copy the nearest comment to every entity on a line.
+comments from the original source before TS erasure. Associate only a trailing
+`//` comment on the creation site's line and a `//` comment on the immediately
+preceding physical line. For multiline expressions, use the line containing the
+creation site's first token, not a later `.to`, `.at`, or closing bracket. Blank
+lines, intervening code, and block comments break association; do not collect an
+arbitrary preceding comment block or copy the nearest comment to every entity.
+If both permitted comments exist, join the preceding text and trailing text with
+one newline.
 
 For a unique producer site, its associated comment can describe every generated
 instance, including instances from a loop. Shared text does not make those
 instances identical. Several producers on one statement, intermediate arithmetic
 nodes, function header comments, and mixed declaration lists need an explicit
 association policy before automatic export. Unassociated comments must not be
-silently reassigned. Preserve multiline order and readable text; an eventual
+silently reassigned. Preserve the associated text's order and readability; an eventual
 explicit description takes precedence over inferred comments.
 
 Descriptions are entity metadata, not circuit signals or executable configuration.

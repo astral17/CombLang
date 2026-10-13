@@ -342,7 +342,7 @@ output += Arithmetic({ left: Each(input), operation: 'add', right: 5,
       'utf8',
     );
     const section = page.match(
-      /### Arithmetic output Signal parameters([\s\S]*?)### Numeric metadata/,
+      /### Arithmetic output Signal parameters([\s\S]*?)(?=\r?\n### )/,
     )?.[1];
     const examples = [...section!.matchAll(/```ts\r?\n([\s\S]*?)```/g)].map((match) => match[1]!);
     expect(examples).toHaveLength(2);

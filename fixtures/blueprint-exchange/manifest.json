@@ -76,6 +76,54 @@
         "hasEntities": true,
         "hasWires": false
       }
+    },
+    {
+      "id": "user-supplied-factorio-2.1.21-signal-before",
+      "origin": "factorio-export",
+      "factorioVersion": "2.1.21",
+      "environment": "User-supplied BEFORE/PARAMETERIZED/PLACED exchanges; Factorio 2.1.21 Space Age reported; mods unspecified; no generated-artifact game acceptance",
+      "path": "factorio-2.1.21/signal-before.txt",
+      "encodedExchangeSha256": "0efeba666839d9faaa0f6cead90faeb2951788d91a1eea2ce21964428ab9a105",
+      "decodedJsonSha256": "45a9ce96f8733b1df7cda93abaec7eb42278676d0d17d6fbdaa5e9b294c259a5",
+      "reviewStatus": "signal-transition-fields-reviewed",
+      "expectedSemanticHeader": {
+        "item": "blueprint",
+        "version": 562954249764875,
+        "hasEntities": true,
+        "hasWires": false
+      }
+    },
+    {
+      "id": "user-supplied-factorio-2.1.21-signal-parameterized",
+      "origin": "factorio-export",
+      "factorioVersion": "2.1.21",
+      "environment": "User-supplied BEFORE/PARAMETERIZED/PLACED exchanges; Factorio 2.1.21 Space Age reported; mods unspecified; no generated-artifact game acceptance",
+      "path": "factorio-2.1.21/signal-parameterized.txt",
+      "encodedExchangeSha256": "2850ce55d614df10257fab20c49344075a0d447386dde6624a1a4bf34a124e5f",
+      "decodedJsonSha256": "12c14fade95daee3e4fbde09a8a04eec0504f70ca5b577f1172ffe5418f852cf",
+      "reviewStatus": "signal-transition-fields-reviewed",
+      "expectedSemanticHeader": {
+        "item": "blueprint",
+        "version": 562954249764875,
+        "hasEntities": true,
+        "hasWires": false
+      }
+    },
+    {
+      "id": "user-supplied-factorio-2.1.21-signal-placed",
+      "origin": "factorio-export",
+      "factorioVersion": "2.1.21",
+      "environment": "User-supplied BEFORE/PARAMETERIZED/PLACED exchanges; Factorio 2.1.21 Space Age reported; mods unspecified; no generated-artifact game acceptance",
+      "path": "factorio-2.1.21/signal-placed.txt",
+      "encodedExchangeSha256": "c0754738465462a110435f7504256302483ce3e13a5b6332facae0ec31c1e928",
+      "decodedJsonSha256": "e5d44912815c2f1a4fe6c068938795f19db8ab83b62c4014e5125771c2e1aebb",
+      "reviewStatus": "signal-transition-fields-reviewed",
+      "expectedSemanticHeader": {
+        "item": "blueprint",
+        "version": 562954249764875,
+        "hasEntities": true,
+        "hasWires": false
+      }
     }
   ],
   "externalEvidence": {

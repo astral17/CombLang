@@ -326,11 +326,54 @@ This is concrete binding, also available through the
 [browser parameter controls](blueprint-json.md#optional-worker-local-parameter-binding),
 not native ID replacement. Ordinary export of the original compilation uses
 defaults; the browser's concrete bound preview uses its selected values.
-Explicit native parameter metadata export
-still rejects Signal declarations with located `CP1002`, including compilations
-with otherwise valid numeric parameters; there is no concrete fallback in that
-explicit mode. Worker compilation/simulation/tests remain usable after this
-separate export failure.
+Native ID replacement for an Arithmetic output remains unsupported. A separate,
+bounded native Signal path exists only for direct Constant filter Signal slots;
+see the next section. Worker compilation/simulation/tests remain usable when a
+requested native export is outside that supported slice.
+
+### Constant filter Signal parameters
+
+The explicit native parameter exporter supports a Signal declaration only when
+its default is a concrete virtual Signal with omitted or normal quality and its
+handle occupies a Constant filter Signal slot. Requires the existing exact
+Constant provisioning capabilities:
+
+```ts
+const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const output = new Network();
+output += Constant({
+  sections: [
+    {
+      filters: [
+        { signal: channel, value: 5 },
+        { signal: Signal('virtual', 'signal-A'), value: 13 },
+        { signal: Signal('item', 'iron-plate'), value: 7 },
+        { signal: Signal('fluid', 'water'), value: 11 },
+      ],
+    },
+  ],
+});
+```
+
+Local binding remains nominal: overriding `channel` changes its marked filter
+row(s), not an ordinary equal A filter. Native metadata is based on source
+identity, so native export replaces every equal A filter in supported Constant
+roles with the allocated first-free `parameter-0` through `parameter-9` name.
+The filter placeholder omits `type: 'virtual'`; metadata records the declaration
+label and `quality-condition: { quality: 'normal', comparator: '=' }`. Counts,
+other rows, sections, placement, wires and topology stay unchanged. The source
+default remains concrete and is not persisted as a fabricated native field.
+
+Existing Constant filter names across types/qualities reserve placeholder names.
+Exhaustion, unused Signal declarations, distinct handles with the same
+normalized original, a same-name namespace/quality conflict, non-virtual or
+non-normal defaults, virtual wildcards and Signal use in another slot fail
+atomically with located `CP1002`. Any other producer kind or unlinked physical
+Entity also rejects a source compilation that declares a Signal parameter.
+Numeric-only exports and ordinary concrete binding are unaffected. The reviewed
+input transition is user-supplied Factorio 2.1.21 Space Age evidence with mods
+unspecified; generated-output game acceptance, arbitrary wires and browser or
+mobile native placement have not been established.
 
 ### Numeric metadata
 
@@ -486,21 +529,22 @@ may replace those literals too. This exporter does not promise their nominal
 independence in Factorio, infer replacement scope from every JSON number, or
 claim verified native placement behavior.
 
-The CLI `blueprint export --parameters` exposes this host-local numeric metadata
+The CLI `blueprint export --parameters` exposes this host-local native metadata
 export; the compiler Worker can request the same document via opt-in
 `blueprintExport: { parameters: true }` result data. Worker-local capture/authority
 is not transported, and export diagnostics are separate from successful concrete
 compilation. Ordinary CLI export and default web preview/copy emit concrete
-configuration. The web blueprint panel's **Include numeric parameters** checkbox
+configuration. The web blueprint panel's **Include parameters** checkbox
 opts into that Worker document; export failures disable copy without invalidating
 successful concrete simulation or tests. The checkbox defaults off and is not
 persisted. It does not change source/test drafts or provide overrides.
 See [source export CLI](blueprint-json.md#source-export-cli) for prototype selection
 and file/stdout conventions. Existing parameter-free export bytes are
 unchanged. This native-export subset preserves explicit numeric formula strings
-but does not add native parameter indices, recipe/property dependencies or signal
-placeholders. Concrete Worker binding and the parameter controls are separate
-implemented features; they do not enable those native semantics. See
+and bounded Constant Signal placeholders, but does not add native parameter
+indices, recipe/property dependencies, other Signal slots, native formulas or
+multiplier substitution. Concrete Worker binding and the parameter controls are
+separate implemented features; they do not enable those native semantics. See
 [optional Worker result export](blueprint-json.md#optional-worker-result-export)
 and [concrete Worker binding](blueprint-json.md#optional-worker-local-parameter-binding)
 for their request/result contracts. Simulation remains concrete; native placement, substitution and

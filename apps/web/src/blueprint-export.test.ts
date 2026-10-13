@@ -166,12 +166,84 @@ describe('Worker-local owning blueprint projection', () => {
     }
   });
 
+  test('Worker opt-in exports Constant Signal placeholders while ordinary requests keep concrete defaults', async () => {
+    const { environment } = await parameterHost();
+    const runtime = new CompilerWorkerRuntime({
+      resolveEntityReplayContext: () => ({
+        ...environment,
+        entityPrototypeResolver: entityPrototypeResolverFromProvider(environment.prototypes),
+      }),
+    });
+    const file = {
+      path: 'constant-signal-worker.factorio.ts',
+      text: `const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: channel, value: 5 },
+  { signal: Signal('virtual', 'signal-A'), value: 13 },
+  { signal: Signal('item', 'iron-plate'), value: 7 },
+] }] });`,
+    };
+    const request = {
+      kind: 'parse' as const,
+      revision: 60,
+      file,
+      entityReplayContext: entityReplayContextTransport(environment.trustedEntityReplayContext),
+    };
+    const exported = await runtime.handle({ ...request, blueprintExport: { parameters: true } });
+    expect(exported.result.pipelineDiagnostics).toEqual([]);
+    expect(exported.result.blueprintExport?.ok).toBe(true);
+    if (!exported.result.blueprintExport?.ok) throw new Error('Worker Signal export failed.');
+    expect(exported.result.blueprintExport.document.blueprint.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Channel',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    expect(exported.result.blueprintExport.document.blueprint.entities[0]).toMatchObject({
+      control_behavior: {
+        sections: {
+          sections: [
+            {
+              filters: [
+                { name: 'parameter-0', count: 5 },
+                { name: 'parameter-0', count: 13 },
+                { name: 'iron-plate', count: 7 },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    const concrete = await runtime.handle({
+      ...request,
+      revision: 61,
+      blueprintExport: { parameters: false },
+    });
+    expect(concrete.result.blueprintExport?.ok).toBe(true);
+    if (!concrete.result.blueprintExport?.ok) throw new Error('Concrete Worker export failed.');
+    expect(concrete.result.blueprintExport.document.blueprint).not.toHaveProperty('parameters');
+    expect(concrete.result.blueprintExport.document.blueprint.entities[0]).toMatchObject({
+      control_behavior: {
+        sections: {
+          sections: [
+            {
+              filters: [
+                { type: 'virtual', name: 'signal-A', count: 5 },
+                { type: 'virtual', name: 'signal-A', count: 13 },
+                { name: 'iron-plate', count: 7 },
+              ],
+            },
+          ],
+        },
+      },
+    });
+    expect(concrete.result).not.toHaveProperty('parameters');
+  });
+
   test.each([
-    [
-      "const amount = Param.signal('Channel', A);",
-      'Constant({ sections: [{ filters: [{ signal: amount, value: 5 }] }] })',
-      '$.parameters[0]',
-    ],
     [
       "const amount = Param.number('Unused', 5);",
       'Constant({ sections: [{ filters: [{ signal: A, value: 3 }] }] })',
@@ -463,8 +535,11 @@ const output = new Network(); output += Constant({ sections: [{ filters: [{ sign
       file: {
         path: 'worker-rejected.factorio.ts',
         text: `const A = Signal('virtual', 'signal-A');
-const channel = Param.signal('Channel', A); const output = new Network();
-output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });`,
+const channel = Param.signal('Channel', A);
+const extra = Entity('constant-combinator');
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });
+void extra;`,
       },
       entityReplayContext: entityReplayContextTransport(environment.trustedEntityReplayContext),
     };

@@ -1,6 +1,7 @@
 node_modules
 dist
 coverage
+workflow
 package-lock.json
 tools/factorio-api/fixtures/*/runtime-api.json
 tools/factorio-api/fixtures/*/prototype-api.json

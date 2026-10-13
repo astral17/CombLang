@@ -94,10 +94,11 @@ describe('author API documentation', () => {
   test.each([
     [0, 2],
     [1, 1],
-    [2, 2],
-    [3, 1],
+    [2, 1],
+    [3, 2],
+    [4, 1],
   ])('compiles literal parameter example %i with %i physical devices', async (index, count) => {
-    expect(blocks('parameters')).toHaveLength(4);
+    expect(blocks('parameters')).toHaveLength(5);
     const text = blocks('parameters')[index];
     expect(text).not.toMatch(/\b(import|await)\s/);
     expect(compile(text, await bundled).resolvedCircuit.ir.producers).toHaveLength(count);
@@ -116,7 +117,7 @@ tick(); expectSignal(output, B).toBe(7);`,
   });
 
   test('matches local expression defaults, bound timing and concrete JSON', async () => {
-    const compilation = compile(blocks('parameters')[2], await bundled);
+    const compilation = compile(blocks('parameters')[3], await bundled);
     expect(compilation.resolvedCircuit.ir.producers).toHaveLength(2);
     run(
       compilation,
@@ -156,7 +157,7 @@ tick(); expectSignal(output, A).toBe(15);`,
   });
 
   test('executes, binds and exports the direct Constant expression example', async () => {
-    const compilation = compile(blocks('parameters')[3], await bundled);
+    const compilation = compile(blocks('parameters')[4], await bundled);
     run(
       compilation,
       `tick();
@@ -231,7 +232,7 @@ tick(); expectSignal(network('output'), Signal('virtual', 'signal-A')).toBe(12);
   });
 
   test('keeps literal formula metadata opaque while defaults drive the documented counts', async () => {
-    const compilation = compile(blocks('parameters')[1], await bundled);
+    const compilation = compile(blocks('parameters')[2], await bundled);
     run(
       compilation,
       `tick();
@@ -253,6 +254,41 @@ expectSignal(network('output'), Signal('virtual', 'signal-B')).toBe(111);`,
     expect(generateBlueprintJson(compilation.resolvedCircuit.ir).blueprint).not.toHaveProperty(
       'parameters',
     );
+  });
+
+  test('exports the literal Constant Signal example and keeps local overrides nominal', async () => {
+    const compilation = compile(blocks('parameters')[1], await bundled);
+    const native = exportSourceCompilationNativeBlueprint(compilation, {
+      label: 'Documented Constant Signal',
+      maxDeciderConditionRows: 1024,
+    });
+    expect(native.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Channel',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    expect(native.entities[0].native.control_behavior.sections.sections[0].filters).toEqual([
+      { index: 1, name: 'parameter-0', quality: 'normal', comparator: '=', count: 5 },
+      { index: 2, name: 'parameter-0', quality: 'normal', comparator: '=', count: 13 },
+      { index: 3, name: 'iron-plate', quality: 'normal', comparator: '=', count: 7 },
+      { index: 4, type: 'fluid', name: 'water', quality: 'normal', comparator: '=', count: 11 },
+    ]);
+    const session = createSourceParameterBindingSession(compilation);
+    const bound = session.bind([{ id: 0, value: { type: 'virtual', name: 'signal-B' } }]);
+    expect(
+      runResolvedDirectPlanTests(
+        bound.plan,
+        bound.resolvedCircuit,
+        `test('nominal documented Signal', ({ network, tick, expectSignal }) => {
+  tick();
+  expectSignal(network('output'), Signal('virtual', 'signal-A')).toBe(13);
+  expectSignal(network('output'), Signal('virtual', 'signal-B')).toBe(5);
+});`,
+      ),
+    ).toMatchObject({ passed: 1, failed: 0 });
   });
 
   test.each(['amount / 1;', '5 * result;', 'input + amount;', 'amount.defaultValue;'])(

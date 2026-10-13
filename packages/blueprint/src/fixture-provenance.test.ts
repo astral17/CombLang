@@ -50,6 +50,28 @@ async function readExchange(url: URL): Promise<string> {
 }
 
 describe('blueprint fixture provenance', () => {
+  test.each(manifest.fixtures.filter((fixture) => fixture.factorioVersion === '2.1.21'))(
+    'pins the supplied Constant Signal transition fixture $id without claiming generated acceptance',
+    async (fixture) => {
+      expect(fixture).toMatchObject({
+        origin: 'factorio-export',
+        reviewStatus: 'signal-transition-fields-reviewed',
+      });
+      expect(fixture.expectedSemanticHeader).toBeDefined();
+      const exchange = await readExchange(new URL(fixture.path, fixtureRoot));
+      expect(sha256(exchange)).toBe(fixture.encodedExchangeSha256);
+      const document = await decodeBlueprintExchange(exchange);
+      const json = stringifyLosslessJson(document);
+      expect(sha256(json)).toBe(fixture.decodedJsonSha256);
+      const projection = classifyBlueprintDocument(document);
+      expect(projection.kind).toBe('blueprint');
+      if (projection.kind !== 'blueprint') throw new Error('Expected blueprint root.');
+      expect(projection.semantic).toMatchObject(fixture.expectedSemanticHeader!);
+      const roundTrip = await decodeBlueprintExchange(await encodeBlueprintExchange(document));
+      expect(stringifyLosslessJson(roundTrip)).toBe(json);
+    },
+  );
+
   test.each(manifest.fixtures.filter((fixture) => fixture.factorioVersion === '2.1.17'))(
     'preserves the independent parameter document $id',
     async (fixture) => {
@@ -88,6 +110,9 @@ describe('blueprint fixture provenance', () => {
       'factorio-2.1.17/dependency-chain.txt',
       'factorio-2.1.17/display-quality.txt',
       'factorio-2.1.17/recipe-formulas.txt',
+      'factorio-2.1.21/signal-before.txt',
+      'factorio-2.1.21/signal-parameterized.txt',
+      'factorio-2.1.21/signal-placed.txt',
     ]);
     expect(manifest.externalEvidence).toMatchObject({
       status: 'codec-framing-reviewed',

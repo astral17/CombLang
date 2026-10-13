@@ -89,7 +89,7 @@ output += Arithmetic({ left: amount, operation: 'add', right: amount, output: A 
 output += Decider({ condition: input[A] > amount, outputs: [input[A]], elseOutputs: [1 * A] });
 output += Selector({ input, operation: 'select', index: amount });`;
 
-describe('owning source native numeric parameter export', () => {
+describe('owning source native parameter export', () => {
   test.each([false, true])(
     'Arithmetic Signal output still rejects native metadata (mixed numeric: %s) without losing concrete defaults',
     (mixed) => {
@@ -449,6 +449,304 @@ output += ${device};`);
     expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
   });
 
+  test('projects authenticated Constant Signal defaults to placeholders without changing local binding', () => {
+    const key = '__comblang_native_signal_export_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const existed = Object.hasOwn(globals, key);
+    const previous = globals[key];
+    globals[key] = 0;
+    try {
+      const compilation = compile(`globalThis.${key} += 1;
+const amount = Param.number('Amount', 5);
+const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: channel, value: amount },
+  { signal: channel, value: amount },
+  { signal: Signal('item', 'iron-plate'), value: 7 },
+  { signal: Signal('fluid', 'water'), value: 11 },
+] }] });
+output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-A'), value: 13 }] }] });
+output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-A'), value: 17 }] }] });`);
+      const artifact = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+      const declarations = sourceApi.listSourceCompilationParameters(compilation);
+      const localParameter = declarations.find(({ kind }) => kind === 'signal')!.parameter;
+      const local = sourceApi.bindSourceCompilationParameters(compilation, [
+        { parameter: localParameter, value: signal('virtual', 'signal-B') },
+      ]);
+      const filtersByEntity = (
+        entities: ReturnType<typeof generateBlueprintJson>['blueprint']['entities'],
+      ) =>
+        entities.map(
+          (entity) =>
+            (
+              entity.control_behavior as {
+                sections: {
+                  sections: { filters: { type?: string; name: string; count: number }[] }[];
+                };
+              }
+            ).sections.sections[0]!.filters,
+        );
+      const localRows = filtersByEntity(generateBlueprintJson(local).blueprint.entities);
+      expect(
+        localRows.map((rows) => rows.map(({ type, name, count }) => ({ type, name, count }))),
+      ).toEqual([
+        [
+          { type: 'virtual', name: 'signal-B', count: 5 },
+          { type: 'virtual', name: 'signal-B', count: 5 },
+          { type: undefined, name: 'iron-plate', count: 7 },
+          { type: 'fluid', name: 'water', count: 11 },
+        ],
+        [{ type: 'virtual', name: 'signal-A', count: 13 }],
+        [{ type: 'virtual', name: 'signal-A', count: 17 }],
+      ]);
+
+      const defaultPair = sourceApi.bindSourceCompilationCircuit(compilation);
+      const defaultRows = filtersByEntity(
+        generateBlueprintJson(defaultPair.resolvedCircuit.ir).blueprint.entities,
+      );
+      expect(
+        defaultRows.map((rows) => rows.map(({ type, name, count }) => ({ type, name, count }))),
+      ).toEqual([
+        [
+          { type: 'virtual', name: 'signal-A', count: 5 },
+          { type: 'virtual', name: 'signal-A', count: 5 },
+          { type: undefined, name: 'iron-plate', count: 7 },
+          { type: 'fluid', name: 'water', count: 11 },
+        ],
+        [{ type: 'virtual', name: 'signal-A', count: 13 }],
+        [{ type: 'virtual', name: 'signal-A', count: 17 }],
+      ]);
+
+      expect(() =>
+        sourceApi.exportSourceCompilationNativeBlueprint(compilation, {
+          ...options,
+          maxDeciderConditionRows: 0,
+        }),
+      ).toThrow(RangeError);
+      expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(artifact);
+      const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      const retry = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      expect(retry).toEqual(native);
+      expect(globals[key]).toBe(1);
+      expect(native.parameters).toEqual([
+        { type: 'number', number: '5', name: 'Amount' },
+        {
+          type: 'id',
+          id: 'parameter-0',
+          name: 'Channel',
+          'quality-condition': { quality: 'normal', comparator: '=' },
+        },
+      ]);
+      const rows = filtersByEntity(emitNativeBlueprintJson(native).blueprint.entities);
+      expect(
+        rows.map((entityRows) =>
+          entityRows.map(({ type, name, count }) => ({ type, name, count })),
+        ),
+      ).toEqual([
+        [
+          { type: undefined, name: 'parameter-0', count: 5 },
+          { type: undefined, name: 'parameter-0', count: 5 },
+          { type: undefined, name: 'iron-plate', count: 7 },
+          { type: 'fluid', name: 'water', count: 11 },
+        ],
+        [{ type: undefined, name: 'parameter-0', count: 13 }],
+        [{ type: undefined, name: 'parameter-0', count: 17 }],
+      ]);
+      expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(artifact);
+      expect(native.wires).toEqual(
+        buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).wires,
+      );
+      expect(native.entities).toHaveLength(3);
+    } finally {
+      if (existed) globals[key] = previous;
+      else delete globals[key];
+    }
+  });
+
+  test('allocates distinct Signal originals in source order and changes only Constant identities', () => {
+    const compilation =
+      compile(`const first = Param.signal('First', Signal('virtual', 'signal-B', 'normal'));
+const amount = Param.number('Amount', 19, { variable: 'amount', formula: '2 + 17' });
+const second = Param.signal('Second', Signal('virtual', 'signal-A'));
+const output = new Network();
+output += Constant({ isOn: false, sections: [
+  { active: false, multiplier: 1.5, group: 'Stored', filters: [
+    { signal: second, value: amount },
+    { signal: Signal('item', 'parameter-0'), value: 3 },
+    { signal: Signal('item', 'iron-plate', 'rare'), value: 7 },
+  ] },
+  { multiplier: -2, filters: [
+    { signal: first, value: 13 },
+    { signal: Signal('virtual', 'signal-A', 'normal'), value: 5 },
+  ] },
+] }).at(4, -2);
+output += Constant({ sections: [{ filters: [
+  { signal: Signal('virtual', 'signal-B'), value: 11 },
+] }] }).at(-4, 2);`);
+    const artifact = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    expect(native.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-1',
+        name: 'First',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      { type: 'number', number: '19', name: 'Amount', variable: 'amount', formula: '2 + 17' },
+      {
+        type: 'id',
+        id: 'parameter-2',
+        name: 'Second',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    const document = emitNativeBlueprintJson(native);
+    const restored = structuredClone(document);
+    const seen: string[] = [];
+    for (const entity of restored.blueprint.entities) {
+      const behavior = entity.control_behavior as {
+        sections: { sections: { filters: { name: string; type?: string }[] }[] };
+      };
+      for (const section of behavior.sections.sections) {
+        for (const filter of section.filters) {
+          if (filter.name !== 'parameter-1' && filter.name !== 'parameter-2') continue;
+          seen.push(filter.name);
+          expect(filter).not.toHaveProperty('type');
+          filter.name = filter.name === 'parameter-1' ? 'signal-B' : 'signal-A';
+          filter.type = 'virtual';
+        }
+      }
+    }
+    expect(seen).toEqual(['parameter-2', 'parameter-1', 'parameter-2', 'parameter-1']);
+    const { parameters: _parameters, ...restoredBlueprint } = restored.blueprint;
+    expect(restoredBlueprint).toEqual(
+      emitNativeBlueprintJson(buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options))
+        .blueprint,
+    );
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(artifact);
+    expect(Object.isFrozen(native)).toBe(true);
+    expect(Object.isFrozen(native.entities)).toBe(true);
+    expect(Object.isFrozen(native.entities[0]!.native.control_behavior)).toBe(true);
+    expect(sourceApi.exportSourceCompilationNativeBlueprint(compilation, options)).toEqual(native);
+  });
+
+  test('skips occupied Constant filter names and rejects exhaustion of the reviewed placeholder pool', () => {
+    const skipped = compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: Signal('item', 'parameter-0'), value: 1 },
+  { signal: Signal('fluid', 'parameter-2'), value: 2 },
+] }] });
+output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });`);
+    expect(sourceApi.exportSourceCompilationNativeBlueprint(skipped, options).parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-1',
+        name: 'Channel',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+
+    const occupiedConstants = Array.from(
+      { length: 10 },
+      (_, index) =>
+        `output += Constant({ sections: [{ filters: [{ signal: Signal('item', 'parameter-${index}'), value: ${index} }] }] });`,
+    ).join('\n');
+    const exhausted =
+      compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const output = new Network();
+${occupiedConstants}
+output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });`);
+    const artifact = structuredClone(sourceApi.sourceCompilationArtifact(exhausted));
+    expect(exportFailure(exhausted)).toMatchObject({
+      code: 'CP1002',
+      path: '$.parameters[0]',
+      span: sourceApi.listSourceCompilationParameters(exhausted)[0]!.source,
+      message: expect.stringContaining('parameter-9'),
+    });
+    expect(sourceApi.sourceCompilationArtifact(exhausted)).toEqual(artifact);
+  });
+
+  test.each([
+    ["Signal('item', 'iron-plate')", '$.parameters[0].defaultValue'],
+    ["Signal('virtual', 'signal-A', 'legendary')", '$.parameters[0].defaultValue'],
+    ["Signal('virtual', 'parameter-0')", '$.parameters[0].defaultValue'],
+  ])('rejects unsupported Signal default %s at its declaration', (defaultValue, path) => {
+    const compilation = compile(`const channel = Param.signal('Channel', ${defaultValue});
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });`);
+    const artifact = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+    expect(exportFailure(compilation)).toMatchObject({
+      code: 'CP1002',
+      path,
+      span: sourceApi.listSourceCompilationParameters(compilation)[0]!.source,
+    });
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(artifact);
+  });
+
+  test.each(["Signal('item', 'signal-A')", "Signal('virtual', 'signal-A', 'legendary')"])(
+    'rejects same-name namespace/quality ambiguity from %s at the declaration',
+    (conflictingSignal) => {
+      const compilation =
+        compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });
+output += Constant({ sections: [{ filters: [{ signal: ${conflictingSignal}, value: 7 }] }] });`);
+      expect(exportFailure(compilation)).toMatchObject({
+        code: 'CP1002',
+        path: '$.parameters[0].defaultValue',
+        span: sourceApi.listSourceCompilationParameters(compilation)[0]!.source,
+      });
+    },
+  );
+
+  test('rejects unused Signal handles, duplicate canonical originals and non-Constant circuits atomically', () => {
+    const unused = compile(`const A = Signal('virtual', 'signal-A');
+const channel = Param.signal('Channel', A);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: A, value: 5 }] }] });`);
+    expect(exportFailure(unused)).toMatchObject({ code: 'CP1002', path: '$.parameters[0]' });
+
+    const duplicate = compile(`const first = Param.signal('First', Signal('virtual', 'signal-A'));
+const second = Param.signal('Second', Signal('virtual', 'signal-A', 'normal'));
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: first, value: 5 },
+  { signal: second, value: 7 },
+] }] });`);
+    expect(exportFailure(duplicate)).toMatchObject({
+      code: 'CP1002',
+      path: '$.parameters[1].defaultValue',
+    });
+
+    const mixed = compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const input = new Network();
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });
+output += Arithmetic({ left: input[Signal('virtual', 'signal-A')], operation: 'add', right: 1, output: Signal('virtual', 'signal-B') });`);
+    const artifact = structuredClone(sourceApi.sourceCompilationArtifact(mixed));
+    expect(exportFailure(mixed)).toMatchObject({
+      code: 'CP1002',
+      path: '$.parameters[0]',
+    });
+    expect(sourceApi.sourceCompilationArtifact(mixed)).toEqual(artifact);
+  });
+
+  test('rejects unlinked physical Entities in Signal export while leaving numeric export unaffected', () => {
+    const compilation =
+      compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const extra = Entity('constant-combinator');
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });
+void extra;`);
+    expect(exportFailure(compilation)).toMatchObject({
+      code: 'CP1002',
+      path: '$.parameters[0]',
+      message: expect.stringContaining('unlinked physical Entities'),
+    });
+  });
+
   test.each([-2147483648, -0, 0, 2147483647])(
     'exports Selector original %s with either ordering and a concrete Signal index',
     (original) => {
@@ -760,12 +1058,6 @@ output += Arithmetic({ left: amount, operation: 'multiply', right: 2, output: A 
   });
 
   test.each([
-    [
-      'signal declaration',
-      "Param.signal('Channel', A)",
-      'Constant({ sections: [{ filters: [{ signal: amount, value: 5 }] }] })',
-      '$.parameters[0]',
-    ],
     [
       'symbolic Selector Signal index',
       "Param.signal('Channel', A)",

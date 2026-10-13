@@ -1105,7 +1105,7 @@ function scheduleRender(saveDraft = true): void {
   parameterPanel.setAvailability(
     false,
     includeNumericParameters.checked
-      ? 'Include numeric parameters exports the original template; turn it off to bind values.'
+      ? 'Include parameters exports the original template; turn it off to bind values.'
       : 'Source or profile changed; waiting for recompilation.',
     'pending',
   );
@@ -1317,7 +1317,7 @@ function submitParameterBinding(overrides: readonly SourceParameterOverride[]): 
     parameterPanel.setAvailability(
       false,
       includeNumericParameters.checked
-        ? 'Turn off Include numeric parameters to bind concrete values.'
+        ? 'Turn off Include parameters to bind concrete values.'
         : 'The parameter capture is unavailable; recompile source to continue.',
       'warning',
     );
@@ -1621,7 +1621,7 @@ function handleWorkerMessage(
     parameterPanel.setAvailability(
       parameterSourceRevision !== undefined && profileReady && !includeNumericParameters.checked,
       includeNumericParameters.checked
-        ? 'Include numeric parameters exports the original template; turn it off to bind values.'
+        ? 'Include parameters exports the original template; turn it off to bind values.'
         : binding.parameters.length === 0
           ? 'This source declares no editable parameters.'
           : parameterSourceRevision === undefined

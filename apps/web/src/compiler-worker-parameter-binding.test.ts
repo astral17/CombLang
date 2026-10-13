@@ -1432,6 +1432,13 @@ output += Constant({ sections: [{ filters: [{ signal: A, value: 2 }] }] });`,
     const runtime = parameterRuntime();
     const response = await runtime.handle(
       parseRequest(52, {
+        file: {
+          ...parameterFile,
+          text: parameterFile.text.replace(
+            "Signal('virtual', 'signal-A')",
+            "Signal('item', 'iron-plate')",
+          ),
+        },
         parameterBinding: true,
         blueprintExport: {
           parameters: true,
@@ -1439,6 +1446,11 @@ output += Constant({ sections: [{ filters: [{ signal: A, value: 2 }] }] });`,
       }),
     );
     expect(response.result.blueprintExport).toMatchObject({ ok: false });
+    if (response.result.blueprintExport?.ok === false) {
+      expect(response.result.blueprintExport.diagnostics).toEqual([
+        expect.objectContaining({ code: 'CP1002', span: expect.any(Object) }),
+      ]);
+    }
     expect(response.result.pipelineDiagnostics).toEqual([]);
     expect(response.parameterBinding).toMatchObject({ ok: true, token: expect.any(String) });
     if (response.parameterBinding?.ok !== true || response.parameterBinding.token === undefined) {

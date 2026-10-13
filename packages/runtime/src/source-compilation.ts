@@ -1,7 +1,7 @@
 import { transformElaborationModule } from '@comblang/compiler/elaboration-transform';
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
 import type { LogicalDeciderCondition, NativeCircuitIr } from '@comblang/compiler/ir';
-import type { SignalId } from '@comblang/factorio';
+import { signalKey, type SignalId } from '@comblang/factorio';
 import {
   cloneEntityReplayContextTransport,
   entityReplayContextIdentity,
@@ -323,7 +323,7 @@ function containsNativeUnsupportedExpression(value: unknown): boolean {
   );
 }
 
-/** Projects this exact compilation's direct numeric configuration slots into native metadata. */
+/** Projects this exact compilation's supported native parameter slots into metadata. */
 export function exportSourceCompilationNativeBlueprint(
   compilation: LocalSourceCompilation,
   options: NativeBlueprintProjectionOptions,
@@ -342,7 +342,77 @@ export function exportSourceCompilationNativeBlueprint(
     throw new BlueprintParameterError('CP1002', path, message, source);
   }
   const declarations = listSourceCompilationParameters(compilation);
+  const signalDeclarations = declarations.filter(({ kind }) => kind === 'signal');
+  const signalInfoByParameter = new Map<
+    BlueprintParameterHandle,
+    {
+      readonly declaration: SourceCompilationParameter;
+      readonly original: SignalId;
+      readonly key: string;
+    }
+  >();
+  const signalInfoByOriginalKey = new Map<
+    string,
+    {
+      readonly declaration: SourceCompilationParameter;
+      readonly original: SignalId;
+      readonly key: string;
+    }
+  >();
+  const signalInfoByOriginalName = new Map<
+    string,
+    {
+      readonly declaration: SourceCompilationParameter;
+      readonly original: SignalId;
+      readonly key: string;
+    }[]
+  >();
   for (const [index, declaration] of declarations.entries()) {
+    if (declaration.kind === 'signal') {
+      const original = declaration.defaultValue as SignalId;
+      let key: string;
+      try {
+        key = signalKey(original);
+      } catch {
+        reject(
+          `$.parameters[${index}].defaultValue`,
+          'native Signal defaults must be concrete virtual signals.',
+          declaration.source,
+        );
+      }
+      if (
+        original.type !== 'virtual' ||
+        (original.quality !== undefined && original.quality !== 'normal')
+      ) {
+        reject(
+          `$.parameters[${index}].defaultValue`,
+          'native Signal defaults support only virtual signals with omitted or normal quality.',
+          declaration.source,
+        );
+      }
+      if (/^parameter-[0-9]+$/.test(original.name)) {
+        reject(
+          `$.parameters[${index}].defaultValue`,
+          'native Signal defaults cannot use reserved parameter placeholder names.',
+          declaration.source,
+        );
+      }
+      const duplicate = signalInfoByOriginalKey.get(key!);
+      if (duplicate !== undefined) {
+        reject(
+          `$.parameters[${index}].defaultValue`,
+          `original signal ${JSON.stringify(original.name)} is already used by declaration ${JSON.stringify(duplicate.declaration.label)} at ${duplicate.declaration.source.fileId}:${duplicate.declaration.source.start}-${duplicate.declaration.source.end}.`,
+          declaration.source,
+        );
+      }
+      const info = Object.freeze({ declaration, original, key: key! });
+      signalInfoByParameter.set(declaration.parameter, info);
+      signalInfoByOriginalKey.set(key!, info);
+      const sameName = signalInfoByOriginalName.get(original.name) ?? [];
+      sameName.push(info);
+      signalInfoByOriginalName.set(original.name, sameName);
+      continue;
+    }
     if (declaration.kind !== 'number') {
       reject(
         `$.parameters[${index}]`,
@@ -364,7 +434,61 @@ export function exportSourceCompilationNativeBlueprint(
       );
     }
   }
+  if (signalDeclarations.length > 0) {
+    const firstSignal = signalDeclarations[0]!;
+    const firstSignalIndex = declarations.indexOf(firstSignal);
+    const signalPath = `$.parameters[${firstSignalIndex}]`;
+    const producers = compilation.resolvedCircuit.ir.producers;
+    const unsupportedProducer = producers.find((producer) => producer.kind !== 'constant');
+    if (unsupportedProducer !== undefined) {
+      reject(
+        signalPath,
+        'native Signal export requires every producer to be Constant.',
+        firstSignal.source,
+      );
+    }
+    const linkedEntities = new Set(
+      producers.flatMap((producer) => (producer.entityId === undefined ? [] : [producer.entityId])),
+    );
+    const unlinkedEntity = (compilation.resolvedCircuit.ir.entities ?? []).find(
+      (entity) => !linkedEntities.has(entity.id),
+    );
+    if (unlinkedEntity !== undefined) {
+      reject(
+        signalPath,
+        'native Signal export does not support unlinked physical Entities alongside Signal parameters.',
+        firstSignal.source,
+      );
+    }
+  }
   const used = new Set<BlueprintParameterHandle>();
+  const reservedSignalPlaceholderNames = new Set<string>();
+  if (signalDeclarations.length > 0) {
+    for (const producer of compilation.resolvedCircuit.ir.producers) {
+      if (producer.kind !== 'constant') continue;
+      const configuration =
+        'configuration' in producer.config ? producer.config.configuration : undefined;
+      const concreteSignals =
+        configuration === undefined
+          ? (producer.config.outputs?.map(({ signal }) => signal) ?? [])
+          : configuration.sections.flatMap((section) =>
+              section.filters.map(({ signal }) => signal),
+            );
+      for (const concreteSignal of concreteSignals) {
+        const key = signalKey(concreteSignal);
+        reservedSignalPlaceholderNames.add(concreteSignal.name);
+        for (const sameName of signalInfoByOriginalName.get(concreteSignal.name) ?? []) {
+          if (sameName.key !== key) {
+            reject(
+              `$.parameters[${declarations.indexOf(sameName.declaration)}].defaultValue`,
+              `Constant filter signal ${JSON.stringify(concreteSignal.name)} has a different namespace or quality from the declared Signal default.`,
+              sameName.declaration.source,
+            );
+          }
+        }
+      }
+    }
+  }
   const occurrences: ({
     captureId: string;
     parameter: BlueprintParameterHandle;
@@ -372,6 +496,7 @@ export function exportSourceCompilationNativeBlueprint(
     source: SourceSpan;
   } & (
     | { kind: 'constant-count'; sectionIndex: number; filterIndex: number }
+    | { kind: 'constant-signal'; sectionIndex: number; filterIndex: number }
     | { kind: 'arithmetic-operand'; side: 'first' | 'second' }
     | { kind: 'selector-index' }
     | { kind: 'decider-threshold'; conditionPath: readonly number[] }
@@ -509,7 +634,8 @@ export function exportSourceCompilationNativeBlueprint(
   });
   state.source.constantTemplates.forEach((capture, captureIndex) => {
     const path = `$.constantTemplates[${captureIndex}]`;
-    inspectConstantConfigurationTemplate(capture.template, path);
+    const registration = inspectConstantConfigurationTemplate(capture.template, path);
+    const accepted = new Set<BlueprintParameterHandle>();
     capture.template.sections.forEach((section, sectionIndex) => {
       const sectionPath = `${path}.sections[${sectionIndex}]`;
       if (typeof section.multiplier !== 'number') {
@@ -521,12 +647,39 @@ export function exportSourceCompilationNativeBlueprint(
       }
       section.filters.forEach((filter, filterIndex) => {
         const filterPath = `${sectionPath}.filters[${filterIndex}]`;
-        if (canonicalBlueprintParameterHandle(filter.signal) !== undefined) {
-          reject(
-            `${filterPath}.signal`,
-            'native source export does not support signal parameters.',
-            capture.source,
-          );
+        const signalParameter = canonicalBlueprintParameterHandle(filter.signal);
+        if (signalParameter !== undefined) {
+          if (signalParameter.kind !== 'signal' || !signalInfoByParameter.has(signalParameter)) {
+            reject(
+              `${filterPath}.signal`,
+              'native source export supports only declared Signal parameters in Constant filter slots.',
+              capture.source,
+            );
+          }
+          accepted.add(signalParameter);
+          used.add(signalParameter);
+          occurrences.push({
+            kind: 'constant-signal',
+            captureId: capture.captureId,
+            sectionIndex,
+            filterIndex,
+            parameter: signalParameter,
+            path: `${filterPath}.signal`,
+            source: capture.source,
+          });
+        } else {
+          const concreteSignal = filter.signal as SignalId;
+          const key = signalKey(concreteSignal);
+          reservedSignalPlaceholderNames.add(concreteSignal.name);
+          for (const sameName of signalInfoByOriginalName.get(concreteSignal.name) ?? []) {
+            if (sameName.key !== key) {
+              reject(
+                `$.parameters[${declarations.indexOf(sameName.declaration)}].defaultValue`,
+                `Constant filter signal ${JSON.stringify(concreteSignal.name)} has a different namespace or quality from the declared Signal default.`,
+                sameName.declaration.source,
+              );
+            }
+          }
         }
         if (isRegisteredBlueprintNumericExpression(filter.value)) {
           reject(
@@ -537,6 +690,14 @@ export function exportSourceCompilationNativeBlueprint(
         }
         const parameter = canonicalBlueprintParameterHandle(filter.value);
         if (parameter === undefined) return;
+        if (parameter.kind !== 'number') {
+          reject(
+            `${filterPath}.value`,
+            'native source export supports only numeric Constant filter counts.',
+            capture.source,
+          );
+        }
+        accepted.add(parameter);
         used.add(parameter);
         occurrences.push({
           kind: 'constant-count',
@@ -549,8 +710,16 @@ export function exportSourceCompilationNativeBlueprint(
         });
       });
     });
+    if (registration.usedParameters.some((parameter) => !accepted.has(parameter))) {
+      reject(
+        path,
+        'native source export does not support this symbolic Constant slot.',
+        capture.source,
+      );
+    }
   });
-  const originals = new Map<number, SourceCompilationParameter>();
+  const numberOriginals = new Map<number, SourceCompilationParameter>();
+  const allocatedSignalNames = new Map<BlueprintParameterHandle, string>();
   const parameters: NativeBlueprintParameter[] = declarations.map((declaration, index) => {
     if (!used.has(declaration.parameter)) {
       reject(
@@ -559,21 +728,54 @@ export function exportSourceCompilationNativeBlueprint(
         declaration.source,
       );
     }
-    const original = declaration.defaultValue as number;
-    const first = originals.get(original);
-    if (first !== undefined) {
+    if (declaration.kind === 'number') {
+      const original = declaration.defaultValue as number;
+      const first = numberOriginals.get(original);
+      if (first !== undefined) {
+        reject(
+          `$.parameters[${index}].defaultValue`,
+          `original ${String(original)} is already used by declaration ${JSON.stringify(first.label)} at ${first.source.fileId}:${first.source.start}-${first.source.end}.`,
+          declaration.source,
+        );
+      }
+      numberOriginals.set(original, declaration);
+      return Object.freeze({
+        type: 'number',
+        number: String(original),
+        name: declaration.label,
+        ...declaration.metadata,
+      });
+    }
+    const info = signalInfoByParameter.get(declaration.parameter);
+    if (info === undefined) {
       reject(
-        `$.parameters[${index}].defaultValue`,
-        `original ${String(original)} is already used by declaration ${JSON.stringify(first.label)} at ${first.source.fileId}:${first.source.start}-${first.source.end}.`,
+        `$.parameters[${index}]`,
+        'native Signal declaration has no authenticated Constant filter use.',
         declaration.source,
       );
     }
-    originals.set(original, declaration);
+    let placeholder: string | undefined;
+    for (let candidate = 0; candidate < 10; candidate += 1) {
+      const name = `parameter-${candidate}`;
+      if (!reservedSignalPlaceholderNames.has(name)) {
+        placeholder = name;
+        reservedSignalPlaceholderNames.add(name);
+        break;
+      }
+    }
+    if (placeholder === undefined) {
+      reject(
+        `$.parameters[${index}]`,
+        'native Constant Signal placeholder pool parameter-0 through parameter-9 is exhausted.',
+        declaration.source,
+      );
+    }
+    allocatedSignalNames.set(declaration.parameter, placeholder);
     return Object.freeze({
-      type: 'number',
-      number: String(original),
+      type: 'id',
+      id: placeholder,
       name: declaration.label,
-      ...declaration.metadata,
+      'quality-condition': Object.freeze({ quality: 'normal', comparator: '=' }),
     });
   });
 
@@ -595,7 +797,7 @@ export function exportSourceCompilationNativeBlueprint(
   for (const occurrence of occurrences) {
     const relation = relations.get(occurrence.captureId);
     const family =
-      occurrence.kind === 'constant-count'
+      occurrence.kind === 'constant-count' || occurrence.kind === 'constant-signal'
         ? 'constant'
         : occurrence.kind === 'arithmetic-operand'
           ? 'arithmetic'
@@ -609,7 +811,7 @@ export function exportSourceCompilationNativeBlueprint(
     ) {
       reject(
         occurrence.path,
-        'missing authenticated numeric configuration producer relation.',
+        'missing authenticated source configuration producer relation.',
         occurrence.source,
       );
     }
@@ -707,7 +909,13 @@ export function exportSourceCompilationNativeBlueprint(
           readonly sections?: {
             readonly sections?: readonly {
               readonly index?: number;
-              readonly filters?: readonly { readonly index?: number; readonly count?: number }[];
+              readonly filters?: readonly {
+                readonly index?: number;
+                readonly count?: number;
+                readonly type?: string;
+                readonly name?: string;
+                readonly quality?: string;
+              }[];
             }[];
           };
         }
@@ -716,9 +924,41 @@ export function exportSourceCompilationNativeBlueprint(
     const filter = section?.filters?.[occurrence.filterIndex];
     if (
       section?.index !== occurrence.sectionIndex + 1 ||
-      filter?.index !== occurrence.filterIndex + 1 ||
-      filter.count !== defaults.get(occurrence.parameter)
+      filter?.index !== occurrence.filterIndex + 1
     ) {
+      reject(
+        occurrence.path,
+        'marked Constant filter did not survive native projection unchanged.',
+        occurrence.source,
+      );
+    }
+    if (occurrence.kind === 'constant-signal') {
+      const info = signalInfoByParameter.get(occurrence.parameter);
+      const name = filter?.name;
+      const type = filter?.type ?? 'item';
+      const quality = filter?.quality;
+      let projectedKey: string | undefined;
+      if (typeof name === 'string' && typeof type === 'string') {
+        try {
+          projectedKey = signalKey({
+            type: type as SignalId['type'],
+            name,
+            ...(typeof quality === 'string' ? { quality } : {}),
+          });
+        } catch {
+          projectedKey = undefined;
+        }
+      }
+      if (info === undefined || projectedKey !== info.key) {
+        reject(
+          occurrence.path,
+          'marked Constant Signal default did not survive authenticated projection unchanged.',
+          occurrence.source,
+        );
+      }
+      continue;
+    }
+    if (filter.count !== defaults.get(occurrence.parameter)) {
       reject(
         occurrence.path,
         'marked Constant count did not survive native projection unchanged.',
@@ -726,7 +966,98 @@ export function exportSourceCompilationNativeBlueprint(
       );
     }
   }
-  const native = Object.freeze({ ...projected, parameters: Object.freeze(parameters) });
+  const replacementsByOriginal = new Map<string, string>();
+  for (const [parameter, info] of signalInfoByParameter) {
+    const placeholder = allocatedSignalNames.get(parameter);
+    if (placeholder === undefined) {
+      reject(
+        `$.parameters[${declarations.indexOf(info.declaration)}]`,
+        'native Signal placeholder allocation is incomplete.',
+        info.declaration.source,
+      );
+    }
+    replacementsByOriginal.set(info.key, placeholder);
+  }
+  const patchedByNumber = new Map<number, (typeof projected.entities)[number]['native']>();
+  const readRecord = (value: unknown): Record<string, unknown> | undefined =>
+    value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
+  for (const [producerIndex, producer] of replacement.circuit.producers.entries()) {
+    if (producer.kind !== 'constant' || replacementsByOriginal.size === 0) continue;
+    const entityNumber = producerIndex + 1;
+    const entity = entities.get(entityNumber);
+    if (entity === undefined) {
+      const declaration = signalDeclarations[0]!;
+      reject(
+        `$.parameters[${declarations.indexOf(declaration)}]`,
+        'projected Constant producer is missing its native entity.',
+        declaration.source,
+      );
+    }
+    const behavior = readRecord(entity.native.control_behavior);
+    const sectionsRecord = readRecord(behavior?.sections);
+    const nativeSections = sectionsRecord?.sections;
+    if (!Array.isArray(nativeSections)) continue;
+    let entityChanged = false;
+    const nextSections = nativeSections.map((sectionValue) => {
+      const section = readRecord(sectionValue);
+      const filtersValue = section?.filters;
+      if (!Array.isArray(filtersValue)) return sectionValue;
+      let sectionChanged = false;
+      const nextFilters = filtersValue.map((filterValue) => {
+        const filter = readRecord(filterValue);
+        const name = filter?.name;
+        const type = filter?.type ?? 'item';
+        const quality = filter?.quality;
+        if (typeof name !== 'string' || typeof type !== 'string') return filterValue;
+        let key: string;
+        try {
+          key = signalKey({
+            type: type as SignalId['type'],
+            name,
+            ...(typeof quality === 'string' ? { quality } : {}),
+          });
+        } catch {
+          return filterValue;
+        }
+        const placeholder = replacementsByOriginal.get(key);
+        if (placeholder === undefined || filter === undefined) return filterValue;
+        const preservedFields = { ...filter };
+        delete preservedFields.type;
+        sectionChanged = true;
+        return Object.freeze({ ...preservedFields, name: placeholder });
+      });
+      if (!sectionChanged || section === undefined) return sectionValue;
+      entityChanged = true;
+      return Object.freeze({ ...section, filters: Object.freeze(nextFilters) });
+    });
+    if (!entityChanged || behavior === undefined || sectionsRecord === undefined) continue;
+    const nextBehavior = Object.freeze({
+      ...behavior,
+      sections: Object.freeze({ ...sectionsRecord, sections: Object.freeze(nextSections) }),
+    });
+    patchedByNumber.set(
+      entityNumber,
+      Object.freeze({ ...entity.native, control_behavior: nextBehavior }),
+    );
+  }
+  const projectedEntities =
+    patchedByNumber.size === 0
+      ? projected.entities
+      : Object.freeze(
+          projected.entities.map((entity) => {
+            const nativeFields = patchedByNumber.get(entity.entityNumber);
+            return nativeFields === undefined
+              ? entity
+              : Object.freeze({ ...entity, native: nativeFields });
+          }),
+        );
+  const native = Object.freeze({
+    ...projected,
+    entities: projectedEntities,
+    parameters: Object.freeze(parameters),
+  });
   validateNativeBlueprintFcir(native);
   return native;
 }

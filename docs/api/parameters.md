@@ -172,24 +172,75 @@ for paths, JSON/plain reporting, capture lifetime and export modes.
 
 These modes have different purposes:
 
-| Mode                                                 | Values used                                       | Result                                                |
-| ---------------------------------------------------- | ------------------------------------------------- | ----------------------------------------------------- |
-| Ordinary compilation/export                          | Declared defaults                                 | Concrete circuit and JSON, without parameter metadata |
-| Apply/Reset or CLI `--overrides`                     | Chosen values; omitted IDs use defaults           | Concrete circuit and JSON, without parameter metadata |
-| CLI `--parameters` or **Include numeric parameters** | Original defaults plus supported numeric metadata | Native parameter-template JSON                        |
+| Mode                                         | Values used                                                       | Result                                                |
+| -------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------- |
+| Ordinary compilation/export                  | Declared defaults                                                 | Concrete circuit and JSON, without parameter metadata |
+| Apply/Reset or CLI `--overrides`             | Chosen values; omitted IDs use defaults                           | Concrete circuit and JSON, without parameter metadata |
+| CLI `--parameters` or **Include parameters** | Original defaults plus supported numeric/Constant Signal metadata | Native parameter-template JSON                        |
 
 Concrete overrides and native-template export cannot be combined. The workbench
-disables Apply/Reset while **Include numeric parameters** is checked.
+disables Apply/Reset while **Include parameters** is checked.
 
 Native-template export supports number declarations used directly as Constant
 filter counts, Arithmetic constants, Decider right-hand thresholds or numeric
-Selector select indices. All originals must fit signed int32 and remain present
-in the exported fields. Signal declarations, symbolic section multipliers,
-derived Arithmetic, Constant or Decider-threshold expressions, unused
-declarations and equal originals belonging to distinct parameters fail
+Selector select indices. Numeric originals must fit signed int32 and remain
+present in the exported fields. It also supports Signal declarations used in
+Constant filter Signal slots under the bounded contract below. Symbolic section
+multipliers, derived Arithmetic, Constant or Decider-threshold expressions,
+unused declarations and equal originals belonging to distinct parameters fail
 explicitly in that mode. Native replacement may also affect ordinary literals
 equal to an original; nominal independence in local binding does not establish
 independence in Factorio placement.
+
+### Bounded Constant Signal native export
+
+The native exporter supports a concrete virtual Signal default with omitted or
+normal quality when its parameter handle occupies a Constant filter Signal
+slot. Source runs once and retains that concrete default for ordinary local
+binding. Native export allocates the first free `parameter-0` through
+`parameter-9` name, reserving names already present in Constant filter rows,
+and emits an ID parameter with the declaration label and normal-quality `=`
+condition. The source default is not written back into the circuit or stored as
+a fabricated native field.
+
+Complete example (requires the selected environment's existing Constant
+provisioning capabilities):
+
+```ts
+const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const output = new Network();
+output += Constant({
+  sections: [
+    {
+      filters: [
+        { signal: channel, value: 5 },
+        { signal: Signal('virtual', 'signal-A'), value: 13 },
+        { signal: Signal('item', 'iron-plate'), value: 7 },
+        { signal: Signal('fluid', 'water'), value: 11 },
+      ],
+    },
+  ],
+});
+```
+
+The native template uses the item-default name `parameter-0` for both virtual
+A rows, preserving counts 5 and 13; iron-plate and water remain unchanged.
+The ordinary A row is replaced because Factorio metadata is based on original
+identity, not the local nominal handle. A local override to B changes only the
+marked `channel` row(s); the ordinary A row stays A. Repeated uses of one handle
+are supported, but distinct handles with the same normalized original are not.
+Different namespaces or non-normal qualities sharing the original name are
+ambiguous and reject at the declaration.
+
+This slice accepts only direct Constant filter Signal slots and circuits whose
+producers are Constant; any physical Entity must be linked to its producer.
+Item/fluid defaults, non-normal qualities, virtual wildcards, source defaults
+named `parameter-N`, placeholder-pool exhaustion, unused declarations and
+Signal use in any other native slot reject atomically with located `CP1002`.
+No general native replacement, native derived formulas/multipliers, or
+placement acceptance is implied. The bounded input transition is user-supplied
+Factorio 2.1.21 evidence with unspecified mods; generated-output game acceptance
+remains unverified.
 
 Complete metadata example; requires trusted canonical Constant authority:
 
