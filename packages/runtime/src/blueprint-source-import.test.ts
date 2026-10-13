@@ -122,6 +122,47 @@ function constantDocument(name = 'constant-combinator') {
   });
 }
 
+function selectorDocument() {
+  return JSON.stringify({
+    blueprint: {
+      entities: [
+        {
+          entity_number: 10,
+          name: 'selector-combinator',
+          position: { x: 0, y: 0 },
+          direction: 0,
+          control_behavior: {
+            operation: 'select',
+            select_max: true,
+            index_signal: { type: 'virtual', name: 'signal-index', quality: 'rare' },
+          },
+        },
+        {
+          entity_number: 11,
+          name: 'selector-combinator',
+          position: { x: 3, y: 0 },
+          direction: 0,
+          control_behavior: {
+            operation: 'count',
+            count_signal: { type: 'item', name: 'iron-plate', quality: 'normal' },
+          },
+        },
+        {
+          entity_number: 12,
+          name: 'selector-combinator',
+          position: { x: 6, y: 0 },
+          direction: 0,
+          control_behavior: {
+            operation: 'count',
+            count_signal: { type: 'item', name: 'copper-plate', quality: 'normal' },
+          },
+        },
+      ],
+      wires: [[10, 3, 11, 1]],
+    },
+  });
+}
+
 function deciderDocument(
   options: { readonly implicitCopyInput?: boolean; readonly wiredUnreadInput?: boolean } = {},
 ) {
@@ -282,7 +323,12 @@ async function canonicalHost() {
   const database = structuredClone(syntheticPrototypeDatabase()) as {
     entities: Array<Record<string, unknown>>;
   };
-  const families = ['constant-combinator', 'arithmetic-combinator', 'decider-combinator'] as const;
+  const families = [
+    'constant-combinator',
+    'arithmetic-combinator',
+    'decider-combinator',
+    'selector-combinator',
+  ] as const;
   database.entities.push(
     ...families.map((family) => ({
       key: `entity:${family}`,
@@ -368,7 +414,7 @@ describe('host-neutral canonical blueprint source import', () => {
     expect(result.diagnostics.every(Object.isFrozen)).toBe(true);
   });
 
-  test('imports exact canonical Decider once and keeps Selector outside the subset', () => {
+  test('imports exact canonical Decider and still refuses unsupported entity families', () => {
     const compile = vi.spyOn(sourceCompilation, 'compileSourceProgram');
     const result = importCanonicalBlueprintSource(
       deciderDocument(),
@@ -385,8 +431,8 @@ describe('host-neutral canonical blueprint source import', () => {
     expect(result.verification).toMatchObject({ state: 'verified', entityCount: 1 });
 
     const selector = importCanonicalBlueprintSource(
-      constantDocument('selector-combinator'),
-      { path: 'synthetic/selector.factorio.ts' },
+      constantDocument('programmable-speaker'),
+      { path: 'synthetic/speaker.factorio.ts' },
       host.environment,
     );
     expect(selector).toMatchObject({
@@ -396,6 +442,183 @@ describe('host-neutral canonical blueprint source import', () => {
     expect(selector).not.toHaveProperty('source');
     expect(selector).not.toHaveProperty('correspondence');
     expect(compile).toHaveBeenCalledOnce();
+  });
+
+  test('imports Select and Count through exact Selector profiles and verifies isolated input lanes', () => {
+    const compile = vi.spyOn(sourceCompilation, 'compileSourceProgram');
+    const result = importCanonicalBlueprintSource(
+      selectorDocument(),
+      { path: 'synthetic/selector.factorio.ts' },
+      host.environment,
+    );
+
+    expect(result.state).toBe('verified');
+    if (result.state !== 'verified') throw new Error('Expected verified Selector source.');
+    expect(compile).toHaveBeenCalledOnce();
+    expect(compile.mock.calls[0]?.[0]).toBe(result.source);
+    expect(result.verification).toMatchObject({ state: 'verified', entityCount: 3 });
+    expect(result.correspondence.entities).toMatchObject([
+      { entityNumber: 10, family: 'selector' },
+      { entityNumber: 11, family: 'selector', attachmentSpans: [] },
+      { entityNumber: 12, family: 'selector', attachmentSpans: [] },
+    ]);
+    expect(result.source.text.match(/Selector\(/g)).toHaveLength(3);
+    expect(result.source.text).toContain('signal-index');
+    expect(result.source.text).toContain('iron-plate');
+    expect(result.source.text).toContain('copper-plate');
+    const unwiredCount = result.correspondence.entities.find(
+      ({ entityNumber }) => entityNumber === 12,
+    );
+    if (unwiredCount === undefined) throw new Error('Expected the fully unwired Count.');
+    const countSource = result.source.text.slice(
+      unwiredCount.constructionSpan.start,
+      unwiredCount.constructionSpan.end,
+    );
+    const inputPair = countSource.match(/input:pair\((import_network_\d+),(import_network_\d+)\)/);
+    if (inputPair === null) throw new Error('Expected both reconstructed Count input lanes.');
+    const inputLaneColors = inputPair.slice(1).map((networkName) => {
+      const row = result.correspondence.networks.find(({ name }) => name === networkName);
+      if (row === undefined) throw new Error(`Missing source correspondence for ${networkName}.`);
+      const declaration = result.source.text.slice(
+        row.declarationSpan.start,
+        row.declarationSpan.end,
+      );
+      return declaration.match(/Network<([RG])>/)?.[1];
+    });
+    expect(inputLaneColors).toEqual(['R', 'G']);
+
+    const unsupported = importCanonicalBlueprintSource(
+      selectorDocument().replace(
+        '"select_max":true',
+        '"select_max":true,"select_highest_quality":true',
+      ),
+      { path: 'synthetic/selector-new-field.factorio.ts' },
+      host.environment,
+    );
+    expect(unsupported).toMatchObject({
+      state: 'blocked',
+      diagnostics: [
+        expect.objectContaining({
+          category: 'unsupported-selector-configuration',
+          path: '$.blueprint.entities[0].control_behavior.select_highest_quality',
+        }),
+      ],
+    });
+    expect(unsupported).not.toHaveProperty('source');
+    expect(unsupported).not.toHaveProperty('correspondence');
+    expect(compile).toHaveBeenCalledOnce();
+
+    const negativeZero = importCanonicalBlueprintSource(
+      selectorDocument().replace(
+        '"index_signal":{"type":"virtual","name":"signal-index","quality":"rare"}',
+        '"index_constant":-0',
+      ),
+      { path: 'synthetic/selector-negative-zero.factorio.ts' },
+      host.environment,
+    );
+    expect(negativeZero).toMatchObject({
+      state: 'blocked',
+      diagnostics: [
+        expect.objectContaining({
+          category: 'unsupported-source-configuration',
+          path: '$.blueprint.entities[0].control_behavior.index_constant',
+          entityNumber: 10,
+        }),
+      ],
+    });
+    expect(negativeZero).not.toHaveProperty('source');
+    expect(negativeZero).not.toHaveProperty('correspondence');
+    expect(compile).toHaveBeenCalledOnce();
+  });
+
+  test('requires one exact correctly typed trusted Selector profile', () => {
+    const compile = vi.spyOn(sourceCompilation, 'compileSourceProgram');
+    const imported = selectorDocument();
+    const missingContext = createTrustedEntityReplayContext({
+      database: host.trustedEntityReplayContext.database,
+      source: 'synthetic',
+      evidenceIdentity: 'missing-selector-blueprint-import-profile',
+      policyIdentity: 'missing-selector-blueprint-import-profile-policy',
+      profiles: host.profiles.slice(0, 3),
+    });
+    const missing = importCanonicalBlueprintSource(
+      imported,
+      { path: 'missing-selector.ts' },
+      { ...host.environment, trustedEntityReplayContext: missingContext },
+    );
+    expect(missing).toMatchObject({
+      state: 'blocked',
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({
+          category: 'missing-profile-selection',
+          path: '$.blueprint.entities[0].name',
+        }),
+      ]),
+    });
+
+    const duplicateSelector: EntityProfile = {
+      ...host.profiles[3]!,
+      ref: {
+        ...host.profiles[3]!.ref,
+        profileId: 'profile:duplicate-selector-blueprint-import' as EntityProfileId,
+      },
+    };
+    const ambiguousContext = createTrustedEntityReplayContext({
+      database: host.trustedEntityReplayContext.database,
+      source: 'synthetic',
+      evidenceIdentity: 'ambiguous-selector-blueprint-import-profile',
+      policyIdentity: 'ambiguous-selector-blueprint-import-profile-policy',
+      profiles: [...host.profiles, duplicateSelector],
+    });
+    const ambiguous = importCanonicalBlueprintSource(
+      imported,
+      { path: 'ambiguous-selector.ts' },
+      { ...host.environment, trustedEntityReplayContext: ambiguousContext },
+    );
+    expect(ambiguous).toMatchObject({
+      state: 'blocked',
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({ category: 'ambiguous-canonical-profile' }),
+      ]),
+    });
+
+    const wrongTypeProfile: EntityProfile = {
+      ...host.profiles[3]!,
+      prototypeType: 'decider-combinator',
+    };
+    const wrongTypeContext = createTrustedEntityReplayContext({
+      database: host.trustedEntityReplayContext.database,
+      source: 'synthetic',
+      evidenceIdentity: 'wrong-type-selector-blueprint-import-profile',
+      policyIdentity: 'wrong-type-selector-blueprint-import-profile-policy',
+      profiles: [...host.profiles.slice(0, 3), wrongTypeProfile],
+    });
+    const wrongType = importCanonicalBlueprintSource(
+      imported,
+      { path: 'wrong-type-selector.ts' },
+      { ...host.environment, trustedEntityReplayContext: wrongTypeContext },
+    );
+    expect(wrongType.state).toBe('blocked');
+    expect(wrongType).not.toHaveProperty('source');
+    expect(wrongType).not.toHaveProperty('correspondence');
+
+    const moddedName = 'modded-selector-combinator';
+    const modded = importCanonicalBlueprintSource(
+      imported.replaceAll('selector-combinator', moddedName),
+      { path: 'modded-selector.ts' },
+      host.environment,
+    );
+    expect(modded).toMatchObject({
+      state: 'blocked',
+      diagnostics: expect.arrayContaining([
+        expect.objectContaining({ category: 'unsupported-canonical-family' }),
+      ]),
+    });
+    for (const refusal of [missing, ambiguous, wrongType, modded]) {
+      expect(refusal).not.toHaveProperty('source');
+      expect(refusal).not.toHaveProperty('correspondence');
+    }
+    expect(compile).not.toHaveBeenCalled();
   });
 
   test('verifies mixed-family topology with both Decider colors and ordered output branches', () => {

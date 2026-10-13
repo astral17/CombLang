@@ -151,6 +151,47 @@ function deciderDocument(options: { readonly implicitCopyInput?: boolean } = {})
   });
 }
 
+function selectorDocument() {
+  return JSON.stringify({
+    blueprint: {
+      entities: [
+        {
+          entity_number: 10,
+          name: 'selector-combinator',
+          position: { x: 0, y: 0 },
+          direction: 0,
+          control_behavior: {
+            operation: 'select',
+            select_max: true,
+            index_signal: { type: 'virtual', name: 'signal-index', quality: 'rare' },
+          },
+        },
+        {
+          entity_number: 11,
+          name: 'selector-combinator',
+          position: { x: 3, y: 0 },
+          direction: 0,
+          control_behavior: {
+            operation: 'count',
+            count_signal: { type: 'item', name: 'iron-plate', quality: 'normal' },
+          },
+        },
+        {
+          entity_number: 12,
+          name: 'selector-combinator',
+          position: { x: 6, y: 0 },
+          direction: 0,
+          control_behavior: {
+            operation: 'count',
+            count_signal: { type: 'item', name: 'copper-plate', quality: 'normal' },
+          },
+        },
+      ],
+      wires: [[10, 3, 11, 1]],
+    },
+  });
+}
+
 async function temporaryFile(name: string, content: string | Uint8Array): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), 'comblang-blueprint-import-'));
   directories.push(directory);
@@ -168,7 +209,12 @@ async function canonicalHost() {
   const database = structuredClone(syntheticPrototypeDatabase()) as {
     entities: Array<Record<string, unknown>>;
   };
-  const families = ['constant-combinator', 'arithmetic-combinator', 'decider-combinator'] as const;
+  const families = [
+    'constant-combinator',
+    'arithmetic-combinator',
+    'decider-combinator',
+    'selector-combinator',
+  ] as const;
   database.entities.push(
     ...families.map((family) => ({
       key: `entity:${family}`,
@@ -453,6 +499,73 @@ describe('blueprint source import CLI', () => {
     }
 
     expect(compile).toHaveBeenCalledTimes(2);
+  });
+
+  test('imports verified Selector JSON and exchange exclusively and refuses a newer field', async () => {
+    const host = await canonicalHost();
+    const sourceText = selectorDocument();
+    const jsonInput = await temporaryFile('selector.json', sourceText);
+    const exchangeInput = await exchangeFile('selector.exchange', sourceText);
+    const jsonOutput = join(dirname(jsonInput), 'selector-json.factorio.ts');
+    const exchangeOutput = join(dirname(exchangeInput), 'selector-exchange.factorio.ts');
+    const refusalInput = await temporaryFile(
+      'selector-new-field.json',
+      sourceText.replace('"select_max":true', '"select_max":true,"select_highest_quality":true'),
+    );
+    const refusalOutput = join(dirname(refusalInput), 'selector-refused.factorio.ts');
+    const compile = vi.spyOn(sourceApi, 'compileSourceProgram');
+    const { log, error } = capture();
+
+    for (const [input, output] of [
+      [jsonInput, jsonOutput],
+      [exchangeInput, exchangeOutput],
+    ] as const) {
+      log.mockClear();
+      expect(
+        await run(['blueprint', 'import', '--json', '--output', output, input], host.environment),
+      ).toBe(0);
+      const report = reportAt(log);
+      expect(error).not.toHaveBeenCalled();
+      expect(report).toMatchObject({
+        ok: true,
+        output: resolve(output),
+        source: { path: resolve(output), text: expect.stringContaining('Selector(') },
+        verification: { state: 'verified', entityCount: 3 },
+        correspondence: {
+          entities: [
+            { entityNumber: 10, family: 'selector' },
+            { entityNumber: 11, family: 'selector', attachmentSpans: [] },
+            { entityNumber: 12, family: 'selector', attachmentSpans: [] },
+          ],
+        },
+      });
+      expect(report.source.text).toContain('signal-index');
+      expect(report.source.text).toContain('iron-plate');
+      expect(report.source.text).toContain('copper-plate');
+      expect(report.source.text).toContain('Network<R>');
+      expect(report.source.text).toContain('Network<G>');
+      expect(await readFile(output, 'utf8')).toBe(report.source.text);
+      expect(compile.mock.calls.at(-1)?.[0]?.text).toBe(report.source.text);
+    }
+
+    expect(compile).toHaveBeenCalledTimes(2);
+    log.mockClear();
+    expect(
+      await run(
+        ['blueprint', 'import', '--json', '--output', refusalOutput, refusalInput],
+        host.environment,
+      ),
+    ).toBe(2);
+    expect(reportAt(log)).toMatchObject({
+      ok: false,
+      error: {
+        code: 'CLIBP1006',
+        path: '$.blueprint.entities[0].control_behavior.select_highest_quality',
+      },
+      diagnostics: [expect.objectContaining({ category: 'unsupported-selector-configuration' })],
+    });
+    expect(compile).toHaveBeenCalledTimes(2);
+    await expect(stat(refusalOutput)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   test('refuses an implicit Decider copy-input mask without creating output', async () => {

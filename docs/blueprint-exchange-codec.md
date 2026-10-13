@@ -117,16 +117,17 @@ node apps/cli/dist/main.js check --prototypes database.json imported.factorio.ts
 
 `--prototype-identity <id>` can pin the selected database; use the same pin for
 the subsequent `check`. The host must provide a trusted Entity replay context
-with exactly one profile for each imported canonical Constant, Arithmetic, or
-Decider prototype. Decider selection requires the exact base name and key
-`decider-combinator` / `entity:decider-combinator`; a same-type modded name is not
-a substitute. Import never selects profiles by type alone, position, or
-approximate name; missing/ambiguous profiles, modded names, opaque roots, partial
-inventories, unsupported fields, and unsupported placement are refusals. The
-supported source subset requires explicit direction, exact x/y placement, and
-top-level four-value wire tuples; legacy per-entity connections, object-shaped
-wires, and unknown outer fields are not silently dropped. Root metadata may be
-reported as retained-only, but it is not emitted into the generated source.
+with exactly one profile for each imported canonical Constant, Arithmetic,
+Decider, or Selector prototype. Selector selection requires the exact base name
+and key `selector-combinator` / `entity:selector-combinator`; a same-type modded
+name is not a substitute. Import never selects profiles by type alone, position,
+or approximate name; missing/ambiguous profiles, modded names, opaque roots,
+partial inventories, unsupported fields, and unsupported placement are
+refusals. The supported source subset requires explicit direction, exact x/y
+placement, and top-level four-value wire tuples; legacy per-entity connections,
+object-shaped wires, and unknown outer fields are not silently dropped. Root
+metadata may be reported as retained-only, but it is not emitted into the
+generated source.
 
 Decider condition groups and true/else output rows are preserved in order. This
 source subset requires an explicit input-network mask for copied-count outputs;
@@ -135,6 +136,19 @@ constant-count wildcard output. An explicitly empty else branch, a configuration
 with no output rows, and negative-zero condition/output counts are refused rather
 than normalized. A configured Decider with no connected output wire is distinct
 from a Decider configuration with no output rows.
+
+Selector import supports only explicit `Select` and `Count` control behavior.
+Select requires `operation: "select"`, an explicit `select_max`, and exactly one
+of `index_constant` or `index_signal`; Count requires `operation: "count"` and a
+`count_signal`. Missing fields are not replaced with defaults. Random, Time, and
+Quality operations, `index_comparator`, `select_highest_quality`, unknown or
+cross-operation fields, wildcard Signals, and negative-zero numeric indices are
+refused instead of guessed or normalized. Explicit concrete Signal qualities
+are retained. Both red and green Selector input colors are represented in the
+generated source even when one or both lanes are unwired; the blueprint
+`control_behavior` does not encode an input read mask. Only wired outputs attach
+to the imported source topology. This structural subset does not promise native
+Selector tie-breaking, electrical behavior, or physical wire-edge fidelity.
 
 #### Browser workflow
 
@@ -150,11 +164,14 @@ Exchange decoding uses the standard Web deflate streams and reports `BEX1004`
 when they are unavailable. Editing the pasted text invalidates any pending or
 verified preview. Select and wait for a validated prototype environment first;
 conversion reuses that selected profile.
-The current source importer supports its reviewed Constant, Arithmetic, and
-Decider subset, with explicit placements and supported top-level wire tuples.
-Decider uses the exact canonical prototype profile and the same representability
-limits described above; modded same-type profiles and unsupported output masks or
-branches are refused.
+The current source importer supports its reviewed Constant, Arithmetic, Decider,
+and explicit Selector Select/Count subset, with explicit placements and
+supported top-level wire tuples. Decider and Selector use their exact canonical
+prototype profiles and the same representability limits described above; modded
+same-type profiles and unsupported output masks, branches, Selector operations,
+or fields are refused. Selector input color pairs remain explicit even where a
+lane is unwired; this is a structural reconstruction limit, not a claim about
+native Selector semantics or physical wire-edge fidelity.
 Unsupported fields, incomplete coverage, missing or ambiguous canonical
 profiles, and failed verification are shown as refusals with native JSON paths
 and generated-source locations where available. A refusal never presents

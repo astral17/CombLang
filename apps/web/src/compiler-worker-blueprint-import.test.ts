@@ -205,11 +205,52 @@ function builtinDeciderBlueprintDocument(options: { readonly implicitCopyInput?:
   });
 }
 
+function builtinSelectorBlueprintDocument() {
+  return JSON.stringify({
+    blueprint: {
+      entities: [
+        {
+          entity_number: 10,
+          name: 'selector-combinator',
+          position: { x: 0, y: 0 },
+          direction: 0,
+          control_behavior: {
+            operation: 'select',
+            select_max: true,
+            index_signal: { type: 'virtual', name: 'signal-index', quality: 'rare' },
+          },
+        },
+        {
+          entity_number: 11,
+          name: 'selector-combinator',
+          position: { x: 3, y: 0 },
+          direction: 0,
+          control_behavior: {
+            operation: 'count',
+            count_signal: { type: 'item', name: 'iron-plate', quality: 'normal' },
+          },
+        },
+        {
+          entity_number: 12,
+          name: 'selector-combinator',
+          position: { x: 6, y: 0 },
+          direction: 0,
+          control_behavior: {
+            operation: 'count',
+            count_signal: { type: 'item', name: 'copper-plate', quality: 'normal' },
+          },
+        },
+      ],
+      wires: [[10, 3, 11, 1]],
+    },
+  });
+}
+
 async function canonicalHost() {
   const database = structuredClone(syntheticPrototypeDatabase()) as {
     entities: Array<Record<string, unknown>>;
   };
-  const families = ['constant-combinator', 'arithmetic-combinator'] as const;
+  const families = ['constant-combinator', 'arithmetic-combinator', 'selector-combinator'] as const;
   database.entities.push(
     ...families.map((family) => ({
       key: `entity:${family}`,
@@ -432,6 +473,128 @@ describe('compiler Worker blueprint import endpoint', () => {
     expect(refusal.result).not.toHaveProperty('correspondence');
     expect(refusal.result).not.toHaveProperty('diagnosticContext');
     expect(JSON.stringify(refusal)).not.toContain('trustedEntityReplayContext');
+
+    expect(load).toHaveBeenCalledOnce();
+    expect(compile).toHaveBeenCalledTimes(2);
+    expect(compile.mock.calls[0]?.[0]).toEqual(json.result.source);
+    expect(compile.mock.calls[1]?.[0]).toEqual(encoded.result.source);
+  });
+
+  test('imports Selector JSON and exchange through ordinary builtin provisioning', async () => {
+    const [source, assetManifest] = await Promise.all([
+      readFile(
+        new URL('../../../packages/prototypes/generated/space-age-2.1.17.json', import.meta.url),
+        'utf8',
+      ),
+      readFile(
+        new URL(
+          '../../../packages/prototypes/generated/space-age-2.1.17.json.manifest.json',
+          import.meta.url,
+        ),
+        'utf8',
+      ),
+    ]);
+    const load = vi.spyOn(prototypeApi, 'loadPrototypeAsset');
+    const compile = vi.spyOn(sourceCompilation, 'compileSourceProgram');
+    const worker = new CompilerWorkerRuntime();
+    const documentText = builtinSelectorBlueprintDocument();
+    const exchange = await blueprintExchangeCodec.encodeBlueprintExchange(
+      parseLosslessJson(documentText),
+    );
+    const json = await worker.handleImport({
+      kind: 'import-blueprint',
+      revision: 1093,
+      document: { text: documentText, format: 'json' },
+      sourcePath: 'selector.factorio.ts',
+      prototypeProfile: { kind: 'builtin', source, assetManifest },
+    });
+
+    expect(json.result.state).toBe('verified');
+    if (json.result.state !== 'verified') {
+      throw new Error(
+        `Expected ordinary builtin Selector import; got ${JSON.stringify(json.result)}`,
+      );
+    }
+    const verifiedJson = json.result;
+    expect(structuredClone(json)).toEqual(json);
+    expect(verifiedJson).toMatchObject({
+      verification: { state: 'verified', entityCount: 3 },
+      correspondence: {
+        entities: [
+          { entityNumber: 10, family: 'selector' },
+          { entityNumber: 11, family: 'selector', attachmentSpans: [] },
+          { entityNumber: 12, family: 'selector', attachmentSpans: [] },
+        ],
+      },
+    });
+    expect(verifiedJson.source.text.match(/Selector\(/g)).toHaveLength(3);
+    expect(verifiedJson.source.text).toContain('signal-index');
+    expect(verifiedJson.source.text).toContain('iron-plate');
+    expect(verifiedJson.source.text).toContain('copper-plate');
+    const unwiredCount = verifiedJson.correspondence.entities.find(
+      ({ entityNumber }) => entityNumber === 12,
+    );
+    if (unwiredCount === undefined) throw new Error('Expected the fully unwired Count.');
+    const countSource = verifiedJson.source.text.slice(
+      unwiredCount.constructionSpan.start,
+      unwiredCount.constructionSpan.end,
+    );
+    const inputPair = countSource.match(/input:pair\((import_network_\d+),(import_network_\d+)\)/);
+    if (inputPair === null) throw new Error('Expected both reconstructed Count input lanes.');
+    const inputLaneColors = inputPair.slice(1).map((networkName) => {
+      const row = verifiedJson.correspondence.networks.find(({ name }) => name === networkName);
+      if (row === undefined) throw new Error(`Missing source correspondence for ${networkName}.`);
+      const declaration = verifiedJson.source.text.slice(
+        row.declarationSpan.start,
+        row.declarationSpan.end,
+      );
+      return declaration.match(/Network<([RG])>/)?.[1];
+    });
+    expect(inputLaneColors).toEqual(['R', 'G']);
+    expect(verifiedJson).not.toHaveProperty('diagnosticContext');
+
+    const encoded = await worker.handleImport({
+      kind: 'import-blueprint',
+      revision: 1094,
+      document: { text: exchange, format: 'exchange' },
+      sourcePath: 'selector.factorio.ts',
+      prototypeProfile: { kind: 'builtin', identity: json.prototypeEnvironment!.identity },
+    });
+    expect(encoded.result.state).toBe('verified');
+    if (encoded.result.state !== 'verified') {
+      throw new Error('Expected ordinary builtin Selector exchange import.');
+    }
+    expect(structuredClone(encoded)).toEqual(encoded);
+    expect(encoded.result.source).toEqual(json.result.source);
+    expect(encoded.result.correspondence).toEqual(json.result.correspondence);
+    expect(encoded.prototypeEnvironment?.identity).toBe(json.prototypeEnvironment?.identity);
+
+    const unsupportedDocument = documentText.replace(
+      '"select_max":true',
+      '"select_max":true,"select_highest_quality":true',
+    );
+    const refusal = await worker.handleImport({
+      kind: 'import-blueprint',
+      revision: 1095,
+      document: { text: unsupportedDocument, format: 'json' },
+      sourcePath: 'selector-refused.factorio.ts',
+      prototypeProfile: { kind: 'builtin', identity: json.prototypeEnvironment!.identity },
+    });
+    expect(structuredClone(refusal)).toEqual(refusal);
+    expect(refusal.result).toMatchObject({
+      state: 'blocked',
+      diagnostics: [
+        expect.objectContaining({
+          category: 'unsupported-selector-configuration',
+          path: '$.blueprint.entities[0].control_behavior.select_highest_quality',
+        }),
+      ],
+    });
+    expect(refusal.result).not.toHaveProperty('source');
+    expect(refusal.result).not.toHaveProperty('correspondence');
+    expect(refusal.result).not.toHaveProperty('diagnosticContext');
+    expect(JSON.stringify(refusal)).not.toContain('trustedEntityReplayContext');
+    expect(JSON.stringify(refusal)).not.toContain('entityPrototypeResolver');
 
     expect(load).toHaveBeenCalledOnce();
     expect(compile).toHaveBeenCalledTimes(2);
