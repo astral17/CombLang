@@ -56,6 +56,13 @@ All Networks start empty at T0. The Constant emits 5 at T1, multiplication
 emits 10 at T2 and addition emits 11 at T3. Source execution builds the circuit;
 it does not run a simulation tick for each source statement.
 
+To turn a supported existing blueprint into editable CombLang source, use the
+workbench's verified **Blueprint to source** panel or the CLI import command.
+Both require the exact trusted prototype profiles and refuse fields outside the
+reviewed Constant, Arithmetic, Decider and Selector subset. See
+[Blueprint-to-source import](blueprint-source-import.md) for the supported
+shapes, the separate preview/replacement step, and a verified example.
+
 ## Run a first test
 
 Keep that circuit in Source and put the following in the test editor:

@@ -20,20 +20,21 @@ For a failing example, start with [Troubleshooting](troubleshooting.md).
 It distinguishes intent-preserving corrections, hardware alternatives and
 current implementation restrictions.
 
-| I want to…                                | Read                                                                                                                                                                       |
-| ----------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Select a signal, quality or wire color    | [Signals](language-reference.md#signals), [Networks and colors](language-reference.md#networks-and-colors), [Network selections](language-reference.md#network-selections) |
-| Add arithmetic or conditions              | [Arithmetic](api/arithmetic.md), [Decider](api/decider.md)                                                                                                                 |
-| Configure Constant sections               | [Constant and Section](api/constant.md)                                                                                                                                    |
-| Select or count input Signals             | [Selector](api/selector.md)                                                                                                                                                |
-| Connect both output wire colors           | [Output connections](language-reference.md#combinators-and-output-connections)                                                                                             |
-| Reuse a circuit-building function         | [Functions](api/functions.md), [ownership and multi-network](ownership-and-multi-network.md)                                                                               |
-| Create or configure a game entity         | [Entity](api/entity.md), [Blueprint schema catalog](blueprint-schema-catalog.md)                                                                                           |
-| Use a custom modpack's prototypes         | [prototypes](api/prototypes.md), [Prototype environment](prototype-environment.md)                                                                                         |
-| Test signal values and delays             | [Testbench](testbench.md#executable-files), [complete test examples](testbench-acceptance.md)                                                                              |
-| Understand an error or warning            | [Diagnostics](diagnostics.md)                                                                                                                                              |
-| Export JSON or process an exchange string | [Blueprint JSON](blueprint-json.md), [exchange codec](blueprint-exchange-codec.md)                                                                                         |
-| Declare and edit circuit parameters       | [Param](api/parameters.md), [binding and export](blueprint-json.md#source-export-cli)                                                                                      |
+| I want to…                                      | Read                                                                                                                                                                       |
+| ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Select a signal, quality or wire color          | [Signals](language-reference.md#signals), [Networks and colors](language-reference.md#networks-and-colors), [Network selections](language-reference.md#network-selections) |
+| Add arithmetic or conditions                    | [Arithmetic](api/arithmetic.md), [Decider](api/decider.md)                                                                                                                 |
+| Configure Constant sections                     | [Constant and Section](api/constant.md)                                                                                                                                    |
+| Select or count input Signals                   | [Selector](api/selector.md)                                                                                                                                                |
+| Connect both output wire colors                 | [Output connections](language-reference.md#combinators-and-output-connections)                                                                                             |
+| Reuse a circuit-building function               | [Functions](api/functions.md), [ownership and multi-network](ownership-and-multi-network.md)                                                                               |
+| Create or configure a game entity               | [Entity](api/entity.md), [Blueprint schema catalog](blueprint-schema-catalog.md)                                                                                           |
+| Use a custom modpack's prototypes               | [prototypes](api/prototypes.md), [Prototype environment](prototype-environment.md)                                                                                         |
+| Test signal values and delays                   | [Testbench](testbench.md#executable-files), [complete test examples](testbench-acceptance.md)                                                                              |
+| Understand an error or warning                  | [Diagnostics](diagnostics.md)                                                                                                                                              |
+| Import a supported blueprint as editable source | [Blueprint-to-source import](blueprint-source-import.md), [exchange codec](blueprint-exchange-codec.md)                                                                    |
+| Export JSON or process an exchange string       | [Blueprint JSON](blueprint-json.md), [exchange codec](blueprint-exchange-codec.md)                                                                                         |
+| Declare and edit circuit parameters             | [Param](api/parameters.md), [binding and export](blueprint-json.md#source-export-cli)                                                                                      |
 
 ## API reference
 

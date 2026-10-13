@@ -7,21 +7,32 @@ consequences of the same problem. An error prevents successful compilation; a
 warning does not. Related source locations can point to an earlier attachment,
 move, borrow or color requirement that caused the conflict.
 
-The examples below are independent programs. Each **Rejected** block deliberately
+The code examples below are independent programs. Each **Rejected** block deliberately
 fails. The following block shows a possible resolution, not necessarily an
 equivalent circuit: choose it only when its stated intent matches yours. The
 final warning example is valid as written and does not require a change. The
 shown codes describe these exact examples; uncertain dynamic types can instead
 be rejected when the operation executes.
 
-| Symptom                            | Read                                                                              |
-| ---------------------------------- | --------------------------------------------------------------------------------- |
-| Attaching a number fails           | [Connection sources](#a-number-is-not-a-connection-source)                        |
-| A third output fails               | [Output capacity](#one-combinator-cannot-drive-three-independent-output-networks) |
-| A union of red and green fails     | [Fixed colors](#a-network-union-cannot-keep-contradictory-fixed-colors)           |
-| An alias stops working after take  | [Consumed owners](#take-consumes-the-source-and-its-aliases)                      |
-| Returning a borrowed input fails   | [Borrowed returns](#a-readonly-borrow-cannot-be-returned-as-an-owned-network)     |
-| A combinator reports unused output | [Warnings](#unused-output-is-a-warning-not-removed-hardware)                      |
+| Symptom                                       | Read                                                                                           |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| Attaching a number fails                      | [Connection sources](#a-number-is-not-a-connection-source)                                     |
+| A third output fails                          | [Output capacity](#one-combinator-cannot-drive-three-independent-output-networks)              |
+| A union of red and green fails                | [Fixed colors](#a-network-union-cannot-keep-contradictory-fixed-colors)                        |
+| An alias stops working after take             | [Consumed owners](#take-consumes-the-source-and-its-aliases)                                   |
+| Returning a borrowed input fails              | [Borrowed returns](#a-readonly-borrow-cannot-be-returned-as-an-owned-network)                  |
+| A combinator reports unused output            | [Warnings](#unused-output-is-a-warning-not-removed-hardware)                                   |
+| A blueprint cannot be reconstructed as source | [Blueprint import is refused](#a-blueprint-root-can-still-be-outside-the-source-import-subset) |
+
+## A blueprint root can still be outside the source import subset
+
+Source import accepts only documented canonical device forms. For example,
+`$.blueprint.entities[0].control_behavior.select_highest_quality` identifies a
+Selector field outside the supported explicit Select/Count operations. Inspect
+the reported native path and the [blueprint-to-source import limits](blueprint-source-import.md#supported-source-subset).
+Keep the original blueprint intact; do not silently remove the field to force an
+import. Choose a source representation only when it preserves the behavior you
+need. Structural import verification is not a Factorio compatibility test.
 
 ## A number is not a connection source
 
