@@ -237,10 +237,14 @@ producers are Constant; any physical Entity must be linked to its producer.
 Item/fluid defaults, non-normal qualities, virtual wildcards, source defaults
 named `parameter-N`, placeholder-pool exhaustion, unused declarations and
 Signal use in any other native slot reject atomically with located `CP1002`.
-No general native replacement, native derived formulas/multipliers, or
-placement acceptance is implied. The bounded input transition is user-supplied
-Factorio 2.1.21 evidence with unspecified mods; generated-output game acceptance
-remains unverified.
+No general native replacement, native derived formulas/multipliers, or broader
+native acceptance is implied. For one user-reported placement of this generated
+virtual/normal Constant template in Factorio 2.1.21 (mods unspecified), both
+matching rows became virtual signal-B with counts 5 and 13; iron-plate and water,
+the red wire, relative layout and directions were preserved. The placed export
+contains no parameter metadata. This bounded report is not an independently run
+game gate. Parameterized save/reopen, other namespaces, qualities or native
+roles, and browser/mobile behavior remain unverified.
 
 Complete metadata example; requires trusted canonical Constant authority:
 

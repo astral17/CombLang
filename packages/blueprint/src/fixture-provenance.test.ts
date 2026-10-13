@@ -50,7 +50,15 @@ async function readExchange(url: URL): Promise<string> {
 }
 
 describe('blueprint fixture provenance', () => {
-  test.each(manifest.fixtures.filter((fixture) => fixture.factorioVersion === '2.1.21'))(
+  test.each(
+    manifest.fixtures.filter(
+      (fixture) =>
+        fixture.factorioVersion === '2.1.21' &&
+        ['signal-before.txt', 'signal-parameterized.txt', 'signal-placed.txt'].some(
+          (name) => fixture.path === `factorio-2.1.21/${name}`,
+        ),
+    ),
+  )(
     'pins the supplied Constant Signal transition fixture $id without claiming generated acceptance',
     async (fixture) => {
       expect(fixture).toMatchObject({
@@ -71,6 +79,36 @@ describe('blueprint fixture provenance', () => {
       expect(stringifyLosslessJson(roundTrip)).toBe(json);
     },
   );
+
+  test.each(
+    manifest.fixtures.filter(
+      (fixture) =>
+        fixture.factorioVersion === '2.1.21' &&
+        fixture.path === 'factorio-2.1.21/generated-signal-placed.txt',
+    ),
+  )('pins the bounded generated Constant placement observation $id', async (fixture) => {
+    expect(fixture).toMatchObject({
+      origin: 'factorio-export',
+      reviewStatus: 'generated-constant-signal-placement-reviewed',
+      expectedSemanticHeader: {
+        item: 'blueprint',
+        version: 562954249764875,
+        hasEntities: true,
+        hasWires: true,
+      },
+    });
+    const exchange = await readExchange(new URL(fixture.path, fixtureRoot));
+    expect(sha256(exchange)).toBe(fixture.encodedExchangeSha256);
+    const document = await decodeBlueprintExchange(exchange);
+    const json = stringifyLosslessJson(document);
+    expect(sha256(json)).toBe(fixture.decodedJsonSha256);
+    const projection = classifyBlueprintDocument(document);
+    expect(projection.kind).toBe('blueprint');
+    if (projection.kind !== 'blueprint') throw new Error('Expected blueprint root.');
+    expect(projection.semantic).toMatchObject(fixture.expectedSemanticHeader!);
+    const roundTrip = await decodeBlueprintExchange(await encodeBlueprintExchange(document));
+    expect(stringifyLosslessJson(roundTrip)).toBe(json);
+  });
 
   test.each(manifest.fixtures.filter((fixture) => fixture.factorioVersion === '2.1.17'))(
     'preserves the independent parameter document $id',
@@ -110,6 +148,7 @@ describe('blueprint fixture provenance', () => {
       'factorio-2.1.17/dependency-chain.txt',
       'factorio-2.1.17/display-quality.txt',
       'factorio-2.1.17/recipe-formulas.txt',
+      'factorio-2.1.21/generated-signal-placed.txt',
       'factorio-2.1.21/signal-before.txt',
       'factorio-2.1.21/signal-parameterized.txt',
       'factorio-2.1.21/signal-placed.txt',

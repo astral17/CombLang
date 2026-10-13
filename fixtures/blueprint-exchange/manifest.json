@@ -124,6 +124,22 @@
         "hasEntities": true,
         "hasWires": false
       }
+    },
+    {
+      "id": "user-reported-generated-constant-signal-placement",
+      "origin": "factorio-export",
+      "factorioVersion": "2.1.21",
+      "environment": "User-reported generated-template placement; encoded version identifies Factorio 2.1.21; SA reported for the earlier transition, not separately restated here; current mods unspecified; save/reopen not observed",
+      "path": "factorio-2.1.21/generated-signal-placed.txt",
+      "encodedExchangeSha256": "077a227d5d2a183d165b6ea5104b2a673ddb7821afe37326540146b4967e9213",
+      "decodedJsonSha256": "b942a2e378e940789da20bc79c593e073853167f76628cb081e633fcab3f0a62",
+      "reviewStatus": "generated-constant-signal-placement-reviewed",
+      "expectedSemanticHeader": {
+        "item": "blueprint",
+        "version": 562954249764875,
+        "hasEntities": true,
+        "hasWires": true
+      }
     }
   ],
   "externalEvidence": {

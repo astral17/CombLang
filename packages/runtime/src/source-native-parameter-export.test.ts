@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
+import { decodeBlueprintExchange, stringifyLosslessJson } from '@comblang/blueprint';
 import {
   createTrustedEntityReplayContext,
   generateBlueprintJson,
@@ -562,6 +563,108 @@ output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-
       if (existed) globals[key] = previous;
       else delete globals[key];
     }
+  });
+
+  test('replays the generated Constant Signal template against the reported placed export', async () => {
+    const compilation =
+      compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const output = new Network();
+output += Constant({
+  sections: [
+    {
+      filters: [
+        { signal: channel, value: 5 },
+        { signal: Signal('item', 'iron-plate'), value: 7 },
+        { signal: Signal('fluid', 'water'), value: 11 },
+      ],
+    },
+  ],
+}).at(4.5, -0.5);
+output += Constant({
+  sections: [{ filters: [{ signal: Signal('virtual', 'signal-A'), value: 13 }] }],
+}).at(4.5, 0.5);`);
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    const generated = emitNativeBlueprintJson(native);
+    type EvidenceFilter = { type?: string; name: string; count: number };
+    type EvidenceEntity = {
+      position: { x: number; y: number };
+      direction?: number;
+      control_behavior?: unknown;
+    };
+    type EvidenceBlueprint = {
+      entities: readonly EvidenceEntity[];
+      parameters?: readonly unknown[];
+      wires: readonly (readonly number[])[];
+    };
+    const generatedBlueprint = generated.blueprint as unknown as EvidenceBlueprint;
+    const exchange = readFileSync(
+      new URL(
+        '../../../fixtures/blueprint-exchange/factorio-2.1.21/generated-signal-placed.txt',
+        import.meta.url,
+      ),
+      'utf8',
+    ).replace(/\r?\n$/, '');
+    const placedDocument = await decodeBlueprintExchange(exchange);
+    const placed = JSON.parse(stringifyLosslessJson(placedDocument)) as {
+      blueprint: EvidenceBlueprint;
+    };
+
+    expect(generated.blueprint.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Channel',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    const filterRows = (blueprint: EvidenceBlueprint) =>
+      blueprint.entities.map((entity) => {
+        const behavior = entity.control_behavior as {
+          sections: { sections: { filters: EvidenceFilter[] }[] };
+        };
+        return behavior.sections.sections.flatMap((section) => section.filters);
+      });
+    const summarize = (rows: ReturnType<typeof filterRows>[number]) =>
+      rows.map(({ type, name, count }) => ({ type, name, count }));
+    const generatedRows = filterRows(generatedBlueprint);
+    expect(generatedRows.map(summarize)).toEqual([
+      [
+        { type: undefined, name: 'parameter-0', count: 5 },
+        { type: undefined, name: 'iron-plate', count: 7 },
+        { type: 'fluid', name: 'water', count: 11 },
+      ],
+      [{ type: undefined, name: 'parameter-0', count: 13 }],
+    ]);
+    for (const entityRows of generatedRows) {
+      for (const row of entityRows.filter(({ name }) => name === 'parameter-0')) {
+        expect(row).not.toHaveProperty('type');
+      }
+    }
+
+    expect(placed.blueprint).not.toHaveProperty('parameters');
+    const placedRows = filterRows(placed.blueprint);
+    expect(placedRows.map(summarize)).toEqual(
+      generatedRows.map((rows) =>
+        rows.map((row) =>
+          row.name === 'parameter-0'
+            ? { type: 'virtual', name: 'signal-B', count: row.count }
+            : { type: row.type, name: row.name, count: row.count },
+        ),
+      ),
+    );
+    expect(placed.blueprint.wires).toEqual([[1, 1, 2, 1]]);
+    expect(generatedBlueprint.wires).toEqual(placed.blueprint.wires);
+    expect(
+      placed.blueprint.entities.map(({ position, direction }) => ({
+        position: { x: position.x - 12, y: position.y + 1 },
+        direction,
+      })),
+    ).toEqual(
+      generatedBlueprint.entities.map(({ position, direction }) => ({
+        position,
+        direction,
+      })),
+    );
   });
 
   test('allocates distinct Signal originals in source order and changes only Constant identities', () => {

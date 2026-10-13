@@ -7,11 +7,14 @@ interface FilterJson {
   readonly type?: string;
   readonly name: string;
   readonly quality?: string;
+  readonly comparator?: string;
   readonly count: number;
 }
 
 interface EntityJson {
   readonly name: string;
+  readonly position?: { readonly x: number; readonly y: number };
+  readonly direction?: number;
   readonly control_behavior?: {
     readonly sections?: {
       readonly sections?: readonly { readonly filters?: readonly FilterJson[] }[];
@@ -23,6 +26,7 @@ interface BlueprintDocument {
   readonly blueprint?: {
     readonly entities?: readonly EntityJson[];
     readonly parameters?: readonly Record<string, unknown>[];
+    readonly wires?: readonly (readonly number[])[];
   };
 }
 
@@ -97,6 +101,31 @@ describe('user-supplied Factorio 2.1.21 Constant Signal transition', () => {
         { type: 'fluid', name: 'water', quality: 'normal', count: 11 },
       ],
       [{ type: 'virtual', name: 'signal-B', quality: 'normal', count: 13 }],
+    ]);
+  });
+
+  test('records the separate generated-template placement without inventing a saved checkpoint', async () => {
+    const placed = await readBlueprint('factorio-2.1.21/generated-signal-placed.txt');
+    const placedRows = constantRows(placed);
+    expect(
+      placedRows.map((rows) =>
+        rows.map((row) => ({ ...signalSummary(row), comparator: row.comparator })),
+      ),
+    ).toEqual([
+      [
+        { type: 'virtual', name: 'signal-B', quality: 'normal', count: 5, comparator: '=' },
+        { type: undefined, name: 'iron-plate', quality: 'normal', count: 7, comparator: '=' },
+        { type: 'fluid', name: 'water', quality: 'normal', count: 11, comparator: '=' },
+      ],
+      [{ type: 'virtual', name: 'signal-B', quality: 'normal', count: 13, comparator: '=' }],
+    ]);
+    expect(placed.blueprint).not.toHaveProperty('parameters');
+    expect(placed.blueprint?.wires).toEqual([[1, 1, 2, 1]]);
+    expect(
+      placed.blueprint?.entities?.map(({ position, direction }) => ({ position, direction })),
+    ).toEqual([
+      { position: { x: 16.5, y: -1.5 }, direction: 4 },
+      { position: { x: 16.5, y: -0.5 }, direction: 4 },
     ]);
   });
 });

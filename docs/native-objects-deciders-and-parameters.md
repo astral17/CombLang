@@ -372,8 +372,13 @@ atomically with located `CP1002`. Any other producer kind or unlinked physical
 Entity also rejects a source compilation that declares a Signal parameter.
 Numeric-only exports and ordinary concrete binding are unaffected. The reviewed
 input transition is user-supplied Factorio 2.1.21 Space Age evidence with mods
-unspecified; generated-output game acceptance, arbitrary wires and browser or
-mobile native placement have not been established.
+unspecified. The user also supplied the placed export for this one generated
+virtual/normal Constant template: both matching rows became virtual signal-B
+with counts 5 and 13, while iron-plate and water, the red wire, relative layout
+and directions were preserved; parameter metadata was absent after placement.
+This is a bounded user-reported observation, not an independently run game
+gate. Parameterized save/reopen, other namespaces, qualities or native roles,
+arbitrary wires, and browser/mobile native placement remain unverified.
 
 ### Numeric metadata
 
