@@ -157,8 +157,8 @@ and `dependent` fields are preserved opaquely. Native formula validity,
 original-value substitution and placement are not verified. Signal declarations,
 unsupported slots/expressions, unused parameters, ambiguous equal originals and
 non-int32 originals fail explicitly in `--parameters` native-metadata mode. See
-the precise supported slots and native
-limitations in [the parameter guide](native-objects-deciders-and-parameters.md).
+the [supported source slots](api/parameters.md#supported-fields) and
+[native-metadata export limits](api/parameters.md#formula-metadata-and-export-modes).
 
 Without `--output`, plain stdout contains only native JSON; warnings go to stderr.
 With `--json`, stdout contains `{ "ok": true, "document": ... }`, with

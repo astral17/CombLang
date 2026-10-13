@@ -262,11 +262,17 @@ metadata properties or reflection; the owning host can list numeric `metadata`.
 Owning number parameters may also form opaque local expressions with finite
 numbers via binary `+`, `-`, `*` and unary `-`. A derived expression is consumed
 only by an exact Arithmetic numeric `left` or `right` slot, a direct Constant
-filter count, or a Constant section multiplier and is evaluated by the
-registered host DAG during default compilation and binding. Direct parameter
-slots and direct-number circuit comparisons remain separate supported forms.
-Derived expressions do not produce booleans, circuit Conditions or native
-formula strings.
+filter count, a Constant section multiplier, or the right-hand numeric
+threshold of an exact Decider, `when`, or `IF` condition (including nested
+AND/OR conditions). It is evaluated by the registered host DAG during default
+compilation and binding. Direct parameter slots and direct-number circuit
+comparisons are also supported in those threshold forms. This is circuit
+configuration, not an ordinary JavaScript comparison: derived expressions do
+not produce booleans, circuit Conditions or native formula strings. Negated
+parameterized conditions remain unsupported; materialized parameterized `when`
+and `IF` require trusted canonical Decider authority, while parameter-free
+forms remain profile-free. See the [Param API](api/parameters.md#supported-fields)
+and [Decider threshold reference](api/decider.md#parameterized-thresholds).
 
 Native formula strings are opaque, distinct from internal host numeric DAGs.
 Local binding/simulation use explicit defaults or host overrides, never formulas.
@@ -670,10 +676,10 @@ concrete Signal, a direct current-session `Param.signal(...)` handle, or
 defaults are normalized immediately into the concrete configuration; host-local
 binding may override the output SignalID and numeric operands without changing
 hardware or topology. A bare Signal parameter is not a Network selection and
-remains invalid as `left` or `right`. Derived numeric expressions are limited
-to exact Arithmetic constant operands and direct Constant filter-count/multiplier
-slots; they do not enable parameter keys, compact Decider outputs, or expressions
-in other configuration families.
+remains invalid as `left` or `right`. Derived numeric expressions do not enable
+parameter keys, Decider output rows, dynamic operations, or other unsupported
+configuration fields; the supported Decider threshold is a separate right-hand
+condition slot.
 Explicit native metadata export still
 rejects Signal declarations with located `CP1002`. Ordinary compilation uses
 defaults; concrete parameter controls and CLI overrides use chosen bound values.

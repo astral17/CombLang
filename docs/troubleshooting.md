@@ -14,15 +14,19 @@ final warning example is valid as written and does not require a change. The
 shown codes describe these exact examples; uncertain dynamic types can instead
 be rejected when the operation executes.
 
-| Symptom                                       | Read                                                                                           |
-| --------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| Attaching a number fails                      | [Connection sources](#a-number-is-not-a-connection-source)                                     |
-| A third output fails                          | [Output capacity](#one-combinator-cannot-drive-three-independent-output-networks)              |
-| A union of red and green fails                | [Fixed colors](#a-network-union-cannot-keep-contradictory-fixed-colors)                        |
-| An alias stops working after take             | [Consumed owners](#take-consumes-the-source-and-its-aliases)                                   |
-| Returning a borrowed input fails              | [Borrowed returns](#a-readonly-borrow-cannot-be-returned-as-an-owned-network)                  |
-| A combinator reports unused output            | [Warnings](#unused-output-is-a-warning-not-removed-hardware)                                   |
-| A blueprint cannot be reconstructed as source | [Blueprint import is refused](#a-blueprint-root-can-still-be-outside-the-source-import-subset) |
+| Symptom                                                 | Read                                                                                                        |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Attaching a number fails                                | [Connection sources](#a-number-is-not-a-connection-source)                                                  |
+| A third output fails                                    | [Output capacity](#one-combinator-cannot-drive-three-independent-output-networks)                           |
+| A union of red and green fails                          | [Fixed colors](#a-network-union-cannot-keep-contradictory-fixed-colors)                                     |
+| An alias stops working after take                       | [Consumed owners](#take-consumes-the-source-and-its-aliases)                                                |
+| Returning a borrowed input fails                        | [Borrowed returns](#a-readonly-borrow-cannot-be-returned-as-an-owned-network)                               |
+| A combinator reports unused output                      | [Warnings](#unused-output-is-a-warning-not-removed-hardware)                                                |
+| A blueprint cannot be reconstructed as source           | [Blueprint import is refused](#a-blueprint-root-can-still-be-outside-the-source-import-subset)              |
+| A derived number is rejected in JavaScript or an output | [Numeric expressions have specific source slots](#a-numeric-expression-is-not-a-javascript-value-or-output) |
+| Parameterized `when` or `IF` is rejected                | [Trusted Decider authority](#parameterized-when-or-if-needs-trusted-decider-authority)                      |
+| A parameter binding fails                               | [Retry a failed binding](#a-failed-parameter-binding-can-be-retried)                                        |
+| Native export reports `CP1002` for a derived threshold  | [Local binding and native export differ](#a-derived-threshold-is-local-only)                                |
 
 ## A blueprint root can still be outside the source import subset
 
@@ -33,6 +37,46 @@ the reported native path and the [blueprint-to-source import limits](blueprint-s
 Keep the original blueprint intact; do not silently remove the field to force an
 import. Choose a source representation only when it preserves the behavior you
 need. Structural import verification is not a Factorio compatibility test.
+
+## A numeric expression is not a JavaScript value or output
+
+Owning number parameters and derived expressions are accepted only in the source
+slots listed in the [Param API](api/parameters.md#supported-fields). A right-hand
+numeric threshold in an exact Decider, `when`, or `IF` condition is a supported
+circuit slot; an ordinary JavaScript comparison, truthiness test, negated
+parameterized condition, or Decider output row is not. Move the expression into
+a supported configuration slot rather than coercing it or changing the circuit
+to source-time branching. See the complete [Decider example](api/decider.md#parameterized-thresholds).
+
+## Parameterized when or IF needs trusted Decider authority
+
+Materialized parameterized `when` and `IF` conditions require trusted canonical
+`entity:decider-combinator` authority. Select a prototype environment that
+provides that canonical profile; a different prototype with a similar name does
+not grant it. Ordinary parameter-free `when` and `IF` remain profile-free. See
+[Decider authority requirements](api/decider.md#exact-configuration-and-hardware)
+and the [prototype environment](prototype-environment.md).
+
+## A failed parameter binding can be retried
+
+Read the diagnostic and correct the reported value or source use, then apply the
+binding again against the still-retained source. A failed Worker bind does not
+expire its current session, though the workbench clears the previous preview,
+tests and copy payload while keeping edited fields for a retry. Recompile only
+after source/profile changes or if the Worker session was lost. CLI override
+errors also fail explicitly without creating output or silently using defaults.
+See [Worker binding lifetime](compiler-worker-parameters.md#parameter-binding)
+and [CLI override behavior](blueprint-json.md#source-export-cli).
+
+## A derived threshold is local only
+
+Local binding evaluates a supported derived numeric Decider threshold into a
+concrete condition. Explicit native numeric-template export cannot encode that
+expression and reports `CP1002`; it does not fall back to concrete export. Use
+ordinary export or concrete `--overrides` when the intended result is a chosen
+concrete circuit. Formula metadata is opaque and is not evaluated as a
+replacement. See [parameter export modes](api/parameters.md#formula-metadata-and-export-modes)
+and [blueprint export](blueprint-json.md#source-export-cli).
 
 ## A number is not a connection source
 

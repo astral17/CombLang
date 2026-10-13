@@ -198,21 +198,27 @@ const item = Param.signal('Item', Signal('item', 'iron-plate'));
 const limit = Param.number('Limit', 100);
 ```
 
-`Param` is reserved. Supported slots are an exact Arithmetic configuration's
-direct numeric operand, a derived local numeric expression or direct Signal
-output, an exact Constant filter's direct Signal or count (direct number
-parameter or derived expression) and a section's direct numeric multiplier
-(direct number parameter or derived expression), an
-exact Decider condition's direct right-hand numeric threshold, and exact
-Selector `select`'s `index` (number or Signal) or `count`'s `output` (Signal).
-Selector `selectMax` remains concrete; other Selector operations and slots are
-not parameterized. The defaults compile once into an ordinary concrete Plan
-and NCIR. Parameters are not JavaScript numbers, booleans, or loop bounds.
-Derived source expressions are limited to `+`, `-`, `*` and unary `-` and may
-only be consumed in exact Arithmetic numeric constant operands or direct
-Constant filter-count/multiplier slots; they remain opaque and cannot be used
-for control flow, coercion or comparisons. Unsupported declaration forms report a source diagnostic
-(`CL1050` for malformed syntax; `CP1000` for an invalid concrete default or metadata).
+`Param` is reserved. The canonical source-slot matrix is in the
+[Param API reference](api/parameters.md#supported-fields). Source supports an
+exact Arithmetic configuration's direct numeric operand, derived numeric
+expression or direct Signal output; exact Constant filter Signals/counts and
+section multipliers; the right-hand numeric threshold of an exact Decider,
+`when`, or `IF` condition; and exact Selector `select.index` (number or Signal)
+or `count.output` (Signal). Thresholds may use nested AND/OR conditions.
+Parameterized materialized `when`/`IF` requires trusted canonical Decider
+authority; ordinary parameter-free `when`/`IF` remains profile-free. Selector
+`selectMax` stays concrete; other Selector operations and slots are not
+parameterized. Defaults compile once into an ordinary concrete Plan and NCIR.
+Parameters are not JavaScript numbers, booleans, or loop bounds.
+
+Derived source expressions use `+`, `-`, `*` and unary `-`. They are consumed
+only in exact Arithmetic numeric operands, direct Constant filter counts or
+section multipliers, and right-hand numeric Decider thresholds in exact,
+fluent, or `IF` forms. This is limited circuit-configuration support, not a
+general JavaScript comparison: derived expressions do not produce booleans or
+circuit Conditions and cannot be used for control flow, coercion, or output
+rows. Unsupported declaration forms report a source diagnostic (`CL1050` for
+malformed syntax; `CP1000` for an invalid concrete default or metadata).
 
 ### Constant multiplier parameters
 
@@ -439,7 +445,8 @@ executing source again or changing the original concrete artifacts.
 Every declaration in this export subset must be a number parameter used only
 as a direct exact Constant filter count, direct Arithmetic constant operand
 (`left` or `right`), Selector `select` numeric index, or Decider
-constant-right comparison threshold, including leaves of nested AND/OR conditions.
+constant-right comparison threshold in exact `Decider`, `when`, or `IF`,
+including leaves of nested AND/OR conditions.
 Its explicit default is also its
 native original and must be an integer in [-2147483648, 2147483647]; it is not
 wrapped, rounded or allocated automatically. A zero count remains an explicit
@@ -454,8 +461,9 @@ For valid captured compilations, unsupported declarations or uses fail
 atomically with `CP1002`, a declaration or Constant/device-call source span,
 and a semantic path. Signal and unused parameters, symbolic Decider outputs (including else outputs),
 Selector Signal indices/count outputs, symbolic multipliers and derived numeric
-expressions are outside this subset; derived Arithmetic and Constant values fail
-with `CP1002` even when their local results are constant-equivalent. A marked Decider threshold is tracked by its
+expressions are outside this subset; derived Arithmetic, Constant, and Decider
+threshold values fail with `CP1002` even when their local results are
+constant-equivalent. A marked Decider threshold is tracked by its
 exact comparison-leaf path in the authenticated capture and concrete producer.
 The existing bounded native condition expansion identifies every emitted row of
 that leaf, including duplicated rows; each must retain the declared original.

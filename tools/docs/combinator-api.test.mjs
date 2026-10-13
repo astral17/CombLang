@@ -15,6 +15,22 @@ const pages = ['arithmetic', 'decider', 'constant', 'selector'];
 const read = (name) => readFileSync(resolve(root, 'docs', name), 'utf8');
 const blocks = (name) =>
   [...read(name).matchAll(/```ts\r?\n([\s\S]*?)```/g)].map((match) => match[1]);
+const exampleUnderHeading = (name, heading) => {
+  const lines = read(name).split(/\r?\n/);
+  const start = lines.indexOf(`## ${heading}`);
+  if (start < 0) throw new Error(`Missing ## ${heading} heading in ${name}.`);
+  const nextHeading = lines.findIndex((line, index) => index > start && /^## /.test(line));
+  const section = lines.slice(start + 1, nextHeading < 0 ? undefined : nextHeading).join('\n');
+  const example = section.match(/```ts\r?\n([\s\S]*?)```/)?.[1];
+  if (example === undefined) throw new Error(`Missing TypeScript example under ## ${heading}.`);
+  return example;
+};
+const deciderExamples = {
+  compact: exampleUnderHeading('api/decider.md', 'Compact example'),
+  fluent: exampleUnderHeading('api/decider.md', 'Fluent mutation example'),
+  exact: exampleUnderHeading('api/decider.md', 'Exact example'),
+  each: exampleUnderHeading('api/decider.md', 'Each redirection example'),
+};
 
 // Tiny synthetic canonical-family authority for documentation compilation only.
 function host(
@@ -145,7 +161,7 @@ describe('combinator API documentation', () => {
   });
 
   test('checks compact compound condition then/else tick behavior on one Decider', () => {
-    const compilation = compile(blocks('api/decider.md')[1]);
+    const compilation = compile(deciderExamples.compact);
     run(
       compilation,
       `
@@ -164,7 +180,7 @@ describe('combinator API documentation', () => {
   });
 
   test('checks fluent same-handle mutation, append returns and both branches', () => {
-    const compilation = compile(blocks('api/decider.md')[2]);
+    const compilation = compile(deciderExamples.fluent);
     const aliases = new Map(
       compilation.plan.networkAliases.map(({ name, network }) => [name, network]),
     );
@@ -189,7 +205,7 @@ describe('combinator API documentation', () => {
   });
 
   test('checks exact false output rows without adapter devices', () => {
-    const compilation = compile(blocks('api/decider.md')[3], true);
+    const compilation = compile(deciderExamples.exact, true);
     run(
       compilation,
       `
@@ -216,7 +232,7 @@ describe('combinator API documentation', () => {
 
   test('checks Each concrete redirection and one constant row per candidate', () => {
     run(
-      compile(blocks('api/decider.md')[4]),
+      compile(deciderExamples.each),
       `
       const A = Signal('virtual', 'signal-A');
       tick(2);
@@ -399,7 +415,7 @@ describe('combinator API documentation', () => {
   ])('requires trusted base authority for %s exact example %i', (name, index) => {
     const compilation = compileSourceProgram({
       path: 'missing-canonical-profile.factorio.ts',
-      text: blocks(`api/${name}.md`)[index],
+      text: name === 'decider' ? deciderExamples.exact : blocks(`api/${name}.md`)[index],
     });
     expect(compilation.pipelineDiagnostics).toEqual([
       expect.objectContaining({

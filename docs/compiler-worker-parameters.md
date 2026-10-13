@@ -52,7 +52,11 @@ data, not executable expressions.
 Export happens before local capture is stripped, with a single source execution.
 Failure of an explicit numeric/native export returns diagnostics and no fallback
 document, without adding errors to an otherwise successful compilation pipeline.
-Its concrete Plan/ResolvedCircuit remains usable for tests and simulation.
+Its concrete Plan/ResolvedCircuit remains usable for tests and simulation. In
+particular, a derived Decider threshold can be bound locally but is not a native
+numeric parameter: explicit native export reports `CP1002`, while a retained
+parameter-binding session for the successful compilation remains usable. The
+[Param API](api/parameters.md) is the source-slot and export-limit reference.
 Compile/preflight errors produce a failed requested export using the existing
 error diagnostics and do not attempt projection. Warnings remain in the compile
 pipeline and do not prevent export. Codes, source spans and related information
@@ -67,6 +71,9 @@ snapshotted immutably without invoking getters. Provider/profile validation,
 Worker cache selection and revision/progress behavior remain unchanged; options
 do not grant Entity authority or infer a provider. Exact combinators still need
 the existing selected profile or trusted Worker-local host environment.
+Parameterized materialized `when` and `IF` Deciders require the same trusted
+canonical Decider authority; ordinary parameter-free forms remain profile-free.
+See the [Decider threshold contract](api/decider.md#parameterized-thresholds).
 
 This provides an opt-in result transport, not parameter overrides or a binding
 protocol. Native formula evaluation,
@@ -134,6 +141,11 @@ does not execute source or reload a profile. `WP1007` reports a missing, expired
 or mismatched token/revision; valid-token binding preserves `CP1000`, `CP1001`,
 and `CP1002` diagnostics and source spans. Unexpected binding exceptions become
 `WP1008` without a stack or invented source span.
+
+When a supported parameterized Decider threshold is used, binding keeps the
+final normal and false branch rows of the captured producer, including rows
+appended after output attachment; it does not create another device. Exact and
+materialized fluent forms use the same canonical authority requirements.
 
 The token routes only to one in-memory session in that Worker runtime; it is not
 an authorization credential or persistent identifier. Starting any later parse
