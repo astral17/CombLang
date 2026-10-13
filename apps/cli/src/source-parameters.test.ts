@@ -2,8 +2,14 @@ import { mkdtemp, open, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, test, vi } from 'vitest';
+import {
+  createTrustedEntityReplayContext,
+  syntheticZeroPortEntityProfile,
+} from '@comblang/compiler';
+import type { EntityProfile } from '@comblang/compiler/entity';
+import { loadPrototypeDatabase, syntheticPrototypeDatabase } from '@comblang/prototypes';
 
-import { run } from './main.js';
+import { run, type CliCompilationEnvironment } from './main.js';
 import {
   parseSourceParameterListOptions,
   readSourceParameterOverrides,
@@ -25,6 +31,54 @@ async function temporaryFile(name: string, contents?: string | Uint8Array): Prom
 
 async function sourceFile(contents: string): Promise<string> {
   return temporaryFile('main.factorio.ts', contents);
+}
+
+async function parameterHost() {
+  const families = ['constant-combinator', 'decider-combinator'] as const;
+  const database = syntheticPrototypeDatabase() as { entities: Array<Record<string, unknown>> };
+  database.entities.push(
+    ...families.map((family) => ({
+      key: `entity:${family}`,
+      name: family,
+      type: family,
+      blueprintEligible: true,
+      tileWidth: 1,
+      tileHeight: 1,
+      circuit: {
+        read: false,
+        enableDisable: false,
+        readContents: false,
+        setFilters: false,
+        setRequests: false,
+        setRecipe: false,
+        readRecipe: false,
+        readFinishedCraft: false,
+        outputSignals: false,
+      },
+    })),
+  );
+  const { prototypes } = await loadPrototypeDatabase(database);
+  const identity = { schemaVersion: prototypes.schemaVersion, identity: prototypes.identity };
+  const profiles = families.map((family, index): EntityProfile => ({
+    ...structuredClone(syntheticZeroPortEntityProfile),
+    ref: {
+      ...syntheticZeroPortEntityProfile.ref,
+      database: identity,
+      prototypeKey: `entity:${family}`,
+      profileId: `profile:cli-parameter-list-${index}` as EntityProfile['ref']['profileId'],
+    },
+    prototypeType: family,
+  }));
+  const trustedEntityReplayContext = createTrustedEntityReplayContext({
+    database: identity,
+    source: 'synthetic',
+    evidenceIdentity: 'cli-parameter-list-test-evidence',
+    policyIdentity: 'cli-parameter-list-test-policy',
+    profiles,
+  });
+  return {
+    environment: { prototypes, trustedEntityReplayContext } satisfies CliCompilationEnvironment,
+  };
 }
 
 describe('source parameter listing CLI options', () => {
@@ -214,6 +268,7 @@ output += CC(5 * Signal('virtual', 'signal-output'));`);
   });
 
   test('lists number descriptors without exposing local expression roots or views', async () => {
+    const { environment } = await parameterHost();
     const key = '__comblang_cli_local_expression_list_runs';
     const globals = globalThis as Record<string, unknown>;
     const previous = globals[key];
@@ -222,10 +277,16 @@ output += CC(5 * Signal('virtual', 'signal-output'));`);
 const amount = Param.number('Amount', 5);
 const factor = Param.number('Factor', 2);
 const count = (amount + 1) * factor;
-const right = amount - 1;`);
+const right = amount - 1;
+const threshold = amount * 2 - 1;
+const A = Signal('virtual', 'signal-A', 'rare');
+const input = new Network();
+const output = new Network();
+input += CC(7 * A);
+output += Decider({ condition: input[A] > threshold, outputs: [input[A]] });`);
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     try {
-      expect(await run(['parameters', 'list', '--json', path])).toBe(0);
+      expect(await run(['parameters', 'list', '--json', path], environment)).toBe(0);
       const report = JSON.parse(String(log.mock.calls[0]?.[0]));
       expect(report).toMatchObject({
         ok: true,

@@ -36,7 +36,12 @@ const chosen = [
 
 // Private synthetic authority fixture: exercises replay, not native Factorio behavior.
 async function parameterHost() {
-  const families = ['constant-combinator', 'arithmetic-combinator', 'structural'] as const;
+  const families = [
+    'constant-combinator',
+    'arithmetic-combinator',
+    'structural',
+    'decider-combinator',
+  ] as const;
   const database = syntheticPrototypeDatabase() as { entities: Array<Record<string, unknown>> };
   database.entities.push(
     ...families.map((family) => ({
@@ -677,6 +682,86 @@ test('primary fresh session two', ({ network, tick, expectSignal }) => {
     expect(arithmetic.control_behavior.arithmetic_conditions.second_constant).toBe(8);
     expect(globals[sourceCounter]).toBe(2);
     expect(globals[testCounter]).toBe(1);
+  });
+
+  test('tests exact derived Decider thresholds at defaults and one override snapshot', async () => {
+    const { environment } = await parameterHost();
+    const expressionSource = `${counted}const A = Signal('virtual', 'signal-A', 'rare');
+const amount = Param.number('Amount', 5);
+const threshold = amount * 2 - 1;
+const input = new Network();
+const output = new Network();
+input += CC(7 * A);
+output += Decider({ condition: input[A] > threshold, outputs: [input[A]] });`;
+    const testSource = (expected: number) => `${registered}
+const A = Signal('virtual', 'signal-A', 'rare');
+test('a driven session is discarded', ({ network, drive, tick, expectSignal }) => {
+  expectSignal(network('input'), A).toBe(0);
+  drive(network('input'), [[A, 100]]);
+  tick(3);
+});
+test('fresh T0 uses the selected threshold', ({ network, tick, expectSignal }) => {
+  expectSignal(network('input'), A).toBe(0);
+  expectSignal(network('output'), A).toBe(0);
+  tick(2);
+  expectSignal(network('input'), A).toBe(7);
+  expectSignal(network('output'), A).toBe(${expected});
+  expectSignal(network('output'), Signal('virtual', 'signal-A')).toBe(0);
+});`;
+
+    const defaults = await files(expressionSource, testSource(0), []);
+    const defaultCapture = capture();
+    expect(await run(['test', '--json', defaults.sourcePath, defaults.testPath], environment)).toBe(
+      0,
+    );
+    expect(defaultCapture.report().tests).toMatchObject({ passed: 2, failed: 0 });
+    expect(globals[sourceCounter]).toBe(1);
+    expect(globals[testCounter]).toBe(1);
+
+    const overrides = await files(expressionSource, testSource(7), [{ id: 0, value: 3 }]);
+    const overrideCapture = capture();
+    expect(
+      await run(
+        [
+          'test',
+          '--json',
+          '--overrides',
+          overrides.valuesPath,
+          overrides.sourcePath,
+          overrides.testPath,
+        ],
+        environment,
+      ),
+    ).toBe(0);
+    expect(overrideCapture.report().tests).toMatchObject({ passed: 2, failed: 0 });
+    expect(globals[sourceCounter]).toBe(1);
+    expect(globals[testCounter]).toBe(1);
+
+    const invalid = await files(expressionSource, `${registered}test('must not run', () => {});`, [
+      { id: 0, value: 0.25 },
+    ]);
+    const invalidCapture = capture();
+    expect(
+      await run(
+        ['test', '--json', '--overrides', invalid.valuesPath, invalid.sourcePath, invalid.testPath],
+        environment,
+      ),
+    ).toBe(1);
+    const failure = invalidCapture.report();
+    const diagnostic = failure.diagnostics.find((item: { code: string }) => item.code === 'CP1000');
+    expect(diagnostic).toMatchObject({
+      code: 'CP1000',
+      severity: 'error',
+      message: expect.stringContaining('Decider constant values must be safe integers'),
+      span: { fileId: expect.any(String), start: expect.any(Number), end: expect.any(Number) },
+    });
+    expect(diagnostic.span.fileId).toContain(invalid.sourcePath.replaceAll('\\', '/'));
+    expect(expressionSource.slice(diagnostic.span.start, diagnostic.span.end)).toContain(
+      "Param.number('Amount', 5)",
+    );
+    expect(failure).not.toHaveProperty('tests');
+    expect(globals[sourceCounter]).toBe(1);
+    expect(globals[testCounter]).toBe(0);
   });
 
   test('preserves Signal quality beside a derived Constant count through CLI tests and JSON', async () => {

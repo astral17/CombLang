@@ -609,6 +609,127 @@ output += Arithmetic({ left: input[A], operation: 'multiply', right: amount - 1,
     }
   });
 
+  test('exports exact derived Decider thresholds locally and refuses native templates without fallback', async () => {
+    const { environment } = await parameterHost();
+    const key = '__comblang_cli_decider_threshold_export_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const previous = globals[key];
+    globals[key] = 0;
+    const text = `globalThis.${key} = Number(globalThis.${key} ?? 0) + 1;
+const A = Signal('virtual', 'signal-A', 'rare');
+const amount = Param.number('Amount', 5);
+const threshold = amount * 2 - 1;
+const input = new Network();
+const output = new Network();
+input += CC(7 * A);
+output += Decider({ condition: input[A] > threshold, outputs: [input[A]] });`;
+    try {
+      const path = await sourceFile(text);
+      const valuesPath = join(dirname(path), 'threshold-values.json');
+      const rejectedPath = join(dirname(path), 'native-template.json');
+      await writeFile(valuesPath, JSON.stringify([{ id: 0, value: 3 }]));
+      const { log, error } = capture();
+
+      expect(await run(['blueprint', 'export', '--json', path], environment)).toBe(0);
+      const defaults = JSON.parse(String(log.mock.calls[0]?.[0])).document;
+      expect(globals[key]).toBe(1);
+      expect(
+        await run(['blueprint', 'export', '--json', '--overrides', valuesPath, path], environment),
+      ).toBe(0);
+      const overridden = JSON.parse(String(log.mock.calls[1]?.[0])).document;
+      expect(globals[key]).toBe(2);
+
+      const device = (document: typeof defaults, name: string) =>
+        document.blueprint.entities.find((candidate: { name: string }) => candidate.name === name);
+      expect(defaults.blueprint.entities.map((item: { name: string }) => item.name)).toEqual([
+        'constant-combinator',
+        'decider-combinator',
+      ]);
+      expect(device(defaults, 'constant-combinator').control_behavior).toMatchObject({
+        sections: { sections: [{ filters: [{ name: 'signal-A', quality: 'rare', count: 7 }] }] },
+      });
+      expect(
+        device(defaults, 'decider-combinator').control_behavior.decider_conditions,
+      ).toMatchObject({
+        conditions: [
+          {
+            first_signal: { name: 'signal-A', quality: 'rare' },
+            comparator: '>',
+            constant: 9,
+          },
+        ],
+        outputs: [{ signal: { name: 'signal-A', quality: 'rare' }, copy_count_from_input: true }],
+      });
+      expect(
+        device(overridden, 'decider-combinator').control_behavior.decider_conditions.conditions[0],
+      ).toMatchObject({
+        first_signal: { name: 'signal-A', quality: 'rare' },
+        comparator: '>',
+        constant: 5,
+      });
+      expect(overridden.blueprint.entities.map((item: { name: string }) => item.name)).toEqual(
+        defaults.blueprint.entities.map((item: { name: string }) => item.name),
+      );
+      expect(
+        overridden.blueprint.entities.map(
+          ({
+            entity_number,
+            position,
+            direction,
+          }: {
+            entity_number: number;
+            position: unknown;
+            direction: number;
+          }) => ({
+            entity_number,
+            position,
+            direction,
+          }),
+        ),
+      ).toEqual(
+        defaults.blueprint.entities.map(
+          ({
+            entity_number,
+            position,
+            direction,
+          }: {
+            entity_number: number;
+            position: unknown;
+            direction: number;
+          }) => ({
+            entity_number,
+            position,
+            direction,
+          }),
+        ),
+      );
+      expect(overridden.blueprint.wires).toEqual(defaults.blueprint.wires);
+
+      log.mockClear();
+      expect(
+        await run(
+          ['blueprint', 'export', '--parameters', '--json', '--output', rejectedPath, path],
+          environment,
+        ),
+      ).toBe(2);
+      const nativeFailure = JSON.parse(String(log.mock.calls[0]?.[0]));
+      expect(nativeFailure).toMatchObject({
+        ok: false,
+        error: {
+          code: 'CP1002',
+          span: { fileId: expect.any(String), start: expect.any(Number), end: expect.any(Number) },
+        },
+      });
+      expect(nativeFailure).not.toHaveProperty('document');
+      await expect(stat(rejectedPath)).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(globals[key]).toBe(3);
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete globals[key];
+      else globals[key] = previous;
+    }
+  });
+
   test.each([
     [
       'Constant filter count',

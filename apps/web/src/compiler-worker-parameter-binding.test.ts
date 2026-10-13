@@ -60,7 +60,7 @@ output += Arithmetic({ left: input[A], operation: 'multiply', right: amount - 1,
 };
 
 function parameterHost() {
-  const families = ['constant-combinator', 'arithmetic-combinator'] as const;
+  const families = ['constant-combinator', 'arithmetic-combinator', 'decider-combinator'] as const;
   const profiles: EntityProfile[] = families.map((family, index) => ({
     ...structuredClone(syntheticZeroPortEntityProfile),
     ref: {
@@ -490,6 +490,226 @@ test('primary independent session', ({ network, tick, expectSignal }) => {
       const wires = consume(defaults, 12, 4, 48);
       expect(consume(overridden, 30, 8, 240)).toEqual(wires);
       expect(consume(reset, 12, 4, 48)).toEqual(wires);
+      expect(globals[localExpressionRunKey]).toBe(1);
+    } finally {
+      if (previous === undefined) delete globals[localExpressionRunKey];
+      else globals[localExpressionRunKey] = previous;
+    }
+  });
+
+  test('binds exact Decider thresholds through retained Worker consumers and native refusal', async () => {
+    const globals = globalThis as Record<string, unknown>;
+    const previous = globals[localExpressionRunKey];
+    globals[localExpressionRunKey] = 0;
+    try {
+      const runtime = parameterRuntime();
+      const file = {
+        path: 'worker-decider-threshold.factorio.ts',
+        text: `globalThis.${localExpressionRunKey} = Number(globalThis.${localExpressionRunKey} ?? 0) + 1;
+const A = Signal('virtual', 'signal-A', 'rare');
+const amount = Param.number('Amount', 5);
+const threshold = amount * 2 - 1;
+const input = new Network();
+const output = new Network();
+input += CC(7 * A);
+output += Decider({ condition: input[A] > threshold, outputs: [input[A]] });`,
+      };
+      const parsed = structuredClone(
+        await runtime.handle(
+          parseRequest(230, {
+            file,
+            parameterBinding: true,
+            blueprintExport: { parameters: true },
+          }),
+        ),
+      );
+      expect(structuredClone(parsed)).toEqual(parsed);
+      expect(globals[localExpressionRunKey]).toBe(1);
+      expect(parsed.result.pipelineDiagnostics).toEqual([]);
+      expect(parsed.result.blueprintExport).toMatchObject({
+        ok: false,
+        diagnostics: [
+          {
+            code: 'CP1002',
+            severity: 'error',
+            span: {
+              fileId: expect.any(String),
+              start: expect.any(Number),
+              end: expect.any(Number),
+            },
+          },
+        ],
+      });
+      const binding = parsed.parameterBinding;
+      if (
+        binding?.ok !== true ||
+        binding.token === undefined ||
+        parsed.result.plan === undefined ||
+        parsed.result.resolvedCircuit === undefined
+      ) {
+        throw new Error('Expected the retained Decider parameter session despite export refusal.');
+      }
+      expect(binding.parameters).toMatchObject([
+        { id: 0, kind: 'number', label: 'Amount', defaultValue: 5 },
+      ]);
+      expect(structuredClone(binding.parameters)).toEqual(binding.parameters);
+
+      let revision = parsed.revision;
+      const bind = (value?: number) => {
+        const request: CompilerWorkerBindRequest = {
+          kind: 'bind-parameters',
+          revision: ++revision,
+          sourceRevision: parsed.revision,
+          token: binding.token!,
+          overrides: value === undefined ? [] : [{ id: 0, value }],
+        };
+        const response: CompilerWorkerBoundResponse = structuredClone(
+          runtime.handleBinding(structuredClone(request)),
+        );
+        expect(structuredClone(response)).toEqual(response);
+        expect(globals[localExpressionRunKey]).toBe(1);
+        return response;
+      };
+      const pair = (response: CompilerWorkerBoundResponse) => {
+        if (!response.result.ok) throw new Error('Expected a valid Decider parameter binding.');
+        return response.result;
+      };
+      const defaults = pair(bind());
+      const defaultsBefore = structuredClone(defaults);
+      const overridden = pair(bind(3));
+      const overriddenBefore = structuredClone(overridden);
+      const invalid = bind(0.25);
+      expect(invalid.result).toMatchObject({
+        ok: false,
+        diagnostics: [
+          {
+            code: 'CP1000',
+            severity: 'error',
+            span: binding.parameters[0]!.source,
+          },
+        ],
+      });
+      expect(invalid.result).not.toHaveProperty('plan');
+      expect(invalid.result).not.toHaveProperty('resolvedCircuit');
+      expect(defaults).toEqual(defaultsBefore);
+      expect(overridden).toEqual(overriddenBefore);
+      const retry = pair(bind(3));
+      const reset = pair(bind());
+      expect(reset.plan).toEqual(defaults.plan);
+      expect(reset.resolvedCircuit).toEqual(defaults.resolvedCircuit);
+
+      const topology = (selected: typeof defaults) => ({
+        entities: selected.plan.entities.map(({ id, profile }) => ({
+          id,
+          profileId: profile.profileId,
+        })),
+        producers: selected.plan.producers.map(({ entityId, kind }) => ({ entityId, kind })),
+        placements: selected.resolvedCircuit.ir.entities.map(({ id, placement }) => ({
+          id,
+          placement,
+        })),
+        networks: selected.resolvedCircuit.ir.networks,
+        networkPairs: selected.plan.networkPairs,
+      });
+      expect(topology(overridden)).toEqual(topology(defaults));
+      expect(topology(reset)).toEqual(topology(defaults));
+
+      const consume = (selected: typeof defaults, thresholdValue: number, expected: number) => {
+        const before = structuredClone(selected);
+        const artifact = createSourceCircuitArtifact(selected.plan, selected.resolvedCircuit);
+        const constant = artifact.blueprint.blueprint.entities.find(
+          ({ name }) => name === 'constant-combinator',
+        );
+        const decider = artifact.blueprint.blueprint.entities.find(
+          ({ name }) => name === 'decider-combinator',
+        );
+        expect(artifact.blueprint.blueprint.entities).toHaveLength(2);
+        expect(constant?.control_behavior).toMatchObject({
+          sections: {
+            sections: [{ filters: [{ name: 'signal-A', quality: 'rare', count: 7 }] }],
+          },
+        });
+        expect(decider?.control_behavior).toMatchObject({
+          decider_conditions: {
+            conditions: [
+              {
+                first_signal: { name: 'signal-A', quality: 'rare' },
+                comparator: '>',
+                constant: thresholdValue,
+              },
+            ],
+            outputs: [
+              { signal: { name: 'signal-A', quality: 'rare' }, copy_count_from_input: true },
+            ],
+          },
+        });
+        expect(artifact.blueprint.blueprint).not.toHaveProperty('parameters');
+        const controller = new SourceSimulationController(artifact);
+        const rare = signal('virtual', 'signal-A', 'rare');
+        expect(controller.currentTick).toBe(0);
+        expect(controller.timeline).toHaveLength(1);
+        expect(controller.timeline[0]!.networks.every(({ signals }) => signals.length === 0)).toBe(
+          true,
+        );
+        expect(controller.signalValueAt(0, 'input', rare)).toBe(0);
+        expect(controller.signalValueAt(0, 'output', rare)).toBe(0);
+        controller.stepFrom(0);
+        expect(controller.signalValueAt(1, 'input', rare)).toBe(7);
+        expect(controller.signalValueAt(1, 'output', rare)).toBe(0);
+        controller.stepFrom(1);
+        expect(controller.signalValueAt(2, 'output', rare)).toBe(expected);
+        expect(controller.signalValueAt(2, 'output', signal('virtual', 'signal-A'))).toBe(0);
+
+        const panel = selectBlueprintPanel({ parameters: false, concrete: artifact.blueprint });
+        expect(panel.copyPayload).toBe(JSON.stringify(artifact.blueprint, null, 2));
+        expect(
+          selectBlueprintPanel({ parameters: true, concrete: artifact.blueprint }),
+        ).toMatchObject({ state: 'invalid', status: 'Parameter export unavailable' });
+        const webTests = runWebTests(
+          selected.plan,
+          `const A = Signal('virtual', 'signal-A', 'rare');
+test('fresh exact Decider result', ({ network, tick, expectSignal }) => {
+  expectSignal(network('input'), A).toBe(0);
+  expectSignal(network('output'), A).toBe(0);
+  tick(2);
+  expectSignal(network('input'), A).toBe(7);
+  expectSignal(network('output'), A).toBe(${expected});
+  expectSignal(network('output'), Signal('virtual', 'signal-A')).toBe(0);
+});
+test('a later test starts from empty T0', ({ network, tick, expectSignal }) => {
+  expectSignal(network('input'), A).toBe(0);
+  expectSignal(network('output'), A).toBe(0);
+  tick(2);
+  expectSignal(network('input'), A).toBe(7);
+  expectSignal(network('output'), A).toBe(${expected});
+});`,
+          selected.resolvedCircuit,
+        );
+        expect(webTests).toMatchObject({ passed: 2, failed: 0 });
+        expect(selected).toEqual(before);
+        controller.reset();
+        expect(controller.currentTick).toBe(0);
+        expect(controller.timeline).toHaveLength(1);
+        expect(controller.signalValueAt(0, 'output', rare)).toBe(0);
+        return artifact.blueprint.blueprint.wires;
+      };
+
+      const wires = consume(defaults, 9, 0);
+      expect(consume(overridden, 5, 7)).toEqual(wires);
+      expect(consume(retry, 5, 7)).toEqual(wires);
+      expect(consume(reset, 9, 0)).toEqual(wires);
+      expect(() =>
+        createSourceCircuitArtifact(defaults.plan, overridden.resolvedCircuit),
+      ).toThrow();
+      expect(
+        runWebTests(
+          defaults.plan,
+          "test('mismatched Decider pair', () => {});",
+          overridden.resolvedCircuit,
+        ),
+      ).toMatchObject({ passed: 0, failed: 1 });
+      expect(defaults).toEqual(defaultsBefore);
+      expect(overridden).toEqual(overriddenBefore);
       expect(globals[localExpressionRunKey]).toBe(1);
     } finally {
       if (previous === undefined) delete globals[localExpressionRunKey];
