@@ -998,11 +998,6 @@ output += Constant({ sections: [{ multiplier: scale * 0.5, filters: [] }] });`,
       'Numeric expressions accept only finite numbers and owning number parameters.',
     ],
     [
-      'Decider({ condition: input[A] > (amount + 1), outputs: [input[A]] })',
-      'RT2029',
-      'A derived source numeric expression can only be consumed in an exact Arithmetic operand or Constant filter-count/multiplier slot.',
-    ],
-    [
       "Selector({ input, operation: 'select', index: amount + 1 })",
       'CP1001',
       '$.expression: Source numeric expression views are opaque and cannot be inspected or coerced.',
@@ -1031,6 +1026,38 @@ output += Constant({ sections: [{ multiplier: scale * 0.5, filters: [] }] });`,
       );
     },
   );
+
+  test('binds a derived Decider threshold locally but refuses native-template export', () => {
+    const text = `${exactSource}
+const input = new Network();
+const threshold = amount + 1;
+output += Decider({ condition: input[A] > threshold, outputs: [input[A]] });`;
+    const compilation = compile(text);
+    const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+    const amount = sourceApi.listSourceCompilationParameters(compilation)[0]!.parameter;
+    const defaults = sourceApi.bindSourceCompilationCircuit(compilation);
+    const overridden = sourceApi.bindSourceCompilationCircuit(compilation, [
+      { parameter: amount, value: 9 },
+    ]);
+    const condition = (pair: typeof defaults) => {
+      const decider = pair.plan.producers.find(({ kind }) => kind === 'decider');
+      if (decider?.kind !== 'decider') throw new Error('Expected an exact Decider.');
+      return decider.condition;
+    };
+
+    expect(condition(defaults)).toMatchObject({ kind: 'compare-signal', constant: 6 });
+    expect(condition(overridden)).toMatchObject({ kind: 'compare-signal', constant: 10 });
+    expect(exportFailure(compilation)).toMatchObject({
+      code: 'CP1002',
+      span: expect.objectContaining({ fileId: compilation.fileId }),
+    });
+    expect(
+      condition(
+        sourceApi.bindSourceCompilationCircuit(compilation, [{ parameter: amount, value: 7 }]),
+      ),
+    ).toMatchObject({ kind: 'compare-signal', constant: 8 });
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
+  });
 
   test('does not grant export authority to copied compilations or transport artifacts', () => {
     const compilation = compile(mixedSource);

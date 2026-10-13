@@ -489,7 +489,10 @@ class ElaborationRecorder {
   readonly #constantTemplates: CapturedConstantConfigurationTemplate[] = [];
   readonly #deciderTemplates: CapturedDeciderConfigurationTemplate[] = [];
   readonly #selectorTemplates: CapturedSelectorConfigurationTemplate[] = [];
-  readonly #deciderParameterSlots = new WeakMap<object, BlueprintNumberParameterHandle>();
+  readonly #deciderParameterSlots = new WeakMap<
+    object,
+    BlueprintNumberParameterHandle | BlueprintNumericExpression
+  >();
   readonly #combinatorByOutput = new Map<NetworkOwnershipState, CombinatorValue>();
   readonly #runtimeValues = new RuntimeValueRegistry();
   readonly #deciderMemberAliases = new WeakMap<
@@ -1735,14 +1738,52 @@ class ElaborationRecorder {
     },
     compare: (operator: string, left: unknown, right: unknown, rawSpan: RawSpan): unknown => {
       this.#rejectDerivedNumericExpression(left, rawSpan);
-      this.#rejectDerivedNumericExpression(right, rawSpan);
       let normalizedRight = right;
-      let parameter: BlueprintNumberParameterHandle | undefined;
+      let parameter: BlueprintNumberParameterHandle | BlueprintNumericExpression | undefined;
+      const rightExpression = findSourceNumericExpressionView(right);
+      if (rightExpression !== undefined) {
+        try {
+          if (this.#parameterCapture === undefined) {
+            throw new Error('Source numeric expressions require an owning parameter session.');
+          }
+          if (rightExpression.session !== this.#parameterCapture.session) {
+            throw new Error('Source numeric expression belongs to a different parameter session.');
+          }
+          if (!this.#isCircuitDslValue(left)) {
+            throw new Error(
+              'A source numeric expression is supported only as the right constant of an exact Decider condition.',
+            );
+          }
+          normalizedRight = circuitConstant(
+            evaluateBlueprintNumericExpression(
+              this.#parameterCapture.session,
+              rightExpression.expression,
+            ),
+          );
+          parameter = rightExpression.expression;
+        } catch (error) {
+          throw new ElaborationExecutionError(
+            error instanceof Error ? error.message : 'Invalid Decider numeric expression slot.',
+            this.#span(rawSpan),
+            'RT2027',
+            undefined,
+            { cause: error },
+          );
+        }
+      } else {
+        this.#rejectDerivedNumericExpression(right, rawSpan);
+      }
       const rightIsParameter =
-        findBlueprintParameterHandle(right) !== undefined || isBlueprintParameterShaped(right);
+        rightExpression !== undefined ||
+        findBlueprintParameterHandle(right) !== undefined ||
+        isBlueprintParameterShaped(right);
       const leftIsParameter =
         findBlueprintParameterHandle(left) !== undefined || isBlueprintParameterShaped(left);
-      if (this.#parameterCapture !== undefined && (rightIsParameter || leftIsParameter)) {
+      if (
+        rightExpression === undefined &&
+        this.#parameterCapture !== undefined &&
+        (rightIsParameter || leftIsParameter)
+      ) {
         try {
           if (!rightIsParameter || leftIsParameter || !this.#isCircuitDslValue(left)) {
             throw new Error(
@@ -4272,7 +4313,7 @@ class ElaborationRecorder {
   #rejectDerivedNumericExpression(value: unknown, rawSpan: RawSpan): void {
     if (findSourceNumericExpressionView(value) === undefined) return;
     throw new ElaborationExecutionError(
-      'A derived source numeric expression can only be consumed in an exact Arithmetic operand or Constant filter-count/multiplier slot.',
+      'A derived source numeric expression can only be consumed in an exact Arithmetic operand, Constant filter-count/multiplier slot, or right-hand numeric threshold of an exact Decider condition.',
       this.#span(rawSpan),
       'RT2029',
     );
@@ -6317,7 +6358,7 @@ class ElaborationRecorder {
         : this.#deciderParameterSlots.has(value as object);
     if (containsParameter(condition)) {
       throw new ElaborationExecutionError(
-        'Source number parameters are supported only in exact Decider configuration conditions, not mutable branches, IF/when, or negated conditions.',
+        'Source number parameters and derived numeric expressions are supported only in exact Decider configuration conditions, not mutable branches, IF/when, or negated conditions.',
         this.#span(rawSpan),
         'RT2027',
       );
