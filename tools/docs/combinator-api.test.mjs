@@ -91,7 +91,7 @@ describe('combinator API documentation', () => {
 
   test.each([
     ['arithmetic', [3, 2, 2], [false, true, true]],
-    ['decider', [2, 2, 2, 2], [false, false, true, false]],
+    ['decider', [2, 2, 2, 2, 2], [true, false, false, true, false]],
     ['constant', [1, 1, 1, 1, 1], [false, false, true, true, true]],
     ['selector', [4, 3], [true, true]],
   ])(
@@ -145,7 +145,7 @@ describe('combinator API documentation', () => {
   });
 
   test('checks compact compound condition then/else tick behavior on one Decider', () => {
-    const compilation = compile(blocks('api/decider.md')[0]);
+    const compilation = compile(blocks('api/decider.md')[1]);
     run(
       compilation,
       `
@@ -164,7 +164,7 @@ describe('combinator API documentation', () => {
   });
 
   test('checks fluent same-handle mutation, append returns and both branches', () => {
-    const compilation = compile(blocks('api/decider.md')[1]);
+    const compilation = compile(blocks('api/decider.md')[2]);
     const aliases = new Map(
       compilation.plan.networkAliases.map(({ name, network }) => [name, network]),
     );
@@ -189,7 +189,7 @@ describe('combinator API documentation', () => {
   });
 
   test('checks exact false output rows without adapter devices', () => {
-    const compilation = compile(blocks('api/decider.md')[2], true);
+    const compilation = compile(blocks('api/decider.md')[3], true);
     run(
       compilation,
       `
@@ -216,7 +216,7 @@ describe('combinator API documentation', () => {
 
   test('checks Each concrete redirection and one constant row per candidate', () => {
     run(
-      compile(blocks('api/decider.md')[3]),
+      compile(blocks('api/decider.md')[4]),
       `
       const A = Signal('virtual', 'signal-A');
       tick(2);
@@ -393,7 +393,7 @@ describe('combinator API documentation', () => {
 
   test.each([
     ['arithmetic', 1],
-    ['decider', 2],
+    ['decider', 3],
     ['constant', 2],
     ['constant', 3],
   ])('requires trusted base authority for %s exact example %i', (name, index) => {

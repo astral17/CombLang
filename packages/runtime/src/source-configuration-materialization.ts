@@ -180,7 +180,7 @@ function materializeDeciderProducer(
   concrete: DeciderProducerConfig,
 ): DirectPlanDecider {
   const plannedOutputs = planned.outputs ?? [planned.output];
-  if (plannedOutputs.length !== concrete.outputs.length || concrete.outputs.length === 0) {
+  if (plannedOutputs.length !== concrete.outputs.length) {
     return pairMaterializationFailure();
   }
   const outputs = plannedOutputs.map((output, index) =>
@@ -199,10 +199,12 @@ function materializeDeciderProducer(
       materializeDeciderOutput(output, concrete.elseOutputs![index]!),
     );
   }
+  const output = outputs[0] ?? elseOutputs?.[0];
+  if (output === undefined) return pairMaterializationFailure();
   return {
     ...planned,
     condition: materializeDeciderCondition(planned.condition, concrete.condition),
-    output: outputs[0]!,
+    output,
     ...(planned.outputs === undefined ? {} : { outputs }),
     ...(elseOutputs === undefined ? {} : { elseOutputs }),
   };

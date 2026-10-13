@@ -1031,7 +1031,9 @@ output += Constant({ sections: [{ multiplier: scale * 0.5, filters: [] }] });`,
     const text = `${exactSource}
 const input = new Network();
 const threshold = amount + 1;
-output += Decider({ condition: input[A] > threshold, outputs: [input[A]] });`;
+const gate = when(input[A] > threshold).at(4, 5, 2).then(input[A]);
+output += gate;
+gate.else(1 * A);`;
     const compilation = compile(text);
     const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
     const amount = sourceApi.listSourceCompilationParameters(compilation)[0]!.parameter;
@@ -1047,6 +1049,10 @@ output += Decider({ condition: input[A] > threshold, outputs: [input[A]] });`;
 
     expect(condition(defaults)).toMatchObject({ kind: 'compare-signal', constant: 6 });
     expect(condition(overridden)).toMatchObject({ kind: 'compare-signal', constant: 10 });
+    expect(defaults.plan.producers.find(({ kind }) => kind === 'decider')).toMatchObject({
+      outputs: [{ kind: 'signal' }],
+      elseOutputs: [{ kind: 'signal-constant', value: 1 }],
+    });
     expect(exportFailure(compilation)).toMatchObject({
       code: 'CP1002',
       span: expect.objectContaining({ fileId: compilation.fileId }),
@@ -1057,6 +1063,32 @@ output += Decider({ condition: input[A] > threshold, outputs: [input[A]] });`;
       ),
     ).toMatchObject({ kind: 'compare-signal', constant: 8 });
     expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
+  });
+
+  test('exports direct-number fluent Deciders from their final attached branch configuration', () => {
+    const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const amount = Param.number('Amount', 5);
+const input = new Network();
+const output = new Network();
+const gate = when(input[A] > amount).at(4, 5, 2).then(input[A]);
+output += gate;
+gate.else(2 * B);
+gate.then(3 * B);
+gate.else(4 * B);`);
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    expect(native.entities).toHaveLength(1);
+    expect(emitNativeBlueprintJson(native).blueprint.entities[0]).toMatchObject({
+      position: { x: 4, y: 5 },
+      direction: 2,
+      control_behavior: {
+        decider_conditions: {
+          conditions: [{ constant: 5 }],
+          outputs: [{ copy_count_from_input: true }, { constant: 3 }],
+          else_outputs: [{ constant: 2 }, { constant: 4 }],
+        },
+      },
+    });
   });
 
   test('does not grant export authority to copied compilations or transport artifacts', () => {

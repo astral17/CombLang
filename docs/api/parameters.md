@@ -34,8 +34,8 @@ CLI, browser controls or the embedding API instead.
 ## Supported fields
 
 Use parameters in these exact configurations. Arithmetic operands, the two
-direct Constant numeric slots and exact Decider thresholds also accept the
-limited derived source expressions described below:
+direct Constant numeric slots and Decider thresholds also accept the limited
+derived source expressions described below:
 
 | Constructor                           | Field                                                                               | Accepted source value              |
 | ------------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------- |
@@ -44,7 +44,7 @@ limited derived source expressions described below:
 | `Constant`                            | `sections[].filters[].value`                                                        | Number or local numeric expression |
 | `Constant`                            | `sections[].filters[].signal`                                                       | Signal                             |
 | `Constant`                            | `sections[].multiplier`                                                             | Number or local numeric expression |
-| `Decider`                             | Right-hand numeric comparison threshold in `condition`, including nested conditions | Number or local numeric expression |
+| `Decider`, `when`, or `IF`            | Right-hand numeric comparison threshold in `condition`, including nested conditions | Number or local numeric expression |
 | `Selector` with `operation: 'select'` | `index`                                                                             | Number or Signal                   |
 | `Selector` with `operation: 'count'`  | `output`                                                                            | Signal                             |
 
@@ -59,8 +59,9 @@ other owning number parameters using binary `+`, `-`, `*` or unary `-`. The
 opaque result is evaluated by the registered numeric DAG only when it occupies
 an exact Arithmetic `left` or `right` constant slot, a direct Constant filter
 count, a Constant section multiplier, or the right-hand numeric threshold of an
-exact Decider condition (including nested AND/OR conditions). It creates no
-device and does not re-execute source during binding. Count and threshold
+exact Decider, `when(...).then(...).else(...)`, or `IF(condition, then, else)`
+condition (including nested AND/OR conditions). It creates no device and does
+not re-execute source during binding. Count and threshold
 results must be finite safe integers before existing signed-int32
 normalization; multipliers remain finite doubles. Parameter-free JavaScript
 arithmetic remains ordinary JavaScript. Derived expressions are not booleans,
@@ -222,13 +223,13 @@ Parameter handles and derived expressions are opaque configuration values, not
 JavaScript numbers, booleans, Signal handles or loop bounds. Derived values may
 be retained in locals, arrays, objects and return values, but may only be
 consumed in exact Arithmetic numeric constant slots, direct Constant filter
-count/multiplier slots, or as the right numeric threshold in an exact Decider
-condition described above. Do not use derived expressions for
+count/multiplier slots, or as the right numeric threshold in an exact Decider,
+fluent `when`, or `IF` condition described above. Do not use derived expressions for
 division/modulo/power/bitwise operations, ordinary JavaScript comparisons,
 truthiness, coercion, property access, parameter keys, compact arithmetic, other
-Constant fields, Decider outputs, Selector fields, IF/when or negated
-conditions, or Section scaling. Direct number-parameter circuit comparisons
-remain supported where listed above.
+Constant fields, Decider outputs, Selector fields, negated conditions, or
+Section scaling. Direct number-parameter circuit comparisons remain supported
+where listed above.
 Internal host numeric-expression APIs and opaque native formula metadata are
 separate from locally evaluated source expressions.
 
@@ -246,10 +247,11 @@ verify the implemented model, not native formula, replacement or placement behav
 See also [Signal](signal.md), [Decider](decider.md), [Constant](constant.md),
 [Selector](selector.md) and the [embedding parameter APIs](../native-objects-deciders-and-parameters.md#descriptor-based-local-binding).
 
-## Local numeric expressions in exact Arithmetic, Constant and Decider slots
+## Local numeric expressions in Arithmetic, Constant and Decider slots
 
-This complete example binds a local expression only into an exact Decider
-threshold. It reuses existing hardware and does not emit a native formula:
+This complete example binds a local expression through a fluent Decider builder.
+It reuses existing hardware, captures the final branch configuration (including
+the `.else` appended after attachment), and does not emit a native formula:
 
 ```typescript
 const A = Signal('virtual', 'signal-A');
@@ -258,13 +260,19 @@ const threshold = amount * 2 - 1;
 const input = new Network();
 const output = new Network();
 input += CC(7 * A);
-output += Decider({ condition: input[A] > threshold, outputs: [input[A]] });
+const gate = when(input[A] > threshold).then(input[A]);
+output += gate;
+gate.else(1 * A);
 ```
 
-The default threshold is 9; binding Amount to 3 changes it to 5. Because the
-input is 7, the Decider output changes accordingly. Native numeric-template
-export rejects this derived threshold with located `CP1002`; it remains a
-concrete local binding, not a Factorio formula.
+The default threshold is 9; binding Amount to 3 changes it to 5. Binding uses
+the retained source execution and does not rerun this code. The equivalent
+`IF(condition, then, else)` and exact `Decider` forms accept the same right-hand
+threshold. Parameterized materialized forms require trusted canonical Decider
+authority. Direct number parameters keep the existing native export rules
+across these forms. Native numeric-template export rejects this derived
+threshold with located `CP1002`; it remains a concrete local binding, not a
+Factorio formula.
 
 This complete example uses only two physical devices. The derived value is
 evaluated locally into the exact Arithmetic constant slot; it is not emitted as

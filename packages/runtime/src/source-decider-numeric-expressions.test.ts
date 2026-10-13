@@ -114,8 +114,6 @@ output += Decider({ condition: input[A] > threshold, outputs: [input[A]] });`);
     ],
     ['ordinary JavaScript comparison', `const invalid = threshold > 0;`, 'RT2029'],
     ['truthiness', `if (threshold) {}`, 'RT2029'],
-    ['IF', `IF(input[A] > threshold, input[A]);`, 'RT2027'],
-    ['when', `when(input[A] > threshold).then(input[A]);`, 'RT2027'],
     [
       'negation',
       `output += Decider({ condition: !(input[A] > threshold), outputs: [input[A]] });`,

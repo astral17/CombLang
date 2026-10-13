@@ -205,6 +205,11 @@ interface CapturedDeciderConfigurationTemplate {
   readonly source: SourceSpan;
 }
 
+interface PendingDeciderTemplateCapture {
+  readonly producer: CombinatorValue;
+  readonly captureId: string;
+}
+
 interface CapturedSelectorConfigurationTemplate {
   readonly captureId: string;
   readonly template: SelectorConfigurationTemplate;
@@ -237,8 +242,6 @@ interface NormalizedArithmeticConfiguration {
 
 interface NormalizedDeciderConfiguration {
   readonly condition: PlanDeciderCondition;
-  readonly conditionTemplate: DeciderTemplateCondition;
-  readonly hasNumberParameter: boolean;
   readonly outputs: readonly DeciderOutputCandidate[];
   readonly elseOutputs?: readonly DeciderOutputCandidate[];
 }
@@ -346,7 +349,7 @@ interface TopologySnapshot {
   readonly combinators: CombinatorRegistrySnapshot;
   readonly arithmeticTemplatesLength: number;
   readonly constantTemplatesLength: number;
-  readonly deciderTemplatesLength: number;
+  readonly pendingDeciderTemplateCapturesLength: number;
   readonly selectorTemplatesLength: number;
   readonly debugInstancesLength: number;
   readonly debugInstanceCounts: ReadonlyMap<string, number>;
@@ -487,7 +490,7 @@ class ElaborationRecorder {
   readonly #combinators = new CombinatorRegistry();
   readonly #arithmeticTemplates: CapturedArithmeticConfigurationTemplate[] = [];
   readonly #constantTemplates: CapturedConstantConfigurationTemplate[] = [];
-  readonly #deciderTemplates: CapturedDeciderConfigurationTemplate[] = [];
+  readonly #pendingDeciderTemplateCaptures: PendingDeciderTemplateCapture[] = [];
   readonly #selectorTemplates: CapturedSelectorConfigurationTemplate[] = [];
   readonly #deciderParameterSlots = new WeakMap<
     object,
@@ -1098,10 +1101,6 @@ class ElaborationRecorder {
           },
           rawSpan,
         );
-        if (configuration.hasNumberParameter) {
-          const { captureId } = this.#combinators.capture(producer);
-          this.#captureDeciderTemplate(producer, captureId, configuration);
-        }
         // #createCombinator records the exact Decider association after the
         // descriptor is complete; exact and ergonomic forms share one link.
         return producer;
@@ -1751,7 +1750,7 @@ class ElaborationRecorder {
           }
           if (!this.#isCircuitDslValue(left)) {
             throw new Error(
-              'A source numeric expression is supported only as the right constant of an exact Decider condition.',
+              'A source numeric expression is supported only as the right constant of a Decider condition.',
             );
           }
           normalizedRight = circuitConstant(
@@ -1787,7 +1786,7 @@ class ElaborationRecorder {
         try {
           if (!rightIsParameter || leftIsParameter || !this.#isCircuitDslValue(left)) {
             throw new Error(
-              'A source number parameter is supported only as the direct right constant of an exact Decider condition.',
+              'A source number parameter is supported only as the direct right constant of a Decider condition.',
             );
           }
           const slot = lookupBlueprintParameterSlot(
@@ -1854,7 +1853,6 @@ class ElaborationRecorder {
       return this.#withTopologyTransaction(rawSpan, () => {
         this.#recordDslCall();
         if (!this.#isCondition(condition)) throw new Error('IF/when requires a circuit condition.');
-        this.#assertNoSourceParameterizedCondition(condition.condition, rawSpan);
         if (outputValues.length === 0) {
           throw new Error('IF/when requires at least one output specification.');
         }
@@ -1883,7 +1881,6 @@ class ElaborationRecorder {
         this.#recordDslCall();
         if (!this.#isCondition(condition))
           throw new Error('when(...) requires a circuit condition.');
-        this.#assertNoSourceParameterizedCondition(condition.condition, rawSpan);
         return this.#createCombinator(
           {
             kind: 'decider',
@@ -1934,7 +1931,6 @@ class ElaborationRecorder {
       return this.#withTopologyTransaction(actualRawSpan, () => {
         this.#recordDslCall();
         if (!this.#isCondition(condition)) throw new Error('IF/when requires a circuit condition.');
-        this.#assertNoSourceParameterizedCondition(condition.condition, actualRawSpan);
         if (
           branchArguments !== undefined &&
           (branchArguments.length < 1 || branchArguments.length > 2)
@@ -2005,7 +2001,7 @@ class ElaborationRecorder {
     not: (value: unknown, rawSpan: RawSpan): unknown => {
       this.#rejectParameterControlValue(value, rawSpan);
       if (!this.#isCondition(value)) return !value;
-      this.#assertNoSourceParameterizedCondition(value.condition, rawSpan);
+      this.#assertNoParameterizedNegatedCondition(value.condition, rawSpan);
       this.#recordDslCall();
       return this.#runtimeValue({
         kind: 'condition',
@@ -2615,7 +2611,38 @@ class ElaborationRecorder {
   }
 
   deciderTemplates(): readonly CapturedDeciderConfigurationTemplate[] {
-    return Object.freeze([...this.#deciderTemplates]);
+    const parameterCapture = this.#parameterCapture;
+    if (parameterCapture === undefined) return Object.freeze([]);
+    return Object.freeze(
+      this.#pendingDeciderTemplateCaptures.map(({ producer, captureId }) => {
+        const descriptor = this.#combinators.stateFor(producer).descriptor;
+        if (descriptor.kind !== 'decider') {
+          throw new Error('A captured Decider template lost its producer descriptor.');
+        }
+        const condition = this.#deciderConditionTemplate(descriptor.condition);
+        if (!condition.hasNumberParameter) {
+          throw new Error('A captured Decider template has no registered number parameter.');
+        }
+        const outputs =
+          descriptor.outputs ?? (descriptor.output === undefined ? [] : [descriptor.output]);
+        const template = createDeciderConfigurationTemplate(parameterCapture.session, {
+          condition: condition.value,
+          outputs: outputs.map((output) => this.#deciderTemplateOutput(output)),
+          ...(descriptor.elseOutputs === undefined
+            ? {}
+            : {
+                elseOutputs: descriptor.elseOutputs.map((output) =>
+                  this.#deciderTemplateOutput(output),
+                ),
+              }),
+        });
+        return Object.freeze({
+          captureId,
+          template,
+          source: Object.freeze({ ...descriptor.source }),
+        });
+      }),
+    );
   }
 
   selectorTemplates(): readonly CapturedSelectorConfigurationTemplate[] {
@@ -3334,10 +3361,20 @@ class ElaborationRecorder {
     resolvedProfile?: EntityProfile,
   ): void {
     const profile = resolvedProfile ?? this.#resolveCanonicalProfile('Decider', rawSpan);
-    if (profile === undefined) return;
     const outputs =
       descriptor.outputs ?? (descriptor.output === undefined ? [] : [descriptor.output]);
     if (outputs.length === 0 && (descriptor.elseOutputs?.length ?? 0) === 0) return;
+    const hasNumberParameter = this.#conditionHasNumberParameter(descriptor.condition);
+    if (profile === undefined) {
+      if (hasNumberParameter) {
+        throw new ElaborationExecutionError(
+          'Parameterized Decider construction requires a trusted canonical entity:decider-combinator profile.',
+          this.#span(rawSpan),
+          'RT2027',
+        );
+      }
+      return;
+    }
     const configuration: EntityDeciderConfiguration = {
       mode: 'decider',
       condition: descriptor.condition,
@@ -3367,6 +3404,10 @@ class ElaborationRecorder {
     } satisfies LinkedDeciderAssociation;
     this.#linkedProducerByIdentity.set(producer.identity, association);
     this.#linkedProducers.push({ producer, association });
+    if (hasNumberParameter && this.#parameterCapture !== undefined) {
+      const { captureId } = this.#combinators.capture(producer);
+      this.#pendingDeciderTemplateCaptures.push({ producer, captureId });
+    }
   }
 
   #ensureSecondaryOutput(value: CombinatorValue, rawSpan: RawSpan): NetworkValue {
@@ -3783,7 +3824,7 @@ class ElaborationRecorder {
       combinators: this.#combinators.snapshot(),
       arithmeticTemplatesLength: this.#arithmeticTemplates.length,
       constantTemplatesLength: this.#constantTemplates.length,
-      deciderTemplatesLength: this.#deciderTemplates.length,
+      pendingDeciderTemplateCapturesLength: this.#pendingDeciderTemplateCaptures.length,
       selectorTemplatesLength: this.#selectorTemplates.length,
       debugInstancesLength: this.#debugInstances.length,
       debugInstanceCounts: new Map(this.#debugInstanceCounts),
@@ -3824,7 +3865,7 @@ class ElaborationRecorder {
     this.#combinators.restore(snapshot.combinators);
     this.#arithmeticTemplates.length = snapshot.arithmeticTemplatesLength;
     this.#constantTemplates.length = snapshot.constantTemplatesLength;
-    this.#deciderTemplates.length = snapshot.deciderTemplatesLength;
+    this.#pendingDeciderTemplateCaptures.length = snapshot.pendingDeciderTemplateCapturesLength;
     this.#selectorTemplates.length = snapshot.selectorTemplatesLength;
     this.#debugInstances.length = snapshot.debugInstancesLength;
     this.#debugInstanceCounts.clear();
@@ -4313,7 +4354,7 @@ class ElaborationRecorder {
   #rejectDerivedNumericExpression(value: unknown, rawSpan: RawSpan): void {
     if (findSourceNumericExpressionView(value) === undefined) return;
     throw new ElaborationExecutionError(
-      'A derived source numeric expression can only be consumed in an exact Arithmetic operand, Constant filter-count/multiplier slot, or right-hand numeric threshold of an exact Decider condition.',
+      'A derived source numeric expression can only be consumed in an exact Arithmetic operand, Constant filter-count/multiplier slot, or right-hand numeric threshold of a Decider condition.',
       this.#span(rawSpan),
       'RT2029',
     );
@@ -5107,32 +5148,6 @@ class ElaborationRecorder {
     return { mode: 'copy', signal, ...(input === undefined ? {} : { input }) };
   }
 
-  #captureDeciderTemplate(
-    value: CombinatorValue,
-    captureId: string,
-    configuration: NormalizedDeciderConfiguration,
-  ): void {
-    if (this.#parameterCapture === undefined) return;
-    const descriptor = this.#combinators.stateFor(value).descriptor;
-    if (descriptor.kind !== 'decider') {
-      throw new Error('Decider parameter slots were associated with a non-Decider producer.');
-    }
-    const template = createDeciderConfigurationTemplate(this.#parameterCapture.session, {
-      condition: configuration.conditionTemplate,
-      outputs: configuration.outputs.map(({ output }) => this.#deciderTemplateOutput(output)),
-      ...(configuration.elseOutputs === undefined
-        ? {}
-        : {
-            elseOutputs: configuration.elseOutputs.map(({ output }) =>
-              this.#deciderTemplateOutput(output),
-            ),
-          }),
-    });
-    this.#deciderTemplates.push(
-      Object.freeze({ captureId, template, source: Object.freeze({ ...descriptor.source }) }),
-    );
-  }
-
   #captureSelectorTemplate(
     value: CombinatorValue,
     captureId: string,
@@ -5202,7 +5217,7 @@ class ElaborationRecorder {
         'RT2027',
       );
     }
-    const conditionTemplate = this.#deciderConditionTemplate(conditionValue.condition);
+    this.#deciderConditionTemplate(conditionValue.condition);
     const normal =
       Object.prototype.hasOwnProperty.call(value, 'outputs') && value.outputs !== undefined
         ? this.#deciderConfigurationRows(value.outputs, fieldSources?.outputs ?? source, 'outputs')
@@ -5224,8 +5239,6 @@ class ElaborationRecorder {
     }
     return {
       condition: conditionValue.condition,
-      conditionTemplate: conditionTemplate.value,
-      hasNumberParameter: conditionTemplate.hasNumberParameter,
       outputs: normal,
       ...(alternate.length === 0 ? {} : { elseOutputs: alternate }),
     };
@@ -6351,14 +6364,17 @@ class ElaborationRecorder {
     return this.#hasRuntimeKind(value, 'condition');
   }
 
-  #assertNoSourceParameterizedCondition(condition: PlanDeciderCondition, rawSpan: RawSpan): void {
-    const containsParameter = (value: PlanDeciderCondition): boolean =>
-      value.kind === 'and' || value.kind === 'or'
-        ? value.conditions.some(containsParameter)
-        : this.#deciderParameterSlots.has(value as object);
-    if (containsParameter(condition)) {
+  #conditionHasNumberParameter(condition: PlanDeciderCondition): boolean {
+    if (condition.kind === 'and' || condition.kind === 'or') {
+      return condition.conditions.some((child) => this.#conditionHasNumberParameter(child));
+    }
+    return this.#deciderParameterSlots.has(condition as object);
+  }
+
+  #assertNoParameterizedNegatedCondition(condition: PlanDeciderCondition, rawSpan: RawSpan): void {
+    if (this.#conditionHasNumberParameter(condition)) {
       throw new ElaborationExecutionError(
-        'Source number parameters and derived numeric expressions are supported only in exact Decider configuration conditions, not mutable branches, IF/when, or negated conditions.',
+        'Source number parameters and derived numeric expressions are not supported in negated Decider conditions.',
         this.#span(rawSpan),
         'RT2027',
       );
@@ -6405,7 +6421,6 @@ class ElaborationRecorder {
         [{ message: 'Physical combinator was created here.', span: state.descriptor.source }],
       );
     }
-    this.#assertNoSourceParameterizedCondition(state.descriptor.condition, rawSpan);
     if (appended.length === 0) {
       throw new Error(`.${branch}(output, ...) requires at least one output specification.`);
     }

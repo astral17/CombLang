@@ -63,12 +63,44 @@ same source output vocabulary above, not raw Blueprint `conditions`/`outputs` JS
 `entity:decider-combinator` authority in the
 [prototype environment](../prototype-environment.md). With that authority,
 ergonomic and exact forms share the linked physical Entity representation.
+Parameterized materialized `when` and `IF` conditions also require that trusted
+canonical authority; ordinary parameter-free forms remain profile-free.
 
 Every device adds one tick to its inputs. The same primary/secondary output
 results, placement and attachment methods are described under
 [Combinator](combinator.md). Reading a source does not consume its owner.
 Destination Signal binding is limited to compatible single-row branches; later
 mutations are checked against the already-bound Signal and input color capacity.
+
+## Parameterized thresholds
+
+An owning number parameter or registered derived numeric expression may be the
+right-hand threshold in an exact `Decider`, a fluent `when` builder, or `IF`.
+Nested AND/OR conditions use the same rules. Binding updates the retained
+configuration locally without rerunning source. A mutable builder's final
+descriptor is captured, so branch rows appended after output attachment remain
+part of the same physical Decider.
+
+Complete source; requires trusted canonical Decider authority:
+
+```ts
+const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const amount = Param.number('Amount', 5);
+const input = new Network();
+const output = new Network();
+input += CC(7 * A);
+const gate = when(input[A] > amount).then(input[A]);
+output += gate;
+gate.else(1 * B);
+```
+
+The default threshold is 5; binding Amount to 9 changes the condition while
+reusing the captured source execution. The final else row is retained even
+though it was appended after attaching `gate`. Direct number parameters keep
+their existing native export rules across exact, fluent and `IF` forms. Derived
+thresholds bind locally but native numeric-template export refuses them with
+located `CP1002`; no native formula support is implied.
 
 ## Compact example
 

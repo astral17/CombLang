@@ -291,10 +291,10 @@ const exact = Decider({ condition: (input[A] > amount) && (input[B] <= 2 || inpu
     });
   });
 
-  test('does not leak exact Decider parameters into IF, when, or negated conditions', () => {
+  test('rejects negated parameterized conditions across Decider constructor forms', () => {
     const prefixes = [
-      `const exact = IF(input[A] > amount, input[A]);`,
-      `const exact = when(input[A] > amount).then(input[A]);`,
+      `const exact = IF(!(input[A] > amount), input[A]);`,
+      `const exact = when(!(input[A] > amount)).then(input[A]);`,
       `const exact = Decider({ condition: !(input[A] > amount), outputs: [input[A]] });`,
     ];
     for (const statement of prefixes) {
@@ -302,7 +302,7 @@ const exact = Decider({ condition: (input[A] > amount) && (input[B] <= 2 || inpu
       expect(() => exactParameterizedExecution(source)).toThrowError(
         expect.objectContaining({
           code: 'RT2027',
-          message: expect.stringContaining('only in exact Decider configuration conditions'),
+          message: expect.stringContaining('not supported in negated Decider conditions'),
         }),
       );
     }
