@@ -242,8 +242,24 @@ replace ordinary count literals matching a parameter original as well, unlike
 local nominal binding. Only typed local expressions in Constant count slots
 receive this treatment; symbolic multipliers, derived expressions in other
 slots, division and opaque formula strings remain unsupported or opaque as
-appropriate. Generated formula arithmetic, placement and save/reopen behavior
-have not been verified in Factorio.
+appropriate.
+
+A user-returned final placement export for this generated `(x * 2)` case records
+normal virtual A=9 and B=18 at Amount=9 ([Factorio 2.1.21 fixture](../../fixtures/blueprint-exchange/factorio-2.1.21/generated-number-formula-placed.txt)).
+This is one bounded native placement observation: current mods were unspecified,
+save/reopen was not observed, and the export has no `wires` field, so it says
+nothing about wired layouts. It does not validate other generated operators,
+functions, formula slots, versions or mod configurations.
+
+The generic MathExpression reference in the
+[pinned Factorio 2.1.21 API input](../../tools/factorio-api/fixtures/2.1.21/runtime-api.json)
+documents `+`, `-`, `*`, `/`, `^`, parentheses, and the built-ins `abs`, `log2`,
+`sign`, `max` and `min`.
+That generic grammar is broader than this typed exporter, which accepts only
+registered nested `+`, `-`, `*` and unary negation. In TypeScript, `^` is
+bitwise XOR, not exponentiation, and power syntax is outside this API. Explicit
+native `formula` metadata remains opaque: local binding does not parse or
+evaluate it.
 
 ### Bounded Constant Signal native export
 

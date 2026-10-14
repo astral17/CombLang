@@ -110,6 +110,43 @@ describe('blueprint fixture provenance', () => {
     expect(stringifyLosslessJson(roundTrip)).toBe(json);
   });
 
+  test('pins the bounded generated Constant numeric formula placement observation', async () => {
+    const path = 'factorio-2.1.21/generated-number-formula-placed.txt';
+    const byPath = manifest.fixtures.filter((fixture) => fixture.path === path);
+    const byId = manifest.fixtures.filter(
+      (fixture) => fixture.id === 'user-reported-generated-constant-number-formula-placement',
+    );
+    expect(byPath).toHaveLength(1);
+    expect(byId).toHaveLength(1);
+    const [fixture] = byPath;
+    if (fixture === undefined) throw new Error('Generated numeric formula fixture is missing.');
+    expect(fixture).toMatchObject({
+      id: 'user-reported-generated-constant-number-formula-placement',
+      origin: 'factorio-export',
+      factorioVersion: '2.1.21',
+      environment: expect.stringContaining('current mods unspecified; save/reopen not observed'),
+      reviewStatus: 'generated-constant-number-formula-placement-reviewed-bounded',
+      expectedSemanticHeader: {
+        item: 'blueprint',
+        version: 562954249764875,
+        hasEntities: true,
+        hasWires: false,
+      },
+    });
+
+    const exchange = await readExchange(new URL(fixture.path, fixtureRoot));
+    expect(sha256(exchange)).toBe(fixture.encodedExchangeSha256);
+    const document = await decodeBlueprintExchange(exchange);
+    const json = stringifyLosslessJson(document);
+    expect(sha256(json)).toBe(fixture.decodedJsonSha256);
+    const projection = classifyBlueprintDocument(document);
+    expect(projection.kind).toBe('blueprint');
+    if (projection.kind !== 'blueprint') throw new Error('Expected blueprint root.');
+    expect(projection.semantic).toMatchObject(fixture.expectedSemanticHeader!);
+    const roundTrip = await decodeBlueprintExchange(await encodeBlueprintExchange(document));
+    expect(stringifyLosslessJson(roundTrip)).toBe(json);
+  });
+
   test.each(manifest.fixtures.filter((fixture) => fixture.factorioVersion === '2.1.17'))(
     'preserves the independent parameter document $id',
     async (fixture) => {
@@ -148,6 +185,7 @@ describe('blueprint fixture provenance', () => {
       'factorio-2.1.17/dependency-chain.txt',
       'factorio-2.1.17/display-quality.txt',
       'factorio-2.1.17/recipe-formulas.txt',
+      'factorio-2.1.21/generated-number-formula-placed.txt',
       'factorio-2.1.21/generated-signal-placed.txt',
       'factorio-2.1.21/signal-before.txt',
       'factorio-2.1.21/signal-parameterized.txt',

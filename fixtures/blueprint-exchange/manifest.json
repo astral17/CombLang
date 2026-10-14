@@ -140,6 +140,22 @@
         "hasEntities": true,
         "hasWires": true
       }
+    },
+    {
+      "id": "user-reported-generated-constant-number-formula-placement",
+      "origin": "factorio-export",
+      "factorioVersion": "2.1.21",
+      "environment": "User-returned final placement export for generated typed Constant x*2 template; encoded version verifies Factorio 2.1.21; current mods unspecified; save/reopen not observed",
+      "path": "factorio-2.1.21/generated-number-formula-placed.txt",
+      "encodedExchangeSha256": "35bbfbfe7e7965e2b349042688379933caa9fbfc871c8bb048f8c640218c13a1",
+      "decodedJsonSha256": "b3f53d003bc17254b08b98c92b458ac3fbbfb6cc474de192443b9483df89d565",
+      "reviewStatus": "generated-constant-number-formula-placement-reviewed-bounded",
+      "expectedSemanticHeader": {
+        "item": "blueprint",
+        "version": 562954249764875,
+        "hasEntities": true,
+        "hasWires": false
+      }
     }
   ],
   "externalEvidence": {

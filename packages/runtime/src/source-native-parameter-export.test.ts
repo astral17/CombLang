@@ -667,6 +667,120 @@ output += Constant({
     );
   });
 
+  test('replays the generated Constant numeric formula against the reported placed export', async () => {
+    const key = '__comblang_native_constant_number_formula_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const existed = Object.hasOwn(globals, key);
+    const previous = globals[key];
+    globals[key] = 0;
+    try {
+      type EvidenceFilter = {
+        type?: string;
+        name: string;
+        quality?: string;
+        comparator?: string;
+        count: number;
+      };
+      type EvidenceEntity = {
+        name: string;
+        position: { x: number; y: number };
+        direction?: number;
+        control_behavior: unknown;
+      };
+      type EvidenceBlueprint = {
+        entities: readonly EvidenceEntity[];
+        parameters?: readonly unknown[];
+        wires?: readonly unknown[];
+      };
+      const compilation = compile(`globalThis.${key} += 1;
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const output = new Network();
+output += Constant({
+  sections: [
+    {
+      filters: [
+        { signal: Signal('virtual', 'signal-A'), value: amount },
+        { signal: Signal('virtual', 'signal-B'), value: amount * 2 },
+      ],
+    },
+  ],
+}).at(0.5, 0.5);`);
+      const amount = sourceApi.listSourceCompilationParameters(compilation)[0]!.parameter;
+      const defaults = sourceApi.bindSourceCompilationCircuit(compilation);
+      const overridden = sourceApi.bindSourceCompilationCircuit(compilation, [
+        { parameter: amount, value: 9 },
+      ]);
+      const counts = (pair: typeof defaults) => {
+        const behavior = generateBlueprintJson(pair.resolvedCircuit.ir).blueprint.entities[0]!
+          .control_behavior as {
+          sections: { sections: { filters: { count: number }[] }[] };
+        };
+        return behavior.sections.sections.flatMap((section) =>
+          section.filters.map(({ count }) => count),
+        );
+      };
+      expect(counts(defaults)).toEqual([5, 10]);
+      expect(counts(overridden)).toEqual([9, 18]);
+
+      const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      expect(native.parameters).toEqual([
+        { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+        { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
+      ]);
+      const nativeTemplate = emitNativeBlueprintJson(native)
+        .blueprint as unknown as EvidenceBlueprint;
+      const exchange = readFileSync(
+        new URL(
+          '../../../fixtures/blueprint-exchange/factorio-2.1.21/generated-number-formula-placed.txt',
+          import.meta.url,
+        ),
+        'utf8',
+      ).replace(/\r?\n$/, '');
+      const placedDocument = await decodeBlueprintExchange(exchange);
+      const placed = JSON.parse(stringifyLosslessJson(placedDocument)) as {
+        blueprint: EvidenceBlueprint;
+      };
+      expect(placed.blueprint).not.toHaveProperty('parameters');
+      expect(placed.blueprint).not.toHaveProperty('wires');
+      expect(nativeTemplate.entities).toHaveLength(1);
+      expect(placed.blueprint.entities).toHaveLength(1);
+
+      const filterRows = (entity: EvidenceEntity) => {
+        const behavior = entity.control_behavior as {
+          sections: { sections: { filters: EvidenceFilter[] }[] };
+        };
+        return behavior.sections.sections.flatMap((section) => section.filters);
+      };
+      expect(filterRows(nativeTemplate.entities[0]!)).toMatchObject([{ count: 5 }, { count: 10 }]);
+      const generated = generateBlueprintJson(overridden.resolvedCircuit.ir)
+        .blueprint as unknown as EvidenceBlueprint;
+      const summarize = (entity: EvidenceEntity, position: EvidenceEntity['position']) => ({
+        name: entity.name,
+        position,
+        direction: entity.direction,
+        filters: filterRows(entity).map(({ type, name, quality, comparator, count }) => ({
+          type,
+          name,
+          quality,
+          comparator,
+          count,
+        })),
+      });
+      const generatedEntity = generated.entities[0]!;
+      const placedEntity = placed.blueprint.entities[0]!;
+      expect(
+        summarize(placedEntity, {
+          x: placedEntity.position.x - 12,
+          y: placedEntity.position.y + 2,
+        }),
+      ).toEqual(summarize(generatedEntity, generatedEntity.position));
+      expect(globals[key]).toBe(1);
+    } finally {
+      if (existed) globals[key] = previous;
+      else delete globals[key];
+    }
+  });
+
   test('allocates distinct Signal originals in source order and changes only Constant identities', () => {
     const compilation =
       compile(`const first = Param.signal('First', Signal('virtual', 'signal-B', 'normal'));
@@ -1427,6 +1541,54 @@ output += Constant({ sections: [{ filters: [
         sections: [{ filters: [{ count: 5 }, { count: 4 }, { count: -10 }] }],
       },
     });
+  });
+
+  test('retains nested multiplication and addition precedence in a native Constant formula', () => {
+    const key = '__comblang_native_constant_nested_formula_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const existed = Object.hasOwn(globals, key);
+    const previous = globals[key];
+    globals[key] = 0;
+    try {
+      const compilation = compile(`globalThis.${key} += 1;
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: Signal('virtual', 'signal-A'), value: amount },
+  { signal: Signal('virtual', 'signal-B'), value: (amount * 2 + 3) * 5 },
+] }] });`);
+      const amount = sourceApi.listSourceCompilationParameters(compilation)[0]!.parameter;
+      const defaults = sourceApi.bindSourceCompilationCircuit(compilation);
+      const overridden = sourceApi.bindSourceCompilationCircuit(compilation, [
+        { parameter: amount, value: 9 },
+      ]);
+      const counts = (pair: typeof defaults) => {
+        const behavior = generateBlueprintJson(pair.resolvedCircuit.ir).blueprint.entities[0]!
+          .control_behavior as {
+          sections: { sections: { filters: { count: number }[] }[] };
+        };
+        return behavior.sections.sections.flatMap((section) =>
+          section.filters.map(({ count }) => count),
+        );
+      };
+      expect(counts(defaults)).toEqual([5, 65]);
+      expect(counts(overridden)).toEqual([9, 105]);
+
+      const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      expect(native.parameters).toEqual([
+        { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+        {
+          type: 'number',
+          number: '65',
+          formula: '(((x * 2) + 3) * 5)',
+          dependent: true,
+        },
+      ]);
+      expect(globals[key]).toBe(1);
+    } finally {
+      if (existed) globals[key] = previous;
+      else delete globals[key];
+    }
   });
 
   test('deduplicates repeated same-default formula rows in first captured occurrence order', () => {

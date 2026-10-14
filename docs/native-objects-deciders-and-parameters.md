@@ -419,8 +419,15 @@ strings may be invalid in Factorio. Separately, typed Constant formula export
 requires valid unique variable identifiers for supplied numeric declarations.
 Local binding and simulation still use the explicit default (here `5` and `111`)
 or a host override, not the formula result. Native metadata export is host-local,
-also available through `blueprint export --parameters` in the CLI;
-native formula evaluation, substitution and placement validity remain unverified.
+also available through `blueprint export --parameters` in the CLI. This concerns
+caller-supplied opaque strings, not the separately supported typed Constant
+count-formula path. One user-returned final Factorio 2.1.21 placement export for
+the generated typed `(x * 2)` case records normal virtual A=9 and B=18 at
+Amount=9 ([fixture](../fixtures/blueprint-exchange/factorio-2.1.21/generated-number-formula-placed.txt)).
+That bounded observation does not validate caller-supplied strings, other
+operators or functions, save/reopen, or wired layouts; current mods were
+unspecified and the export has no `wires` field. See the [typed formula contract](api/parameters.md#bounded-typed-constant-count-formulas)
+for the distinction from Factorio's broader MathExpression grammar.
 
 Empty metadata `{}` normalizes to absence. Present fields with `undefined`, wrong
 types, unknown keys, symbols, accessors, non-enumerable fields, arrays, null or
