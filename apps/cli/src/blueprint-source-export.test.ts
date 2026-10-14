@@ -1067,6 +1067,93 @@ output += Constant({ sections: [{ filters: [
     expect(error).not.toHaveBeenCalled();
   });
 
+  test('exports typed Constant count formulas and keeps an unsupported formula failure atomic', async () => {
+    const { environment } = await parameterHost();
+    const formulaSource = `const amount = Param.number('Amount', 5, { variable: 'x' });
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: Signal('virtual', 'signal-A'), value: amount },
+  { signal: Signal('virtual', 'signal-B'), value: amount * 2 },
+] }] });`;
+    const path = await sourceFile(formulaSource);
+    const nativePath = join(dirname(path), 'typed-formula-native.json');
+    const concretePath = join(dirname(path), 'typed-formula-concrete.json');
+    const { log, error } = capture();
+    expect(
+      await run(
+        ['blueprint', 'export', '--parameters', '--json', '--output', nativePath, path],
+        environment,
+      ),
+    ).toBe(0);
+    const native = JSON.parse(await readFile(nativePath, 'utf8'));
+    expect(native.blueprint.parameters).toEqual([
+      { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
+    ]);
+    expect(native.blueprint.entities[0].control_behavior.sections.sections[0].filters).toEqual([
+      {
+        index: 1,
+        type: 'virtual',
+        name: 'signal-A',
+        quality: 'normal',
+        comparator: '=',
+        count: 5,
+      },
+      {
+        index: 2,
+        type: 'virtual',
+        name: 'signal-B',
+        quality: 'normal',
+        comparator: '=',
+        count: 10,
+      },
+    ]);
+    expect(
+      await run(['blueprint', 'export', '--json', '--output', concretePath, path], environment),
+    ).toBe(0);
+    const concrete = JSON.parse(await readFile(concretePath, 'utf8'));
+    expect(concrete.blueprint).not.toHaveProperty('parameters');
+    expect(concrete.blueprint.entities[0].control_behavior.sections.sections[0].filters).toEqual([
+      { index: 1, type: 'virtual', name: 'signal-A', quality: 'normal', comparator: '=', count: 5 },
+      {
+        index: 2,
+        type: 'virtual',
+        name: 'signal-B',
+        quality: 'normal',
+        comparator: '=',
+        count: 10,
+      },
+    ]);
+
+    const rejectedSource = formulaSource.replace(
+      "{ signal: Signal('virtual', 'signal-A'), value: amount },\n  ",
+      '',
+    );
+    const rejectedPath = await sourceFile(rejectedSource, 'unsupported-formula.factorio.ts');
+    const rejectedOutput = join(dirname(rejectedPath), 'must-not-exist.json');
+    expect(
+      await run(
+        ['blueprint', 'export', '--parameters', '--json', '--output', rejectedOutput, rejectedPath],
+        environment,
+      ),
+    ).toBe(2);
+    const failure = JSON.parse(String(log.mock.calls.at(-1)?.[0]));
+    expect(failure).toMatchObject({
+      ok: false,
+      error: {
+        code: 'CP1002',
+        path: '$.constantTemplates[0].sections[0].filters[0].value',
+        span: { start: expect.any(Number), end: expect.any(Number) },
+      },
+    });
+    expect(rejectedSource.slice(failure.error.span.start, failure.error.span.end)).toBe(
+      "Param.number('Amount', 5, { variable: 'x' })",
+    );
+    expect(failure).not.toHaveProperty('document');
+    await expect(stat(rejectedOutput)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(error).not.toHaveBeenCalled();
+  });
+
   test.each([
     [
       "const amount = Param.number('Scale', 1);",

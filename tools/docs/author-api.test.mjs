@@ -82,6 +82,36 @@ function run(compilation, body) {
 }
 
 describe('author API documentation', () => {
+  test('runs the bounded typed Constant formula example and preserves local binding', async () => {
+    const source = read('parameters').match(
+      /### Bounded typed Constant count formulas[\s\S]*?```javascript\r?\n([\s\S]*?)```/,
+    )?.[1];
+    if (source === undefined) throw new Error('Missing bounded Constant formula example');
+    const compilation = compile(source, await bundled);
+    const session = createSourceParameterBindingSession(compilation);
+    const amount = session.parameters[0];
+    if (amount === undefined) throw new Error('Missing documented Amount parameter');
+    const bound = session.bind([{ id: amount.id, value: 9 }]);
+    expect(generateBlueprintJson(bound.resolvedCircuit.ir).blueprint).not.toHaveProperty(
+      'parameters',
+    );
+    expect(generateBlueprintJson(bound.resolvedCircuit.ir).blueprint.entities[0]).toMatchObject({
+      control_behavior: {
+        sections: {
+          sections: [{ filters: [{ count: 9 }, { count: 18 }] }],
+        },
+      },
+    });
+    const native = exportSourceCompilationNativeBlueprint(compilation, {
+      label: 'Documented typed formula',
+      maxDeciderConditionRows: 1024,
+    });
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
+    ]);
+  });
+
   test.each(pages)('provides the standalone %s reference contract', (name) => {
     expect(existsSync(pageUrl(name))).toBe(true);
     const page = read(name);
@@ -156,7 +186,7 @@ tick(); expectSignal(output, A).toBe(15);`,
     expect(generateBlueprintJson(session.bind([]).resolvedCircuit.ir)).toEqual(original);
   });
 
-  test('executes, binds and exports the direct Constant expression example', async () => {
+  test('executes and binds the Constant example while rejecting its symbolic multiplier', async () => {
     const compilation = compile(blocks('parameters')[4], await bundled);
     run(
       compilation,
@@ -183,12 +213,19 @@ tick(); expectSignal(network('output'), Signal('virtual', 'signal-A')).toBe(12);
       },
     });
     expect(generateBlueprintJson(session.bind([]).resolvedCircuit.ir)).toEqual(original);
-    expect(() =>
+    try {
       exportSourceCompilationNativeBlueprint(compilation, {
         label: 'Derived Constant parameters',
         maxDeciderConditionRows: 1024,
-      }),
-    ).toThrow(expect.objectContaining({ code: 'CP1002' }));
+      });
+      throw new Error('Expected symbolic multiplier rejection');
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: 'CP1002',
+        path: '$.constantTemplates[0].sections[0].multiplier',
+      });
+      expect(error.message).toContain('symbolic multipliers');
+    }
   });
 
   test('binds the literal documented ID values and resets against original defaults', async () => {

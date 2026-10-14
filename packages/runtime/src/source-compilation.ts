@@ -64,7 +64,10 @@ import {
 } from '../../compiler/src/decider-configuration-template.js';
 import { nativeDeciderConditionGroups } from '../../compiler/src/native-decider-conditions.js';
 import { inspectSelectorConfigurationTemplate } from '../../compiler/src/selector-configuration-template.js';
-import { isRegisteredBlueprintNumericExpression } from '../../compiler/src/blueprint-numeric-expression-bridge.js';
+import {
+  inspectRegisteredBlueprintNumericExpression,
+  isRegisteredBlueprintNumericExpression,
+} from '../../compiler/src/blueprint-numeric-expression-bridge.js';
 import {
   buildNativeBlueprintFcir,
   type NativeBlueprintProjectionOptions,
@@ -74,6 +77,10 @@ import {
   type NativeBlueprintFcir,
   type NativeBlueprintParameter,
 } from '../../compiler/src/native-blueprint-ir.js';
+import {
+  createNativeConstantFormulaRenderer,
+  type MeasuredNativeConstantFormula,
+} from './source-native-constant-formulas.js';
 import type { SourceSpan } from '@comblang/shared';
 
 export interface SourceCompilationEnvironment {
@@ -463,6 +470,28 @@ export function exportSourceCompilationNativeBlueprint(
   }
   const used = new Set<BlueprintParameterHandle>();
   const reservedSignalPlaceholderNames = new Set<string>();
+  const directConstantCountParameters = new Set<BlueprintParameterHandle>();
+  const pendingConstantFormulas: {
+    readonly captureId: string;
+    readonly sectionIndex: number;
+    readonly filterIndex: number;
+    readonly expression: unknown;
+    readonly dependencies: readonly BlueprintParameterHandle[];
+    readonly path: string;
+    readonly source: SourceSpan;
+    readonly session: ReturnType<typeof inspectConstantConfigurationTemplate>['session'];
+  }[] = [];
+  const measuredConstantFormulas: {
+    readonly captureId: string;
+    readonly sectionIndex: number;
+    readonly filterIndex: number;
+    readonly path: string;
+    readonly source: SourceSpan;
+    readonly measured: MeasuredNativeConstantFormula;
+  }[] = [];
+  let formulaSession:
+    ReturnType<typeof inspectConstantConfigurationTemplate>['session'] | undefined;
+  let formulaRenderer: ReturnType<typeof createNativeConstantFormulaRenderer> | undefined;
   if (signalDeclarations.length > 0) {
     for (const producer of compilation.resolvedCircuit.ir.producers) {
       if (producer.kind !== 'constant') continue;
@@ -491,15 +520,34 @@ export function exportSourceCompilationNativeBlueprint(
   }
   const occurrences: ({
     captureId: string;
-    parameter: BlueprintParameterHandle;
     path: string;
     source: SourceSpan;
   } & (
-    | { kind: 'constant-count'; sectionIndex: number; filterIndex: number }
-    | { kind: 'constant-signal'; sectionIndex: number; filterIndex: number }
-    | { kind: 'arithmetic-operand'; side: 'first' | 'second' }
-    | { kind: 'selector-index' }
-    | { kind: 'decider-threshold'; conditionPath: readonly number[] }
+    | {
+        kind: 'constant-count';
+        sectionIndex: number;
+        filterIndex: number;
+        parameter: BlueprintParameterHandle;
+      }
+    | {
+        kind: 'constant-count-expression';
+        sectionIndex: number;
+        filterIndex: number;
+        measured: MeasuredNativeConstantFormula;
+      }
+    | {
+        kind: 'constant-signal';
+        sectionIndex: number;
+        filterIndex: number;
+        parameter: BlueprintParameterHandle;
+      }
+    | { kind: 'arithmetic-operand'; side: 'first' | 'second'; parameter: BlueprintParameterHandle }
+    | { kind: 'selector-index'; parameter: BlueprintParameterHandle }
+    | {
+        kind: 'decider-threshold';
+        conditionPath: readonly number[];
+        parameter: BlueprintParameterHandle;
+      }
   ))[] = [];
   state.source.selectorTemplates.forEach((capture, captureIndex) => {
     const path = `$.selectorTemplates[${captureIndex}]`;
@@ -682,11 +730,53 @@ export function exportSourceCompilationNativeBlueprint(
           }
         }
         if (isRegisteredBlueprintNumericExpression(filter.value)) {
-          reject(
-            `${filterPath}.value`,
-            'native source export does not support expression counts.',
-            capture.source,
-          );
+          let inspection;
+          try {
+            inspection = inspectRegisteredBlueprintNumericExpression(
+              registration.session,
+              filter.value,
+              `${filterPath}.value`,
+            );
+          } catch (error) {
+            if (error instanceof BlueprintParameterError) {
+              reject(
+                `${filterPath}.value`,
+                'native formula export requires an authenticated expression owned by this compilation.',
+                capture.source,
+              );
+            }
+            throw error;
+          }
+          if (inspection.dependencies.length === 0) {
+            reject(
+              `${filterPath}.value`,
+              'native Constant formulas require at least one number parameter dependency.',
+              inspection.source ?? capture.source,
+            );
+          }
+          if (formulaSession !== undefined && formulaSession !== registration.session) {
+            reject(
+              `${filterPath}.value`,
+              'native Constant formulas must belong to one compilation parameter session.',
+              capture.source,
+            );
+          }
+          formulaSession = registration.session;
+          for (const dependency of inspection.dependencies) {
+            accepted.add(dependency);
+            used.add(dependency);
+          }
+          pendingConstantFormulas.push({
+            captureId: capture.captureId,
+            sectionIndex,
+            filterIndex,
+            expression: filter.value,
+            dependencies: inspection.dependencies,
+            path: `${filterPath}.value`,
+            source: inspection.source ?? capture.source,
+            session: registration.session,
+          });
+          return;
         }
         const parameter = canonicalBlueprintParameterHandle(filter.value);
         if (parameter === undefined) return;
@@ -699,6 +789,7 @@ export function exportSourceCompilationNativeBlueprint(
         }
         accepted.add(parameter);
         used.add(parameter);
+        directConstantCountParameters.add(parameter);
         occurrences.push({
           kind: 'constant-count',
           captureId: capture.captureId,
@@ -718,6 +809,130 @@ export function exportSourceCompilationNativeBlueprint(
       );
     }
   });
+  if (pendingConstantFormulas.length > 0) {
+    const firstFormula = pendingConstantFormulas[0]!;
+    const producers = compilation.resolvedCircuit.ir.producers;
+    if (producers.some((producer) => producer.kind !== 'constant')) {
+      reject(
+        firstFormula.path,
+        'native Constant formula export requires every producer to be Constant.',
+        firstFormula.source,
+      );
+    }
+    const linkedEntities = new Set(
+      producers.flatMap((producer) => (producer.entityId === undefined ? [] : [producer.entityId])),
+    );
+    const unlinkedEntity = (compilation.resolvedCircuit.ir.entities ?? []).find(
+      (entity) => !linkedEntities.has(entity.id),
+    );
+    if (unlinkedEntity !== undefined) {
+      reject(
+        firstFormula.path,
+        'native Constant formula export does not support unlinked physical Entities.',
+        firstFormula.source,
+      );
+    }
+
+    const declarationsByParameter = new Map(
+      declarations.map((declaration) => [declaration.parameter, declaration]),
+    );
+    const variableByParameter = new Map<BlueprintParameterHandle, string>();
+    const variableOwners = new Map<string, SourceCompilationParameter>();
+    const reservedVariables = new Set(['abs', 'log2', 'sign', 'max', 'min']);
+    for (const [index, declaration] of declarations.entries()) {
+      if (declaration.kind !== 'number') continue;
+      const variable = declaration.metadata?.variable;
+      if (variable === undefined) continue;
+      if (
+        typeof variable !== 'string' ||
+        !/^[A-Za-z][A-Za-z0-9_]*$/.test(variable) ||
+        reservedVariables.has(variable) ||
+        /^p[0-9]+_/.test(variable)
+      ) {
+        reject(
+          `$.parameters[${index}].metadata.variable`,
+          'native Constant formula variables must be valid non-reserved identifiers.',
+          declaration.source,
+        );
+      }
+      const previous = variableOwners.get(variable);
+      if (previous !== undefined) {
+        reject(
+          `$.parameters[${index}].metadata.variable`,
+          `native Constant formula variable ${JSON.stringify(variable)} is already used by declaration ${JSON.stringify(previous.label)}.`,
+          declaration.source,
+        );
+      }
+      variableOwners.set(variable, declaration);
+      variableByParameter.set(declaration.parameter, variable);
+    }
+    for (const formula of pendingConstantFormulas) {
+      for (const dependency of formula.dependencies) {
+        const declaration = declarationsByParameter.get(dependency);
+        if (declaration === undefined || declaration.kind !== 'number') {
+          reject(
+            formula.path,
+            'native Constant formula dependency is not a number declaration owned by this compilation.',
+            formula.source,
+          );
+        }
+        const declarationIndex = declarations.indexOf(declaration);
+        const metadata = declaration.metadata;
+        if (metadata?.variable === undefined) {
+          reject(
+            `$.parameters[${declarationIndex}].metadata.variable`,
+            'native Constant formula dependencies require an explicit variable name.',
+            declaration.source,
+          );
+        }
+        if (Object.hasOwn(metadata, 'formula') || metadata.dependent === true) {
+          reject(
+            `$.parameters[${declarationIndex}].metadata`,
+            'native Constant formula dependencies must be direct leaf parameters without formula metadata.',
+            declaration.source,
+          );
+        }
+        if (!directConstantCountParameters.has(dependency)) {
+          reject(
+            formula.path,
+            `formula dependency ${JSON.stringify(declaration.label)} must also occur as a direct Constant count.`,
+            formula.source,
+          );
+        }
+      }
+    }
+    const ownerSession = formulaSession;
+    if (ownerSession === undefined) {
+      reject(
+        firstFormula.path,
+        'native Constant formula session is unavailable.',
+        firstFormula.source,
+      );
+    }
+    formulaRenderer = createNativeConstantFormulaRenderer(ownerSession, (parameter) =>
+      variableByParameter.get(parameter),
+    );
+    for (const formula of pendingConstantFormulas) {
+      const measured = formulaRenderer.measure(formula.expression, formula.path);
+      measuredConstantFormulas.push({
+        captureId: formula.captureId,
+        sectionIndex: formula.sectionIndex,
+        filterIndex: formula.filterIndex,
+        path: formula.path,
+        source: formula.source,
+        measured,
+      });
+      occurrences.push({
+        kind: 'constant-count-expression',
+        captureId: formula.captureId,
+        sectionIndex: formula.sectionIndex,
+        filterIndex: formula.filterIndex,
+        measured,
+        path: formula.path,
+        source: formula.source,
+      });
+    }
+  }
   const numberOriginals = new Map<number, SourceCompilationParameter>();
   const allocatedSignalNames = new Map<BlueprintParameterHandle, string>();
   const parameters: NativeBlueprintParameter[] = declarations.map((declaration, index) => {
@@ -779,6 +994,57 @@ export function exportSourceCompilationNativeBlueprint(
     });
   });
 
+  if (measuredConstantFormulas.length > 0) {
+    const firstFormula = measuredConstantFormulas[0]!;
+    const formulaByOriginal = new Map<number, MeasuredNativeConstantFormula>();
+    const uniqueFormulas: MeasuredNativeConstantFormula[] = [];
+    for (const occurrence of measuredConstantFormulas) {
+      const { measured } = occurrence;
+      if (numberOriginals.has(measured.defaultValue)) {
+        reject(
+          occurrence.path,
+          `derived original ${String(measured.defaultValue)} collides with a declared number original.`,
+          occurrence.source,
+        );
+      }
+      const previous = formulaByOriginal.get(measured.defaultValue);
+      if (previous !== undefined) {
+        if (previous.key !== measured.key) {
+          reject(
+            occurrence.path,
+            `derived original ${String(measured.defaultValue)} is already used by a different formula at ${previous.path}.`,
+            occurrence.source,
+          );
+        }
+        continue;
+      }
+      formulaByOriginal.set(measured.defaultValue, measured);
+      uniqueFormulas.push(measured);
+    }
+    if (formulaRenderer === undefined) {
+      reject(
+        firstFormula.path,
+        'native Constant formula renderer is unavailable.',
+        firstFormula.source,
+      );
+    }
+    const rendered = formulaRenderer.renderUnique(uniqueFormulas);
+    for (const measured of uniqueFormulas) {
+      const formula = rendered.get(measured.key);
+      if (formula === undefined) {
+        reject(measured.path, 'native Constant formula rendering is incomplete.', measured.source);
+      }
+      parameters.push(
+        Object.freeze({
+          type: 'number',
+          number: String(measured.defaultValue),
+          formula,
+          dependent: true,
+        }),
+      );
+    }
+  }
+
   // The binder authenticates templates, their session and their exact physical producer relation.
   const replacement = bindCapturedSourceConfigurationTemplatesWithRelations(
     state.source,
@@ -797,7 +1063,9 @@ export function exportSourceCompilationNativeBlueprint(
   for (const occurrence of occurrences) {
     const relation = relations.get(occurrence.captureId);
     const family =
-      occurrence.kind === 'constant-count' || occurrence.kind === 'constant-signal'
+      occurrence.kind === 'constant-count' ||
+      occurrence.kind === 'constant-count-expression' ||
+      occurrence.kind === 'constant-signal'
         ? 'constant'
         : occurrence.kind === 'arithmetic-operand'
           ? 'arithmetic'
@@ -953,6 +1221,16 @@ export function exportSourceCompilationNativeBlueprint(
         reject(
           occurrence.path,
           'marked Constant Signal default did not survive authenticated projection unchanged.',
+          occurrence.source,
+        );
+      }
+      continue;
+    }
+    if (occurrence.kind === 'constant-count-expression') {
+      if (filter.count !== occurrence.measured.defaultValue) {
+        reject(
+          occurrence.path,
+          'marked Constant expression count did not survive native projection at its evaluated default.',
           occurrence.source,
         );
       }

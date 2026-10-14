@@ -146,15 +146,18 @@ fall back to defaults.
 
 Concrete overrides use the [Param API's supported source slots](api/parameters.md#supported-fields).
 An unsupported use is an explicit error, not a fallback to the declared default.
-The CLI does not add source syntax, native substitution or formula evaluation.
+The CLI does not add source syntax or evaluate user-authored formula metadata.
 
 The optional `--prototype-identity <id>` pins the provider identity, with the
 same validation as `check`/`test`. Source executes once per invocation. Ordinary
 export and native-template mode use original defaults; concrete `--overrides`
-export uses the chosen bound values. Neither mode evaluates formula metadata.
-Numeric `variable`, `formula`
-and `dependent` fields are preserved opaquely. Native formula validity,
-original-value substitution and placement are not verified. Signal parameters
+export uses the chosen bound values. Neither mode evaluates opaque formula
+metadata. Numeric `variable`, `formula` and `dependent` fields are preserved
+opaquely. Separately, the opt-in native-template exporter can render registered
+numeric expressions used directly in Constant filter counts as bounded derived
+formula rows; their source dependencies require direct Constant count uses and
+explicit variables. Native formula validity, original-value substitution and
+placement are not verified. Signal parameters
 are supported only for concrete virtual defaults with normal quality in direct
 Constant filter Signal slots, subject to the bounded placeholder and circuit
 rules in the Param reference. Other Signal slots/defaults, unsupported

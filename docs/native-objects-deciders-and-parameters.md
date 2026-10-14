@@ -269,12 +269,16 @@ This does not implement Factorio multiplier/group semantics, native substitution
 or rounding. `parameter * Section(...)`, CC convenience scaling, symbolic
 `isOn`/`active`/`group` and parameter keys remain unsupported. Local numeric
 source expressions may occupy only exact Arithmetic constant operands and
-direct Constant filter-count/multiplier slots; they do not create native formulas.
+direct Constant filter-count/multiplier slots. The narrow native formula export
+described in the Param reference applies only to registered expressions in
+direct Constant filter counts; it does not enable derived Arithmetic or
+multiplier formulas.
 
 Explicit native parameter metadata export rejects symbolic multipliers with
 located `CP1002`, even at default 1 or when the same handle is a supported filter
-count. Derived Constant count and multiplier expressions also fail native export
-with `CP1002`, including zero/one defaults. A fractional declaration can fail the existing native original-int32 check
+count. A derived Constant count can be exported only with direct uses and valid
+explicit variables for every dependency; derived multiplier expressions remain
+unsupported with `CP1002`. A fractional declaration can fail the existing native original-int32 check
 first. Ordinary concrete CLI/Worker export retains the default multiplier;
 native-export failure is separate from successful compilation. The
 [browser parameter controls](blueprint-json.md#optional-worker-local-parameter-binding)
@@ -407,10 +411,12 @@ const output = new Network();
 output += device;
 ```
 
-Strings are opaque native metadata: whitespace and empty strings are preserved
-exactly, as is explicit `dependent: false`. No trimming, parsing, rewriting or
-formula evaluation occurs. Unknown references, duplicate variables and apparent
-cycles are preserved, not validated; such strings may be invalid in Factorio.
+Explicit formula strings are opaque native metadata: whitespace and empty
+strings are preserved exactly, as is explicit `dependent: false`. The strings
+are not trimmed, parsed, rewritten or evaluated. Unknown references, duplicate
+formula references and apparent cycles are preserved, not validated; such
+strings may be invalid in Factorio. Separately, typed Constant formula export
+requires valid unique variable identifiers for supplied numeric declarations.
 Local binding and simulation still use the explicit default (here `5` and `111`)
 or a host override, not the formula result. Native metadata export is host-local,
 also available through `blueprint export --parameters` in the CLI;
@@ -545,10 +551,11 @@ successful concrete simulation or tests. The checkbox defaults off and is not
 persisted. It does not change source/test drafts or provide overrides.
 See [source export CLI](blueprint-json.md#source-export-cli) for prototype selection
 and file/stdout conventions. Existing parameter-free export bytes are
-unchanged. This native-export subset preserves explicit numeric formula strings
-and bounded Constant Signal placeholders, but does not add native parameter
-indices, recipe/property dependencies, other Signal slots, native formulas or
-multiplier substitution. Concrete Worker binding and the parameter controls are
+unchanged. This native-export subset preserves explicit numeric formula strings,
+supports bounded typed formulas in direct Constant count slots, and supports
+bounded Constant Signal placeholders. It does not add native parameter indices,
+recipe/property dependencies, other Signal slots or multiplier substitution.
+Concrete Worker binding and the parameter controls are
 separate implemented features; they do not enable those native semantics. See
 [optional Worker result export](blueprint-json.md#optional-worker-result-export)
 and [concrete Worker binding](blueprint-json.md#optional-worker-local-parameter-binding)

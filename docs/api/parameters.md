@@ -172,11 +172,11 @@ for paths, JSON/plain reporting, capture lifetime and export modes.
 
 These modes have different purposes:
 
-| Mode                                         | Values used                                                       | Result                                                |
-| -------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------- |
-| Ordinary compilation/export                  | Declared defaults                                                 | Concrete circuit and JSON, without parameter metadata |
-| Apply/Reset or CLI `--overrides`             | Chosen values; omitted IDs use defaults                           | Concrete circuit and JSON, without parameter metadata |
-| CLI `--parameters` or **Include parameters** | Original defaults plus supported numeric/Constant Signal metadata | Native parameter-template JSON                        |
+| Mode                                         | Values used                                                                                        | Result                                                |
+| -------------------------------------------- | -------------------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Ordinary compilation/export                  | Declared defaults                                                                                  | Concrete circuit and JSON, without parameter metadata |
+| Apply/Reset or CLI `--overrides`             | Chosen values; omitted IDs use defaults                                                            | Concrete circuit and JSON, without parameter metadata |
+| CLI `--parameters` or **Include parameters** | Original defaults plus supported numeric/Signal metadata and bounded typed Constant count formulas | Native parameter-template JSON                        |
 
 Concrete overrides and native-template export cannot be combined. The workbench
 disables Apply/Reset while **Include parameters** is checked.
@@ -184,13 +184,66 @@ disables Apply/Reset while **Include parameters** is checked.
 Native-template export supports number declarations used directly as Constant
 filter counts, Arithmetic constants, Decider right-hand thresholds or numeric
 Selector select indices. Numeric originals must fit signed int32 and remain
-present in the exported fields. It also supports Signal declarations used in
-Constant filter Signal slots under the bounded contract below. Symbolic section
-multipliers, derived Arithmetic, Constant or Decider-threshold expressions,
-unused declarations and equal originals belonging to distinct parameters fail
-explicitly in that mode. Native replacement may also affect ordinary literals
-equal to an original; nominal independence in local binding does not establish
-independence in Factorio placement.
+present in the exported fields. Registered numeric expressions are additionally
+supported only in direct Constant filter-count slots under the bounded contract
+below. Signal declarations in Constant filter Signal slots follow the separate
+bounded contract below. Symbolic section multipliers, derived Arithmetic or
+Decider-threshold expressions, unused declarations and conflicting originals
+fail explicitly in that mode. Native replacement may also affect ordinary
+literals equal to an original; nominal independence in local binding does not
+establish independence in Factorio placement.
+
+### Bounded typed Constant count formulas
+
+A registered local numeric expression in a Constant filter count can produce a
+derived native formula row. This is a narrow structural export, not general
+formula parsing or native validation. For example:
+
+```javascript
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const output = new Network();
+output += Constant({
+  sections: [
+    {
+      filters: [
+        { signal: Signal('virtual', 'signal-A'), value: amount },
+        { signal: Signal('virtual', 'signal-B'), value: amount * 2 },
+      ],
+    },
+  ],
+});
+```
+
+The source executes once and declares only `Amount`. Local binding to 9
+reevaluates the physical counts as 9 and 18, with no parameter metadata in
+concrete JSON. Native-template export keeps the physical defaults 5 and 10;
+real declarations retain source order, then generated rows are appended in
+first captured Constant occurrence order. It appends this derived row after the
+real declaration: `{ type: 'number', number: '10', formula: '(x * 2)', dependent: true }`.
+
+In typed-formula mode, every supplied numeric `metadata.variable` must be valid
+and unique. Each dependency must be an owned number declaration with an
+explicit `metadata.variable` matching `[A-Za-z][A-Za-z0-9_]*`; built-ins `abs`,
+`log2`, `sign`, `max`, `min` and recipe-reference names such as `p12_recipe` are
+reserved. Each dependency must also occur as a direct physical Constant count
+and must not itself declare `formula` (even an empty string) or
+`dependent: true`. Typed formula export requires a linked Constant-only physical
+circuit. It accepts only signed-int32 literals/defaults and the registered `+`,
+`-`, `*` and unary-negation nodes; output is fully parenthesized without folding
+or reassociation and respects bounded node and byte limits. Repeated identical
+default/formula pairs share one row. Different formulas for the same derived
+original, or collision with any declared number original, reject atomically
+with located `CP1002`.
+
+Generated rows are derived exporter metadata, not source declarations or new
+local handles; they have no fabricated `name` or variable. Physical counts and
+placement remain unchanged. Factorio may
+replace ordinary count literals matching a parameter original as well, unlike
+local nominal binding. Only typed local expressions in Constant count slots
+receive this treatment; symbolic multipliers, derived expressions in other
+slots, division and opaque formula strings remain unsupported or opaque as
+appropriate. Generated formula arithmetic, placement and save/reopen behavior
+have not been verified in Factorio.
 
 ### Bounded Constant Signal native export
 
@@ -237,8 +290,8 @@ producers are Constant; any physical Entity must be linked to its producer.
 Item/fluid defaults, non-normal qualities, virtual wildcards, source defaults
 named `parameter-N`, placeholder-pool exhaustion, unused declarations and
 Signal use in any other native slot reject atomically with located `CP1002`.
-No general native replacement, native derived formulas/multipliers, or broader
-native acceptance is implied. For one user-reported placement of this generated
+No general native replacement, formula evaluation, or broader native acceptance
+is implied. For one user-reported placement of this generated
 virtual/normal Constant template in Factorio 2.1.21 (mods unspecified), both
 matching rows became virtual signal-B with counts 5 and 13; iron-plate and water,
 the red wire, relative layout and directions were preserved. The placed export
@@ -376,5 +429,7 @@ output += Constant({
 The default is multiplier 1 and count 12. Binding Amount to 9, Factor to 3,
 and Scale to 3 produces multiplier 1.5 and count 30 without changing the
 Constant or its topology. Non-unit multiplier simulation remains unsupported
-(`FC1003`/Unknown), and native numeric-template export rejects both derived
-Constant slots with `CP1002`; neither result claims Factorio formula semantics.
+(`FC1003`/Unknown), and native numeric-template export rejects this program
+because its symbolic multiplier is outside the supported formula slice. A
+derived count alone additionally needs direct physical uses and explicit native
+variables for every dependency; neither result claims Factorio formula semantics.

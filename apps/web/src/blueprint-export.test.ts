@@ -619,4 +619,68 @@ void extra;`,
     expect(browser.blueprintExport).toEqual({ ok: true, document: cli });
     expect(error).not.toHaveBeenCalled();
   });
+
+  test('typed Constant formula exports match CLI, while concrete Worker output stays metadata-free', async () => {
+    const { environment } = await parameterHost();
+    const directory = await mkdtemp(join(tmpdir(), 'comblang-worker-formula-parity-'));
+    directories.push(directory);
+    const path = join(directory, 'formula.factorio.ts');
+    const formulaSource = `const amount = Param.number('Amount', 5, { variable: 'x' });
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: Signal('virtual', 'signal-A'), value: amount },
+  { signal: Signal('virtual', 'signal-B'), value: amount * 2 },
+] }] });`;
+    await writeFile(path, formulaSource);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    expect(await run(['blueprint', 'export', '--json', '--parameters', path], environment)).toBe(0);
+    const cliNative = JSON.parse(String(log.mock.calls.at(-1)?.[0])).document;
+    const runtime = new CompilerWorkerRuntime({
+      resolveEntityReplayContext: () => ({
+        ...environment,
+        entityPrototypeResolver: entityPrototypeResolverFromProvider(environment.prototypes),
+      }),
+    });
+    const request = {
+      kind: 'parse' as const,
+      revision: 80,
+      file: { path, text: formulaSource },
+      entityReplayContext: entityReplayContextTransport(environment.trustedEntityReplayContext),
+    };
+    const workerNative = await runtime.handle({
+      ...request,
+      blueprintExport: { parameters: true },
+    });
+    expect(workerNative.result.pipelineDiagnostics).toEqual([]);
+    expect(workerNative.result.blueprintExport).toEqual({ ok: true, document: cliNative });
+    if (!workerNative.result.blueprintExport?.ok) throw new Error('Worker formula export failed.');
+    expect(workerNative.result.blueprintExport.document.blueprint.parameters).toEqual([
+      { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
+    ]);
+
+    log.mockClear();
+    expect(await run(['blueprint', 'export', '--json', path], environment)).toBe(0);
+    const cliConcrete = JSON.parse(String(log.mock.calls.at(-1)?.[0])).document;
+    const workerConcrete = await runtime.handle({
+      ...request,
+      revision: 81,
+      blueprintExport: { parameters: false },
+    });
+    expect(workerConcrete.result.blueprintExport).toEqual({ ok: true, document: cliConcrete });
+    if (!workerConcrete.result.blueprintExport?.ok)
+      throw new Error('Concrete Worker export failed.');
+    expect(workerConcrete.result.blueprintExport.document.blueprint).not.toHaveProperty(
+      'parameters',
+    );
+    expect(workerConcrete.result.blueprintExport.document.blueprint.entities[0]).toMatchObject({
+      control_behavior: {
+        sections: {
+          sections: [{ filters: [{ count: 5 }, { count: 10 }] }],
+        },
+      },
+    });
+    expect(error).not.toHaveBeenCalled();
+  });
 });
