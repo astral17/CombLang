@@ -1481,11 +1481,15 @@ output += Constant({ sections: [{ filters: [{ signal: A, value: 2 }] }] });`,
 const amount = Param.number('Amount', 10, { variable: 'x' });
 const input = new Network();
 const directOutput = new Network();
+const fractionalOutput = new Network();
 const formulaOutput = new Network();
 const powerOutput = new Network();
+const largeOutput = new Network();
 directOutput += Selector({ input, operation: 'select', index: amount });
+fractionalOutput += Selector({ input, operation: 'select', index: amount * 0.5 + 1 });
 formulaOutput += Selector({ input, operation: 'select', index: amount / 2 + 3 });
-powerOutput += Selector({ input, operation: 'select', index: amount ** 2 });`,
+powerOutput += Selector({ input, operation: 'select', index: amount ** 2 });
+largeOutput += Selector({ input, operation: 'select', index: (amount + 2147483648) - 2147483647 });`,
             },
             parameterBinding: true,
             blueprintExport: { parameters: true },
@@ -1500,8 +1504,15 @@ powerOutput += Selector({ input, operation: 'select', index: amount ** 2 });`,
       }
       expect(parsed.result.blueprintExport.document.blueprint.parameters).toEqual([
         { type: 'number', number: '10', name: 'Amount', variable: 'x' },
+        { type: 'number', number: '6', formula: '((x * 0.5) + 1)', dependent: true },
         { type: 'number', number: '8', formula: '((x / 2) + 3)', dependent: true },
         { type: 'number', number: '100', formula: '((x) ^ (2))', dependent: true },
+        {
+          type: 'number',
+          number: '11',
+          formula: '((x + 2147483648) - 2147483647)',
+          dependent: true,
+        },
       ]);
       expect(
         parsed.result.blueprintExport.document.blueprint.entities.map(({ control_behavior }) =>
@@ -1511,7 +1522,7 @@ powerOutput += Selector({ input, operation: 'select', index: amount ** 2 });`,
             ? control_behavior.index_constant
             : undefined,
         ),
-      ).toEqual([10, 8, 100]);
+      ).toEqual([10, 6, 8, 100, 11]);
 
       const binding = parsed.parameterBinding;
       if (binding?.ok !== true || binding.token === undefined) {
@@ -1544,6 +1555,7 @@ powerOutput += Selector({ input, operation: 'select', index: amount ** 2 });`,
         ok: false,
         diagnostics: [expect.objectContaining({ code: 'CP1000', span: expect.any(Object) })],
       });
+      expect(fractional.result).not.toHaveProperty('plan');
       const retry = concrete(bind(14));
       const reset = concrete(bind());
       const indices = (pair: typeof defaults) =>
@@ -1554,8 +1566,8 @@ powerOutput += Selector({ input, operation: 'select', index: amount ** 2 });`,
               ? producer.index
               : undefined,
           );
-      expect(indices(defaults)).toEqual([10, 8, 100]);
-      expect(indices(overridden)).toEqual([14, 10, 196]);
+      expect(indices(defaults)).toEqual([10, 6, 8, 100, 11]);
+      expect(indices(overridden)).toEqual([14, 8, 10, 196, 15]);
       expect(retry.plan).toEqual(overridden.plan);
       expect(reset.plan).toEqual(defaults.plan);
       expect(defaults.resolvedCircuit.ir.producers.map(({ id }) => id)).toEqual(
@@ -1570,7 +1582,7 @@ powerOutput += Selector({ input, operation: 'select', index: amount ** 2 });`,
             ? control_behavior.index_constant
             : undefined,
         ),
-      ).toEqual([14, 10, 196]);
+      ).toEqual([14, 8, 10, 196, 15]);
       expect(artifact.blueprint.blueprint).not.toHaveProperty('parameters');
       expect(globals[localExpressionRunKey]).toBe(1);
     } finally {

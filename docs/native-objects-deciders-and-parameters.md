@@ -610,6 +610,12 @@ pure default/binding evaluator. Source `**` uses finite JavaScript-number
 semantics, distinct from Factorio device arithmetic. The private native renderer
 maps `**` to `^` with explicit grouping, but does not establish game acceptance,
 evaluation or placement semantics.
+Its finite decimal/scientific literal operands use shortest round-trip decimal
+text, omitting a positive exponent plus sign (for example, `1e+21` becomes
+`1e21`). The raw evaluated formula default must still be signed int32, and this
+does not widen declared numeric originals or local integer destinations. This is
+a bounded structural spelling rule, not complete MathExpression grammar or
+native Factorio evidence.
 The reviewed host-local integration is limited to Arithmetic constant operand
 values, Decider `condition.compare.right` thresholds and `mode: 'constant'`
 output values in both normal and else output lists, Constant section multipliers

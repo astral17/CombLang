@@ -149,7 +149,97 @@ describe('private native numeric formula renderer', () => {
     }
   });
 
-  test('rejects forged roots and non-int32 literals with located CP1002', () => {
+  test('renders finite decimal and scientific literals with exact bounded text', () => {
+    const { session, renderer } = setup();
+    const cases = [
+      [binary('add', literal(0.5), literal(1.5)), '(0.5 + 1.5)', 2],
+      [binary('subtract', literal(1.5), literal(0.5)), '(1.5 - 0.5)', 1],
+      [binary('multiply', literal(-0.5), literal(2)), '(-0.5 * 2)', -1],
+      [binary('divide', literal(1), literal(0.5)), '(1 / 0.5)', 2],
+      [
+        binary('add', binary('power', literal(-0.5), literal(2)), literal(0.75)),
+        '(((-0.5) ^ (2)) + 0.75)',
+        1,
+      ],
+      [binary('add', { kind: 'negate', operand: literal(0.5) }, literal(1.5)), '((-0.5) + 1.5)', 1],
+      [
+        binary('subtract', literal(2147483648), literal(2147483647)),
+        '(2147483648 - 2147483647)',
+        1,
+      ],
+      [
+        binary('add', binary('subtract', literal(1e21), literal(1e21)), literal(1)),
+        '((1e21 - 1e21) + 1)',
+        1,
+      ],
+      [
+        binary(
+          'add',
+          binary('subtract', literal(Number.MIN_VALUE), literal(Number.MIN_VALUE)),
+          literal(1),
+        ),
+        '((5e-324 - 5e-324) + 1)',
+        1,
+      ],
+      [
+        binary(
+          'add',
+          binary('subtract', literal(0.30000000000000004), literal(0.30000000000000004)),
+          literal(1),
+        ),
+        '((0.30000000000000004 - 0.30000000000000004) + 1)',
+        1,
+      ],
+    ] as const;
+    const measured = cases.map(([expression]) =>
+      renderer.measure(createBlueprintNumericExpression(session, expression), '$.literal'),
+    );
+    const formulas = renderer.renderUnique(measured);
+
+    for (const [index, [, expected, defaultValue]] of cases.entries()) {
+      expect(formulas.get(measured[index]!.key)).toBe(expected);
+      expect(measured[index]!.renderedBytes).toBe(expected.length);
+      expect(measured[index]!.defaultValue).toBe(defaultValue);
+      expect([...expected].every((character) => character.charCodeAt(0) < 128)).toBe(true);
+    }
+  });
+
+  test('normalizes negative zero and keeps distinct finite literals canonical', () => {
+    const { session, renderer } = setup();
+    const negativeZero = renderer.measure(
+      createBlueprintNumericExpression(session, binary('add', literal(-0), literal(1))),
+      '$.negativeZero',
+    );
+    const positiveZero = renderer.measure(
+      createBlueprintNumericExpression(session, binary('add', literal(0), literal(1))),
+      '$.positiveZero',
+    );
+    expect(negativeZero.key).toBe(positiveZero.key);
+    expect([...renderer.renderUnique([negativeZero, positiveZero]).values()]).toEqual(['(0 + 1)']);
+
+    const first = renderer.measure(
+      createBlueprintNumericExpression(
+        session,
+        binary('subtract', literal(2147483648), literal(2147483647)),
+      ),
+      '$.first',
+    );
+    const second = renderer.measure(
+      createBlueprintNumericExpression(
+        session,
+        binary('subtract', literal(2147483649), literal(2147483648)),
+      ),
+      '$.second',
+    );
+    expect(first.defaultValue).toBe(second.defaultValue);
+    expect(first.key).not.toBe(second.key);
+    expect([...renderer.renderUnique([first, second]).values()]).toEqual([
+      '(2147483648 - 2147483647)',
+      '(2147483649 - 2147483648)',
+    ]);
+  });
+
+  test('rejects forged roots and invalid final defaults with located CP1002', () => {
     const { session, handles, renderer } = setup([{ name: 'x', value: 5 }]);
     const forged = { kind: 'literal', value: 1 } as BlueprintNumericExpression;
     let forgedError: unknown;
@@ -199,16 +289,16 @@ describe('private native numeric formula renderer', () => {
   test.each(['multiply', 'power'] as const)(
     'bounds shared %s expansion and aggregate unique text bytes',
     (operator) => {
-      const { session, handles, renderer } = setup([{ name: 'x', value: 0 }]);
-      let shared: unknown = parameter(handles.get('x')!);
+      const { session, renderer } = setup([{ name: 'x', value: 0 }]);
+      let shared: unknown = binary('subtract', literal(1.5), literal(0.5));
       for (let index = 0; index < 16; index += 1) shared = binary(operator, shared, shared);
       const overRootLimit = createBlueprintNumericExpression(session, shared);
       expect(() => renderer.measure(overRootLimit, '$.tooLarge')).toThrow(
         expect.objectContaining({ code: 'CP1002', path: '$.tooLarge' }),
       );
 
-      shared = parameter(handles.get('x')!);
-      const sharedDepth = operator === 'power' ? 13 : 14;
+      shared = binary('subtract', literal(1.5), literal(0.5));
+      const sharedDepth = operator === 'power' ? 12 : 13;
       for (let index = 0; index < sharedDepth; index += 1)
         shared = binary(operator, shared, shared);
       const first = createBlueprintNumericExpression(session, binary(operator, shared, shared));

@@ -261,11 +261,16 @@ Selector numeric select index, and must not itself declare `formula` (even an
 empty string) or `dependent: true`. Typed formula export requires a linked
 physical circuit containing only Constant, Arithmetic, Decider and Selector
 producers. It
-accepts only signed-int32 literals/defaults and registered `+`, `-`, `*`, `/`,
-`**` and unary-negation nodes. The raw evaluated default must itself be signed int32 and
-match its physical field; fractional or wrapped defaults are rejected. Output is
-fully parenthesized without folding or reassociation and respects bounded node
-and byte limits. Repeated identical
+accepts finite numeric literals, including decimal/scientific values outside
+int32, and registered `+`, `-`, `*`, `/`, `**` and unary-negation nodes.
+The raw evaluated default must itself be signed int32 and match its physical
+field; fractional or out-of-range defaults are rejected. This does not relax
+declared numeric-original bounds or the local integer-destination rules.
+Literal text uses the shortest round-trip decimal spelling; positive exponent
+plus signs are omitted (for example, `1e+21` renders as `1e21`). This bounded
+structural spelling is not a claim of complete MathExpression grammar support or
+native Factorio acceptance. Output is fully parenthesized without folding or
+reassociation and respects bounded node and byte limits. Repeated identical
 default/formula pairs share one row across all four families. Different formulas
 for the same derived original, or collision with any declared number original,
 reject atomically with located `CP1002`.
@@ -307,6 +312,37 @@ output += Constant({
       filters: [
         { signal: Signal('virtual', 'signal-A'), value: amount },
         { signal: Signal('virtual', 'signal-B'), value: amount / 2 + 3 },
+      ],
+    },
+  ],
+});
+```
+
+#### Bounded finite-literal example
+
+Finite literals may be fractional or exceed int32 inside a registered expression.
+With Amount 10, `amount * 0.5 + 1` has raw default 6 and binds to 8 at Amount 14;
+Amount 11 produces 6.5 and is rejected by this integer Constant-count slot. The
+large intermediate `(amount + 2147483648) - 2147483647` has raw default 11 and
+remains eligible for native projection because its final value is signed int32.
+The generated formulas are `((x * 0.5) + 1)` and
+`((x + 2147483648) - 2147483647)`; physical defaults remain 10, 6 and 11.
+This is structural export, not a claim that Factorio accepts or evaluates either
+formula.
+
+```javascript
+const amount = Param.number('Amount', 10, { variable: 'x' });
+const output = new Network();
+output += Constant({
+  sections: [
+    {
+      filters: [
+        { signal: Signal('virtual', 'signal-A'), value: amount },
+        { signal: Signal('virtual', 'signal-B'), value: amount * 0.5 + 1 },
+        {
+          signal: Signal('virtual', 'signal-C'),
+          value: amount + 2147483648 - 2147483647,
+        },
       ],
     },
   ],

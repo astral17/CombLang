@@ -147,6 +147,45 @@ describe('author API documentation', () => {
     );
   });
 
+  test('runs the documented finite-literal default, override, failure, and native projection', async () => {
+    const source = read('parameters').match(
+      /#### Bounded finite-literal example[\s\S]*?```javascript\r?\n([\s\S]*?)\r?\n```/,
+    )?.[1];
+    if (source === undefined) throw new Error('Missing bounded finite-literal example');
+    const compilation = compile(source, await bundled);
+    const session = createSourceParameterBindingSession(compilation);
+    const amount = session.parameters[0];
+    if (amount === undefined) throw new Error('Missing documented Amount parameter');
+
+    const native = exportSourceCompilationNativeBlueprint(compilation, {
+      label: 'Documented finite-literal formulas',
+      maxDeciderConditionRows: 1024,
+    });
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '10', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '6', formula: '((x * 0.5) + 1)', dependent: true },
+      {
+        type: 'number',
+        number: '11',
+        formula: '((x + 2147483648) - 2147483647)',
+        dependent: true,
+      },
+    ]);
+    const counts = (circuit) =>
+      circuit.entities[0].control_behavior.sections.sections[0].filters.map(({ count }) => count);
+    const defaults = generateBlueprintJson(compilation.resolvedCircuit.ir).blueprint;
+    const bound = session.bind([{ id: amount.id, value: 14 }]);
+    const overridden = generateBlueprintJson(bound.resolvedCircuit.ir).blueprint;
+    expect(counts(defaults)).toEqual([10, 6, 11]);
+    expect(counts(overridden)).toEqual([14, 8, 15]);
+    expect(overridden).not.toHaveProperty('parameters');
+    expect(() => session.bind([{ id: amount.id, value: 11 }])).toThrow(
+      expect.objectContaining({ code: 'CP1000' }),
+    );
+    const retry = session.bind([{ id: amount.id, value: 14 }]);
+    expect(counts(generateBlueprintJson(retry.resolvedCircuit.ir).blueprint)).toEqual([14, 8, 15]);
+  });
+
   test('runs the documented bounded power defaults, override, and native projection', async () => {
     const source = read('parameters').match(
       /#### Bounded power example[\s\S]*?```javascript\r?\n([\s\S]*?)\r?\n```/,

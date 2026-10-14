@@ -171,8 +171,11 @@ remain unverified. Signal parameters
 are supported only for concrete virtual defaults with normal quality in direct
 Constant filter Signal slots, subject to the bounded placeholder and circuit
 rules in the Param reference. Other Signal slots/defaults, unsupported
-expressions, unused parameters, ambiguous equal originals and non-int32 numeric
-originals fail explicitly in `--parameters` native-metadata mode. See
+expressions, unused parameters, ambiguous equal originals and non-int32 declared
+numeric originals fail explicitly in `--parameters` native-metadata mode. Formula
+operands may be any finite numeric literal, but each raw evaluated formula
+default must still fit signed int32; local integer destinations continue to
+reject fractional results. See
 the [supported source slots](api/parameters.md#supported-fields) and
 [native-metadata export limits](api/parameters.md#formula-metadata-and-export-modes).
 

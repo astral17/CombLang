@@ -134,6 +134,91 @@ output += Constant({ sections: [{ filters: [
     });
   });
 
+  test('projects fractional and large formula literals while keeping raw defaults in int32', () => {
+    const compilation = compile(
+      [
+        "const A = Signal('virtual', 'signal-A');",
+        "const B = Signal('virtual', 'signal-B');",
+        "const C = Signal('virtual', 'signal-C');",
+        "const D = Signal('virtual', 'signal-D');",
+        "const E = Signal('virtual', 'signal-E');",
+        "const amount = Param.number('Amount', 10, { variable: 'x' });",
+        "const root = Param.number('Root', 9, { variable: 'y' });",
+        'const output = new Network();',
+        'output += Constant({ sections: [{ filters: [',
+        '{ signal: A, value: amount },',
+        '{ signal: B, value: amount * 0.5 + 1 },',
+        '{ signal: C, value: (amount + 2147483648) - 2147483647 },',
+        '{ signal: D, value: root },',
+        '{ signal: E, value: root ** 0.5 },',
+        '] }] });',
+      ].join('\n'),
+    );
+    const declarations = sourceApi.listSourceCompilationParameters(compilation);
+    const amount = declarations.find(({ label }) => label === 'Amount')!.parameter;
+    const root = declarations.find(({ label }) => label === 'Root')!.parameter;
+    const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '10', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '9', name: 'Root', variable: 'y' },
+      { type: 'number', number: '6', formula: '((x * 0.5) + 1)', dependent: true },
+      {
+        type: 'number',
+        number: '11',
+        formula: '((x + 2147483648) - 2147483647)',
+        dependent: true,
+      },
+      { type: 'number', number: '3', formula: '((y) ^ (0.5))', dependent: true },
+    ]);
+
+    const counts = (pair: ReturnType<typeof sourceApi.bindSourceCompilationCircuit>) => {
+      const behavior = generateBlueprintJson(pair.resolvedCircuit.ir).blueprint.entities[0]!
+        .control_behavior as {
+        sections: { sections: { filters: { count: number }[] }[] };
+      };
+      return behavior.sections.sections[0]!.filters.map(({ count }) => count);
+    };
+    const defaults = sourceApi.bindSourceCompilationCircuit(compilation);
+    const overridden = sourceApi.bindSourceCompilationCircuit(compilation, [
+      { parameter: amount, value: 14 },
+      { parameter: root, value: 16 },
+    ]);
+    expect(counts(defaults)).toEqual([10, 6, 11, 9, 3]);
+    expect(counts(overridden)).toEqual([14, 8, 15, 16, 4]);
+    expect(() =>
+      sourceApi.bindSourceCompilationCircuit(compilation, [
+        { parameter: amount, value: 11 },
+        { parameter: root, value: 16 },
+      ]),
+    ).toThrow(expect.objectContaining({ code: 'CP1000' }));
+    expect(() =>
+      sourceApi.bindSourceCompilationCircuit(compilation, [
+        { parameter: amount, value: 14 },
+        { parameter: root, value: 2 },
+      ]),
+    ).toThrow(expect.objectContaining({ code: 'CP1000' }));
+
+    const nativeJson = emitNativeBlueprintJson(native);
+    expect(nativeJson.blueprint.entities[0]!.control_behavior).toMatchObject({
+      sections: {
+        sections: [
+          {
+            filters: [
+              { name: 'signal-A', count: 10 },
+              { name: 'signal-B', count: 6 },
+              { name: 'signal-C', count: 11 },
+              { name: 'signal-D', count: 9 },
+              { name: 'signal-E', count: 3 },
+            ],
+          },
+        ],
+      },
+    });
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
+  });
+
   test.each([false, true])(
     'Arithmetic Signal output still rejects native metadata (mixed numeric: %s) without losing concrete defaults',
     (mixed) => {
@@ -2049,7 +2134,7 @@ output += Decider({ condition: ${left} >= amount && ${left} ${operator} amount +
       expectedMessage: 'signed int32 integer',
     },
     {
-      name: 'formula literal outside signed int32',
+      name: 'large literal produces a final default outside signed int32',
       declaration: "const amount = Param.number('Amount', 5, { variable: 'x' });",
       expression: 'amount + 2147483648',
       expectedPath: '$.arithmeticTemplates[0].right.value',
@@ -2226,7 +2311,7 @@ const other = Param.number('Other', 7, { variable: 'y' });`,
       message: 'signed int32 integers',
     },
     {
-      name: 'expression literal is outside int32',
+      name: 'large expression literal produces a final default outside int32',
       declarations: `const amount = Param.number('Amount', 5, { variable: 'x' });`,
       filters: `{ signal: Signal('virtual', 'signal-A'), value: amount },
   { signal: Signal('virtual', 'signal-B'), value: amount + 2147483648 }`,

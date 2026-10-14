@@ -51,6 +51,23 @@ function int32(value: number): boolean {
   return Number.isInteger(value) && value >= int32Min && value <= int32Max;
 }
 
+function nativeNumericLiteralText(value: number, path: string, source?: SourceSpan): string {
+  if (!Number.isFinite(value)) {
+    fail(path, 'native numeric formula literals must be finite numbers.', source);
+  }
+  const normalized = Object.is(value, -0) ? 0 : value;
+  const text = String(normalized).replace(/e\+/, 'e');
+  const roundTrip = Number(text);
+  if (!Number.isFinite(roundTrip) || roundTrip !== normalized) {
+    fail(
+      path,
+      'native numeric formula literals must round-trip through finite decimal text.',
+      source,
+    );
+  }
+  return text;
+}
+
 export function createNativeNumericFormulaRenderer(
   session: BlueprintParameterSession,
   variableFor: (parameter: BlueprintNumberParameterHandle) => string | undefined,
@@ -84,7 +101,7 @@ export function createNativeNumericFormulaRenderer(
   ): string {
     switch (expression.kind) {
       case 'literal':
-        return String(Object.is(expression.value, -0) ? 0 : expression.value);
+        return nativeNumericLiteralText(expression.value, path, source);
       case 'parameter':
         return resolveVariable(expression, path, source);
       case 'negate':
@@ -138,17 +155,9 @@ export function createNativeNumericFormulaRenderer(
         let nodeMeasure: NodeMeasure;
         switch (node.kind) {
           case 'literal': {
-            if (!int32(node.value)) {
-              fail(
-                path,
-                'native numeric formula literals must be signed int32 integers.',
-                inspection.source,
-              );
-            }
-            const normalized = Object.is(node.value, -0) ? 0 : node.value;
-            const text = String(normalized);
+            const text = nativeNumericLiteralText(node.value, path, inspection.source);
             nodeMeasure = {
-              key: intern(JSON.stringify(['literal', normalized])),
+              key: intern(JSON.stringify(['literal', text])),
               renderedBytes: text.length,
             };
             break;

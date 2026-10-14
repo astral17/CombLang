@@ -1067,16 +1067,20 @@ output += Constant({ sections: [{ filters: [
     expect(error).not.toHaveBeenCalled();
   });
 
-  test('exports and binds divided numeric Selector formulas without publishing failures', async () => {
+  test('exports and binds fractional, divided, and powered Selector formulas without publishing failures', async () => {
     const { environment } = await parameterHost();
     const path = await sourceFile(`const amount = Param.number('Amount', 10, { variable: 'x' });
 const input = new Network();
 const directOutput = new Network();
+const fractionalOutput = new Network();
 const formulaOutput = new Network();
 const powerOutput = new Network();
+const largeOutput = new Network();
 directOutput += Selector({ input, operation: 'select', index: amount });
+fractionalOutput += Selector({ input, operation: 'select', index: amount * 0.5 + 1 });
 formulaOutput += Selector({ input, operation: 'select', index: amount / 2 + 3 });
-powerOutput += Selector({ input, operation: 'select', index: amount ** 2 });`);
+powerOutput += Selector({ input, operation: 'select', index: amount ** 2 });
+largeOutput += Selector({ input, operation: 'select', index: (amount + 2147483648) - 2147483647 });`);
     const nativePath = join(dirname(path), 'selector-formula-native.json');
     const overridesPath = join(dirname(path), 'selector-formula-overrides.json');
     await writeFile(overridesPath, JSON.stringify([{ id: 0, value: 14 }]));
@@ -1091,15 +1095,22 @@ powerOutput += Selector({ input, operation: 'select', index: amount ** 2 });`);
     const native = JSON.parse(await readFile(nativePath, 'utf8'));
     expect(native.blueprint.parameters).toEqual([
       { type: 'number', number: '10', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '6', formula: '((x * 0.5) + 1)', dependent: true },
       { type: 'number', number: '8', formula: '((x / 2) + 3)', dependent: true },
       { type: 'number', number: '100', formula: '((x) ^ (2))', dependent: true },
+      {
+        type: 'number',
+        number: '11',
+        formula: '((x + 2147483648) - 2147483647)',
+        dependent: true,
+      },
     ]);
     expect(
       native.blueprint.entities.map(
         ({ control_behavior }: { control_behavior: { index_constant?: number } }) =>
           control_behavior.index_constant,
       ),
-    ).toEqual([10, 8, 100]);
+    ).toEqual([10, 6, 8, 100, 11]);
 
     expect(
       await run(['blueprint', 'export', '--json', '--overrides', overridesPath, path], environment),
@@ -1111,7 +1122,7 @@ powerOutput += Selector({ input, operation: 'select', index: amount ** 2 });`);
         ({ control_behavior }: { control_behavior: { index_constant?: number } }) =>
           control_behavior.index_constant,
       ),
-    ).toEqual([14, 10, 196]);
+    ).toEqual([14, 8, 10, 196, 15]);
 
     await writeFile(overridesPath, JSON.stringify([{ id: 0, value: 11 }]));
     const failedOutput = join(dirname(path), 'selector-formula-fractional.json');
