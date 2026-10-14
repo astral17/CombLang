@@ -82,11 +82,11 @@ function run(compilation, body) {
 }
 
 describe('author API documentation', () => {
-  test('runs the bounded typed Constant formula example and preserves local binding', async () => {
+  test('runs the bounded typed Arithmetic formula example and preserves local binding', async () => {
     const source = read('parameters').match(
-      /### Bounded typed Constant count formulas[\s\S]*?```javascript\r?\n([\s\S]*?)```/,
+      /### Bounded typed native numeric formulas[\s\S]*?```javascript\r?\n([\s\S]*?)\r?\n```/,
     )?.[1];
-    if (source === undefined) throw new Error('Missing bounded Constant formula example');
+    if (source === undefined) throw new Error('Missing bounded Arithmetic formula example');
     const compilation = compile(source, await bundled);
     const session = createSourceParameterBindingSession(compilation);
     const amount = session.parameters[0];
@@ -96,11 +96,7 @@ describe('author API documentation', () => {
       'parameters',
     );
     expect(generateBlueprintJson(bound.resolvedCircuit.ir).blueprint.entities[0]).toMatchObject({
-      control_behavior: {
-        sections: {
-          sections: [{ filters: [{ count: 9 }, { count: 18 }] }],
-        },
-      },
+      control_behavior: { arithmetic_conditions: { first_constant: 9, second_constant: 105 } },
     });
     const native = exportSourceCompilationNativeBlueprint(compilation, {
       label: 'Documented typed formula',
@@ -108,7 +104,7 @@ describe('author API documentation', () => {
     });
     expect(native.parameters).toEqual([
       { type: 'number', number: '5', name: 'Amount', variable: 'x' },
-      { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
+      { type: 'number', number: '65', formula: '(((x * 2) + 3) * 5)', dependent: true },
     ]);
   });
 

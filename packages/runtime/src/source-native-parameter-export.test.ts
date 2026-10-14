@@ -1422,13 +1422,12 @@ output += Constant({ sections: [{ multiplier: scale, filters: [] }] });`);
     });
   });
 
-  test('rejects derived Arithmetic roots from native formula export with provenance', () => {
+  test('exports a typed Arithmetic formula while preserving its concrete local binding', () => {
     const text = `const A = Signal('virtual', 'signal-A');
-const amount = Param.number('Amount', 5);
-const input = new Network(), output = new Network();
-input += CC(3 * A);
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const output = new Network();
 const constantEquivalent = amount * 0;
-output += Arithmetic({ left: input[A], operation: 'add', right: constantEquivalent, output: A });`;
+output += Arithmetic({ left: amount, operation: 'add', right: constantEquivalent, output: A });`;
     const compilation = sourceApi.compileSourceProgram(
       { path: 'native-derived-arithmetic.factorio.ts', text },
       parameterHost(),
@@ -1437,16 +1436,11 @@ output += Arithmetic({ left: input[A], operation: 'add', right: constantEquivale
     const originalArtifact = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
     const originalPair = sourceApi.bindSourceCompilationCircuit(compilation);
     const originalJson = generateBlueprintJson(originalPair.resolvedCircuit.ir);
-    let failure: unknown;
-    try {
-      sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
-    } catch (error) {
-      failure = error;
-    }
-    expect(failure).toMatchObject({
-      code: 'CP1002',
-      span: { fileId: compilation.fileId, start: expect.any(Number), end: expect.any(Number) },
-    });
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '0', formula: '(x * 0)', dependent: true },
+    ]);
     const overridden = sourceApi.bindSourceCompilationCircuit(compilation, [
       { parameter: sourceApi.listSourceCompilationParameters(compilation)[0]!.parameter, value: 9 },
     ]);
@@ -1619,6 +1613,290 @@ for (let index = 0; index < 2; index += 1) {
     ]);
   });
 
+  test('shares numeric formulas across Arithmetic and Constant in deterministic capture order', () => {
+    const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const factor = Param.number('Factor', 2, { variable: 'y' });
+const output = new Network();
+output += Arithmetic({ left: amount, operation: 'add', right: (amount * 2 + 3) * 5, output: A });
+output += Arithmetic({ left: (amount + factor) * 2, operation: 'multiply', right: factor, output: B });
+output += Arithmetic({ left: amount, operation: 'add', right: amount * 2, output: A });
+output += Constant({ sections: [{ filters: [
+  { signal: A, value: amount },
+  { signal: B, value: amount * 2 },
+] }] });`);
+    const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '2', name: 'Factor', variable: 'y' },
+      { type: 'number', number: '65', formula: '(((x * 2) + 3) * 5)', dependent: true },
+      { type: 'number', number: '14', formula: '((x + y) * 2)', dependent: true },
+      { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
+    ]);
+    expect(native.entities).toEqual(
+      buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).entities,
+    );
+    expect(native.wires).toEqual(
+      buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).wires,
+    );
+    const entities = emitNativeBlueprintJson(native).blueprint.entities;
+    expect(entities[0]!.control_behavior).toMatchObject({
+      arithmetic_conditions: { first_constant: 5, second_constant: 65 },
+    });
+    expect(entities[1]!.control_behavior).toMatchObject({
+      arithmetic_conditions: { first_constant: 14, second_constant: 2 },
+    });
+    expect(entities[2]!.control_behavior).toMatchObject({
+      arithmetic_conditions: { first_constant: 5, second_constant: 10 },
+    });
+    expect(entities[3]!.control_behavior).toMatchObject({
+      sections: { sections: [{ filters: [{ count: 5 }, { count: 10 }] }] },
+    });
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
+  });
+
+  test('keeps the documented native Arithmetic formula example executable', () => {
+    const page = readFileSync(new URL('../../../docs/api/parameters.md', import.meta.url), 'utf8');
+    const source = page.match(
+      /### Bounded typed native numeric formulas[\s\S]*?```javascript\r?\n([\s\S]*?)\r?\n```/,
+    )?.[1];
+    expect(source).toBeDefined();
+    const compilation = compile(source!);
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '65', formula: '(((x * 2) + 3) * 5)', dependent: true },
+    ]);
+    expect(emitNativeBlueprintJson(native).blueprint.entities[0]!.control_behavior).toMatchObject({
+      arithmetic_conditions: { first_constant: 5, second_constant: 65 },
+    });
+  });
+
+  test.each([
+    ['left', 'literal'],
+    ['right', 'literal'],
+    ['left', 'signal'],
+    ['right', 'signal'],
+  ] as const)(
+    'exports an Arithmetic formula on the %s with a parameterless or signal opposite operand (%s)',
+    (side, otherKind) => {
+      const opposite = otherKind === 'signal' ? 'input[A]' : '7';
+      const left = side === 'left' ? 'amount * 2' : opposite;
+      const right = side === 'right' ? 'amount * 2' : opposite;
+      const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const input = new Network(), output = new Network();
+output += Arithmetic({ left: ${left}, operation: 'add', right: ${right}, output: A });
+output += Arithmetic({ left: amount, operation: 'add', right: 1, output: A });`);
+      const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      expect(native.parameters).toEqual([
+        { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+        { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
+      ]);
+      const behavior = emitNativeBlueprintJson(native).blueprint.entities[0]!.control_behavior as {
+        arithmetic_conditions: Record<string, unknown>;
+      };
+      const constantField = side === 'left' ? 'first_constant' : 'second_constant';
+      expect(behavior.arithmetic_conditions[constantField]).toBe(10);
+      if (otherKind === 'signal') {
+        const signalField = side === 'left' ? 'second_signal' : 'first_signal';
+        expect(behavior.arithmetic_conditions[signalField]).toMatchObject({ name: 'signal-A' });
+      } else {
+        const otherConstantField = side === 'left' ? 'second_constant' : 'first_constant';
+        expect(behavior.arithmetic_conditions[otherConstantField]).toBe(7);
+      }
+    },
+  );
+
+  test('uses original defaults across rebind, reset and retry without re-executing source', () => {
+    const key = '__comblang_native_arithmetic_formula_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const existed = Object.hasOwn(globals, key);
+    const previous = globals[key];
+    globals[key] = 0;
+    try {
+      const compilation = compile(`globalThis.${key} += 1;
+const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const output = new Network();
+output += Arithmetic({ left: amount, operation: 'add', right: (amount * 2 + 3) * 5, output: A });`);
+      const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+      const parameter = sourceApi.listSourceCompilationParameters(compilation)[0]!.parameter;
+      const values = (pair: ReturnType<typeof sourceApi.bindSourceCompilationCircuit>) =>
+        emitNativeBlueprintJson(buildNativeBlueprintFcir(pair.resolvedCircuit.ir, options))
+          .blueprint.entities[0]!.control_behavior;
+      const defaults = sourceApi.bindSourceCompilationCircuit(compilation);
+      const overridden = sourceApi.bindSourceCompilationCircuit(compilation, [
+        { parameter, value: 9 },
+      ]);
+      const reset = sourceApi.bindSourceCompilationCircuit(compilation);
+      expect(values(defaults)).toMatchObject({
+        arithmetic_conditions: { first_constant: 5, second_constant: 65 },
+      });
+      expect(values(overridden)).toMatchObject({
+        arithmetic_conditions: { first_constant: 9, second_constant: 105 },
+      });
+      expect(values(reset)).toMatchObject({
+        arithmetic_conditions: { first_constant: 5, second_constant: 65 },
+      });
+      const first = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      expect(first.parameters).toEqual([
+        { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+        { type: 'number', number: '65', formula: '(((x * 2) + 3) * 5)', dependent: true },
+      ]);
+      expect(sourceApi.exportSourceCompilationNativeBlueprint(compilation, options)).toEqual(first);
+      expect(globals[key]).toBe(1);
+      expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
+    } finally {
+      if (existed) globals[key] = previous;
+      else delete globals[key];
+    }
+  });
+
+  test('requires a direct physical Constant count or Arithmetic operand for every formula dependency', () => {
+    const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const output = new Network();
+output += Arithmetic({ left: amount * 2, operation: 'add', right: 1, output: A });`);
+    expect(exportFailure(compilation)).toMatchObject({
+      code: 'CP1002',
+      path: '$.arithmeticTemplates[0].left.value',
+      message: expect.stringContaining('direct Constant count or Arithmetic constant operand'),
+    });
+  });
+
+  test.each([
+    ['Decider', 'output += Decider({ condition: input[A] > amount, outputs: [input[A]] });'],
+    ['Selector', "output += Selector({ input, operation: 'select', index: amount });"],
+  ])('does not retain a formula dependency through direct %s use', (_family, extra) => {
+    const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const input = new Network(), output = new Network();
+output += Arithmetic({ left: amount * 2, operation: 'add', right: 1, output: A });
+${extra}`);
+    expect(exportFailure(compilation)).toMatchObject({
+      code: 'CP1002',
+      path: '$.arithmeticTemplates[0].left.value',
+      message: expect.stringContaining('direct Constant count or Arithmetic constant operand'),
+    });
+  });
+
+  test.each([
+    {
+      name: 'missing explicit variable',
+      declaration: "const amount = Param.number('Amount', 5);",
+      expression: 'amount * 2',
+      expectedPath: '$.parameters[0].metadata.variable',
+      expectedMessage: 'require an explicit variable name',
+    },
+    {
+      name: 'dependent formula leaf',
+      declaration:
+        "const amount = Param.number('Amount', 5, { variable: 'x', formula: '', dependent: true });",
+      expression: 'amount * 2',
+      expectedPath: '$.parameters[0].metadata',
+      expectedMessage: 'direct leaf parameters without formula metadata',
+    },
+    {
+      name: 'formula default outside signed int32',
+      declaration: "const amount = Param.number('Amount', 2147483647, { variable: 'x' });",
+      expression: 'amount + 1',
+      expectedPath: '$.arithmeticTemplates[0].right.value',
+      expectedMessage: 'signed int32 integers',
+    },
+    {
+      name: 'raw declared original outside signed int32',
+      declaration: "const amount = Param.number('Amount', 2147483648, { variable: 'x' });",
+      expression: 'amount * 2',
+      expectedPath: '$.parameters[0].defaultValue',
+      expectedMessage: 'signed int32 integer',
+    },
+    {
+      name: 'formula literal outside signed int32',
+      declaration: "const amount = Param.number('Amount', 5, { variable: 'x' });",
+      expression: 'amount + 2147483648',
+      expectedPath: '$.arithmeticTemplates[0].right.value',
+      expectedMessage: 'signed int32 integers',
+    },
+  ])(
+    'rejects Arithmetic formula dependency case: $name',
+    ({ declaration, expression, expectedPath, expectedMessage }) => {
+      const compilation = compile(`const A = Signal('virtual', 'signal-A');
+${declaration}
+const output = new Network();
+output += Arithmetic({ left: amount, operation: 'add', right: ${expression}, output: A });`);
+      const error = exportFailure(compilation);
+      expect(error).toMatchObject({ code: 'CP1002', path: expectedPath });
+      expect(error.message).toContain(expectedMessage);
+    },
+  );
+
+  test('rejects a derived original collision with a declaration and conflicting formulas atomically', () => {
+    const declaredCollision = compile(`const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const target = Param.number('Target', 10, { variable: 'y' });
+const output = new Network();
+output += Arithmetic({ left: amount, operation: 'add', right: amount * 2, output: A });
+output += Arithmetic({ left: target, operation: 'add', right: 1, output: A });`);
+    const declaredCollisionArtifact = structuredClone(
+      sourceApi.sourceCompilationArtifact(declaredCollision),
+    );
+    expect(exportFailure(declaredCollision)).toMatchObject({
+      code: 'CP1002',
+      path: '$.arithmeticTemplates[0].right.value',
+      message: expect.stringContaining('collides with a declared number original'),
+    });
+    expect(sourceApi.sourceCompilationArtifact(declaredCollision)).toEqual(
+      declaredCollisionArtifact,
+    );
+
+    const conflicting = compile(`const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const other = Param.number('Other', 7, { variable: 'y' });
+const output = new Network();
+output += Arithmetic({ left: amount, operation: 'add', right: amount + 1, output: A });
+output += Arithmetic({ left: other, operation: 'add', right: other - 1, output: A });`);
+    const conflictingArtifact = structuredClone(sourceApi.sourceCompilationArtifact(conflicting));
+    expect(exportFailure(conflicting)).toMatchObject({
+      code: 'CP1002',
+      path: '$.arithmeticTemplates[1].right.value',
+      message: expect.stringContaining('already used by a different formula'),
+    });
+    expect(sourceApi.sourceCompilationArtifact(conflicting)).toEqual(conflictingArtifact);
+  });
+
+  test.each([
+    ['Decider', 'output += Decider({ condition: input[A] > amount, outputs: [input[A]] });'],
+    ['Selector', "output += Selector({ input, operation: 'select', index: amount });"],
+  ])('keeps native Arithmetic formulas closed to mixed %s producers', (_name, extra) => {
+    const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const input = new Network(), output = new Network();
+output += Arithmetic({ left: amount, operation: 'add', right: amount * 2, output: A });
+${extra}`);
+    expect(exportFailure(compilation)).toMatchObject({
+      code: 'CP1002',
+      path: '$.arithmeticTemplates[0].right.value',
+      message: expect.stringContaining('every producer to be Constant or Arithmetic'),
+    });
+  });
+
+  test('rejects an unlinked physical Entity in a Constant/Arithmetic formula circuit', () => {
+    const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const output = new Network();
+const orphan = Entity('entity:constant-combinator');
+void orphan;
+output += Arithmetic({ left: amount, operation: 'add', right: amount * 2, output: A });`);
+    expect(exportFailure(compilation)).toMatchObject({
+      code: 'CP1002',
+      path: '$.arithmeticTemplates[0].right.value',
+      message: expect.stringContaining('unlinked physical Entities'),
+    });
+  });
+
   test.each([
     {
       name: 'missing direct dependency use',
@@ -1728,7 +2006,7 @@ output += Constant({ sections: [{ filters: [${filters}] }] });`);
     expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
   });
 
-  test('keeps the typed-formula closed scope limited to linked Constant-only circuits', () => {
+  test('allows linked Constant and Arithmetic producers with a typed formula', () => {
     const mixed = compile(`const amount = Param.number('Amount', 5, { variable: 'x' });
 const input = new Network(), output = new Network();
 output += Constant({ sections: [{ filters: [
@@ -1736,12 +2014,12 @@ output += Constant({ sections: [{ filters: [
   { signal: Signal('virtual', 'signal-B'), value: amount * 2 },
 ] }] });
 output += Arithmetic({ left: input[Signal('virtual', 'signal-A')], operation: 'add', right: 1, output: Signal('virtual', 'signal-B') });`);
-    const error = exportFailure(mixed);
-    expect(error).toMatchObject({
-      code: 'CP1002',
-      path: '$.constantTemplates[0].sections[0].filters[1].value',
-    });
-    expect(error.message).toContain('every producer to be Constant');
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(mixed, options);
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
+    ]);
+    expect(native.entities).toHaveLength(2);
   });
 
   test('rejects an unlinked physical Entity in an otherwise Constant-only formula circuit', () => {

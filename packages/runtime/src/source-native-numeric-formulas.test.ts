@@ -6,7 +6,7 @@ import {
   createBlueprintParameterSession,
   type BlueprintNumberParameterHandle,
 } from '../../compiler/src/blueprint-parameters.js';
-import { createNativeConstantFormulaRenderer } from './source-native-constant-formulas.js';
+import { createNativeNumericFormulaRenderer } from './source-native-numeric-formulas.js';
 
 function setup(defaults: readonly { readonly name: string; readonly value: number }[] = []) {
   const session = createBlueprintParameterSession();
@@ -17,7 +17,7 @@ function setup(defaults: readonly { readonly name: string; readonly value: numbe
     variables.set(parameter, name);
     handles.set(name, parameter);
   }
-  const renderer = createNativeConstantFormulaRenderer(session, (parameter) =>
+  const renderer = createNativeNumericFormulaRenderer(session, (parameter) =>
     variables.get(parameter),
   );
   return { session, handles, renderer };
@@ -35,12 +35,12 @@ function binary(operator: 'add' | 'subtract' | 'multiply', left: unknown, right:
   return { kind: 'binary' as const, operator, left, right };
 }
 
-function render(renderer: ReturnType<typeof createNativeConstantFormulaRenderer>, root: unknown) {
+function render(renderer: ReturnType<typeof createNativeNumericFormulaRenderer>, root: unknown) {
   const measured = renderer.measure(root, '$.count');
   return { measured, text: renderer.renderUnique([measured]).get(measured.key) };
 }
 
-describe('private native Constant formula renderer', () => {
+describe('private native numeric formula renderer', () => {
   test('preserves operator tree and deterministically renders every supported operator', () => {
     const { session, handles, renderer } = setup([
       { name: 'x', value: 5 },

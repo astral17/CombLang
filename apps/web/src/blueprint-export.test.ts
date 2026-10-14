@@ -620,7 +620,7 @@ void extra;`,
     expect(error).not.toHaveBeenCalled();
   });
 
-  test('typed Constant formula exports match CLI, while concrete Worker output stays metadata-free', async () => {
+  test('typed Constant and Arithmetic formula exports match CLI, while concrete Worker output stays metadata-free', async () => {
     const { environment } = await parameterHost();
     const directory = await mkdtemp(join(tmpdir(), 'comblang-worker-formula-parity-'));
     directories.push(directory);
@@ -630,7 +630,8 @@ const output = new Network();
 output += Constant({ sections: [{ filters: [
   { signal: Signal('virtual', 'signal-A'), value: amount },
   { signal: Signal('virtual', 'signal-B'), value: amount * 2 },
-] }] });`;
+] }] });
+output += Arithmetic({ left: amount, operation: 'add', right: (amount * 2 + 3) * 5, output: Signal('virtual', 'signal-C') });`;
     await writeFile(path, formulaSource);
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -657,8 +658,14 @@ output += Constant({ sections: [{ filters: [
     if (!workerNative.result.blueprintExport?.ok) throw new Error('Worker formula export failed.');
     expect(workerNative.result.blueprintExport.document.blueprint.parameters).toEqual([
       { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '65', formula: '(((x * 2) + 3) * 5)', dependent: true },
       { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
     ]);
+    expect(
+      workerNative.result.blueprintExport.document.blueprint.entities[1]!.control_behavior,
+    ).toMatchObject({
+      arithmetic_conditions: { first_constant: 5, second_constant: 65 },
+    });
 
     log.mockClear();
     expect(await run(['blueprint', 'export', '--json', path], environment)).toBe(0);
@@ -680,6 +687,11 @@ output += Constant({ sections: [{ filters: [
           sections: [{ filters: [{ count: 5 }, { count: 10 }] }],
         },
       },
+    });
+    expect(
+      workerConcrete.result.blueprintExport.document.blueprint.entities[1]!.control_behavior,
+    ).toMatchObject({
+      arithmetic_conditions: { first_constant: 5, second_constant: 65 },
     });
     expect(error).not.toHaveBeenCalled();
   });

@@ -1067,17 +1067,20 @@ output += Constant({ sections: [{ filters: [
     expect(error).not.toHaveBeenCalled();
   });
 
-  test('exports typed Constant count formulas and keeps an unsupported formula failure atomic', async () => {
+  test('exports typed Constant and Arithmetic formulas and keeps unsupported metadata export atomic', async () => {
     const { environment } = await parameterHost();
     const formulaSource = `const amount = Param.number('Amount', 5, { variable: 'x' });
-const output = new Network();
+const input = new Network(), output = new Network();
 output += Constant({ sections: [{ filters: [
   { signal: Signal('virtual', 'signal-A'), value: amount },
   { signal: Signal('virtual', 'signal-B'), value: amount * 2 },
-] }] });`;
+] }] });
+output += Arithmetic({ left: amount, operation: 'add', right: (amount * 2 + 3) * 5, output: Signal('virtual', 'signal-C') });`;
     const path = await sourceFile(formulaSource);
     const nativePath = join(dirname(path), 'typed-formula-native.json');
     const concretePath = join(dirname(path), 'typed-formula-concrete.json');
+    const overridesPath = join(dirname(path), 'typed-formula-overrides.json');
+    await writeFile(overridesPath, JSON.stringify([{ id: 0, value: 9 }]));
     const { log, error } = capture();
     expect(
       await run(
@@ -1088,6 +1091,7 @@ output += Constant({ sections: [{ filters: [
     const native = JSON.parse(await readFile(nativePath, 'utf8'));
     expect(native.blueprint.parameters).toEqual([
       { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '65', formula: '(((x * 2) + 3) * 5)', dependent: true },
       { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
     ]);
     expect(native.blueprint.entities[0].control_behavior.sections.sections[0].filters).toEqual([
@@ -1108,6 +1112,10 @@ output += Constant({ sections: [{ filters: [
         count: 10,
       },
     ]);
+    expect(native.blueprint.entities[1].control_behavior.arithmetic_conditions).toMatchObject({
+      first_constant: 5,
+      second_constant: 65,
+    });
     expect(
       await run(['blueprint', 'export', '--json', '--output', concretePath, path], environment),
     ).toBe(0);
@@ -1124,11 +1132,31 @@ output += Constant({ sections: [{ filters: [
         count: 10,
       },
     ]);
+    expect(concrete.blueprint.entities[1].control_behavior.arithmetic_conditions).toMatchObject({
+      first_constant: 5,
+      second_constant: 65,
+    });
 
-    const rejectedSource = formulaSource.replace(
-      "{ signal: Signal('virtual', 'signal-A'), value: amount },\n  ",
-      '',
-    );
+    expect(
+      await run(['blueprint', 'export', '--json', '--overrides', overridesPath, path], environment),
+    ).toBe(0);
+    const overridden = JSON.parse(String(log.mock.calls.at(-1)?.[0])).document;
+    expect(overridden.blueprint).not.toHaveProperty('parameters');
+    expect(overridden.blueprint.entities[0].control_behavior.sections.sections[0].filters).toEqual([
+      expect.objectContaining({ count: 9 }),
+      expect.objectContaining({ count: 18 }),
+    ]);
+    expect(overridden.blueprint.entities[1].control_behavior.arithmetic_conditions).toMatchObject({
+      first_constant: 9,
+      second_constant: 105,
+    });
+
+    const rejectedSource = formulaSource
+      .replace("{ signal: Signal('virtual', 'signal-A'), value: amount },\n  ", '')
+      .replace(
+        'left: amount, operation:',
+        "left: input[Signal('virtual', 'signal-A')], operation:",
+      );
     const rejectedPath = await sourceFile(rejectedSource, 'unsupported-formula.factorio.ts');
     const rejectedOutput = join(dirname(rejectedPath), 'must-not-exist.json');
     expect(
@@ -1142,7 +1170,7 @@ output += Constant({ sections: [{ filters: [
       ok: false,
       error: {
         code: 'CP1002',
-        path: '$.constantTemplates[0].sections[0].filters[0].value',
+        path: '$.arithmeticTemplates[0].right.value',
         span: { start: expect.any(Number), end: expect.any(Number) },
       },
     });

@@ -78,9 +78,9 @@ import {
   type NativeBlueprintParameter,
 } from '../../compiler/src/native-blueprint-ir.js';
 import {
-  createNativeConstantFormulaRenderer,
-  type MeasuredNativeConstantFormula,
-} from './source-native-constant-formulas.js';
+  createNativeNumericFormulaRenderer,
+  type MeasuredNativeNumericFormula,
+} from './source-native-numeric-formulas.js';
 import type { SourceSpan } from '@comblang/shared';
 
 export interface SourceCompilationEnvironment {
@@ -470,28 +470,34 @@ export function exportSourceCompilationNativeBlueprint(
   }
   const used = new Set<BlueprintParameterHandle>();
   const reservedSignalPlaceholderNames = new Set<string>();
-  const directConstantCountParameters = new Set<BlueprintParameterHandle>();
-  const pendingConstantFormulas: {
-    readonly captureId: string;
-    readonly sectionIndex: number;
-    readonly filterIndex: number;
-    readonly expression: unknown;
-    readonly dependencies: readonly BlueprintParameterHandle[];
-    readonly path: string;
-    readonly source: SourceSpan;
-    readonly session: ReturnType<typeof inspectConstantConfigurationTemplate>['session'];
-  }[] = [];
-  const measuredConstantFormulas: {
-    readonly captureId: string;
-    readonly sectionIndex: number;
-    readonly filterIndex: number;
-    readonly path: string;
-    readonly source: SourceSpan;
-    readonly measured: MeasuredNativeConstantFormula;
-  }[] = [];
+  const directNativeNumericParameters = new Set<BlueprintParameterHandle>();
+  type PendingNativeNumericFormula =
+    | {
+        readonly kind: 'arithmetic-operand-expression';
+        readonly captureId: string;
+        readonly side: 'first' | 'second';
+        readonly expression: unknown;
+        readonly dependencies: readonly BlueprintParameterHandle[];
+        readonly path: string;
+        readonly source: SourceSpan;
+        readonly session: ReturnType<typeof inspectConstantConfigurationTemplate>['session'];
+      }
+    | {
+        readonly kind: 'constant-count-expression';
+        readonly captureId: string;
+        readonly sectionIndex: number;
+        readonly filterIndex: number;
+        readonly expression: unknown;
+        readonly dependencies: readonly BlueprintParameterHandle[];
+        readonly path: string;
+        readonly source: SourceSpan;
+        readonly session: ReturnType<typeof inspectConstantConfigurationTemplate>['session'];
+      };
+  const pendingNativeNumericFormulas: PendingNativeNumericFormula[] = [];
+  const measuredNativeNumericFormulas: MeasuredNativeNumericFormula[] = [];
   let formulaSession:
     ReturnType<typeof inspectConstantConfigurationTemplate>['session'] | undefined;
-  let formulaRenderer: ReturnType<typeof createNativeConstantFormulaRenderer> | undefined;
+  let formulaRenderer: ReturnType<typeof createNativeNumericFormulaRenderer> | undefined;
   if (signalDeclarations.length > 0) {
     for (const producer of compilation.resolvedCircuit.ir.producers) {
       if (producer.kind !== 'constant') continue;
@@ -533,7 +539,7 @@ export function exportSourceCompilationNativeBlueprint(
         kind: 'constant-count-expression';
         sectionIndex: number;
         filterIndex: number;
-        measured: MeasuredNativeConstantFormula;
+        measured: MeasuredNativeNumericFormula;
       }
     | {
         kind: 'constant-signal';
@@ -542,6 +548,11 @@ export function exportSourceCompilationNativeBlueprint(
         parameter: BlueprintParameterHandle;
       }
     | { kind: 'arithmetic-operand'; side: 'first' | 'second'; parameter: BlueprintParameterHandle }
+    | {
+        kind: 'arithmetic-operand-expression';
+        side: 'first' | 'second';
+        measured: MeasuredNativeNumericFormula;
+      }
     | { kind: 'selector-index'; parameter: BlueprintParameterHandle }
     | {
         kind: 'decider-threshold';
@@ -652,7 +663,7 @@ export function exportSourceCompilationNativeBlueprint(
   });
   state.source.arithmeticTemplates.forEach((capture, captureIndex) => {
     const path = `$.arithmeticTemplates[${captureIndex}]`;
-    inspectArithmeticConfigurationTemplate(capture.template, path);
+    const registration = inspectArithmeticConfigurationTemplate(capture.template, path);
     for (const [key, side] of [
       ['left', 'first'],
       ['right', 'second'],
@@ -661,15 +672,55 @@ export function exportSourceCompilationNativeBlueprint(
       if (operand.kind !== 'constant') continue;
       const operandPath = `${path}.${key}.value`;
       if (isRegisteredBlueprintNumericExpression(operand.value)) {
-        reject(
-          operandPath,
-          'native source export does not support expression operands.',
-          capture.source,
-        );
+        let inspection;
+        try {
+          inspection = inspectRegisteredBlueprintNumericExpression(
+            registration.session,
+            operand.value,
+            operandPath,
+          );
+        } catch (error) {
+          if (error instanceof BlueprintParameterError) {
+            reject(
+              operandPath,
+              'native numeric formula export requires an authenticated expression owned by this compilation.',
+              capture.source,
+            );
+          }
+          throw error;
+        }
+        if (inspection.dependencies.length === 0) {
+          reject(
+            operandPath,
+            'native numeric formulas require at least one number parameter dependency.',
+            inspection.source ?? capture.source,
+          );
+        }
+        if (formulaSession !== undefined && formulaSession !== registration.session) {
+          reject(
+            operandPath,
+            'native numeric formulas must belong to one compilation parameter session.',
+            capture.source,
+          );
+        }
+        formulaSession = registration.session;
+        for (const dependency of inspection.dependencies) used.add(dependency);
+        pendingNativeNumericFormulas.push({
+          kind: 'arithmetic-operand-expression',
+          captureId: capture.captureId,
+          side,
+          expression: operand.value,
+          dependencies: inspection.dependencies,
+          path: operandPath,
+          source: inspection.source ?? capture.source,
+          session: registration.session,
+        });
+        continue;
       }
       const parameter = canonicalBlueprintParameterHandle(operand.value);
       if (parameter === undefined) continue;
       used.add(parameter);
+      directNativeNumericParameters.add(parameter);
       occurrences.push({
         kind: 'arithmetic-operand',
         captureId: capture.captureId,
@@ -750,14 +801,14 @@ export function exportSourceCompilationNativeBlueprint(
           if (inspection.dependencies.length === 0) {
             reject(
               `${filterPath}.value`,
-              'native Constant formulas require at least one number parameter dependency.',
+              'native numeric formulas require at least one number parameter dependency.',
               inspection.source ?? capture.source,
             );
           }
           if (formulaSession !== undefined && formulaSession !== registration.session) {
             reject(
               `${filterPath}.value`,
-              'native Constant formulas must belong to one compilation parameter session.',
+              'native numeric formulas must belong to one compilation parameter session.',
               capture.source,
             );
           }
@@ -766,7 +817,8 @@ export function exportSourceCompilationNativeBlueprint(
             accepted.add(dependency);
             used.add(dependency);
           }
-          pendingConstantFormulas.push({
+          pendingNativeNumericFormulas.push({
+            kind: 'constant-count-expression',
             captureId: capture.captureId,
             sectionIndex,
             filterIndex,
@@ -789,7 +841,7 @@ export function exportSourceCompilationNativeBlueprint(
         }
         accepted.add(parameter);
         used.add(parameter);
-        directConstantCountParameters.add(parameter);
+        directNativeNumericParameters.add(parameter);
         occurrences.push({
           kind: 'constant-count',
           captureId: capture.captureId,
@@ -809,30 +861,8 @@ export function exportSourceCompilationNativeBlueprint(
       );
     }
   });
-  if (pendingConstantFormulas.length > 0) {
-    const firstFormula = pendingConstantFormulas[0]!;
-    const producers = compilation.resolvedCircuit.ir.producers;
-    if (producers.some((producer) => producer.kind !== 'constant')) {
-      reject(
-        firstFormula.path,
-        'native Constant formula export requires every producer to be Constant.',
-        firstFormula.source,
-      );
-    }
-    const linkedEntities = new Set(
-      producers.flatMap((producer) => (producer.entityId === undefined ? [] : [producer.entityId])),
-    );
-    const unlinkedEntity = (compilation.resolvedCircuit.ir.entities ?? []).find(
-      (entity) => !linkedEntities.has(entity.id),
-    );
-    if (unlinkedEntity !== undefined) {
-      reject(
-        firstFormula.path,
-        'native Constant formula export does not support unlinked physical Entities.',
-        firstFormula.source,
-      );
-    }
-
+  if (pendingNativeNumericFormulas.length > 0) {
+    const firstFormula = pendingNativeNumericFormulas[0]!;
     const declarationsByParameter = new Map(
       declarations.map((declaration) => [declaration.parameter, declaration]),
     );
@@ -851,7 +881,7 @@ export function exportSourceCompilationNativeBlueprint(
       ) {
         reject(
           `$.parameters[${index}].metadata.variable`,
-          'native Constant formula variables must be valid non-reserved identifiers.',
+          'native numeric formula variables must be valid non-reserved identifiers.',
           declaration.source,
         );
       }
@@ -859,20 +889,20 @@ export function exportSourceCompilationNativeBlueprint(
       if (previous !== undefined) {
         reject(
           `$.parameters[${index}].metadata.variable`,
-          `native Constant formula variable ${JSON.stringify(variable)} is already used by declaration ${JSON.stringify(previous.label)}.`,
+          `native numeric formula variable ${JSON.stringify(variable)} is already used by declaration ${JSON.stringify(previous.label)}.`,
           declaration.source,
         );
       }
       variableOwners.set(variable, declaration);
       variableByParameter.set(declaration.parameter, variable);
     }
-    for (const formula of pendingConstantFormulas) {
+    for (const formula of pendingNativeNumericFormulas) {
       for (const dependency of formula.dependencies) {
         const declaration = declarationsByParameter.get(dependency);
         if (declaration === undefined || declaration.kind !== 'number') {
           reject(
             formula.path,
-            'native Constant formula dependency is not a number declaration owned by this compilation.',
+            'native numeric formula dependency is not a number declaration owned by this compilation.',
             formula.source,
           );
         }
@@ -881,56 +911,83 @@ export function exportSourceCompilationNativeBlueprint(
         if (metadata?.variable === undefined) {
           reject(
             `$.parameters[${declarationIndex}].metadata.variable`,
-            'native Constant formula dependencies require an explicit variable name.',
+            'native numeric formula dependencies require an explicit variable name.',
             declaration.source,
           );
         }
         if (Object.hasOwn(metadata, 'formula') || metadata.dependent === true) {
           reject(
             `$.parameters[${declarationIndex}].metadata`,
-            'native Constant formula dependencies must be direct leaf parameters without formula metadata.',
+            'native numeric formula dependencies must be direct leaf parameters without formula metadata.',
             declaration.source,
           );
         }
-        if (!directConstantCountParameters.has(dependency)) {
+        if (!directNativeNumericParameters.has(dependency)) {
           reject(
             formula.path,
-            `formula dependency ${JSON.stringify(declaration.label)} must also occur as a direct Constant count.`,
+            `formula dependency ${JSON.stringify(declaration.label)} must also occur as a direct Constant count or Arithmetic constant operand.`,
             formula.source,
           );
         }
       }
     }
+    const producers = compilation.resolvedCircuit.ir.producers;
+    if (
+      producers.some((producer) => producer.kind !== 'constant' && producer.kind !== 'arithmetic')
+    ) {
+      reject(
+        firstFormula.path,
+        'native numeric formula export requires every producer to be Constant or Arithmetic.',
+        firstFormula.source,
+      );
+    }
+    const linkedEntities = new Set(
+      producers.flatMap((producer) => (producer.entityId === undefined ? [] : [producer.entityId])),
+    );
+    const unlinkedEntity = (compilation.resolvedCircuit.ir.entities ?? []).find(
+      (entity) => !linkedEntities.has(entity.id),
+    );
+    if (unlinkedEntity !== undefined) {
+      reject(
+        firstFormula.path,
+        'native numeric formula export does not support unlinked physical Entities.',
+        firstFormula.source,
+      );
+    }
     const ownerSession = formulaSession;
     if (ownerSession === undefined) {
       reject(
         firstFormula.path,
-        'native Constant formula session is unavailable.',
+        'native numeric formula session is unavailable.',
         firstFormula.source,
       );
     }
-    formulaRenderer = createNativeConstantFormulaRenderer(ownerSession, (parameter) =>
+    formulaRenderer = createNativeNumericFormulaRenderer(ownerSession, (parameter) =>
       variableByParameter.get(parameter),
     );
-    for (const formula of pendingConstantFormulas) {
+    for (const formula of pendingNativeNumericFormulas) {
       const measured = formulaRenderer.measure(formula.expression, formula.path);
-      measuredConstantFormulas.push({
-        captureId: formula.captureId,
-        sectionIndex: formula.sectionIndex,
-        filterIndex: formula.filterIndex,
-        path: formula.path,
-        source: formula.source,
-        measured,
-      });
-      occurrences.push({
-        kind: 'constant-count-expression',
-        captureId: formula.captureId,
-        sectionIndex: formula.sectionIndex,
-        filterIndex: formula.filterIndex,
-        measured,
-        path: formula.path,
-        source: formula.source,
-      });
+      measuredNativeNumericFormulas.push(measured);
+      occurrences.push(
+        formula.kind === 'constant-count-expression'
+          ? {
+              kind: formula.kind,
+              captureId: formula.captureId,
+              sectionIndex: formula.sectionIndex,
+              filterIndex: formula.filterIndex,
+              measured,
+              path: formula.path,
+              source: formula.source,
+            }
+          : {
+              kind: formula.kind,
+              captureId: formula.captureId,
+              side: formula.side,
+              measured,
+              path: formula.path,
+              source: formula.source,
+            },
+      );
     }
   }
   const numberOriginals = new Map<number, SourceCompilationParameter>();
@@ -994,26 +1051,25 @@ export function exportSourceCompilationNativeBlueprint(
     });
   });
 
-  if (measuredConstantFormulas.length > 0) {
-    const firstFormula = measuredConstantFormulas[0]!;
-    const formulaByOriginal = new Map<number, MeasuredNativeConstantFormula>();
-    const uniqueFormulas: MeasuredNativeConstantFormula[] = [];
-    for (const occurrence of measuredConstantFormulas) {
-      const { measured } = occurrence;
+  if (measuredNativeNumericFormulas.length > 0) {
+    const firstFormula = pendingNativeNumericFormulas[0]!;
+    const formulaByOriginal = new Map<number, MeasuredNativeNumericFormula>();
+    const uniqueFormulas: MeasuredNativeNumericFormula[] = [];
+    for (const measured of measuredNativeNumericFormulas) {
       if (numberOriginals.has(measured.defaultValue)) {
         reject(
-          occurrence.path,
+          measured.path,
           `derived original ${String(measured.defaultValue)} collides with a declared number original.`,
-          occurrence.source,
+          measured.source,
         );
       }
       const previous = formulaByOriginal.get(measured.defaultValue);
       if (previous !== undefined) {
         if (previous.key !== measured.key) {
           reject(
-            occurrence.path,
+            measured.path,
             `derived original ${String(measured.defaultValue)} is already used by a different formula at ${previous.path}.`,
-            occurrence.source,
+            measured.source,
           );
         }
         continue;
@@ -1024,7 +1080,7 @@ export function exportSourceCompilationNativeBlueprint(
     if (formulaRenderer === undefined) {
       reject(
         firstFormula.path,
-        'native Constant formula renderer is unavailable.',
+        'native numeric formula renderer is unavailable.',
         firstFormula.source,
       );
     }
@@ -1032,7 +1088,7 @@ export function exportSourceCompilationNativeBlueprint(
     for (const measured of uniqueFormulas) {
       const formula = rendered.get(measured.key);
       if (formula === undefined) {
-        reject(measured.path, 'native Constant formula rendering is incomplete.', measured.source);
+        reject(measured.path, 'native numeric formula rendering is incomplete.', measured.source);
       }
       parameters.push(
         Object.freeze({
@@ -1067,7 +1123,8 @@ export function exportSourceCompilationNativeBlueprint(
       occurrence.kind === 'constant-count-expression' ||
       occurrence.kind === 'constant-signal'
         ? 'constant'
-        : occurrence.kind === 'arithmetic-operand'
+        : occurrence.kind === 'arithmetic-operand' ||
+            occurrence.kind === 'arithmetic-operand-expression'
           ? 'arithmetic'
           : occurrence.kind === 'selector-index'
             ? 'selector'
@@ -1153,7 +1210,10 @@ export function exportSourceCompilationNativeBlueprint(
       }
       continue;
     }
-    if (occurrence.kind === 'arithmetic-operand') {
+    if (
+      occurrence.kind === 'arithmetic-operand' ||
+      occurrence.kind === 'arithmetic-operand-expression'
+    ) {
       const behavior = entity?.native.control_behavior as
         | {
             readonly arithmetic_conditions?: {
@@ -1163,10 +1223,16 @@ export function exportSourceCompilationNativeBlueprint(
           }
         | undefined;
       const field = occurrence.side === 'first' ? 'first_constant' : 'second_constant';
-      if (behavior?.arithmetic_conditions?.[field] !== defaults.get(occurrence.parameter)) {
+      const expected =
+        occurrence.kind === 'arithmetic-operand-expression'
+          ? occurrence.measured.defaultValue
+          : defaults.get(occurrence.parameter);
+      if (typeof expected !== 'number' || behavior?.arithmetic_conditions?.[field] !== expected) {
         reject(
           occurrence.path,
-          'marked Arithmetic operand did not survive native projection unchanged.',
+          occurrence.kind === 'arithmetic-operand-expression'
+            ? 'marked Arithmetic expression did not survive native projection at its evaluated default.'
+            : 'marked Arithmetic operand did not survive native projection unchanged.',
           occurrence.source,
         );
       }

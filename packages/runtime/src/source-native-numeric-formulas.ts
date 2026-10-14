@@ -14,7 +14,7 @@ import {
   type BlueprintParameterSession,
 } from '../../compiler/src/blueprint-parameters.js';
 
-export interface MeasuredNativeConstantFormula {
+export interface MeasuredNativeNumericFormula {
   readonly expression: BlueprintNumericExpression;
   readonly dependencies: readonly BlueprintNumberParameterHandle[];
   readonly defaultValue: number;
@@ -24,9 +24,9 @@ export interface MeasuredNativeConstantFormula {
   readonly source?: SourceSpan;
 }
 
-export interface NativeConstantFormulaRenderer {
-  measure(expression: unknown, path: string): MeasuredNativeConstantFormula;
-  renderUnique(formulas: readonly MeasuredNativeConstantFormula[]): ReadonlyMap<string, string>;
+export interface NativeNumericFormulaRenderer {
+  measure(expression: unknown, path: string): MeasuredNativeNumericFormula;
+  renderUnique(formulas: readonly MeasuredNativeNumericFormula[]): ReadonlyMap<string, string>;
 }
 
 interface NodeMeasure {
@@ -51,10 +51,10 @@ function int32(value: number): boolean {
   return Number.isInteger(value) && value >= int32Min && value <= int32Max;
 }
 
-export function createNativeConstantFormulaRenderer(
+export function createNativeNumericFormulaRenderer(
   session: BlueprintParameterSession,
   variableFor: (parameter: BlueprintNumberParameterHandle) => string | undefined,
-): NativeConstantFormulaRenderer {
+): NativeNumericFormulaRenderer {
   const canonicalNodes = new Map<string, number>();
 
   function intern(key: string): number {
@@ -72,7 +72,7 @@ export function createNativeConstantFormulaRenderer(
   ): string {
     const variable = variableFor(node.parameter);
     if (variable === undefined || !/^[A-Za-z][A-Za-z0-9_]*$/.test(variable)) {
-      fail(path, 'native Constant formulas require an explicit valid variable name.', source);
+      fail(path, 'native numeric formulas require an explicit valid variable name.', source);
     }
     return variable;
   }
@@ -98,7 +98,7 @@ export function createNativeConstantFormulaRenderer(
   }
 
   return Object.freeze({
-    measure(expressionValue: unknown, path: string): MeasuredNativeConstantFormula {
+    measure(expressionValue: unknown, path: string): MeasuredNativeNumericFormula {
       let inspection;
       try {
         inspection = inspectRegisteredBlueprintNumericExpression(session, expressionValue, path);
@@ -106,7 +106,7 @@ export function createNativeConstantFormulaRenderer(
         if (error instanceof BlueprintParameterError) {
           fail(
             path,
-            'native Constant formulas require a registered expression owned by this compilation.',
+            'native numeric formulas require a registered expression owned by this compilation.',
             error.span,
           );
         }
@@ -119,7 +119,7 @@ export function createNativeConstantFormulaRenderer(
       ) {
         fail(
           path,
-          'native Constant formula root is not a registered expression.',
+          'native numeric formula root is not a registered expression.',
           inspection.source,
         );
       }
@@ -134,7 +134,7 @@ export function createNativeConstantFormulaRenderer(
             if (!int32(node.value)) {
               fail(
                 path,
-                'native Constant formula literals must be signed int32 integers.',
+                'native numeric formula literals must be signed int32 integers.',
                 inspection.source,
               );
             }
@@ -180,7 +180,7 @@ export function createNativeConstantFormulaRenderer(
       };
       const root = measureNode(expression);
       if (root.renderedBytes > constantConfigurationLimits.maxBytes) {
-        fail(path, 'rendered native Constant formula exceeds the byte limit.', inspection.source);
+        fail(path, 'rendered native numeric formula exceeds the byte limit.', inspection.source);
       }
       let defaultValue: number;
       try {
@@ -189,7 +189,7 @@ export function createNativeConstantFormulaRenderer(
         if (error instanceof BlueprintParameterError) {
           fail(
             path,
-            'native Constant formula default could not be evaluated from owned defaults.',
+            'native numeric formula default could not be evaluated from owned defaults.',
             error.span ?? inspection.source,
           );
         }
@@ -198,7 +198,7 @@ export function createNativeConstantFormulaRenderer(
       if (!int32(defaultValue)) {
         fail(
           path,
-          'native Constant formula defaults must evaluate to signed int32 integers.',
+          'native numeric formula defaults must evaluate to signed int32 integers.',
           inspection.source,
         );
       }
@@ -213,15 +213,15 @@ export function createNativeConstantFormulaRenderer(
         ...(inspection.source ? { source: inspection.source } : {}),
       });
     },
-    renderUnique(formulas: readonly MeasuredNativeConstantFormula[]): ReadonlyMap<string, string> {
-      const unique = new Map<string, MeasuredNativeConstantFormula>();
+    renderUnique(formulas: readonly MeasuredNativeNumericFormula[]): ReadonlyMap<string, string> {
+      const unique = new Map<string, MeasuredNativeNumericFormula>();
       let totalBytes = 0;
       for (const formula of formulas) {
         if (unique.has(formula.key)) continue;
         if (formula.renderedBytes > constantConfigurationLimits.maxBytes - totalBytes) {
           fail(
             formula.path,
-            'generated native Constant formula texts exceed the aggregate byte limit.',
+            'generated native numeric formula texts exceed the aggregate byte limit.',
             formula.source,
           );
         }
@@ -234,7 +234,7 @@ export function createNativeConstantFormulaRenderer(
         if (text.length !== formula.renderedBytes) {
           fail(
             formula.path,
-            'native Constant formula rendering length changed after preflight.',
+            'native numeric formula rendering length changed after preflight.',
             formula.source,
           );
         }
