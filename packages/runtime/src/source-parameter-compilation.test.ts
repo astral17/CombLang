@@ -2309,6 +2309,85 @@ output += counted;`;
     expect(compilation.execution?.circuit.ir).toEqual(before);
   });
 
+  test('captures repeated numeric Selector expressions and rebinds concrete indices without rerunning source', () => {
+    let sourceExecutions = 0;
+    const text = `const amount = Param.number('Amount', 5);
+const index = amount + 1;
+const input = new Network();
+const secondary = new Network();
+const firstOutput = new Network();
+const secondOutput = new Network();
+firstOutput += Selector({ input: pair(input, secondary), operation: 'select', index }).at(2, 3);
+secondOutput += Selector({ input, operation: 'select', index: amount });`;
+    const compilation = compileSourceProgram(
+      { path: 'source-selector-numeric-expression.factorio.ts', text },
+      parameterHost(),
+      [],
+      (stage) => {
+        if (stage === 'execute') sourceExecutions += 1;
+      },
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const declaration = listSourceCompilationParameters(compilation)[0]!;
+    const originalArtifact = structuredClone(sourceCompilationArtifact(compilation));
+    const originalIr = structuredClone(compilation.execution?.circuit.ir);
+    const defaults = bindSourceCompilationCircuit(compilation);
+    const overridden = bindSourceCompilationCircuit(compilation, [
+      { parameter: declaration.parameter, value: 9 },
+    ]);
+    const reset = bindSourceCompilationCircuit(compilation, []);
+    const selectorIndices = (pair: ReturnType<typeof bindSourceCompilationCircuit>) =>
+      pair.plan.producers
+        .filter((producer) => producer.kind === 'selector')
+        .map((producer) =>
+          producer.kind === 'selector' && producer.operation === 'select'
+            ? producer.index
+            : undefined,
+        );
+
+    expect(selectorIndices(defaults)).toEqual([6, 5]);
+    expect(selectorIndices(overridden)).toEqual([10, 9]);
+    expect(reset).toEqual(defaults);
+    expect(overridden.resolvedCircuit.ir.producers.map(({ id }) => id)).toEqual(
+      defaults.resolvedCircuit.ir.producers.map(({ id }) => id),
+    );
+    expect(
+      overridden.resolvedCircuit.ir.entities.map(({ id, placement }) => ({ id, placement })),
+    ).toEqual(defaults.resolvedCircuit.ir.entities.map(({ id, placement }) => ({ id, placement })));
+    expect(compilation.execution?.circuit.ir).toEqual(originalIr);
+    expect(sourceCompilationArtifact(compilation)).toEqual(originalArtifact);
+    expect(sourceExecutions).toBe(1);
+  });
+
+  test('executes the documented numeric Selector index example', () => {
+    const documentation = readFileSync(
+      new URL('../../../docs/api/selector.md', import.meta.url),
+      'utf8',
+    );
+    const example = documentation.match(
+      /## Numeric parameter index[\s\S]*?```ts\r?\n([\s\S]*?)\r?\n```/,
+    )?.[1];
+    if (example === undefined) throw new Error('Expected the complete numeric Selector example.');
+    const compilation = compileSourceProgram(
+      { path: 'documented-selector-parameter-index.factorio.ts', text: example },
+      parameterHost(),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const rank = listSourceCompilationParameters(compilation)[0]!.parameter;
+    const defaults = bindSourceCompilationCircuit(compilation);
+    const overridden = bindSourceCompilationCircuit(compilation, [{ parameter: rank, value: 1 }]);
+    const indices = (pair: ReturnType<typeof bindSourceCompilationCircuit>) =>
+      pair.plan.producers
+        .filter((producer) => producer.kind === 'selector')
+        .map((producer) =>
+          producer.kind === 'selector' && producer.operation === 'select'
+            ? producer.index
+            : undefined,
+        );
+    expect(indices(defaults)).toEqual([0, 1]);
+    expect(indices(overridden)).toEqual([1, 2]);
+  });
+
   test('materializes nested Decider branches and Selector modes through strict replay', () => {
     const compilation = compileSourceProgram(
       {

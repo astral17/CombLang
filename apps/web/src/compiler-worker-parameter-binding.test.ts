@@ -60,7 +60,12 @@ output += Arithmetic({ left: input[A], operation: 'multiply', right: amount - 1,
 };
 
 function parameterHost() {
-  const families = ['constant-combinator', 'arithmetic-combinator', 'decider-combinator'] as const;
+  const families = [
+    'constant-combinator',
+    'arithmetic-combinator',
+    'decider-combinator',
+    'selector-combinator',
+  ] as const;
   const profiles: EntityProfile[] = families.map((family, index) => ({
     ...structuredClone(syntheticZeroPortEntityProfile),
     ref: {
@@ -1459,6 +1464,111 @@ output += Constant({ sections: [{ filters: [{ signal: A, value: 2 }] }] });`,
     expect(
       runtime.bindParameters(response.parameterBinding.token, response.revision).plan,
     ).toBeDefined();
+  });
+
+  test('exports Selector index formulas and rebinds their concrete defaults through the Worker', async () => {
+    const globals = globalThis as Record<string, unknown>;
+    const previous = globals[localExpressionRunKey];
+    globals[localExpressionRunKey] = 0;
+    try {
+      const runtime = parameterRuntime();
+      const parsed = structuredClone(
+        await runtime.handle(
+          parseRequest(54, {
+            file: {
+              path: 'worker-selector-index-formula.factorio.ts',
+              text: `globalThis.${localExpressionRunKey} = Number(globalThis.${localExpressionRunKey} ?? 0) + 1;
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const input = new Network();
+const directOutput = new Network();
+const formulaOutput = new Network();
+directOutput += Selector({ input, operation: 'select', index: amount });
+formulaOutput += Selector({ input, operation: 'select', index: amount + 1 });`,
+            },
+            parameterBinding: true,
+            blueprintExport: { parameters: true },
+          }),
+        ),
+      );
+      expect(globals[localExpressionRunKey]).toBe(1);
+      expect(parsed.result.pipelineDiagnostics).toEqual([]);
+      expect(parsed.result.blueprintExport).toMatchObject({ ok: true });
+      if (parsed.result.blueprintExport?.ok !== true) {
+        throw new Error('Expected a successful Worker native-template export.');
+      }
+      expect(parsed.result.blueprintExport.document.blueprint.parameters).toEqual([
+        { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+        { type: 'number', number: '6', formula: '(x + 1)', dependent: true },
+      ]);
+      expect(
+        parsed.result.blueprintExport.document.blueprint.entities.map(({ control_behavior }) =>
+          typeof control_behavior === 'object' &&
+          control_behavior !== null &&
+          'index_constant' in control_behavior
+            ? control_behavior.index_constant
+            : undefined,
+        ),
+      ).toEqual([5, 6]);
+
+      const binding = parsed.parameterBinding;
+      if (binding?.ok !== true || binding.token === undefined) {
+        throw new Error('Expected a retained Selector parameter session.');
+      }
+      let revision = parsed.revision;
+      const bind = (value?: number) =>
+        structuredClone(
+          runtime.handleBinding({
+            kind: 'bind-parameters',
+            revision: ++revision,
+            sourceRevision: parsed.revision,
+            token: binding.token!,
+            overrides: value === undefined ? [] : [{ id: 0, value }],
+          }),
+        );
+      const concrete = (response: CompilerWorkerBoundResponse) => {
+        if (!response.result.ok) throw new Error('Expected a concrete Selector binding.');
+        return response.result;
+      };
+      const defaults = concrete(bind());
+      const overridden = concrete(bind(9));
+      const invalid = bind(1.5);
+      expect(invalid.result).toMatchObject({
+        ok: false,
+        diagnostics: [{ code: 'CP1000', span: binding.parameters[0]!.source }],
+      });
+      const retry = concrete(bind(9));
+      const reset = concrete(bind());
+      const indices = (pair: typeof defaults) =>
+        pair.plan.producers
+          .filter((producer) => producer.kind === 'selector')
+          .map((producer) =>
+            producer.kind === 'selector' && producer.operation === 'select'
+              ? producer.index
+              : undefined,
+          );
+      expect(indices(defaults)).toEqual([5, 6]);
+      expect(indices(overridden)).toEqual([9, 10]);
+      expect(retry.plan).toEqual(overridden.plan);
+      expect(reset.plan).toEqual(defaults.plan);
+      expect(defaults.resolvedCircuit.ir.producers.map(({ id }) => id)).toEqual(
+        overridden.resolvedCircuit.ir.producers.map(({ id }) => id),
+      );
+      const artifact = createSourceCircuitArtifact(overridden.plan, overridden.resolvedCircuit);
+      expect(
+        artifact.blueprint.blueprint.entities.map(({ control_behavior }) =>
+          typeof control_behavior === 'object' &&
+          control_behavior !== null &&
+          'index_constant' in control_behavior
+            ? control_behavior.index_constant
+            : undefined,
+        ),
+      ).toEqual([9, 10]);
+      expect(artifact.blueprint.blueprint).not.toHaveProperty('parameters');
+      expect(globals[localExpressionRunKey]).toBe(1);
+    } finally {
+      if (previous === undefined) delete globals[localExpressionRunKey];
+      else globals[localExpressionRunKey] = previous;
+    }
   });
 
   test('rejects tokens from another runtime or revision and allocates distinct runtime tokens', async () => {

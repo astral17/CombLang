@@ -109,7 +109,7 @@ describe('combinator API documentation', () => {
     ['arithmetic', [3, 2, 2], [false, true, true]],
     ['decider', [2, 2, 2, 2, 2], [true, false, false, true, false]],
     ['constant', [1, 1, 1, 1, 1], [false, false, true, true, true]],
-    ['selector', [4, 3], [true, true]],
+    ['selector', [4, 3, 3], [true, true, true]],
   ])(
     'compiles every %s ts block as a standalone program with the stated prerequisites',
     (name, counts, trusted) => {

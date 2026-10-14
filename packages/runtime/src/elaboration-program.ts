@@ -249,7 +249,10 @@ interface NormalizedDeciderConfiguration {
 type SelectorParameterSlots =
   | {
       readonly operation: 'select';
-      readonly index: BlueprintNumberParameterHandle | BlueprintSignalParameterHandle;
+      readonly index:
+        | BlueprintNumberParameterHandle
+        | BlueprintSignalParameterHandle
+        | BlueprintNumericExpression;
     }
   | { readonly operation: 'count'; readonly output: BlueprintSignalParameterHandle };
 
@@ -4354,7 +4357,7 @@ class ElaborationRecorder {
   #rejectDerivedNumericExpression(value: unknown, rawSpan: RawSpan): void {
     if (findSourceNumericExpressionView(value) === undefined) return;
     throw new ElaborationExecutionError(
-      'A derived source numeric expression can only be consumed in an exact Arithmetic operand, Constant filter-count/multiplier slot, or right-hand numeric threshold of a Decider condition.',
+      'A derived source numeric expression can only be consumed in an exact Arithmetic operand, Constant filter-count/multiplier slot, right-hand numeric threshold of a Decider condition, or numeric Selector select index.',
       this.#span(rawSpan),
       'RT2029',
     );
@@ -4912,8 +4915,41 @@ class ElaborationRecorder {
       const indexValue = value.index === undefined ? 0 : value.index;
       let index: number | SignalId;
       let parameterSlots: Extract<SelectorParameterSlots, { operation: 'select' }> | undefined;
+      const expressionView = findSourceNumericExpressionView(indexValue);
       const registration = findBlueprintParameterHandle(indexValue);
-      if (registration !== undefined || isBlueprintParameterShaped(indexValue)) {
+      if (expressionView !== undefined) {
+        if (this.#parameterCapture === undefined) {
+          throw new ElaborationExecutionError(
+            'Selector numeric expressions require an owning parameter session.',
+            spanFor('index'),
+            'RT2027',
+          );
+        }
+        if (expressionView.session !== this.#parameterCapture.session) {
+          throw new ElaborationExecutionError(
+            'Source numeric expression belongs to a different parameter session.',
+            spanFor('index'),
+            'RT2027',
+          );
+        }
+        try {
+          index = circuitConstant(
+            evaluateBlueprintNumericExpression(
+              this.#parameterCapture.session,
+              expressionView.expression,
+            ),
+          );
+        } catch (error) {
+          throw new ElaborationExecutionError(
+            error instanceof Error ? error.message : 'Invalid Selector index numeric expression.',
+            spanFor('index'),
+            'RT2027',
+            undefined,
+            { cause: error },
+          );
+        }
+        parameterSlots = { operation: 'select', index: expressionView.expression };
+      } else if (registration !== undefined || isBlueprintParameterShaped(indexValue)) {
         if (this.#parameterCapture === undefined) {
           throw new ElaborationExecutionError(
             'Selector parameter slots require a captured source parameter session.',

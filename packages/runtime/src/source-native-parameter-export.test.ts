@@ -1756,7 +1756,7 @@ output += Arithmetic({ left: amount, operation: 'add', right: (amount * 2 + 3) *
     }
   });
 
-  test('requires a direct physical Constant count, Arithmetic operand or Decider threshold for every formula dependency', () => {
+  test('requires an independent direct physical numeric use for every formula dependency', () => {
     const compilation = compile(`const A = Signal('virtual', 'signal-A');
 const amount = Param.number('Amount', 5, { variable: 'x' });
 const output = new Network();
@@ -1764,21 +1764,28 @@ output += Arithmetic({ left: amount * 2, operation: 'add', right: 1, output: A }
     expect(exportFailure(compilation)).toMatchObject({
       code: 'CP1002',
       path: '$.arithmeticTemplates[0].left.value',
-      message: expect.stringContaining('direct Constant count or Arithmetic constant operand'),
+      message: expect.stringContaining('direct Constant count, Arithmetic constant operand'),
     });
   });
 
-  test('does not retain a formula dependency through direct Selector use', () => {
+  test('allows a direct Selector index to retain an Arithmetic formula dependency', () => {
     const compilation = compile(`const A = Signal('virtual', 'signal-A');
 const amount = Param.number('Amount', 5, { variable: 'x' });
 const input = new Network(), output = new Network();
 output += Arithmetic({ left: amount * 2, operation: 'add', right: 1, output: A });
 output += Selector({ input, operation: 'select', index: amount });`);
-    expect(exportFailure(compilation)).toMatchObject({
-      code: 'CP1002',
-      path: '$.arithmeticTemplates[0].left.value',
-      message: expect.stringContaining('direct Constant count or Arithmetic constant operand'),
-    });
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
+    ]);
+    expect(native.entities).toHaveLength(2);
+    expect(
+      emitNativeBlueprintJson(native).blueprint.entities.map(({ control_behavior }) => {
+        const behavior = control_behavior as { index_constant?: number } | undefined;
+        return behavior?.index_constant;
+      }),
+    ).toEqual([undefined, 5]);
   });
 
   test('allows a direct Decider threshold to retain an Arithmetic formula dependency', () => {
@@ -1995,17 +2002,20 @@ output += Arithmetic({ left: other, operation: 'add', right: other - 1, output: 
     expect(sourceApi.sourceCompilationArtifact(conflicting)).toEqual(conflictingArtifact);
   });
 
-  test('keeps native numeric formulas closed to mixed Selector producers', () => {
+  test('allows linked Selector producers in the closed native formula circuit', () => {
     const compilation = compile(`const A = Signal('virtual', 'signal-A');
 const amount = Param.number('Amount', 5, { variable: 'x' });
 const input = new Network(), output = new Network();
 output += Arithmetic({ left: amount, operation: 'add', right: amount * 2, output: A });
 output += Selector({ input, operation: 'select', index: amount });`);
-    expect(exportFailure(compilation)).toMatchObject({
-      code: 'CP1002',
-      path: '$.arithmeticTemplates[0].right.value',
-      message: expect.stringContaining('every producer to be Constant, Arithmetic or Decider'),
-    });
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
+    ]);
+    expect(native.entities).toEqual(
+      buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).entities,
+    );
   });
 
   test('rejects unlinked physical Entities in Decider formula mode', () => {
@@ -2161,12 +2171,17 @@ output += Arithmetic({ left: input[Signal('virtual', 'signal-A')], operation: 'a
     expect(native.entities).toHaveLength(2);
   });
 
-  test('deduplicates shared formulas across Decider, Arithmetic and Constant in family order', () => {
+  test('deduplicates shared formulas across Selector, Decider, Arithmetic and Constant in family order', () => {
     const compilation = compile(`const A = Signal('virtual', 'signal-A');
 const B = Signal('virtual', 'signal-B');
 const C = Signal('virtual', 'signal-C');
 const amount = Param.number('Amount', 5, { variable: 'x' });
 const input = new Network(), output = new Network();
+const selectorInput = new Network();
+const directSelectorOutput = new Network(), formulaSelectorOutput = new Network();
+const next = amount + 1;
+directSelectorOutput += Selector({ input: selectorInput, operation: 'select', index: amount });
+formulaSelectorOutput += Selector({ input: selectorInput, operation: 'select', index: next });
 output += Constant({ sections: [{ filters: [
   { signal: A, value: amount },
   { signal: B, value: amount * 2 },
@@ -2185,30 +2200,115 @@ output += Decider({ condition: input[A] > amount && input[A] < amount + 1 && inp
       buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).entities,
     );
     const entities = emitNativeBlueprintJson(native).blueprint.entities;
-    expect(entities[0]!.control_behavior).toMatchObject({
+    expect(entities[0]!.control_behavior).toMatchObject({ operation: 'select', index_constant: 5 });
+    expect(entities[1]!.control_behavior).toMatchObject({ operation: 'select', index_constant: 6 });
+    expect(entities[2]!.control_behavior).toMatchObject({
       sections: { sections: [{ filters: [{ count: 5 }, { count: 10 }, { count: 15 }] }] },
     });
-    expect(entities[1]!.control_behavior).toMatchObject({
+    expect(entities[3]!.control_behavior).toMatchObject({
       arithmetic_conditions: { second_constant: 10 },
     });
-    expect(entities[2]!.control_behavior).toMatchObject({
+    expect(entities[4]!.control_behavior).toMatchObject({
       decider_conditions: { conditions: [{ constant: 5 }, { constant: 6 }, { constant: 10 }] },
     });
   });
 
-  test('rejects conflicting formula originals across Decider and Arithmetic families', () => {
+  test('rejects conflicting formula originals across Selector and Arithmetic families', () => {
     const compilation = compile(`const A = Signal('virtual', 'signal-A');
 const amount = Param.number('Amount', 5, { variable: 'x' });
 const other = Param.number('Other', 7, { variable: 'y' });
 const input = new Network(), output = new Network();
-output += Decider({ condition: input[A] > amount && input[A] < amount + 5 && input[A] > other, outputs: [input[A]] });
-output += Arithmetic({ left: input[A], operation: 'add', right: other + 3, output: A });`);
+const selectorInput = new Network();
+const directIndexOutput = new Network(), formulaIndexOutput = new Network();
+directIndexOutput += Selector({ input: selectorInput, operation: 'select', index: amount });
+formulaIndexOutput += Selector({ input: selectorInput, operation: 'select', index: amount + 1 });
+output += Decider({ condition: input[A] > other, outputs: [input[A]] });
+output += Arithmetic({ left: input[A], operation: 'add', right: other - 1, output: A });`);
     expect(exportFailure(compilation)).toMatchObject({
       code: 'CP1002',
       path: '$.arithmeticTemplates[0].right.value',
       message: expect.stringContaining('already used by a different formula'),
     });
   });
+
+  test('exports Selector index formulas retained only by direct Selector index use', () => {
+    let sourceExecutions = 0;
+    const compilation = sourceApi.compileSourceProgram(
+      {
+        path: 'native-selector-index-formula.factorio.ts',
+        text: `const amount = Param.number('Amount', 5, { variable: 'x' });
+const next = amount + 1;
+const input = new Network();
+const directOutput = new Network();
+const formulaOutput = new Network();
+directOutput += Selector({ input, operation: 'select', index: amount });
+formulaOutput += Selector({ input, operation: 'select', index: next });`,
+      },
+      parameterHost(),
+      [],
+      (stage) => {
+        if (stage === 'execute') sourceExecutions += 1;
+      },
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+    const parameter = sourceApi.listSourceCompilationParameters(compilation)[0]!.parameter;
+    const defaults = sourceApi.bindSourceCompilationCircuit(compilation);
+    const overridden = sourceApi.bindSourceCompilationCircuit(compilation, [
+      { parameter, value: 9 },
+    ]);
+    const reset = sourceApi.bindSourceCompilationCircuit(compilation, []);
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+
+    expect(defaults.plan.producers.filter(({ kind }) => kind === 'selector')).toMatchObject([
+      { operation: 'select', index: 5 },
+      { operation: 'select', index: 6 },
+    ]);
+    expect(overridden.plan.producers.filter(({ kind }) => kind === 'selector')).toMatchObject([
+      { operation: 'select', index: 9 },
+      { operation: 'select', index: 10 },
+    ]);
+    expect(reset).toEqual(defaults);
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '6', formula: '(x + 1)', dependent: true },
+    ]);
+    expect(native.entities).toEqual(
+      buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).entities,
+    );
+    expect(
+      emitNativeBlueprintJson(native).blueprint.entities.map(({ control_behavior }) => {
+        const behavior = control_behavior as
+          { operation?: string; index_constant?: number; index_signal?: unknown } | undefined;
+        return behavior?.operation === undefined
+          ? undefined
+          : [behavior.operation, behavior.index_constant, behavior.index_signal];
+      }),
+    ).toEqual([
+      ['select', 5, undefined],
+      ['select', 6, undefined],
+    ]);
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
+    expect(sourceExecutions).toBe(1);
+  });
+
+  test.each([
+    { original: 5, direct: false, message: 'must also occur as a direct Constant count' },
+    { original: 2147483647, direct: true, message: 'signed int32 integers' },
+  ])(
+    'keeps Selector formula-only retention and native default bounds strict ($original)',
+    ({ original, direct, message }) => {
+      const compilation =
+        compile(`const amount = Param.number('Amount', ${original}, { variable: 'x' });
+const input = new Network();
+const output = new Network();
+${direct ? `output += Selector({ input, operation: 'select', index: amount });\n` : ''}output += Selector({ input, operation: 'select', index: amount + 1 });`);
+      const error = exportFailure(compilation);
+      expect(error.code).toBe('CP1002');
+      expect(error.path).toBe(`$.selectorTemplates[${direct ? 1 : 0}].index`);
+      expect(error.message).toContain(message);
+    },
+  );
 
   test('exports registered formulas in final fluent Decider thresholds without changing rows', () => {
     const key = '__comblang_native_decider_formula_runs';
@@ -2374,11 +2474,6 @@ output += Constant({ sections: [{ multiplier: scale * 0.5, filters: [] }] });`,
       'Decider({ condition: input[A] > amount, outputs: [input[A]], elseOutputs: [amount * A] })',
       'RT2027',
       'Numeric expressions accept only finite numbers and owning number parameters.',
-    ],
-    [
-      "Selector({ input, operation: 'select', index: amount + 1 })",
-      'CP1001',
-      '$.expression: Source numeric expression views are opaque and cannot be inspected or coerced.',
     ],
   ])(
     'retains real source diagnostics for unreachable numeric use in %s',

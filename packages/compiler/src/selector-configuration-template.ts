@@ -1,8 +1,13 @@
 import { constantConfigurationLimits, int32, type SignalId } from '@comblang/factorio';
 import type { NetworkId, SourceSpan } from '@comblang/shared';
 
-import { freezeConfigurationData } from './blueprint-configuration-utils.js';
+import { freezeConfigurationDataSkippingFrozen } from './blueprint-configuration-utils.js';
 import type { LogicalNetworkRef } from './ir.js';
+import type { BlueprintNumericExpression } from './blueprint-numeric-expression.js';
+import {
+  inspectRegisteredBlueprintNumericExpression,
+  isRegisteredBlueprintNumericExpression,
+} from './blueprint-numeric-expression-bridge.js';
 import {
   assertBlueprintParameterExactKeys,
   assertBlueprintParameterNumberValue,
@@ -27,7 +32,11 @@ import {
 const selectorTemplateBrand: unique symbol = Symbol('selector-configuration-template');
 
 type SelectorTemplateIndex =
-  number | SignalId | BlueprintNumberParameterHandle | BlueprintSignalParameterHandle;
+  | number
+  | SignalId
+  | BlueprintNumberParameterHandle
+  | BlueprintSignalParameterHandle
+  | BlueprintNumericExpression;
 
 interface SelectorTemplateBase {
   readonly [selectorTemplateBrand]: true;
@@ -56,6 +65,8 @@ export interface SelectorConfigurationTemplateRegistration {
 
 interface SelectorTemplateBudget extends BlueprintParameterDataBudget {
   parameterBytes: number;
+  expressionBytes: number;
+  readonly expressionRoots: WeakSet<object>;
 }
 
 const templateRegistrations = new WeakMap<object, SelectorConfigurationTemplateRegistration>();
@@ -176,12 +187,28 @@ function numberSlot(
   path: string,
   session: BlueprintParameterSession,
   budget: SelectorTemplateBudget,
-): number | BlueprintNumberParameterHandle {
+): number | BlueprintNumberParameterHandle | BlueprintNumericExpression {
   const slot = lookupBlueprintParameterSlot(value, 'number', session, path);
   if (slot !== undefined) {
     accountParameter(budget, slot.registration, path);
     budget.usedParameters.add(slot.handle);
     return slot.handle as BlueprintNumberParameterHandle;
+  }
+  if (isRegisteredBlueprintNumericExpression(value)) {
+    const inspection = inspectRegisteredBlueprintNumericExpression(session, value, path);
+    if (!budget.expressionRoots.has(value)) {
+      budget.expressionRoots.add(value);
+      budget.nodes += inspection.nodeCount;
+      if (budget.nodes > constantConfigurationLimits.maxNodes) {
+        fail(path, `template exceeds the node limit of ${constantConfigurationLimits.maxNodes}.`);
+      }
+      budget.expressionBytes += inspection.byteLength;
+      if (budget.expressionBytes > constantConfigurationLimits.maxBytes) {
+        fail(path, `template exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`);
+      }
+      for (const parameter of inspection.dependencies) budget.usedParameters.add(parameter);
+    }
+    return value;
   }
   return int32(assertBlueprintParameterNumberValue(value, path, 'safe-integer'));
 }
@@ -208,7 +235,9 @@ function selectIndex(
   budget: SelectorTemplateBudget,
 ): SelectorTemplateIndex {
   const registration = findBlueprintParameterHandle(value);
-  if (registration?.kind === 'number') return numberSlot(value, path, session, budget);
+  if (registration?.kind === 'number' || isRegisteredBlueprintNumericExpression(value)) {
+    return numberSlot(value, path, session, budget);
+  }
   if (registration?.kind === 'signal') return signalSlot(value, path, session, budget);
   if (isBlueprintParameterShaped(value)) {
     // A forged handle is not interpreted as a concrete SignalId.
@@ -229,6 +258,8 @@ export function createSelectorConfigurationTemplate(
   const budget: SelectorTemplateBudget = {
     ...createBlueprintParameterDataBudget(),
     parameterBytes: 0,
+    expressionBytes: 0,
+    expressionRoots: new WeakSet(),
   };
   rejectRegisteredHandle(value, '$');
   const root = openBlueprintParameterRecord(value, '$', 0, budget);
@@ -269,6 +300,7 @@ export function createSelectorConfigurationTemplate(
 
   const templateBytes = new TextEncoder().encode(
     JSON.stringify(skeleton, (_key, child: unknown) => {
+      if (isRegisteredBlueprintNumericExpression(child)) return { kind: 'numeric-expression' };
       const parameter = findBlueprintParameterHandle(child);
       if (parameter === undefined) return child;
       return parameter.kind === 'number'
@@ -276,10 +308,16 @@ export function createSelectorConfigurationTemplate(
         : { type: 'virtual', name: 'signal-template-placeholder' };
     }),
   ).byteLength;
-  if (templateBytes + budget.parameterBytes > constantConfigurationLimits.maxBytes) {
+  if (
+    templateBytes + budget.parameterBytes + budget.expressionBytes >
+    constantConfigurationLimits.maxBytes
+  ) {
     fail('$', `template exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`);
   }
-  const template = freezeConfigurationData({ [selectorTemplateBrand]: true as const, ...skeleton });
+  const template = freezeConfigurationDataSkippingFrozen({
+    [selectorTemplateBrand]: true as const,
+    ...skeleton,
+  });
   templateRegistrations.set(
     template,
     Object.freeze({ session, usedParameters: Object.freeze([...budget.usedParameters]) }),

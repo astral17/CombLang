@@ -1,14 +1,130 @@
-import { signal } from '@comblang/factorio';
+import { constantConfigurationLimits, signal } from '@comblang/factorio';
 import type { NetworkId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
 import { createBlueprintParameterSession } from './blueprint-parameters.js';
-import { createSelectorConfigurationTemplate } from './selector-configuration-template.js';
+import { createBlueprintNumericExpression } from './blueprint-numeric-expression.js';
+import {
+  createSelectorConfigurationTemplate,
+  inspectSelectorConfigurationTemplate,
+} from './selector-configuration-template.js';
 
 const red = 'network:red' as NetworkId;
 const green = 'network:green' as NetworkId;
 
 describe('symbolic Selector configuration templates', () => {
+  test('accepts only registered same-session numeric expressions in select indices', () => {
+    const session = createBlueprintParameterSession();
+    const foreign = createBlueprintParameterSession();
+    const amount = session.number('amount', { defaultValue: 5 });
+    const foreignExpression = createBlueprintNumericExpression(foreign, {
+      kind: 'literal',
+      value: 2,
+    });
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: amount },
+      right: { kind: 'literal', value: 1 },
+    });
+    const base = {
+      operation: 'select',
+      input: { refKind: 'single', network: red },
+      selectMax: false,
+    } as const;
+
+    const template = createSelectorConfigurationTemplate(session, { ...base, index: expression });
+    expect(template).toMatchObject({ operation: 'select', index: expression });
+    expect(inspectSelectorConfigurationTemplate(template, '$.template').usedParameters).toEqual([
+      amount,
+    ]);
+    expect(() =>
+      createSelectorConfigurationTemplate(session, { ...base, index: foreignExpression }),
+    ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.index' }));
+    expect(() =>
+      createSelectorConfigurationTemplate(session, {
+        ...base,
+        index: { kind: 'binary', operator: 'add', left: 1, right: 2 },
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'CP1000', path: '$.index.kind' }));
+    expect(() =>
+      createSelectorConfigurationTemplate(session, {
+        operation: 'count',
+        input: { refKind: 'single', network: red },
+        output: expression,
+      }),
+    ).toThrowError(
+      expect.objectContaining({ code: 'CP1000', path: expect.stringMatching(/^\$\.output/) }),
+    );
+    expect(() =>
+      createSelectorConfigurationTemplate(session, {
+        ...base,
+        selectMax: expression,
+        index: 0,
+      }),
+    ).toThrowError(
+      expect.objectContaining({ code: 'CP1000', path: expect.stringMatching(/^\$\.selectMax/) }),
+    );
+  });
+
+  test('budgets shared expression DAGs without expanding repeated subgraphs', () => {
+    const session = createBlueprintParameterSession();
+    let shared: unknown = createBlueprintNumericExpression(session, {
+      kind: 'literal',
+      value: 1,
+    });
+    for (let depth = 0; depth < 20; depth += 1) {
+      shared = createBlueprintNumericExpression(session, {
+        kind: 'binary',
+        operator: 'add',
+        left: shared,
+        right: shared,
+      });
+    }
+    const base = {
+      operation: 'select',
+      input: { refKind: 'single', network: red },
+      selectMax: false,
+    } as const;
+    const template = createSelectorConfigurationTemplate(session, { ...base, index: shared });
+    expect(template).toMatchObject({ operation: 'select', index: shared });
+
+    const makeBalanced = (depth: number): unknown =>
+      depth === 0
+        ? { kind: 'literal', value: 1 }
+        : {
+            kind: 'binary',
+            operator: 'add',
+            left: makeBalanced(depth - 1),
+            right: makeBalanced(depth - 1),
+          };
+    const wide = createBlueprintNumericExpression(session, makeBalanced(11));
+    expect(() =>
+      createSelectorConfigurationTemplate(session, { ...base, index: wide }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1000',
+        path: '$.index',
+        message: expect.stringContaining('node limit'),
+      }),
+    );
+
+    const largeLabel = session.number('x'.repeat(constantConfigurationLimits.maxBytes - 100));
+    const largeExpression = createBlueprintNumericExpression(session, {
+      kind: 'parameter',
+      parameter: largeLabel,
+    });
+    expect(() =>
+      createSelectorConfigurationTemplate(session, { ...base, index: largeExpression }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1000',
+        path: '$',
+        message: expect.stringContaining('byte limit'),
+      }),
+    );
+  }, 20_000);
+
   test('preserves numeric and Signal select variants, count output, and ordered pair refs', () => {
     const session = createBlueprintParameterSession();
     const index = session.number('index', { defaultValue: 0 });

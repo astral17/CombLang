@@ -23,13 +23,13 @@ automatically gain a computation model.
 
 ## Parameters and model
 
-| Field       | Accepted value and default                                                |
-| ----------- | ------------------------------------------------------------------------- |
-| `input`     | Required readable Network or `pair(red, green)`; not a scalar selection.  |
-| `operation` | Required exact `'select'` or `'count'`; no computation default.           |
-| `selectMax` | Select only; boolean, defaults to true.                                   |
-| `index`     | Select only; safe-integer number or current-source Signal, defaults to 0. |
-| `output`    | Count only; required current-source Signal, no default.                   |
+| Field       | Accepted value and default                                                                           |
+| ----------- | ---------------------------------------------------------------------------------------------------- |
+| `input`     | Required readable Network or `pair(red, green)`; not a scalar selection.                             |
+| `operation` | Required exact `'select'` or `'count'`; no computation default.                                      |
+| `selectMax` | Select only; boolean, defaults to true.                                                              |
+| `index`     | Select only; safe-integer number, current-source Signal, or local numeric expression, defaults to 0. |
+| `output`    | Count only; required current-source Signal, no default.                                              |
 
 In the implemented model, input colors are summed by Signal identity first;
 zero totals disappear. Select sorts the remaining counts descending for selectMax
@@ -96,6 +96,31 @@ A = 5, C = 4, B = 3 and INDEX = 2. Index 2 emits B = 3, not INDEX.
 This deterministic ranking is the current simulator contract, not independent
 native tie-breaking conformance evidence.
 
+## Numeric parameter index
+
+A registered number expression can supply a local Select index. This complete
+source also retains the parameter at a direct Selector index, which is required
+if the optional native-template exporter is to emit a formula row for `rank + 1`:
+
+```ts
+const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const C = Signal('virtual', 'signal-C');
+const rank = Param.number('Rank', 0, { variable: 'x' });
+const input = new Network();
+const directOutput = new Network();
+const nextOutput = new Network();
+input += CC(5 * A, 3 * B, 1 * C);
+directOutput += Selector({ input, operation: 'select', selectMax: false, index: rank });
+nextOutput += Selector({ input, operation: 'select', selectMax: false, index: rank + 1 });
+```
+
+Three devices. At T2 with the default, the direct index selects C = 1 and the
+derived index 1 selects B = 3. Binding Rank to 1 changes those indices to 1/2,
+selecting B = 3 and A = 5. Binding reuses the captured source execution. The
+native-template exporter can structurally represent the derived index formula,
+but no Factorio placement or evaluation evidence exists for Selector formulas.
+
 ## Structural Entity overload
 
 Fragment for a configured provider/schema host, not a standalone circuit program:
@@ -127,9 +152,10 @@ are rejected, even when structural schema fields exist. No `Select`, `Count`,
 introduced by this page. Unsupported field mixtures, missing output/input,
 accessors, symbols and invalid indices fail with source-aware diagnostics.
 
-Select `index` accepts a direct number or Signal parameter, and count `output`
-accepts a direct Signal parameter. `selectMax` stays concrete. Local binding and
-opt-in native-template export have different supported subsets; see
+Select `index` accepts a direct number or Signal parameter, or a registered
+local numeric expression; count `output` accepts a direct Signal parameter.
+`selectMax` stays concrete. Local binding and opt-in native-template export
+have different supported subsets; see
 [Param](parameters.md#supported-fields).
 Related: [Signal](signal.md), [pair inputs](../language-reference.md#both-colors-input-views),
 [exact/structural reference](../language-reference.md#provider--and-host-bound-entities)

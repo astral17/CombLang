@@ -1,7 +1,7 @@
 import { int32, type SignalId } from '@comblang/factorio';
 import type { SourceSpan } from '@comblang/shared';
 
-import { freezeConfigurationData } from './blueprint-configuration-utils.js';
+import { freezeConfigurationData, prefixExpressionError } from './blueprint-configuration-utils.js';
 import {
   assertBlueprintParameterNumberValue,
   canonicalizeBlueprintParameterSignal,
@@ -14,6 +14,11 @@ import {
   findBlueprintParameterHandle,
   inspectBlueprintParameterHandle,
 } from './blueprint-parameters.js';
+import {
+  evaluateRegisteredBlueprintNumericExpression,
+  inspectRegisteredBlueprintNumericExpression,
+  isRegisteredBlueprintNumericExpression,
+} from './blueprint-numeric-expression-bridge.js';
 import {
   inspectSelectorConfigurationTemplate,
   type SelectorConfigurationTemplate,
@@ -109,6 +114,32 @@ export function bindSelectorConfigurationTemplate(
     const registration = findBlueprintParameterHandle(value);
     if (registration?.kind === 'number') return resolveNumber(value, path);
     if (registration?.kind === 'signal') return resolveSignal(value, path);
+    if (isRegisteredBlueprintNumericExpression(value)) {
+      const inspection = inspectRegisteredBlueprintNumericExpression(session, value, path);
+      const dependencies = new Set<object>(inspection.dependencies);
+      for (const dependency of inspection.dependencies) used.add(dependency);
+      const expressionBindings = bindings
+        .filter((binding) => dependencies.has(binding.parameter))
+        .map(({ parameter, value: bindingValue }) => ({ parameter, value: bindingValue }));
+      let evaluated: number;
+      try {
+        evaluated = evaluateRegisteredBlueprintNumericExpression(
+          session,
+          value,
+          expressionBindings,
+        );
+      } catch (error) {
+        prefixExpressionError(error, path);
+      }
+      const number = assertBlueprintParameterNumberValue(
+        evaluated,
+        path,
+        'safe-integer',
+        inspection.source,
+        'Selector indices must be safe integers.',
+      );
+      return int32(number);
+    }
     if (typeof value === 'number') {
       return int32(assertBlueprintParameterNumberValue(value, path, 'safe-integer'));
     }

@@ -1067,6 +1067,72 @@ output += Constant({ sections: [{ filters: [
     expect(error).not.toHaveBeenCalled();
   });
 
+  test('exports and binds numeric Selector formulas through the CLI without publishing failed metadata', async () => {
+    const { environment } = await parameterHost();
+    const path = await sourceFile(`const amount = Param.number('Amount', 5, { variable: 'x' });
+const input = new Network();
+const directOutput = new Network();
+const formulaOutput = new Network();
+directOutput += Selector({ input, operation: 'select', index: amount });
+formulaOutput += Selector({ input, operation: 'select', index: amount + 1 });`);
+    const nativePath = join(dirname(path), 'selector-formula-native.json');
+    const overridesPath = join(dirname(path), 'selector-formula-overrides.json');
+    await writeFile(overridesPath, JSON.stringify([{ id: 0, value: 9 }]));
+    const { log, error } = capture();
+
+    expect(
+      await run(
+        ['blueprint', 'export', '--parameters', '--json', '--output', nativePath, path],
+        environment,
+      ),
+    ).toBe(0);
+    const native = JSON.parse(await readFile(nativePath, 'utf8'));
+    expect(native.blueprint.parameters).toEqual([
+      { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '6', formula: '(x + 1)', dependent: true },
+    ]);
+    expect(
+      native.blueprint.entities.map(
+        ({ control_behavior }: { control_behavior: { index_constant?: number } }) =>
+          control_behavior.index_constant,
+      ),
+    ).toEqual([5, 6]);
+
+    expect(
+      await run(['blueprint', 'export', '--json', '--overrides', overridesPath, path], environment),
+    ).toBe(0);
+    const concrete = JSON.parse(String(log.mock.calls.at(-1)?.[0])).document;
+    expect(concrete.blueprint).not.toHaveProperty('parameters');
+    expect(
+      concrete.blueprint.entities.map(
+        ({ control_behavior }: { control_behavior: { index_constant?: number } }) =>
+          control_behavior.index_constant,
+      ),
+    ).toEqual([9, 10]);
+
+    const rejectedPath = await sourceFile(
+      `const amount = Param.number('Amount', 5, { variable: 'x' });
+const input = new Network();
+const output = new Network();
+output += Selector({ input, operation: 'select', index: amount + 1 });`,
+      'selector-formula-only.factorio.ts',
+    );
+    const rejectedOutput = join(dirname(rejectedPath), 'must-not-exist.json');
+    expect(
+      await run(
+        ['blueprint', 'export', '--parameters', '--json', '--output', rejectedOutput, rejectedPath],
+        environment,
+      ),
+    ).toBe(2);
+    const failure = JSON.parse(String(log.mock.calls.at(-1)?.[0]));
+    expect(failure).toMatchObject({
+      ok: false,
+      error: { code: 'CP1002', path: '$.selectorTemplates[0].index' },
+    });
+    await expect(stat(rejectedOutput)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(error).not.toHaveBeenCalled();
+  });
+
   test('exports typed Constant, Arithmetic and final fluent Decider formulas and keeps failures atomic', async () => {
     const { environment } = await parameterHost();
     const formulaSource = `const A = Signal('virtual', 'signal-A');
@@ -1296,12 +1362,12 @@ gate.else(4 * B);`;
     },
   );
 
-  test('symbolic numeric expression remains a located compilation failure without output', async () => {
+  test('Selector formula without a retained variable is a located atomic native-export failure', async () => {
     const { environment } = await parameterHost();
     const { log } = capture();
     for (const device of ["Selector({ input, operation: 'select', index: amount + 1 })"]) {
       const path = await sourceFile(`const A = Signal('virtual', 'signal-A');
-const amount = Param.number('Amount', 5);
+const amount = Param.number('Amount', 5, { variable: 'x' });
 const input = new Network(); const output = new Network(); output += ${device};`);
       const output = join(dirname(path), 'unsupported.json');
       log.mockClear();
@@ -1313,13 +1379,11 @@ const input = new Network(); const output = new Network(); output += ${device};`
       ).toBe(2);
       const report = JSON.parse(String(log.mock.calls[0]?.[0]));
       expect(report.ok).toBe(false);
-      expect(report.error.code).not.toBe('CLIBP1000');
+      expect(report.error).toMatchObject({
+        code: 'CP1002',
+        path: '$.selectorTemplates[0].index',
+      });
       expect(report.error.span).toBeDefined();
-      expect(
-        report.diagnostics.some(
-          (diagnostic: { severity: string }) => diagnostic.severity === 'error',
-        ),
-      ).toBe(true);
       await expect(stat(output)).rejects.toMatchObject({ code: 'ENOENT' });
     }
   });

@@ -33,27 +33,27 @@ CLI, browser controls or the embedding API instead.
 
 ## Supported fields
 
-Use parameters in these exact configurations. Arithmetic operands, the two
-direct Constant numeric slots and Decider thresholds also accept the limited
-derived source expressions described below:
+Use parameters in these exact configurations. Arithmetic operands, Constant
+numeric slots, Decider thresholds, and Selector select indices also accept the
+limited derived source expressions described below:
 
-| Constructor                           | Field                                                                               | Accepted source value              |
-| ------------------------------------- | ----------------------------------------------------------------------------------- | ---------------------------------- |
-| `Arithmetic`                          | `left`, `right` as constant operands                                                | Number or local numeric expression |
-| `Arithmetic`                          | `output`                                                                            | Signal                             |
-| `Constant`                            | `sections[].filters[].value`                                                        | Number or local numeric expression |
-| `Constant`                            | `sections[].filters[].signal`                                                       | Signal                             |
-| `Constant`                            | `sections[].multiplier`                                                             | Number or local numeric expression |
-| `Decider`, `when`, or `IF`            | Right-hand numeric comparison threshold in `condition`, including nested conditions | Number or local numeric expression |
-| `Selector` with `operation: 'select'` | `index`                                                                             | Number or Signal                   |
-| `Selector` with `operation: 'count'`  | `output`                                                                            | Signal                             |
+| Constructor                           | Field                                                                               | Accepted source value                      |
+| ------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------ |
+| `Arithmetic`                          | `left`, `right` as constant operands                                                | Number or local numeric expression         |
+| `Arithmetic`                          | `output`                                                                            | Signal                                     |
+| `Constant`                            | `sections[].filters[].value`                                                        | Number or local numeric expression         |
+| `Constant`                            | `sections[].filters[].signal`                                                       | Signal                                     |
+| `Constant`                            | `sections[].multiplier`                                                             | Number or local numeric expression         |
+| `Decider`, `when`, or `IF`            | Right-hand numeric comparison threshold in `condition`, including nested conditions | Number or local numeric expression         |
+| `Selector` with `operation: 'select'` | `index`                                                                             | Number, Signal or local numeric expression |
+| `Selector` with `operation: 'count'`  | `output`                                                                            | Signal                                     |
 
 For native typed-formula export, a registered expression in an exact Arithmetic
-constant `left`/`right` operand, direct Constant filter `value`, or constant-right
-threshold of an exact Decider/`when`/`IF` condition can produce a formula row.
-Expressions in the other listed slots remain local binding behavior only. Native
-Signal placeholders are a separate bounded feature for Constant filter `signal`
-slots.
+constant `left`/`right` operand, direct Constant filter `value`, constant-right
+threshold of an exact Decider/`when`/`IF` condition, or numeric `index` of a
+Selector `select` can produce a formula row. Constant section multipliers remain
+local binding only. Native Signal placeholders are a separate bounded feature
+for Constant filter `signal` slots.
 
 Arithmetic constants, Constant filter counts, Decider thresholds and numeric
 Selector indices require finite safe integers, then normalize to signed int32.
@@ -65,11 +65,11 @@ A number parameter may form a local source expression with finite numbers and
 other owning number parameters using binary `+`, `-`, `*` or unary `-`. The
 opaque result is evaluated by the registered numeric DAG only when it occupies
 an exact Arithmetic `left` or `right` constant slot, a direct Constant filter
-count, a Constant section multiplier, or the right-hand numeric threshold of an
+count, a Constant section multiplier, the right-hand numeric threshold of an
 exact Decider, `when(...).then(...).else(...)`, or `IF(condition, then, else)`
-condition (including nested AND/OR conditions). It creates no device and does
-not re-execute source during binding. Count and threshold
-results must be finite safe integers before existing signed-int32
+condition (including nested AND/OR conditions), or a Selector `select` index.
+It creates no device and does not re-execute source during binding. Count,
+threshold and Selector-index results must be finite safe integers before existing signed-int32
 normalization; multipliers remain finite doubles. Parameter-free JavaScript
 arithmetic remains ordinary JavaScript. Derived expressions are not booleans,
 circuit Conditions or native formula strings.
@@ -193,14 +193,14 @@ filter counts, Arithmetic constants, Decider right-hand thresholds or numeric
 Selector select indices. Numeric originals must fit signed int32 and remain
 present in the exported fields. Registered numeric expressions can additionally
 produce bounded formula rows from exact Arithmetic `left`/`right` constant
-operands, direct Constant filter counts and constant-right Decider thresholds,
-as described below. Signal
-declarations in Constant filter Signal slots follow the separate bounded
-contract below. Symbolic section multipliers, derived Selector-index expressions,
-unused declarations and conflicting originals fail explicitly in that mode.
-When a typed formula is present, its physical circuit must contain only linked
-Constant, Arithmetic and Decider producers; without typed formulas, existing
-direct-number export support for Decider/Selector remains unchanged. Native
+operands, direct Constant filter counts, constant-right Decider thresholds and
+numeric Selector select indices, as described below. Signal declarations in
+Constant filter Signal slots follow the separate bounded contract below.
+Symbolic section multipliers, unused declarations and conflicting originals
+fail explicitly in that mode. When a typed formula is present, its physical
+circuit must contain only linked Constant, Arithmetic, Decider and Selector
+producers; without typed formulas, existing direct-number export support for
+Decider/Selector remains unchanged. Native
 Signal export retains its stricter Constant-only gate. Native replacement may
 also affect ordinary literals equal to an original; nominal independence in
 local binding does not establish independence in Factorio placement.
@@ -208,11 +208,15 @@ local binding does not establish independence in Factorio placement.
 ### Bounded typed native numeric formulas
 
 A registered local numeric expression in an exact Arithmetic constant operand,
-direct Constant filter count or constant-right Decider condition threshold can
-produce a derived native formula row. This is a narrow structural export, not
-general formula parsing or native validation. In this example, `Amount` is
-retained by its direct Arithmetic left operand and direct Decider threshold; the
-other two slots receive formulas:
+direct Constant filter count, constant-right Decider condition threshold, or
+Selector `select` index can produce a derived native formula row. This is a
+narrow structural export, not general formula parsing or native validation.
+Each dependency must also occur independently as a direct numeric use in a
+Constant count, Arithmetic constant operand, Decider threshold, or Selector
+select index, with an explicit variable and no formula/dependent metadata. The
+native Signal gate remains Constant-only. Selector formula projection has no
+Factorio placement evidence. In the example, `Amount` is retained by its direct
+Arithmetic left operand and Decider threshold; the formula slots are separate:
 
 ```javascript
 const A = Signal('virtual', 'signal-A');
@@ -244,21 +248,22 @@ and unique. Each dependency must be an owned number declaration with an
 explicit `metadata.variable` matching `[A-Za-z][A-Za-z0-9_]*`; built-ins `abs`,
 `log2`, `sign`, `max`, `min` and recipe-reference names such as `p12_recipe` are
 reserved. Each dependency must also occur independently as a direct physical
-Constant filter count, Arithmetic constant operand or Decider right threshold and must not itself declare
-`formula` (even an empty string) or `dependent: true`. Direct uses in Selector do
-not satisfy this retention rule. Typed formula export requires a linked physical
-circuit containing only Constant, Arithmetic and Decider producers. It
+Constant filter count, Arithmetic constant operand, Decider right threshold or
+Selector numeric select index, and must not itself declare `formula` (even an
+empty string) or `dependent: true`. Typed formula export requires a linked
+physical circuit containing only Constant, Arithmetic, Decider and Selector
+producers. It
 accepts only signed-int32 literals/defaults and the registered `+`, `-`, `*` and
 unary-negation nodes; output is fully parenthesized without folding or
 reassociation and respects bounded node and byte limits. Repeated identical
-default/formula pairs share one row across all three families. Different formulas
+default/formula pairs share one row across all four families. Different formulas
 for the same derived original, or collision with any declared number original,
 reject atomically with located `CP1002`.
 
 Real declaration rows retain declaration order. Generated rows follow collection
-order: Decider templates and recursive leaves first, Arithmetic templates second
-(left then right within each template), then Constant templates in section/filter
-order. This preserves existing Constant-only
+order: Selector select indices first, Decider templates and recursive leaves
+second, Arithmetic templates third (left then right within each template), then
+Constant templates in section/filter order. This preserves existing Constant-only
 ordering and does not promise global source order across families.
 
 Generated rows are derived exporter metadata, not source declarations or new
@@ -266,17 +271,19 @@ local handles; they have no fabricated `name` or variable. Physical counts and
 placement remain unchanged. Factorio may replace ordinary numeric literals
 matching a parameter original as well, unlike local nominal binding. Only typed
 local expressions in exact Arithmetic constant operands, direct Constant count
-slots and constant-right Decider thresholds receive this treatment; symbolic multipliers, derived expressions
-in other slots, division and opaque formula strings remain unsupported or
-opaque as appropriate.
+slots, constant-right Decider thresholds and Selector numeric select indices
+receive this treatment; symbolic multipliers, derived expressions in other
+slots, division and opaque formula strings remain unsupported or opaque as
+appropriate.
 
 A user-returned final placement export for a separate Constant-only generated `(x * 2)` case records
 normal virtual A=9 and B=18 at Amount=9 ([Factorio 2.1.21 fixture](../../fixtures/blueprint-exchange/factorio-2.1.21/generated-number-formula-placed.txt)).
 This is one bounded native placement observation: current mods were unspecified,
 save/reopen was not observed, and the export has no `wires` field, so it says
 nothing about wired layouts. It does not validate other generated operators,
-functions, Arithmetic or Decider formula placement, other formula slots, versions
-or mod configurations. No native Decider formula placement evidence is recorded.
+functions, Arithmetic, Decider or Selector formula placement, other formula
+slots, versions or mod configurations. No native Decider or Selector formula
+placement evidence is recorded.
 
 The generic MathExpression reference in the
 [pinned Factorio 2.1.21 API input](../../tools/factorio-api/fixtures/2.1.21/runtime-api.json)

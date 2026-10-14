@@ -268,14 +268,16 @@ numeric simulation result. Non-unit multipliers retain the existing sparse-bus
 This does not implement Factorio multiplier/group semantics, native substitution
 or rounding. `parameter * Section(...)`, CC convenience scaling, symbolic
 `isOn`/`active`/`group` and parameter keys remain unsupported. Local numeric
-source expressions may occupy only exact Arithmetic constant operands and
-direct Constant filter-count/multiplier slots. The narrow native formula export
-described in the Param reference supports registered expressions in exact
-Arithmetic constant operands, direct Constant filter counts and constant-right
-Decider thresholds. A formula-mode circuit is limited to linked
-Constant/Arithmetic/Decider producers; derived multiplier and Selector-index
-formulas remain unsupported. Native Signal export retains its stricter
-Constant-only gate.
+source expressions may occupy exact Arithmetic constant operands, direct
+Constant filter-count/multiplier slots and Selector numeric select indices. The
+narrow native formula export described in the Param reference supports
+registered expressions in exact Arithmetic constant operands, direct Constant
+filter counts, constant-right Decider thresholds and Selector numeric select
+indices. A formula-mode circuit is limited to linked
+Constant/Arithmetic/Decider/Selector producers; derived multiplier formulas
+remain unsupported. Selector formulas require an independent direct use for
+each dependency under the same native formula retention rule. Native Signal
+export retains its stricter Constant-only gate.
 
 Explicit native parameter metadata export rejects symbolic multipliers with
 located `CP1002`, even at default 1 or when the same handle is a supported filter
@@ -325,7 +327,9 @@ continues to emit 7 under B. Bare Signal parameters remain invalid as `left` or
 `right` inputs; they are not Network selections. Derived numeric expressions
 formed from owning number parameters and finite numbers are also accepted in
 exact `left`/`right` constant slots, using the existing local numeric DAG without
-extra hardware or source re-execution. They do not enable Network property keys,
+extra hardware or source re-execution. Registered expressions are also accepted
+in numeric `index` of a Selector `select` configuration with the same local
+binding behavior. These expressions do not enable Network property keys,
 `input + amount`, compact `IF`/`when` outputs, dynamic operations or coercion.
 Concrete Signal and `Each` output behavior is unchanged.
 
@@ -514,10 +518,11 @@ filter count, Arithmetic constant operand (`left` or `right`), Selector
 `select` numeric index, or Decider constant-right comparison threshold in exact
 `Decider`, `when`, or `IF`, including leaves of nested AND/OR conditions.
 Registered expressions have a separate bounded native-formula contract for
-exact Arithmetic constant operands, direct Constant filter counts and
-constant-right Decider thresholds; each formula dependency must also have an
-independent direct use in one of those slots. Formula mode accepts only linked
-Constant, Arithmetic and Decider producers, while the native Signal gate remains
+exact Arithmetic constant operands, direct Constant filter counts,
+constant-right Decider thresholds and numeric Selector select indices; each
+formula dependency must also have an independent direct use in one of those
+four numeric slots. Formula mode accepts only linked Constant, Arithmetic,
+Decider and Selector producers, while the native Signal gate remains
 Constant-only. Its explicit default is also its native original and must be an integer
 in [-2147483648, 2147483647]; it is not
 wrapped, rounded or allocated automatically. A zero count remains an explicit
@@ -531,10 +536,12 @@ are rejected at the second declaration, with a reference to the first.
 For valid captured compilations, unsupported declarations or uses fail
 atomically with `CP1002`, a declaration or device-call source span, and a
 semantic path. Signal and unused parameters, symbolic Decider outputs (including
-else outputs), Selector Signal indices/count outputs, symbolic multipliers,
-and derived Selector-index expressions remain outside this subset and fail with
-`CP1002` even when their local results are
-constant-equivalent. A marked Decider threshold is tracked by its
+else outputs), Selector Signal indices/count outputs, and symbolic multipliers
+remain outside this subset and fail with `CP1002` even when their local results
+are constant-equivalent. A marked Selector numeric formula is authenticated at
+the exact `select.index` slot and must survive projection unchanged in
+`index_constant`, not `index_signal`. Selector native formula placement remains
+unverified. A marked Decider threshold is tracked by its
 exact comparison-leaf path in the authenticated capture and concrete producer.
 The existing bounded native condition expansion identifies every emitted row of
 that leaf, including duplicated rows; each must retain the declared original.
@@ -570,8 +577,9 @@ See [source export CLI](blueprint-json.md#source-export-cli) for prototype selec
 and file/stdout conventions. Existing parameter-free export bytes are
 unchanged. This native-export subset preserves explicit numeric formula
 strings, supports bounded typed formulas in exact Arithmetic constant operands,
-direct Constant count slots and constant-right Decider thresholds, and supports bounded Constant Signal
-placeholders. It does not add native parameter indices, recipe/property
+direct Constant count slots, constant-right Decider thresholds and numeric
+Selector select indices, and supports bounded Constant Signal
+placeholders. It does not add a general native-parameter index syntax, recipe/property
 dependencies, other Signal slots or multiplier substitution.
 Concrete Worker binding and the parameter controls are
 separate implemented features; they do not enable those native semantics. See
@@ -596,11 +604,12 @@ default/binding evaluator. This internal foundation neither parses nor emits
 Factorio formulas and does not establish native formula arithmetic semantics.
 The reviewed host-local integration is limited to Arithmetic constant operand
 values, Decider `condition.compare.right` thresholds and `mode: 'constant'`
-output values in both normal and else output lists, and Constant section
-multipliers and filter counts. A shared expression may occupy a threshold and
+output values in both normal and else output lists, Constant section multipliers
+and filter counts, and numeric indices in Selector `select` configurations. A
+shared expression may occupy a threshold and
 multiple ordered output rows; binding evaluates it to concrete values without
 coalescing duplicate rows. Arithmetic/Decider results and filter-count
-expressions require a safe integer before the existing int32 normalization; a
+expressions and Selector indices require a safe integer before the existing int32 normalization; a
 Constant multiplier is only required to be finite and remains a double in
 concrete configuration. This DAG integration does not itself add source formula
 operators or translate DAGs into native strings, establish placement-time

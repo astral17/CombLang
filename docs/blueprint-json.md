@@ -155,14 +155,14 @@ export uses the chosen bound values. Neither mode evaluates opaque formula
 metadata. Numeric `variable`, `formula` and `dependent` fields are preserved
 opaquely. Separately, the opt-in native-template exporter can render registered
 numeric expressions used directly in Constant filter counts, exact Arithmetic
-constant operands and constant-right Decider thresholds as bounded derived
-formula rows; every dependency requires a separate direct Constant count,
-Arithmetic constant operand or Decider right-threshold use and an explicit
-variable. A user-returned Constant-only `(x * 2)`
+constant operands, constant-right Decider thresholds and Selector `select`
+indices as bounded derived formula rows; every dependency requires a separate
+direct Constant count, Arithmetic constant operand, Decider right-threshold or
+Selector select-index use and an explicit variable. A user-returned Constant-only `(x * 2)`
 placement records A=9 and B=18 at Amount=9; see the
 [bounded native observation](api/parameters.md#bounded-typed-native-numeric-formulas).
-Arithmetic and Decider formula placement and general formula validity remain
-unverified. Signal parameters
+Arithmetic, Decider and Selector formula placement and general formula validity
+remain unverified. Signal parameters
 are supported only for concrete virtual defaults with normal quality in direct
 Constant filter Signal slots, subject to the bounded placeholder and circuit
 rules in the Param reference. Other Signal slots/defaults, unsupported

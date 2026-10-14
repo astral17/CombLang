@@ -3,6 +3,7 @@ import type { SourceFileId, SourceSpan } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
 import { createBlueprintParameterSession } from './blueprint-parameters.js';
+import { createBlueprintNumericExpression } from './blueprint-numeric-expression.js';
 import { bindSelectorConfigurationTemplate } from './selector-configuration-binding.js';
 import { createSelectorConfigurationTemplate } from './selector-configuration-template.js';
 import type { BlueprintParameterBinding } from './blueprint-parameter-validation.js';
@@ -14,6 +15,106 @@ const source: SourceSpan = {
 };
 
 describe('binding symbolic Selector configuration templates', () => {
+  test('evaluates expression indices on each bind, reset and int32-normalizes safe integers', () => {
+    const session = createBlueprintParameterSession();
+    const amount = session.number('amount', { defaultValue: 5, source });
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: amount },
+      right: { kind: 'literal', value: 1 },
+    });
+    const template = createSelectorConfigurationTemplate(session, {
+      operation: 'select',
+      input: { refKind: 'single', network: 'network:input' },
+      selectMax: false,
+      index: expression,
+    });
+
+    const defaults = bindSelectorConfigurationTemplate(template);
+    const overridden = bindSelectorConfigurationTemplate(template, [
+      { parameter: amount, value: 9 },
+    ]);
+    const wrapped = bindSelectorConfigurationTemplate(template, [
+      { parameter: amount, value: 2_147_483_647 },
+    ]);
+    const reset = bindSelectorConfigurationTemplate(template, []);
+
+    expect(defaults).toMatchObject({ index: 6, selectMax: false });
+    expect(overridden).toMatchObject({ index: 10 });
+    expect(wrapped).toMatchObject({ index: -2_147_483_648 });
+    expect(reset).toEqual(defaults);
+    expect(Object.isFrozen(overridden)).toBe(true);
+  });
+
+  test('uses only expression dependencies and rejects missing, unused and invalid bindings', () => {
+    const session = createBlueprintParameterSession();
+    const required = session.number('required', { source });
+    const unused = session.number('unused', { defaultValue: 3 });
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'multiply',
+      left: { kind: 'parameter', parameter: required },
+      right: { kind: 'literal', value: 2 },
+    });
+    const template = createSelectorConfigurationTemplate(session, {
+      operation: 'select',
+      input: { refKind: 'single', network: 'network:input' },
+      selectMax: true,
+      index: expression,
+    });
+
+    expect(() => bindSelectorConfigurationTemplate(template)).toThrowError(
+      expect.objectContaining({ code: 'CP1002', path: '$.index.left.parameter', span: source }),
+    );
+    expect(() =>
+      bindSelectorConfigurationTemplate(template, [
+        { parameter: unused, value: 4 },
+        { parameter: required, value: 6 },
+      ]),
+    ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.bindings' }));
+    expect(() =>
+      bindSelectorConfigurationTemplate(template, [{ parameter: required, value: 1.25 }]),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1000',
+        path: expect.stringMatching(/^\$\.index(?:\.|$)/),
+        span: source,
+      }),
+    );
+    expect(() =>
+      bindSelectorConfigurationTemplate(template, [
+        { parameter: required, value: Number.MAX_SAFE_INTEGER + 1 },
+      ]),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1000',
+        path: expect.stringMatching(/^\$\.index(?:\.|$)/),
+        span: source,
+      }),
+    );
+    expect(() =>
+      bindSelectorConfigurationTemplate(template, [{ parameter: required, value: Infinity }]),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1000',
+        path: expect.stringMatching(/^\$\.index(?:\.|$)/),
+        span: source,
+      }),
+    );
+    expect(() =>
+      bindSelectorConfigurationTemplate(template, [
+        { parameter: required, value: signal('item', 'iron-plate') as unknown as number },
+      ]),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1000',
+        path: expect.stringMatching(/^\$\.index(?:\.|$)/),
+        span: source,
+      }),
+    );
+  });
+
   test('applies numeric defaults and overrides with safe-integer-before-int32 normalization', () => {
     const session = createBlueprintParameterSession();
     const index = session.number('index', { defaultValue: 0, source });

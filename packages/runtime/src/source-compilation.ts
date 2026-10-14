@@ -321,15 +321,6 @@ export function bindSourceCompilationParameters(
   return bindCapturedSourceConfigurationTemplates(state.source, state.execution, bindings);
 }
 
-function containsNativeUnsupportedExpression(value: unknown): boolean {
-  if (isRegisteredBlueprintNumericExpression(value)) return true;
-  return (
-    value !== null &&
-    typeof value === 'object' &&
-    Object.values(value).some(containsNativeUnsupportedExpression)
-  );
-}
-
 /** Projects this exact compilation's supported native parameter slots into metadata. */
 export function exportSourceCompilationNativeBlueprint(
   compilation: LocalSourceCompilation,
@@ -502,6 +493,15 @@ export function exportSourceCompilationNativeBlueprint(
         readonly path: string;
         readonly source: SourceSpan;
         readonly session: ReturnType<typeof inspectConstantConfigurationTemplate>['session'];
+      }
+    | {
+        readonly kind: 'selector-index-expression';
+        readonly captureId: string;
+        readonly expression: unknown;
+        readonly dependencies: readonly BlueprintParameterHandle[];
+        readonly path: string;
+        readonly source: SourceSpan;
+        readonly session: ReturnType<typeof inspectConstantConfigurationTemplate>['session'];
       };
   const pendingNativeNumericFormulas: PendingNativeNumericFormula[] = [];
   const measuredNativeNumericFormulas: MeasuredNativeNumericFormula[] = [];
@@ -563,6 +563,10 @@ export function exportSourceCompilationNativeBlueprint(
         side: 'first' | 'second';
         measured: MeasuredNativeNumericFormula;
       }
+    | {
+        kind: 'selector-index-expression';
+        measured: MeasuredNativeNumericFormula;
+      }
     | { kind: 'selector-index'; parameter: BlueprintParameterHandle }
     | {
         kind: 'decider-threshold';
@@ -579,27 +583,75 @@ export function exportSourceCompilationNativeBlueprint(
     const path = `$.selectorTemplates[${captureIndex}]`;
     const registration = inspectSelectorConfigurationTemplate(capture.template, path);
     const accepted = new Set<BlueprintParameterHandle>();
-    if (containsNativeUnsupportedExpression(capture.template)) {
-      reject(path, 'native source export does not support Selector expressions.', capture.source);
-    }
     if (capture.template.operation === 'select') {
-      const parameter = canonicalBlueprintParameterHandle(capture.template.index);
-      if (parameter !== undefined && parameter.kind === 'number') {
-        accepted.add(parameter);
-        used.add(parameter);
-        occurrences.push({
-          kind: 'selector-index',
+      const index = capture.template.index;
+      const indexPath = `${path}.index`;
+      if (isRegisteredBlueprintNumericExpression(index)) {
+        let inspection;
+        try {
+          inspection = inspectRegisteredBlueprintNumericExpression(
+            registration.session,
+            index,
+            indexPath,
+          );
+        } catch (error) {
+          if (error instanceof BlueprintParameterError) {
+            reject(
+              indexPath,
+              'native numeric formula export requires an authenticated expression owned by this compilation.',
+              capture.source,
+            );
+          }
+          throw error;
+        }
+        if (inspection.dependencies.length === 0) {
+          reject(
+            indexPath,
+            'native numeric formulas require at least one number parameter dependency.',
+            inspection.source ?? capture.source,
+          );
+        }
+        if (formulaSession !== undefined && formulaSession !== registration.session) {
+          reject(
+            indexPath,
+            'native numeric formulas must belong to one compilation parameter session.',
+            capture.source,
+          );
+        }
+        formulaSession = registration.session;
+        for (const dependency of inspection.dependencies) {
+          accepted.add(dependency);
+          used.add(dependency);
+        }
+        pendingNativeNumericFormulas.push({
+          kind: 'selector-index-expression',
           captureId: capture.captureId,
-          parameter,
-          path: `${path}.index`,
-          source: capture.source,
+          expression: index,
+          dependencies: inspection.dependencies,
+          path: indexPath,
+          source: inspection.source ?? capture.source,
+          session: registration.session,
         });
+      } else {
+        const parameter = canonicalBlueprintParameterHandle(index);
+        if (parameter !== undefined && parameter.kind === 'number') {
+          accepted.add(parameter);
+          used.add(parameter);
+          directNativeNumericParameters.add(parameter);
+          occurrences.push({
+            kind: 'selector-index',
+            captureId: capture.captureId,
+            parameter,
+            path: indexPath,
+            source: capture.source,
+          });
+        }
       }
     }
     if (registration.usedParameters.some((parameter) => !accepted.has(parameter))) {
       reject(
         `${path}.${capture.template.operation === 'select' ? 'index' : 'output'}`,
-        'native source export supports only direct numeric Selector select indices.',
+        'native source export supports only direct numeric or registered formula Selector select indices.',
         capture.source,
       );
     }
@@ -983,7 +1035,7 @@ export function exportSourceCompilationNativeBlueprint(
         if (!directNativeNumericParameters.has(dependency)) {
           reject(
             formula.path,
-            `formula dependency ${JSON.stringify(declaration.label)} must also occur as a direct Constant count or Arithmetic constant operand; a direct Decider right threshold is also accepted.`,
+            `formula dependency ${JSON.stringify(declaration.label)} must also occur as a direct Constant count, Arithmetic constant operand, Decider right threshold, or Selector select index.`,
             formula.source,
           );
         }
@@ -995,12 +1047,13 @@ export function exportSourceCompilationNativeBlueprint(
         (producer) =>
           producer.kind !== 'constant' &&
           producer.kind !== 'arithmetic' &&
-          producer.kind !== 'decider',
+          producer.kind !== 'decider' &&
+          producer.kind !== 'selector',
       )
     ) {
       reject(
         firstFormula.path,
-        'native numeric formula export requires every producer to be Constant, Arithmetic or Decider.',
+        'native numeric formula export requires every producer to be Constant, Arithmetic, Decider or Selector.',
         firstFormula.source,
       );
     }
@@ -1036,6 +1089,14 @@ export function exportSourceCompilationNativeBlueprint(
           kind: formula.kind,
           captureId: formula.captureId,
           conditionPath: formula.conditionPath,
+          measured,
+          path: formula.path,
+          source: formula.source,
+        });
+      } else if (formula.kind === 'selector-index-expression') {
+        occurrences.push({
+          kind: formula.kind,
+          captureId: formula.captureId,
           measured,
           path: formula.path,
           source: formula.source,
@@ -1200,7 +1261,7 @@ export function exportSourceCompilationNativeBlueprint(
         : occurrence.kind === 'arithmetic-operand' ||
             occurrence.kind === 'arithmetic-operand-expression'
           ? 'arithmetic'
-          : occurrence.kind === 'selector-index'
+          : occurrence.kind === 'selector-index' || occurrence.kind === 'selector-index-expression'
             ? 'selector'
             : 'decider';
     if (
@@ -1226,6 +1287,21 @@ export function exportSourceCompilationNativeBlueprint(
         reject(
           occurrence.path,
           'marked Selector index did not survive native projection unchanged.',
+          occurrence.source,
+        );
+      }
+      continue;
+    }
+    if (occurrence.kind === 'selector-index-expression') {
+      const behavior = entity?.native.control_behavior as
+        { readonly operation?: string; readonly index_constant?: number } | undefined;
+      if (
+        behavior?.operation !== 'select' ||
+        behavior.index_constant !== occurrence.measured.defaultValue
+      ) {
+        reject(
+          occurrence.path,
+          'marked Selector index expression did not survive native projection at its evaluated default.',
           occurrence.source,
         );
       }
