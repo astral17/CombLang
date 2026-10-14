@@ -620,18 +620,26 @@ void extra;`,
     expect(error).not.toHaveBeenCalled();
   });
 
-  test('typed Constant and Arithmetic formula exports match CLI, while concrete Worker output stays metadata-free', async () => {
+  test('typed Constant, Arithmetic and final fluent Decider formulas match CLI; concrete Worker output stays metadata-free', async () => {
     const { environment } = await parameterHost();
     const directory = await mkdtemp(join(tmpdir(), 'comblang-worker-formula-parity-'));
     directories.push(directory);
     const path = join(directory, 'formula.factorio.ts');
-    const formulaSource = `const amount = Param.number('Amount', 5, { variable: 'x' });
+    const formulaSource = `const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const amount = Param.number('Amount', 5, { variable: 'x' });
 const output = new Network();
 output += Constant({ sections: [{ filters: [
-  { signal: Signal('virtual', 'signal-A'), value: amount },
-  { signal: Signal('virtual', 'signal-B'), value: amount * 2 },
+  { signal: A, value: amount },
+  { signal: B, value: amount * 2 },
 ] }] });
-output += Arithmetic({ left: amount, operation: 'add', right: (amount * 2 + 3) * 5, output: Signal('virtual', 'signal-C') });`;
+output += Arithmetic({ left: amount, operation: 'add', right: (amount * 2 + 3) * 5, output: Signal('virtual', 'signal-C') });
+const input = new Network();
+const gate = when(input[A] > amount && input[A] < amount * 3).at(4, 5, 2).then(input[A]);
+output += gate;
+gate.else(2 * B);
+gate.then(3 * B);
+gate.else(4 * B);`;
     await writeFile(path, formulaSource);
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -658,6 +666,7 @@ output += Arithmetic({ left: amount, operation: 'add', right: (amount * 2 + 3) *
     if (!workerNative.result.blueprintExport?.ok) throw new Error('Worker formula export failed.');
     expect(workerNative.result.blueprintExport.document.blueprint.parameters).toEqual([
       { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '15', formula: '(x * 3)', dependent: true },
       { type: 'number', number: '65', formula: '(((x * 2) + 3) * 5)', dependent: true },
       { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
     ]);
@@ -665,6 +674,23 @@ output += Arithmetic({ left: amount, operation: 'add', right: (amount * 2 + 3) *
       workerNative.result.blueprintExport.document.blueprint.entities[1]!.control_behavior,
     ).toMatchObject({
       arithmetic_conditions: { first_constant: 5, second_constant: 65 },
+    });
+    expect(workerNative.result.blueprintExport.document.blueprint.entities[2]).toMatchObject({
+      position: { x: 4, y: 5 },
+      direction: 2,
+      control_behavior: {
+        decider_conditions: {
+          conditions: [{ constant: 5 }, { constant: 15 }],
+          outputs: [
+            { copy_count_from_input: true, signal: { name: 'signal-A' } },
+            { constant: 3, signal: { name: 'signal-B' } },
+          ],
+          else_outputs: [
+            { constant: 2, signal: { name: 'signal-B' } },
+            { constant: 4, signal: { name: 'signal-B' } },
+          ],
+        },
+      },
     });
 
     log.mockClear();
@@ -692,6 +718,21 @@ output += Arithmetic({ left: amount, operation: 'add', right: (amount * 2 + 3) *
       workerConcrete.result.blueprintExport.document.blueprint.entities[1]!.control_behavior,
     ).toMatchObject({
       arithmetic_conditions: { first_constant: 5, second_constant: 65 },
+    });
+    expect(
+      workerConcrete.result.blueprintExport.document.blueprint.entities[2]!.control_behavior,
+    ).toMatchObject({
+      decider_conditions: {
+        conditions: [{ constant: 5 }, { constant: 15 }],
+        outputs: [
+          { copy_count_from_input: true, signal: { name: 'signal-A' } },
+          { constant: 3, signal: { name: 'signal-B' } },
+        ],
+        else_outputs: [
+          { constant: 2, signal: { name: 'signal-B' } },
+          { constant: 4, signal: { name: 'signal-B' } },
+        ],
+      },
     });
     expect(error).not.toHaveBeenCalled();
   });

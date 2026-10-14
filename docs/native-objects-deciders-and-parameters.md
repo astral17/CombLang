@@ -271,10 +271,11 @@ or rounding. `parameter * Section(...)`, CC convenience scaling, symbolic
 source expressions may occupy only exact Arithmetic constant operands and
 direct Constant filter-count/multiplier slots. The narrow native formula export
 described in the Param reference supports registered expressions in exact
-Arithmetic constant operands and direct Constant filter counts. A formula-mode
-circuit is limited to linked Constant/Arithmetic producers; derived multiplier,
-Decider-threshold and Selector-index formulas remain unsupported. Native Signal
-export retains its stricter Constant-only gate.
+Arithmetic constant operands, direct Constant filter counts and constant-right
+Decider thresholds. A formula-mode circuit is limited to linked
+Constant/Arithmetic/Decider producers; derived multiplier and Selector-index
+formulas remain unsupported. Native Signal export retains its stricter
+Constant-only gate.
 
 Explicit native parameter metadata export rejects symbolic multipliers with
 located `CP1002`, even at default 1 or when the same handle is a supported filter
@@ -417,18 +418,20 @@ Explicit formula strings are opaque native metadata: whitespace and empty
 strings are preserved exactly, as is explicit `dependent: false`. The strings
 are not trimmed, parsed, rewritten or evaluated. Unknown references, duplicate
 formula references and apparent cycles are preserved, not validated; such
-strings may be invalid in Factorio. Separately, typed Constant/Arithmetic
-formula export requires valid unique variable identifiers for supplied numeric declarations.
+strings may be invalid in Factorio. Separately, typed
+Constant/Arithmetic/Decider formula export requires valid unique variable
+identifiers for supplied numeric declarations.
 Local binding and simulation still use the explicit default (here `5` and `111`)
 or a host override, not the formula result. Native metadata export is host-local,
 also available through `blueprint export --parameters` in the CLI. This concerns
 caller-supplied opaque strings, not the separately supported typed Constant
-count/Arithmetic-operand formula path. One user-returned final Factorio 2.1.21 placement export for
+count/Arithmetic-operand/Decider-threshold formula path. One user-returned final Factorio 2.1.21 placement export for
 the generated typed `(x * 2)` case records normal virtual A=9 and B=18 at
 Amount=9 ([fixture](../fixtures/blueprint-exchange/factorio-2.1.21/generated-number-formula-placed.txt)).
 That bounded observation does not validate caller-supplied strings, other
-operators or functions, Arithmetic formula placement, save/reopen, or wired
-layouts; current mods were unspecified and the export has no `wires` field. See
+operators or functions, Arithmetic or Decider formula placement, save/reopen, or
+wired layouts; current mods were unspecified and the export has no `wires` field.
+No native Decider formula placement evidence is recorded. See
 the [typed formula contract](api/parameters.md#bounded-typed-native-numeric-formulas)
 for the distinction from Factorio's broader MathExpression grammar.
 
@@ -511,9 +514,11 @@ filter count, Arithmetic constant operand (`left` or `right`), Selector
 `select` numeric index, or Decider constant-right comparison threshold in exact
 `Decider`, `when`, or `IF`, including leaves of nested AND/OR conditions.
 Registered expressions have a separate bounded native-formula contract for
-exact Arithmetic constant operands and direct Constant filter counts; each
-formula dependency must also have an independent direct use in one of those
-slots. Its explicit default is also its native original and must be an integer
+exact Arithmetic constant operands, direct Constant filter counts and
+constant-right Decider thresholds; each formula dependency must also have an
+independent direct use in one of those slots. Formula mode accepts only linked
+Constant, Arithmetic and Decider producers, while the native Signal gate remains
+Constant-only. Its explicit default is also its native original and must be an integer
 in [-2147483648, 2147483647]; it is not
 wrapped, rounded or allocated automatically. A zero count remains an explicit
 filter, and the native original string is `"0"`, including for a default of
@@ -527,8 +532,8 @@ For valid captured compilations, unsupported declarations or uses fail
 atomically with `CP1002`, a declaration or device-call source span, and a
 semantic path. Signal and unused parameters, symbolic Decider outputs (including
 else outputs), Selector Signal indices/count outputs, symbolic multipliers,
-and derived Decider-threshold or Selector-index expressions remain outside this
-subset and fail with `CP1002` even when their local results are
+and derived Selector-index expressions remain outside this subset and fail with
+`CP1002` even when their local results are
 constant-equivalent. A marked Decider threshold is tracked by its
 exact comparison-leaf path in the authenticated capture and concrete producer.
 The existing bounded native condition expansion identifies every emitted row of
@@ -564,8 +569,8 @@ persisted. It does not change source/test drafts or provide overrides.
 See [source export CLI](blueprint-json.md#source-export-cli) for prototype selection
 and file/stdout conventions. Existing parameter-free export bytes are
 unchanged. This native-export subset preserves explicit numeric formula
-strings, supports bounded typed formulas in exact Arithmetic constant operands
-and direct Constant count slots, and supports bounded Constant Signal
+strings, supports bounded typed formulas in exact Arithmetic constant operands,
+direct Constant count slots and constant-right Decider thresholds, and supports bounded Constant Signal
 placeholders. It does not add native parameter indices, recipe/property
 dependencies, other Signal slots or multiplier substitution.
 Concrete Worker binding and the parameter controls are

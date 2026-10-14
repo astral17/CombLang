@@ -473,6 +473,16 @@ export function exportSourceCompilationNativeBlueprint(
   const directNativeNumericParameters = new Set<BlueprintParameterHandle>();
   type PendingNativeNumericFormula =
     | {
+        readonly kind: 'decider-threshold-expression';
+        readonly captureId: string;
+        readonly conditionPath: readonly number[];
+        readonly expression: unknown;
+        readonly dependencies: readonly BlueprintParameterHandle[];
+        readonly path: string;
+        readonly source: SourceSpan;
+        readonly session: ReturnType<typeof inspectConstantConfigurationTemplate>['session'];
+      }
+    | {
         readonly kind: 'arithmetic-operand-expression';
         readonly captureId: string;
         readonly side: 'first' | 'second';
@@ -559,6 +569,11 @@ export function exportSourceCompilationNativeBlueprint(
         conditionPath: readonly number[];
         parameter: BlueprintParameterHandle;
       }
+    | {
+        kind: 'decider-threshold-expression';
+        conditionPath: readonly number[];
+        measured: MeasuredNativeNumericFormula;
+      }
   ))[] = [];
   state.source.selectorTemplates.forEach((capture, captureIndex) => {
     const path = `$.selectorTemplates[${captureIndex}]`;
@@ -632,16 +647,59 @@ export function exportSourceCompilationNativeBlueprint(
       if (condition.right.kind !== 'constant') return;
       const operandPath = `${conditionSourcePath}.right.value`;
       if (isRegisteredBlueprintNumericExpression(condition.right.value)) {
-        reject(
-          operandPath,
-          'native source export does not support expression thresholds.',
-          capture.source,
-        );
+        let inspection;
+        try {
+          inspection = inspectRegisteredBlueprintNumericExpression(
+            registration.session,
+            condition.right.value,
+            operandPath,
+          );
+        } catch (error) {
+          if (error instanceof BlueprintParameterError) {
+            reject(
+              operandPath,
+              'native numeric formula export requires an authenticated expression owned by this compilation.',
+              capture.source,
+            );
+          }
+          throw error;
+        }
+        if (inspection.dependencies.length === 0) {
+          reject(
+            operandPath,
+            'native numeric formulas require at least one number parameter dependency.',
+            inspection.source ?? capture.source,
+          );
+        }
+        if (formulaSession !== undefined && formulaSession !== registration.session) {
+          reject(
+            operandPath,
+            'native numeric formulas must belong to one compilation parameter session.',
+            capture.source,
+          );
+        }
+        formulaSession = registration.session;
+        for (const dependency of inspection.dependencies) {
+          accepted.add(dependency);
+          used.add(dependency);
+        }
+        pendingNativeNumericFormulas.push({
+          kind: 'decider-threshold-expression',
+          captureId: capture.captureId,
+          conditionPath,
+          expression: condition.right.value,
+          dependencies: inspection.dependencies,
+          path: operandPath,
+          source: inspection.source ?? capture.source,
+          session: registration.session,
+        });
+        return;
       }
       const parameter = canonicalBlueprintParameterHandle(condition.right.value);
       if (parameter !== undefined && parameter.kind === 'number') {
         accepted.add(parameter);
         used.add(parameter);
+        directNativeNumericParameters.add(parameter);
         occurrences.push({
           kind: 'decider-threshold',
           conditionPath,
@@ -925,7 +983,7 @@ export function exportSourceCompilationNativeBlueprint(
         if (!directNativeNumericParameters.has(dependency)) {
           reject(
             formula.path,
-            `formula dependency ${JSON.stringify(declaration.label)} must also occur as a direct Constant count or Arithmetic constant operand.`,
+            `formula dependency ${JSON.stringify(declaration.label)} must also occur as a direct Constant count or Arithmetic constant operand; a direct Decider right threshold is also accepted.`,
             formula.source,
           );
         }
@@ -933,11 +991,16 @@ export function exportSourceCompilationNativeBlueprint(
     }
     const producers = compilation.resolvedCircuit.ir.producers;
     if (
-      producers.some((producer) => producer.kind !== 'constant' && producer.kind !== 'arithmetic')
+      producers.some(
+        (producer) =>
+          producer.kind !== 'constant' &&
+          producer.kind !== 'arithmetic' &&
+          producer.kind !== 'decider',
+      )
     ) {
       reject(
         firstFormula.path,
-        'native numeric formula export requires every producer to be Constant or Arithmetic.',
+        'native numeric formula export requires every producer to be Constant, Arithmetic or Decider.',
         firstFormula.source,
       );
     }
@@ -968,26 +1031,37 @@ export function exportSourceCompilationNativeBlueprint(
     for (const formula of pendingNativeNumericFormulas) {
       const measured = formulaRenderer.measure(formula.expression, formula.path);
       measuredNativeNumericFormulas.push(measured);
-      occurrences.push(
-        formula.kind === 'constant-count-expression'
-          ? {
-              kind: formula.kind,
-              captureId: formula.captureId,
-              sectionIndex: formula.sectionIndex,
-              filterIndex: formula.filterIndex,
-              measured,
-              path: formula.path,
-              source: formula.source,
-            }
-          : {
-              kind: formula.kind,
-              captureId: formula.captureId,
-              side: formula.side,
-              measured,
-              path: formula.path,
-              source: formula.source,
-            },
-      );
+      if (formula.kind === 'decider-threshold-expression') {
+        occurrences.push({
+          kind: formula.kind,
+          captureId: formula.captureId,
+          conditionPath: formula.conditionPath,
+          measured,
+          path: formula.path,
+          source: formula.source,
+        });
+      } else {
+        occurrences.push(
+          formula.kind === 'constant-count-expression'
+            ? {
+                kind: formula.kind,
+                captureId: formula.captureId,
+                sectionIndex: formula.sectionIndex,
+                filterIndex: formula.filterIndex,
+                measured,
+                path: formula.path,
+                source: formula.source,
+              }
+            : {
+                kind: formula.kind,
+                captureId: formula.captureId,
+                side: formula.side,
+                measured,
+                path: formula.path,
+                source: formula.source,
+              },
+        );
+      }
     }
   }
   const numberOriginals = new Map<number, SourceCompilationParameter>();
@@ -1157,7 +1231,10 @@ export function exportSourceCompilationNativeBlueprint(
       }
       continue;
     }
-    if (occurrence.kind === 'decider-threshold') {
+    if (
+      occurrence.kind === 'decider-threshold' ||
+      occurrence.kind === 'decider-threshold-expression'
+    ) {
       const behavior = entity?.native.control_behavior as
         | {
             readonly decider_conditions?: {
@@ -1197,14 +1274,21 @@ export function exportSourceCompilationNativeBlueprint(
         leaf = leaf?.kind === 'compare' ? undefined : leaf?.conditions[index];
       }
       const rows = leaf?.kind === 'compare' ? indices.get(leaf) : undefined;
+      const expected =
+        occurrence.kind === 'decider-threshold-expression'
+          ? occurrence.measured.defaultValue
+          : defaults.get(occurrence.parameter);
       if (
         rows === undefined ||
         rows.length === 0 ||
-        rows.some((index) => conditions?.[index]?.constant !== defaults.get(occurrence.parameter))
+        typeof expected !== 'number' ||
+        rows.some((index) => conditions?.[index]?.constant !== expected)
       ) {
         reject(
           occurrence.path,
-          'marked Decider threshold did not survive native row projection unchanged.',
+          occurrence.kind === 'decider-threshold-expression'
+            ? 'marked Decider expression did not survive native row projection at its evaluated default.'
+            : 'marked Decider threshold did not survive native row projection unchanged.',
           occurrence.source,
         );
       }

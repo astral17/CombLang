@@ -1067,15 +1067,22 @@ output += Constant({ sections: [{ filters: [
     expect(error).not.toHaveBeenCalled();
   });
 
-  test('exports typed Constant and Arithmetic formulas and keeps unsupported metadata export atomic', async () => {
+  test('exports typed Constant, Arithmetic and final fluent Decider formulas and keeps failures atomic', async () => {
     const { environment } = await parameterHost();
-    const formulaSource = `const amount = Param.number('Amount', 5, { variable: 'x' });
+    const formulaSource = `const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const amount = Param.number('Amount', 5, { variable: 'x' });
 const input = new Network(), output = new Network();
 output += Constant({ sections: [{ filters: [
-  { signal: Signal('virtual', 'signal-A'), value: amount },
-  { signal: Signal('virtual', 'signal-B'), value: amount * 2 },
+  { signal: A, value: amount },
+  { signal: B, value: amount * 2 },
 ] }] });
-output += Arithmetic({ left: amount, operation: 'add', right: (amount * 2 + 3) * 5, output: Signal('virtual', 'signal-C') });`;
+output += Arithmetic({ left: amount, operation: 'add', right: (amount * 2 + 3) * 5, output: Signal('virtual', 'signal-C') });
+const gate = when(input[A] > amount && input[A] < amount * 3).at(4, 5, 2).then(input[A]);
+output += gate;
+gate.else(2 * B);
+gate.then(3 * B);
+gate.else(4 * B);`;
     const path = await sourceFile(formulaSource);
     const nativePath = join(dirname(path), 'typed-formula-native.json');
     const concretePath = join(dirname(path), 'typed-formula-concrete.json');
@@ -1091,6 +1098,7 @@ output += Arithmetic({ left: amount, operation: 'add', right: (amount * 2 + 3) *
     const native = JSON.parse(await readFile(nativePath, 'utf8'));
     expect(native.blueprint.parameters).toEqual([
       { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '15', formula: '(x * 3)', dependent: true },
       { type: 'number', number: '65', formula: '(((x * 2) + 3) * 5)', dependent: true },
       { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
     ]);
@@ -1116,6 +1124,23 @@ output += Arithmetic({ left: amount, operation: 'add', right: (amount * 2 + 3) *
       first_constant: 5,
       second_constant: 65,
     });
+    expect(native.blueprint.entities[2]).toMatchObject({
+      position: { x: 4, y: 5 },
+      direction: 2,
+      control_behavior: {
+        decider_conditions: {
+          conditions: [{ constant: 5 }, { constant: 15 }],
+          outputs: [
+            { copy_count_from_input: true, signal: { name: 'signal-A' } },
+            { constant: 3, signal: { name: 'signal-B' } },
+          ],
+          else_outputs: [
+            { constant: 2, signal: { name: 'signal-B' } },
+            { constant: 4, signal: { name: 'signal-B' } },
+          ],
+        },
+      },
+    });
     expect(
       await run(['blueprint', 'export', '--json', '--output', concretePath, path], environment),
     ).toBe(0);
@@ -1136,6 +1161,9 @@ output += Arithmetic({ left: amount, operation: 'add', right: (amount * 2 + 3) *
       first_constant: 5,
       second_constant: 65,
     });
+    expect(
+      concrete.blueprint.entities[2].control_behavior.decider_conditions.conditions,
+    ).toMatchObject([{ constant: 5 }, { constant: 15 }]);
 
     expect(
       await run(['blueprint', 'export', '--json', '--overrides', overridesPath, path], environment),
@@ -1150,13 +1178,14 @@ output += Arithmetic({ left: amount, operation: 'add', right: (amount * 2 + 3) *
       first_constant: 9,
       second_constant: 105,
     });
+    expect(
+      overridden.blueprint.entities[2].control_behavior.decider_conditions.conditions,
+    ).toMatchObject([{ constant: 9 }, { constant: 27 }]);
 
     const rejectedSource = formulaSource
-      .replace("{ signal: Signal('virtual', 'signal-A'), value: amount },\n  ", '')
-      .replace(
-        'left: amount, operation:',
-        "left: input[Signal('virtual', 'signal-A')], operation:",
-      );
+      .replace('{ signal: A, value: amount },\n  ', '')
+      .replace('left: amount, operation:', "left: input[Signal('virtual', 'signal-A')], operation:")
+      .replace('input[A] > amount && input[A] < amount * 3', 'input[A] > amount * 3');
     const rejectedPath = await sourceFile(rejectedSource, 'unsupported-formula.factorio.ts');
     const rejectedOutput = join(dirname(rejectedPath), 'must-not-exist.json');
     expect(
@@ -1170,7 +1199,7 @@ output += Arithmetic({ left: amount, operation: 'add', right: (amount * 2 + 3) *
       ok: false,
       error: {
         code: 'CP1002',
-        path: '$.arithmeticTemplates[0].right.value',
+        path: '$.deciderTemplates[0].condition.right.value',
         span: { start: expect.any(Number), end: expect.any(Number) },
       },
     });
