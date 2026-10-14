@@ -1478,12 +1478,12 @@ output += Constant({ sections: [{ filters: [{ signal: A, value: 2 }] }] });`,
             file: {
               path: 'worker-selector-index-formula.factorio.ts',
               text: `globalThis.${localExpressionRunKey} = Number(globalThis.${localExpressionRunKey} ?? 0) + 1;
-const amount = Param.number('Amount', 5, { variable: 'x' });
+const amount = Param.number('Amount', 10, { variable: 'x' });
 const input = new Network();
 const directOutput = new Network();
 const formulaOutput = new Network();
 directOutput += Selector({ input, operation: 'select', index: amount });
-formulaOutput += Selector({ input, operation: 'select', index: amount + 1 });`,
+formulaOutput += Selector({ input, operation: 'select', index: amount / 2 + 3 });`,
             },
             parameterBinding: true,
             blueprintExport: { parameters: true },
@@ -1497,8 +1497,8 @@ formulaOutput += Selector({ input, operation: 'select', index: amount + 1 });`,
         throw new Error('Expected a successful Worker native-template export.');
       }
       expect(parsed.result.blueprintExport.document.blueprint.parameters).toEqual([
-        { type: 'number', number: '5', name: 'Amount', variable: 'x' },
-        { type: 'number', number: '6', formula: '(x + 1)', dependent: true },
+        { type: 'number', number: '10', name: 'Amount', variable: 'x' },
+        { type: 'number', number: '8', formula: '((x / 2) + 3)', dependent: true },
       ]);
       expect(
         parsed.result.blueprintExport.document.blueprint.entities.map(({ control_behavior }) =>
@@ -1508,7 +1508,7 @@ formulaOutput += Selector({ input, operation: 'select', index: amount + 1 });`,
             ? control_behavior.index_constant
             : undefined,
         ),
-      ).toEqual([5, 6]);
+      ).toEqual([10, 8]);
 
       const binding = parsed.parameterBinding;
       if (binding?.ok !== true || binding.token === undefined) {
@@ -1530,13 +1530,18 @@ formulaOutput += Selector({ input, operation: 'select', index: amount + 1 });`,
         return response.result;
       };
       const defaults = concrete(bind());
-      const overridden = concrete(bind(9));
+      const overridden = concrete(bind(14));
       const invalid = bind(1.5);
       expect(invalid.result).toMatchObject({
         ok: false,
         diagnostics: [{ code: 'CP1000', span: binding.parameters[0]!.source }],
       });
-      const retry = concrete(bind(9));
+      const fractional = bind(11);
+      expect(fractional.result).toMatchObject({
+        ok: false,
+        diagnostics: [expect.objectContaining({ code: 'CP1000', span: expect.any(Object) })],
+      });
+      const retry = concrete(bind(14));
       const reset = concrete(bind());
       const indices = (pair: typeof defaults) =>
         pair.plan.producers
@@ -1546,8 +1551,8 @@ formulaOutput += Selector({ input, operation: 'select', index: amount + 1 });`,
               ? producer.index
               : undefined,
           );
-      expect(indices(defaults)).toEqual([5, 6]);
-      expect(indices(overridden)).toEqual([9, 10]);
+      expect(indices(defaults)).toEqual([10, 8]);
+      expect(indices(overridden)).toEqual([14, 10]);
       expect(retry.plan).toEqual(overridden.plan);
       expect(reset.plan).toEqual(defaults.plan);
       expect(defaults.resolvedCircuit.ir.producers.map(({ id }) => id)).toEqual(
@@ -1562,7 +1567,7 @@ formulaOutput += Selector({ input, operation: 'select', index: amount + 1 });`,
             ? control_behavior.index_constant
             : undefined,
         ),
-      ).toEqual([9, 10]);
+      ).toEqual([14, 10]);
       expect(artifact.blueprint.blueprint).not.toHaveProperty('parameters');
       expect(globals[localExpressionRunKey]).toBe(1);
     } finally {

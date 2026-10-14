@@ -2384,9 +2384,11 @@ class ElaborationRecorder {
               ? 'subtract'
               : operator === '*'
                 ? 'multiply'
-                : undefined;
+                : operator === '/'
+                  ? 'divide'
+                  : undefined;
         if (expressionOperator === undefined) {
-          throw new Error('Source numeric expressions support only +, -, and * operators.');
+          throw new Error('Source numeric expressions support only +, -, *, and / operators.');
         }
         this.#recordDslCall();
         const expression = createBlueprintNumericExpression(this.#parameterCapture.session, {

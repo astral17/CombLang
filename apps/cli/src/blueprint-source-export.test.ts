@@ -1067,17 +1067,17 @@ output += Constant({ sections: [{ filters: [
     expect(error).not.toHaveBeenCalled();
   });
 
-  test('exports and binds numeric Selector formulas through the CLI without publishing failed metadata', async () => {
+  test('exports and binds divided numeric Selector formulas without publishing failures', async () => {
     const { environment } = await parameterHost();
-    const path = await sourceFile(`const amount = Param.number('Amount', 5, { variable: 'x' });
+    const path = await sourceFile(`const amount = Param.number('Amount', 10, { variable: 'x' });
 const input = new Network();
 const directOutput = new Network();
 const formulaOutput = new Network();
 directOutput += Selector({ input, operation: 'select', index: amount });
-formulaOutput += Selector({ input, operation: 'select', index: amount + 1 });`);
+formulaOutput += Selector({ input, operation: 'select', index: amount / 2 + 3 });`);
     const nativePath = join(dirname(path), 'selector-formula-native.json');
     const overridesPath = join(dirname(path), 'selector-formula-overrides.json');
-    await writeFile(overridesPath, JSON.stringify([{ id: 0, value: 9 }]));
+    await writeFile(overridesPath, JSON.stringify([{ id: 0, value: 14 }]));
     const { log, error } = capture();
 
     expect(
@@ -1088,15 +1088,15 @@ formulaOutput += Selector({ input, operation: 'select', index: amount + 1 });`);
     ).toBe(0);
     const native = JSON.parse(await readFile(nativePath, 'utf8'));
     expect(native.blueprint.parameters).toEqual([
-      { type: 'number', number: '5', name: 'Amount', variable: 'x' },
-      { type: 'number', number: '6', formula: '(x + 1)', dependent: true },
+      { type: 'number', number: '10', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '8', formula: '((x / 2) + 3)', dependent: true },
     ]);
     expect(
       native.blueprint.entities.map(
         ({ control_behavior }: { control_behavior: { index_constant?: number } }) =>
           control_behavior.index_constant,
       ),
-    ).toEqual([5, 6]);
+    ).toEqual([10, 8]);
 
     expect(
       await run(['blueprint', 'export', '--json', '--overrides', overridesPath, path], environment),
@@ -1108,7 +1108,30 @@ formulaOutput += Selector({ input, operation: 'select', index: amount + 1 });`);
         ({ control_behavior }: { control_behavior: { index_constant?: number } }) =>
           control_behavior.index_constant,
       ),
-    ).toEqual([9, 10]);
+    ).toEqual([14, 10]);
+
+    await writeFile(overridesPath, JSON.stringify([{ id: 0, value: 11 }]));
+    const failedOutput = join(dirname(path), 'selector-formula-fractional.json');
+    expect(
+      await run(
+        [
+          'blueprint',
+          'export',
+          '--json',
+          '--overrides',
+          overridesPath,
+          '--output',
+          failedOutput,
+          path,
+        ],
+        environment,
+      ),
+    ).toBe(2);
+    expect(JSON.parse(String(log.mock.calls.at(-1)?.[0]))).toMatchObject({
+      ok: false,
+      error: { code: 'CP1000', span: expect.any(Object) },
+    });
+    await expect(stat(failedOutput)).rejects.toMatchObject({ code: 'ENOENT' });
 
     const rejectedPath = await sourceFile(
       `const amount = Param.number('Amount', 5, { variable: 'x' });

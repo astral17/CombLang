@@ -1862,10 +1862,22 @@ const result = amount * input[Signal('virtual', 'signal-A')];`,
         anchor: 'amount * input',
       },
       {
-        name: 'unsupported arithmetic operator',
+        name: 'unsupported modulo operator',
         text: `const amount = Param.number('Amount', 5);
-const result = amount / 1;`,
-        anchor: 'amount / 1',
+const result = amount % 1;`,
+        anchor: 'amount % 1',
+      },
+      {
+        name: 'unsupported power operator',
+        text: `const amount = Param.number('Amount', 5);
+const result = amount ** 2;`,
+        anchor: 'amount ** 2',
+      },
+      {
+        name: 'unsupported bitwise operator',
+        text: `const amount = Param.number('Amount', 5);
+const result = amount & 1;`,
+        anchor: 'amount & 1',
       },
       {
         name: 'control flow',
@@ -1962,6 +1974,116 @@ output += Constant({ sections: [{ multiplier: scale * 0.5, filters: [{ signal: A
     });
   });
 
+  test('binds division across reviewed local slots with located failures and reusable topology', () => {
+    const key = '__comblang_division_expression_source_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const had = Object.hasOwn(globals, key);
+    const before = globals[key];
+    globals[key] = 0;
+    const text = `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 10);
+const denominator = Param.number('Denominator', 5);
+const input = new Network();
+const arithmeticOutput = new Network();
+const constantOutput = new Network();
+const exactOutput = new Network();
+const ifOutput = new Network();
+const fluentOutput = new Network();
+const selectorOutput = new Network();
+const derived = amount / 2 + 3;
+arithmeticOutput += Arithmetic({ left: derived, operation: 'add', right: 0, output: A });
+constantOutput += Constant({ sections: [{ multiplier: amount / 4, filters: [{ signal: A, value: derived }] }] });
+exactOutput += Decider({ condition: input[A] > derived, outputs: [input[A]] });
+ifOutput += IF(input[A] > derived, input[A]);
+fluentOutput += when(input[A] > derived).then(input[A]);
+selectorOutput += Selector({ input, operation: 'select', index: amount / 2 });
+selectorOutput += Selector({ input, operation: 'select', index: 20 / denominator });`;
+    try {
+      const compilation = compileSourceProgram(
+        { path: 'division-parameter-slots.factorio.ts', text },
+        parameterHost(),
+        [],
+        (stage) => {
+          if (stage === 'execute') globals[key] = Number(globals[key]) + 1;
+        },
+      );
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      expect(globals[key]).toBe(1);
+      const [amount, denominator] = listSourceCompilationParameters(compilation);
+      const artifact = structuredClone(sourceCompilationArtifact(compilation));
+      const originalIr = structuredClone(compilation.execution?.circuit.ir);
+      const defaults = bindSourceCompilationCircuit(compilation);
+      const overridden = bindSourceCompilationCircuit(compilation, [
+        { parameter: amount!.parameter, value: 14 },
+      ]);
+      const values = (pair: ReturnType<typeof bindSourceCompilationCircuit>) => ({
+        arithmetic: pair.plan.producers.find(({ kind }) => kind === 'arithmetic'),
+        constant: pair.plan.producers.find(({ kind }) => kind === 'constant'),
+        deciders: pair.plan.producers.filter(({ kind }) => kind === 'decider'),
+        selectors: pair.plan.producers.filter(({ kind }) => kind === 'selector'),
+      });
+      const defaultValues = values(defaults);
+      const reboundValues = values(overridden);
+      expect(defaultValues.arithmetic).toMatchObject({ left: { kind: 'constant', value: 8 } });
+      expect(defaultValues.constant).toMatchObject({
+        configuration: { sections: [{ multiplier: 2.5, filters: [{ value: 8 }] }] },
+      });
+      expect(defaultValues.deciders).toHaveLength(3);
+      for (const producer of defaultValues.deciders) {
+        expect(producer).toMatchObject({ condition: { constant: 8 } });
+      }
+      expect(defaultValues.selectors).toMatchObject([
+        { operation: 'select', index: 5 },
+        { operation: 'select', index: 4 },
+      ]);
+      expect(reboundValues.arithmetic).toMatchObject({ left: { kind: 'constant', value: 10 } });
+      expect(reboundValues.constant).toMatchObject({
+        configuration: { sections: [{ multiplier: 3.5, filters: [{ value: 10 }] }] },
+      });
+      for (const producer of reboundValues.deciders) {
+        expect(producer).toMatchObject({ condition: { constant: 10 } });
+      }
+      expect(reboundValues.selectors).toMatchObject([
+        { operation: 'select', index: 7 },
+        { operation: 'select', index: 4 },
+      ]);
+
+      const failLocated = (
+        bindings: Parameters<typeof bindSourceCompilationCircuit>[1],
+        source: { readonly fileId: string; readonly start: number; readonly end: number },
+      ) => {
+        try {
+          bindSourceCompilationCircuit(compilation, bindings);
+        } catch (error) {
+          expect(error).toMatchObject({ code: 'CP1000', span: source });
+          return;
+        }
+        throw new Error('Expected a located invalid division result.');
+      };
+      failLocated([{ parameter: amount!.parameter, value: 11 }], amount!.source);
+      failLocated([{ parameter: denominator!.parameter, value: 0 }], denominator!.source);
+
+      const retry = bindSourceCompilationCircuit(compilation, [
+        { parameter: amount!.parameter, value: 14 },
+      ]);
+      expect(retry).toEqual(overridden);
+      expect(retry.resolvedCircuit.ir.producers.map(({ id }) => id)).toEqual(
+        defaults.resolvedCircuit.ir.producers.map(({ id }) => id),
+      );
+      expect(
+        retry.resolvedCircuit.ir.entities.map(({ id, placement }) => ({ id, placement })),
+      ).toEqual(
+        defaults.resolvedCircuit.ir.entities.map(({ id, placement }) => ({ id, placement })),
+      );
+      expect(sourceCompilationArtifact(compilation)).toEqual(artifact);
+      expect(compilation.execution?.circuit.ir).toEqual(originalIr);
+      expect(globals[key]).toBe(1);
+    } finally {
+      if (had) globals[key] = before;
+      else delete globals[key];
+    }
+  });
+
   test('preserves parameter-free JavaScript arithmetic, comparison and short-circuit order', () => {
     const key = '__comblang_parameter_free_operator_semantics';
     const globals = globalThis as Record<string, unknown>;
@@ -1972,10 +2094,10 @@ output += Constant({ sections: [{ multiplier: scale * 0.5, filters: [{ signal: A
         path: 'parameter-free-operators.factorio.ts',
         text: `let calls = 0;
 function sideEffect() { calls += 1; return true; }
-globalThis.${key} = ['a' + 'b', 1 < 2, false && sideEffect(), calls];`,
+globalThis.${key} = ['a' + 'b', 20 / 4, 1 < 2, false && sideEffect(), calls];`,
       });
       expect(compilation.pipelineDiagnostics).toEqual([]);
-      expect(globals[key]).toEqual(['ab', true, false, 0]);
+      expect(globals[key]).toEqual(['ab', 5, true, false, 0]);
     } finally {
       if (had) globals[key] = before;
       else delete globals[key];
@@ -2081,7 +2203,7 @@ output += Arithmetic({ left: input[A], operation: 'add', right: amount, output: 
     const unsupported = [
       `const amount = Param.number('Amount', 5); if (amount) {}`,
       `const amount = Param.number('Amount', 5); const gate = !amount; if (gate) {}`,
-      `const amount = Param.number('Amount', 5); amount / 1;`,
+      `const amount = Param.number('Amount', 5); amount % 1;`,
       `const amount = Param.number('Amount', 5); const record = { [amount]: 1 };`,
       `const amount = Param.number('Amount', 5); for (let index = 0; index < amount; index++) {}`,
       `const amount = Param.number('Amount', 5); Number(amount);`,

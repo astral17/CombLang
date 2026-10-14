@@ -31,7 +31,11 @@ function literal(value: number) {
   return { kind: 'literal' as const, value };
 }
 
-function binary(operator: 'add' | 'subtract' | 'multiply', left: unknown, right: unknown) {
+function binary(
+  operator: 'add' | 'subtract' | 'multiply' | 'divide',
+  left: unknown,
+  right: unknown,
+) {
   return { kind: 'binary' as const, operator, left, right };
 }
 
@@ -59,6 +63,60 @@ describe('private native numeric formula renderer', () => {
     expect(result.measured.defaultValue).toBe(5);
   });
 
+  test('renders division with measured parentheses and distinct canonical identity', () => {
+    const { session, handles, renderer } = setup([{ name: 'x', value: 10 }]);
+    const halfPlusThree = createBlueprintNumericExpression(
+      session,
+      binary('add', binary('divide', parameter(handles.get('x')!), literal(2)), literal(3)),
+    );
+    const divideFirst = createBlueprintNumericExpression(
+      session,
+      binary('divide', parameter(handles.get('x')!), binary('add', literal(2), literal(3))),
+    );
+    const parameterOnRight = createBlueprintNumericExpression(
+      session,
+      binary('divide', literal(20), parameter(handles.get('x')!)),
+    );
+    const measured = [
+      renderer.measure(halfPlusThree, '$.first'),
+      renderer.measure(divideFirst, '$.second'),
+      renderer.measure(parameterOnRight, '$.third'),
+    ];
+    const formulas = renderer.renderUnique(measured);
+
+    expect(formulas.get(measured[0]!.key)).toBe('((x / 2) + 3)');
+    expect(formulas.get(measured[1]!.key)).toBe('(x / (2 + 3))');
+    expect(measured[0]!.renderedBytes).toBe('((x / 2) + 3)'.length);
+    expect(measured[1]!.renderedBytes).toBe('(x / (2 + 3))'.length);
+    expect(measured[0]!.defaultValue).toBe(8);
+    expect(measured[1]!.defaultValue).toBe(2);
+    expect(formulas.get(measured[2]!.key)).toBe('(20 / x)');
+    expect(measured[2]!.defaultValue).toBe(2);
+
+    const multiply = renderer.measure(
+      createBlueprintNumericExpression(
+        session,
+        binary('multiply', parameter(handles.get('x')!), literal(2)),
+      ),
+      '$.multiply',
+    );
+    expect(multiply.key).not.toBe(measured[0]!.key);
+    expect(renderer.renderUnique([multiply]).get(multiply.key)).toBe('(x * 2)');
+
+    const sameOperands = (['multiply', 'divide'] as const).map((operator) =>
+      renderer.measure(
+        createBlueprintNumericExpression(
+          session,
+          binary(operator, parameter(handles.get('x')!), literal(1)),
+        ),
+        '$.sameOperands',
+      ),
+    );
+    expect(sameOperands.map(({ defaultValue }) => defaultValue)).toEqual([10, 10]);
+    expect(sameOperands[0]!.key).not.toBe(sameOperands[1]!.key);
+    expect([...renderer.renderUnique(sameOperands).values()]).toEqual(['(x * 1)', '(x / 1)']);
+  });
+
   test('rejects forged roots and non-int32 literals with located CP1002', () => {
     const { session, handles, renderer } = setup([{ name: 'x', value: 5 }]);
     const forged = { kind: 'literal', value: 1 } as BlueprintNumericExpression;
@@ -79,6 +137,17 @@ describe('private native numeric formula renderer', () => {
     );
     expect(() => renderer.measure(invalidLiteral, '$.invalidLiteral')).toThrow(
       expect.objectContaining({ code: 'CP1002', path: '$.invalidLiteral' }),
+    );
+    const fractionalDefault = createBlueprintNumericExpression(
+      session,
+      binary('divide', parameter(handles.get('x')!), literal(2)),
+    );
+    expect(() => renderer.measure(fractionalDefault, '$.fractionalDefault')).toThrow(
+      expect.objectContaining({
+        code: 'CP1002',
+        path: '$.fractionalDefault',
+        message: expect.stringContaining('signed int32 integers'),
+      }),
     );
   });
 

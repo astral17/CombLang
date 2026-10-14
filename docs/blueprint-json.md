@@ -161,6 +161,10 @@ direct Constant count, Arithmetic constant operand, Decider right-threshold or
 Selector select-index use and an explicit variable. A user-returned Constant-only `(x * 2)`
 placement records A=9 and B=18 at Amount=9; see the
 [bounded native observation](api/parameters.md#bounded-typed-native-numeric-formulas).
+Registered `/` expressions use finite JavaScript-number division locally;
+zero denominators and fractional final integer slots fail with `CP1000`.
+Native projection retains the parenthesized division tree but remains structural
+and has no Factorio evaluation or placement evidence.
 Arithmetic, Decider and Selector formula placement and general formula validity
 remain unverified. Signal parameters
 are supported only for concrete virtual defaults with normal quality in direct

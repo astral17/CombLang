@@ -41,7 +41,7 @@ export interface BlueprintNumericNegateExpression extends NumericExpressionNodeB
   readonly operand: BlueprintNumericExpression;
 }
 
-export type BlueprintNumericBinaryOperator = 'add' | 'subtract' | 'multiply';
+export type BlueprintNumericBinaryOperator = 'add' | 'subtract' | 'multiply' | 'divide';
 
 export interface BlueprintNumericBinaryExpression extends NumericExpressionNodeBase {
   readonly kind: 'binary';
@@ -488,9 +488,10 @@ function visit(
     if (
       record.operator !== 'add' &&
       record.operator !== 'subtract' &&
-      record.operator !== 'multiply'
+      record.operator !== 'multiply' &&
+      record.operator !== 'divide'
     ) {
-      fail('CP1000', `${path}.operator`, 'expected add, subtract, or multiply.');
+      fail('CP1000', `${path}.operator`, 'expected add, subtract, multiply, or divide.');
     }
     const left = visit(record.left, `${path}.left`, depth + 1, state);
     const right = visit(record.right, `${path}.right`, depth + 1, state);
@@ -654,7 +655,9 @@ export function evaluateBlueprintNumericExpression(
             ? left.value + right.value
             : registered.node.operator === 'subtract'
               ? left.value - right.value
-              : left.value * right.value;
+              : registered.node.operator === 'multiply'
+                ? left.value * right.value
+                : left.value / right.value;
         const value = assertBlueprintParameterNumberValue(
           unvalidated,
           `${path}.value`,

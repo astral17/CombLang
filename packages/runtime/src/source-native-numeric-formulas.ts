@@ -91,7 +91,13 @@ export function createNativeNumericFormulaRenderer(
         return `(-${render(expression.operand, path, source)})`;
       case 'binary': {
         const operator =
-          expression.operator === 'add' ? '+' : expression.operator === 'subtract' ? '-' : '*';
+          expression.operator === 'add'
+            ? '+'
+            : expression.operator === 'subtract'
+              ? '-'
+              : expression.operator === 'multiply'
+                ? '*'
+                : '/';
         return `(${render(expression.left, path, source)} ${operator} ${render(expression.right, path, source)})`;
       }
     }

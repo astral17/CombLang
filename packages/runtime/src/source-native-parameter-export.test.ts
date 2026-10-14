@@ -1657,6 +1657,63 @@ output += Constant({ sections: [{ filters: [
     expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
   });
 
+  test('exports divided formula defaults exactly and rejects same-original collisions', () => {
+    const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const amount = Param.number('Amount', 10, { variable: 'x' });
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: A, value: amount },
+  { signal: B, value: (amount / 2) + 3 },
+] }] });`);
+    const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '10', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '8', formula: '((x / 2) + 3)', dependent: true },
+    ]);
+    expect(emitNativeBlueprintJson(native).blueprint.entities[0]!.control_behavior).toMatchObject({
+      sections: { sections: [{ filters: [{ count: 10 }, { count: 8 }] }] },
+    });
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
+    const amount = sourceApi.listSourceCompilationParameters(compilation)[0]!.parameter;
+    const bound = sourceApi.bindSourceCompilationCircuit(compilation, [
+      { parameter: amount, value: 14 },
+    ]);
+    expect(bound.plan.producers[0]).toMatchObject({
+      configuration: { sections: [{ filters: [{ value: 14 }, { value: 10 }] }] },
+    });
+    expect(generateBlueprintJson(bound.resolvedCircuit.ir).blueprint).not.toHaveProperty(
+      'parameters',
+    );
+
+    const collision = compile(`const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const C = Signal('virtual', 'signal-C');
+const amount = Param.number('Amount', 10, { variable: 'x' });
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: A, value: amount },
+  { signal: B, value: amount / 2 + 3 },
+  { signal: C, value: amount - 2 },
+] }] });`);
+    expect(exportFailure(collision)).toMatchObject({ code: 'CP1002' });
+
+    const rightSide = compile(`const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: A, value: amount },
+  { signal: B, value: 20 / amount },
+] }] });`);
+    const rightSideNative = sourceApi.exportSourceCompilationNativeBlueprint(rightSide, options);
+    expect(rightSideNative.parameters).toEqual([
+      { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '4', formula: '(20 / x)', dependent: true },
+    ]);
+  });
+
   test('keeps the documented native Arithmetic formula example executable', () => {
     const page = readFileSync(new URL('../../../docs/api/parameters.md', import.meta.url), 'utf8');
     const source = page.match(

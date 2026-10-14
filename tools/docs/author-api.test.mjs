@@ -113,6 +113,40 @@ describe('author API documentation', () => {
     ]);
   });
 
+  test('runs the documented bounded division default, override, failure, and native projection', async () => {
+    const source = read('parameters').match(
+      /### Bounded division example[\s\S]*?```javascript\r?\n([\s\S]*?)\r?\n```/,
+    )?.[1];
+    if (source === undefined) throw new Error('Missing bounded division example');
+    const compilation = compile(source, await bundled);
+    const session = createSourceParameterBindingSession(compilation);
+    const amount = session.parameters[0];
+    if (amount === undefined) throw new Error('Missing documented Amount parameter');
+
+    const native = exportSourceCompilationNativeBlueprint(compilation, {
+      label: 'Documented division formula',
+      maxDeciderConditionRows: 1024,
+    });
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '10', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '8', formula: '((x / 2) + 3)', dependent: true },
+    ]);
+    const defaults = generateBlueprintJson(compilation.resolvedCircuit.ir).blueprint;
+    const bound = session.bind([{ id: amount.id, value: 14 }]);
+    const overridden = generateBlueprintJson(bound.resolvedCircuit.ir).blueprint;
+    expect(
+      defaults.entities[0].control_behavior.sections.sections[0].filters.map(({ count }) => count),
+    ).toEqual([10, 8]);
+    expect(
+      overridden.entities[0].control_behavior.sections.sections[0].filters.map(
+        ({ count }) => count,
+      ),
+    ).toEqual([14, 10]);
+    expect(() => session.bind([{ id: amount.id, value: 11 }])).toThrow(
+      expect.objectContaining({ code: 'CP1000' }),
+    );
+  });
+
   test.each(pages)('provides the standalone %s reference contract', (name) => {
     expect(existsSync(pageUrl(name))).toBe(true);
     const page = read(name);
@@ -329,7 +363,7 @@ expectSignal(network('output'), Signal('virtual', 'signal-B')).toBe(111);`,
     ).toMatchObject({ passed: 1, failed: 0 });
   });
 
-  test.each(['amount / 1;', '5 * result;', 'input + amount;', 'amount.defaultValue;'])(
+  test.each(['amount % 1;', '5 * result;', 'input + amount;', 'amount.defaultValue;'])(
     'does not give opaque source parameters unsupported ordinary-value APIs: %s',
     async (suffix) => {
       const compilation = result(`${blocks('parameters')[0]}\n${suffix}`, await bundled);

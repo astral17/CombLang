@@ -329,7 +329,10 @@ formed from owning number parameters and finite numbers are also accepted in
 exact `left`/`right` constant slots, using the existing local numeric DAG without
 extra hardware or source re-execution. Registered expressions are also accepted
 in numeric `index` of a Selector `select` configuration with the same local
-binding behavior. These expressions do not enable Network property keys,
+binding behavior. Binary `/` uses finite JavaScript-number division in this local
+configuration DAG, not Factorio device arithmetic; intermediate fractions are
+allowed, but each final field keeps its integer or finite-double rule. A zero
+denominator fails with a located error. These expressions do not enable Network property keys,
 `input + amount`, compact `IF`/`when` outputs, dynamic operations or coercion.
 Concrete Signal and `Each` output behavior is unchanged.
 

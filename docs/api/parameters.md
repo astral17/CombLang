@@ -62,7 +62,11 @@ in several fields, its chosen value must satisfy every field's rules. Values
 are not rounded or clamped to make a failed binding pass.
 
 A number parameter may form a local source expression with finite numbers and
-other owning number parameters using binary `+`, `-`, `*` or unary `-`. The
+other owning number parameters using binary `+`, `-`, `*`, `/` or unary `-`.
+Division uses finite JavaScript-number semantics inside this configuration DAG,
+not Factorio device arithmetic; a zero denominator produces a non-finite result
+and a located `CP1000` error. Fractions are allowed at intermediate nodes, while
+the final destination still applies the integer or finite-double rule above. The
 opaque result is evaluated by the registered numeric DAG only when it occupies
 an exact Arithmetic `left` or `right` constant slot, a direct Constant filter
 count, a Constant section multiplier, the right-hand numeric threshold of an
@@ -71,7 +75,8 @@ condition (including nested AND/OR conditions), or a Selector `select` index.
 It creates no device and does not re-execute source during binding. Count,
 threshold and Selector-index results must be finite safe integers before existing signed-int32
 normalization; multipliers remain finite doubles. Parameter-free JavaScript
-arithmetic remains ordinary JavaScript. Derived expressions are not booleans,
+arithmetic remains ordinary JavaScript. `%`, exponentiation and bitwise operators
+remain unsupported for symbolic expressions. Derived expressions are not booleans,
 circuit Conditions or native formula strings.
 
 A Signal parameter in a Selector index changes which input Signal provides the
@@ -253,9 +258,11 @@ Selector numeric select index, and must not itself declare `formula` (even an
 empty string) or `dependent: true`. Typed formula export requires a linked
 physical circuit containing only Constant, Arithmetic, Decider and Selector
 producers. It
-accepts only signed-int32 literals/defaults and the registered `+`, `-`, `*` and
-unary-negation nodes; output is fully parenthesized without folding or
-reassociation and respects bounded node and byte limits. Repeated identical
+accepts only signed-int32 literals/defaults and registered `+`, `-`, `*`, `/` and
+unary-negation nodes. The raw evaluated default must itself be signed int32 and
+match its physical field; fractional or wrapped defaults are rejected. Output is
+fully parenthesized without folding or reassociation and respects bounded node
+and byte limits. Repeated identical
 default/formula pairs share one row across all four families. Different formulas
 for the same derived original, or collision with any declared number original,
 reject atomically with located `CP1002`.
@@ -272,9 +279,33 @@ placement remain unchanged. Factorio may replace ordinary numeric literals
 matching a parameter original as well, unlike local nominal binding. Only typed
 local expressions in exact Arithmetic constant operands, direct Constant count
 slots, constant-right Decider thresholds and Selector numeric select indices
-receive this treatment; symbolic multipliers, derived expressions in other
-slots, division and opaque formula strings remain unsupported or opaque as
-appropriate.
+receive this treatment; symbolic multipliers and derived expressions in other
+slots remain unsupported. Division formulas are only structurally projected:
+the generic pinned MathExpression grammar lists `/`, but this feature has no
+Factorio evaluation or placement evidence. Opaque formula strings remain opaque.
+
+#### Bounded division example
+
+The expression DAG evaluates `amount / 2 + 3` to 8 at the default Amount of 10.
+Binding Amount to 14 gives 10; binding it to 11 produces 8.5 and is rejected in
+this integer Constant-count slot. The generated native row retains the same
+tree as `((x / 2) + 3)` with original 8; this is structural export, not a claim
+that Factorio has accepted or evaluated this formula.
+
+```javascript
+const amount = Param.number('Amount', 10, { variable: 'x' });
+const output = new Network();
+output += Constant({
+  sections: [
+    {
+      filters: [
+        { signal: Signal('virtual', 'signal-A'), value: amount },
+        { signal: Signal('virtual', 'signal-B'), value: amount / 2 + 3 },
+      ],
+    },
+  ],
+});
+```
 
 A user-returned final placement export for a separate Constant-only generated `(x * 2)` case records
 normal virtual A=9 and B=18 at Amount=9 ([Factorio 2.1.21 fixture](../../fixtures/blueprint-exchange/factorio-2.1.21/generated-number-formula-placed.txt)).
@@ -290,7 +321,7 @@ The generic MathExpression reference in the
 documents `+`, `-`, `*`, `/`, `^`, parentheses, and the built-ins `abs`, `log2`,
 `sign`, `max` and `min`.
 That generic grammar is broader than this typed exporter, which accepts only
-registered nested `+`, `-`, `*` and unary negation. In TypeScript, `^` is
+registered nested `+`, `-`, `*`, `/` and unary negation. In TypeScript, `^` is
 bitwise XOR, not exponentiation, and power syntax is outside this API. Explicit
 native `formula` metadata remains opaque: local binding does not parse or
 evaluate it.
@@ -382,10 +413,11 @@ JavaScript numbers, booleans, Signal handles or loop bounds. Derived values may
 be retained in locals, arrays, objects and return values, but may only be
 consumed in exact Arithmetic numeric constant slots, direct Constant filter
 count/multiplier slots, or as the right numeric threshold in an exact Decider,
-fluent `when`, or `IF` condition described above. Do not use derived expressions for
-division/modulo/power/bitwise operations, ordinary JavaScript comparisons,
+fluent `when`, or `IF` condition, or a Selector `select` numeric index described above.
+Do not use derived expressions for
+modulo/power/bitwise operations, ordinary JavaScript comparisons,
 truthiness, coercion, property access, parameter keys, compact arithmetic, other
-Constant fields, Decider outputs, Selector fields, negated conditions, or
+Constant fields, Decider outputs, other Selector fields, negated conditions, or
 Section scaling. Direct number-parameter circuit comparisons remain supported
 where listed above.
 Internal host numeric-expression APIs and opaque native formula metadata are

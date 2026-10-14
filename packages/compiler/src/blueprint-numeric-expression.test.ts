@@ -96,6 +96,94 @@ describe('host-local blueprint numeric expressions', () => {
     expect(evaluateBlueprintNumericExpression(session, sharedRegistered)).toBe(28);
   });
 
+  test('evaluates finite JavaScript division on either side with fractional intermediates', () => {
+    const session = createBlueprintParameterSession();
+    const amount = session.number('amount', { defaultValue: 10, source });
+    const parameterNode = { kind: 'parameter', parameter: amount };
+    const halfThenAdd = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: {
+        kind: 'binary',
+        operator: 'divide',
+        left: parameterNode,
+        right: { kind: 'literal', value: 2 },
+      },
+      right: { kind: 'literal', value: 3 },
+    });
+    const reciprocalSide = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'divide',
+      left: { kind: 'literal', value: 20 },
+      right: parameterNode,
+    });
+    const fractionalIntermediate = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'multiply',
+      left: {
+        kind: 'binary',
+        operator: 'divide',
+        left: parameterNode,
+        right: { kind: 'literal', value: 4 },
+      },
+      right: { kind: 'literal', value: 8 },
+    });
+    const negative = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'divide',
+      left: { kind: 'literal', value: -20 },
+      right: { kind: 'literal', value: 4 },
+    });
+    const negativeDenominator = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'divide',
+      left: { kind: 'literal', value: -20 },
+      right: { kind: 'literal', value: -4 },
+    });
+
+    expect(evaluateBlueprintNumericExpression(session, halfThenAdd)).toBe(8);
+    expect(
+      evaluateBlueprintNumericExpression(session, halfThenAdd, [{ parameter: amount, value: 14 }]),
+    ).toBe(10);
+    expect(evaluateBlueprintNumericExpression(session, reciprocalSide)).toBe(2);
+    expect(
+      evaluateBlueprintNumericExpression(session, reciprocalSide, [
+        { parameter: amount, value: 5 },
+      ]),
+    ).toBe(4);
+    expect(evaluateBlueprintNumericExpression(session, fractionalIntermediate)).toBe(20);
+    expect(evaluateBlueprintNumericExpression(session, negative)).toBe(-5);
+    expect(evaluateBlueprintNumericExpression(session, negativeDenominator)).toBe(5);
+  });
+
+  test('rejects zero denominators and non-finite division with the expression source', () => {
+    const session = createBlueprintParameterSession();
+    const denominator = session.number('denominator', { defaultValue: 2, source });
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'divide',
+      left: { kind: 'literal', value: 20 },
+      right: { kind: 'parameter', parameter: denominator },
+    });
+
+    for (const value of [0, -0]) {
+      expect(() =>
+        evaluateBlueprintNumericExpression(session, expression, [
+          { parameter: denominator, value },
+        ]),
+      ).toThrowError(expect.objectContaining({ code: 'CP1000', span: source }));
+    }
+    const overflow = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'divide',
+      left: { kind: 'literal', value: 1 },
+      right: { kind: 'literal', value: Number.MIN_VALUE },
+    });
+    expect(() => evaluateBlueprintNumericExpression(session, overflow)).toThrowError(
+      expect.objectContaining({ code: 'CP1000' }),
+    );
+  });
+
   test('canonicalizes same-session opaque source views to raw number references', () => {
     const session = createBlueprintParameterSession();
     const parameter = session.number('Limit', { defaultValue: 5, source });
@@ -238,7 +326,7 @@ describe('host-local blueprint numeric expressions', () => {
     expect(() =>
       createBlueprintNumericExpression(session, {
         kind: 'binary',
-        operator: 'divide',
+        operator: 'power',
         left: partial,
         right: { kind: 'literal', value: 2 },
       }),
