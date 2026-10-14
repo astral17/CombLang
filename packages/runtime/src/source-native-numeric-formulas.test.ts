@@ -39,6 +39,10 @@ function binary(
   return { kind: 'binary' as const, operator, left, right };
 }
 
+function call(functionName: 'abs' | 'log2' | 'sign' | 'min' | 'max', ...argumentsValue: unknown[]) {
+  return { kind: 'call' as const, function: functionName, arguments: argumentsValue };
+}
+
 function render(renderer: ReturnType<typeof createNativeNumericFormulaRenderer>, root: unknown) {
   const measured = renderer.measure(root, '$.count');
   return { measured, text: renderer.renderUnique([measured]).get(measured.key) };
@@ -147,6 +151,101 @@ describe('private native numeric formula renderer', () => {
       expect(measured[index]!.renderedBytes).toBe(expected.length);
       expect(measured[index]!.defaultValue).toBe(defaultValue);
     }
+  });
+
+  test('renders host numeric functions with exact syntax, byte counts, and canonical identity', () => {
+    const { session, handles, renderer } = setup([
+      { name: 'x', value: 4 },
+      { name: 'y', value: 4 },
+    ]);
+    const cases = [
+      [call('abs', literal(-4)), 'abs(-4)', 4],
+      [call('log2', literal(8)), 'log2(8)', 3],
+      [call('sign', literal(-0)), 'sign(0)', 0],
+      [call('min', literal(4), literal(2), literal(3)), 'min(4, 2, 3)', 2],
+      [call('max', literal(4), literal(2), literal(3)), 'max(4, 2, 3)', 4],
+      [call('max', literal(1.5), literal(2)), 'max(1.5, 2)', 2],
+      [
+        call(
+          'max',
+          call('abs', parameter(handles.get('x')!)),
+          call('min', literal(2), call('log2', literal(8))),
+        ),
+        'max(abs(x), min(2, log2(8)))',
+        4,
+      ],
+    ] as const;
+    const measured = cases.map(([expression]) =>
+      renderer.measure(createBlueprintNumericExpression(session, expression), '$.call'),
+    );
+    const formulas = renderer.renderUnique(measured);
+    for (const [index, [, expected, defaultValue]] of cases.entries()) {
+      expect(formulas.get(measured[index]!.key)).toBe(expected);
+      expect(measured[index]!.renderedBytes).toBe(new TextEncoder().encode(expected).byteLength);
+      expect(measured[index]!.defaultValue).toBe(defaultValue);
+    }
+
+    const variants = [
+      call('min', parameter(handles.get('x')!), parameter(handles.get('y')!)),
+      call('max', parameter(handles.get('x')!), parameter(handles.get('y')!)),
+      call('max', parameter(handles.get('y')!), parameter(handles.get('x')!)),
+    ].map((expression) =>
+      renderer.measure(createBlueprintNumericExpression(session, expression), '$.canonical'),
+    );
+    expect(variants.map(({ defaultValue }) => defaultValue)).toEqual([4, 4, 4]);
+    expect(new Set(variants.map(({ key }) => key)).size).toBe(3);
+    expect([...renderer.renderUnique(variants).values()]).toEqual([
+      'min(x, y)',
+      'max(x, y)',
+      'max(y, x)',
+    ]);
+    expect(() =>
+      renderer.measure(
+        createBlueprintNumericExpression(session, call('abs', literal(1.5))),
+        '$.fractionalDefault',
+      ),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1002',
+        message: expect.stringContaining('signed int32 integers'),
+      }),
+    );
+    expect(() =>
+      renderer.measure(
+        createBlueprintNumericExpression(session, call('max', literal(2147483648), literal(1))),
+        '$.outOfInt32Default',
+      ),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1002',
+        message: expect.stringContaining('signed int32 integers'),
+      }),
+    );
+  });
+
+  test('preflights expanded shared multi-argument calls and aggregate formula bytes', () => {
+    const { session, renderer } = setup();
+    let shared: unknown = call('min', literal(1), literal(2));
+    for (let index = 0; index < 15; index += 1) shared = call('max', shared, shared);
+    expect(() =>
+      renderer.measure(createBlueprintNumericExpression(session, shared), '$.expandedTooLarge'),
+    ).toThrowError(expect.objectContaining({ code: 'CP1002', path: '$.expandedTooLarge' }));
+
+    shared = call('min', literal(1), literal(2));
+    for (let index = 0; index < 13; index += 1) shared = call('max', shared, shared);
+    const first = renderer.measure(
+      createBlueprintNumericExpression(session, shared),
+      '$.firstShared',
+    );
+    const second = renderer.measure(
+      createBlueprintNumericExpression(session, call('min', shared, shared)),
+      '$.secondShared',
+    );
+    expect(first.renderedBytes).toBeLessThan(262144);
+    expect(second.renderedBytes).toBeLessThan(262144);
+    expect(() => renderer.renderUnique([first, second])).toThrowError(
+      expect.objectContaining({ code: 'CP1002', path: '$.secondShared' }),
+    );
   });
 
   test('renders finite decimal and scientific literals with exact bounded text', () => {

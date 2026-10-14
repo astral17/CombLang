@@ -441,6 +441,36 @@ expectSignal(network('output'), Signal('virtual', 'signal-B')).toBe(111);`,
     },
   );
 
+  test('keeps parameter-free Math calls ordinary JavaScript and rejects opaque parameter calls', async () => {
+    const environment = await bundled;
+    const ordinary = result(
+      `const amount = Math.abs(-5);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-A'), value: amount }] }] });`,
+      environment,
+    );
+    expect(ordinary.pipelineDiagnostics).toEqual([]);
+    if (ordinary.resolvedCircuit === undefined)
+      throw new Error('Parameter-free Math call did not produce a circuit');
+    expect(
+      generateBlueprintJson(ordinary.resolvedCircuit.ir).blueprint.entities[0].control_behavior
+        .sections.sections[0].filters[0].count,
+    ).toBe(5);
+
+    for (const expression of ['Math.abs(amount)', 'Math.abs(amount + 1)']) {
+      const opaque = result(
+        `const amount = Param.number('Amount', -5);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-A'), value: ${expression} }] }] });`,
+        environment,
+      );
+      expect(opaque.pipelineDiagnostics).toEqual([
+        expect.objectContaining({ severity: 'error', span: expect.any(Object) }),
+      ]);
+      expect(opaque.resolvedCircuit).toBeUndefined();
+    }
+  });
+
   test.each([
     [0, 2],
     [1, 0],

@@ -118,6 +118,10 @@ export function createNativeNumericFormulaRenderer(
         }[expression.operator];
         return `(${render(expression.left, path, source)} ${operator} ${render(expression.right, path, source)})`;
       }
+      case 'call':
+        return `${expression.function}(${expression.arguments
+          .map((argument) => render(argument, path, source))
+          .join(', ')})`;
     }
   }
 
@@ -189,6 +193,23 @@ export function createNativeNumericFormulaRenderer(
                 renderingOverhead,
               ),
             };
+            break;
+          }
+          case 'call': {
+            const argumentsMeasure = node.arguments.map(measureNode);
+            const key = intern(
+              JSON.stringify([
+                'call',
+                node.function,
+                argumentsMeasure.map(({ key: childKey }) => childKey),
+              ]),
+            );
+            let renderedBytes = node.function.length + 2;
+            for (const argumentMeasure of argumentsMeasure) {
+              renderedBytes = saturatingAdd(renderedBytes, argumentMeasure.renderedBytes);
+            }
+            renderedBytes = saturatingAdd(renderedBytes, 2 * (node.arguments.length - 1));
+            nodeMeasure = { key, renderedBytes };
             break;
           }
         }

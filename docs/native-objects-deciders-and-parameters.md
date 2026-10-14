@@ -604,18 +604,23 @@ their normal JavaScript property behavior.
 ## Dependencies and formulas
 
 An internal host-local numeric-expression DAG covers finite literals, registered
-number-parameter references, unary negation, and binary addition, subtraction,
-multiplication, division and exponentiation, with bounded construction and a
-pure default/binding evaluator. Source `**` uses finite JavaScript-number
-semantics, distinct from Factorio device arithmetic. The private native renderer
-maps `**` to `^` with explicit grouping, but does not establish game acceptance,
-evaluation or placement semantics.
+number-parameter references, unary negation, binary addition, subtraction,
+multiplication, division and exponentiation, and registered calls to `abs`,
+`log2`, `sign`, `min` and `max`, with bounded construction and a pure
+default/binding evaluator. Calls are host-created DAG nodes only; this does not
+enable source `Math.*` calls on opaque parameter views. Parameter-free
+`Math.*` remains ordinary JavaScript, with no spelling-based source rewrite.
+Source `**` uses finite JavaScript-number semantics, distinct from Factorio
+device arithmetic. The private native renderer maps `**` to `^` with explicit
+grouping and renders the registered calls structurally, but neither spelling
+establishes native game acceptance, evaluation or placement semantics.
 Its finite decimal/scientific literal operands use shortest round-trip decimal
 text, omitting a positive exponent plus sign (for example, `1e+21` becomes
 `1e21`). The raw evaluated formula default must still be signed int32, and this
 does not widen declared numeric originals or local integer destinations. This is
 a bounded structural spelling rule, not complete MathExpression grammar or
-native Factorio evidence.
+native Factorio evidence. The same evidence boundary applies to the new
+function-call spellings.
 The reviewed host-local integration is limited to Arithmetic constant operand
 values, Decider `condition.compare.right` thresholds and `mode: 'constant'`
 output values in both normal and else output lists, Constant section multipliers

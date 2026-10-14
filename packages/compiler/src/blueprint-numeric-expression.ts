@@ -50,11 +50,20 @@ export interface BlueprintNumericBinaryExpression extends NumericExpressionNodeB
   readonly right: BlueprintNumericExpression;
 }
 
+type BlueprintNumericFunctionName = 'abs' | 'log2' | 'sign' | 'min' | 'max';
+
+export interface BlueprintNumericCallExpression extends NumericExpressionNodeBase {
+  readonly kind: 'call';
+  readonly function: BlueprintNumericFunctionName;
+  readonly arguments: readonly BlueprintNumericExpression[];
+}
+
 export type BlueprintNumericExpression =
   | BlueprintNumericLiteralExpression
   | BlueprintNumericParameterExpression
   | BlueprintNumericNegateExpression
-  | BlueprintNumericBinaryExpression;
+  | BlueprintNumericBinaryExpression
+  | BlueprintNumericCallExpression;
 
 export interface BlueprintNumericExpressionInspection {
   readonly session: BlueprintParameterSession;
@@ -80,6 +89,11 @@ type NumericExpressionNode =
       readonly operator: BlueprintNumericBinaryOperator;
       readonly left: BlueprintNumericExpression;
       readonly right: BlueprintNumericExpression;
+    }
+  | {
+      readonly kind: 'call';
+      readonly function: BlueprintNumericFunctionName;
+      readonly arguments: readonly BlueprintNumericExpression[];
     };
 
 interface RegisteredNumericExpression {
@@ -142,6 +156,13 @@ function nodeByteCost(
       break;
     case 'binary':
       local = { kind: node.kind, operator: node.operator, left: null, right: null };
+      break;
+    case 'call':
+      local = {
+        kind: node.kind,
+        function: node.function,
+        arguments: node.arguments.map(() => null),
+      };
       break;
   }
   return textEncoder.encode(JSON.stringify(local)).byteLength;
@@ -273,6 +294,10 @@ export function inspectBlueprintNumericExpression(
     } else if (registered.node.kind === 'binary') {
       visitRegistered(registered.node.left, `${nodePath}.left`, depth + 1);
       visitRegistered(registered.node.right, `${nodePath}.right`, depth + 1);
+    } else if (registered.node.kind === 'call') {
+      for (const [index, argument] of registered.node.arguments.entries()) {
+        visitRegistered(argument, `${nodePath}.arguments[${index}]`, depth + 1);
+      }
     }
     active.delete(value);
     visited.add(value);
@@ -327,6 +352,76 @@ function assertExactKeys(
   }
 }
 
+function readCallArguments(
+  value: unknown,
+  functionName: BlueprintNumericFunctionName,
+  path: string,
+): readonly unknown[] {
+  let isArray: boolean;
+  try {
+    isArray = Array.isArray(value);
+  } catch {
+    fail('CP1000', path, 'expected a plain numeric expression argument array.');
+  }
+  if (
+    !isArray ||
+    value === null ||
+    typeof value !== 'object' ||
+    Object.getPrototypeOf(value) !== Array.prototype
+  ) {
+    fail('CP1000', path, 'expected a plain numeric expression argument array.');
+  }
+  const arrayValue = value as unknown[];
+
+  const lengthDescriptor = Object.getOwnPropertyDescriptor(arrayValue, 'length');
+  const length = lengthDescriptor?.value;
+  const minimumLength = functionName === 'min' || functionName === 'max' ? 2 : 1;
+  const maximumLength = functionName === 'min' || functionName === 'max' ? 255 : 1;
+  if (typeof length !== 'number' || length < minimumLength || length > maximumLength) {
+    const arity = minimumLength === 1 ? 'exactly one' : 'between two and 255';
+    fail('CP1000', path, `${functionName} requires ${arity} arguments.`);
+  }
+
+  let keys: (string | symbol)[];
+  try {
+    keys = Reflect.ownKeys(arrayValue);
+  } catch {
+    fail('CP1000', path, 'could not inspect numeric expression argument array.');
+  }
+  for (const key of keys) {
+    if (key === 'length') continue;
+    if (typeof key !== 'string') {
+      fail('CP1000', path, 'numeric expression argument arrays cannot have symbol properties.');
+    }
+    const index = Number(key);
+    if (!Number.isInteger(index) || index < 0 || index >= length || String(index) !== key) {
+      fail(
+        'CP1000',
+        `${path}.${key}`,
+        'numeric expression argument arrays cannot have extra properties.',
+      );
+    }
+    const descriptor = Object.getOwnPropertyDescriptor(arrayValue, key);
+    if (descriptor === undefined || !('value' in descriptor)) {
+      fail('CP1000', `${path}[${index}]`, 'numeric expression arguments must be data properties.');
+    }
+    if (!descriptor.enumerable) {
+      fail('CP1000', `${path}[${index}]`, 'numeric expression arguments must be enumerable.');
+    }
+  }
+
+  const argumentsValue: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    const descriptor = Object.getOwnPropertyDescriptor(arrayValue, String(index));
+    if (descriptor === undefined) {
+      fail('CP1000', `${path}[${index}]`, 'numeric expression argument arrays cannot be sparse.');
+    }
+    // Accessors were rejected during the own-key pass, so this snapshot never executes caller code.
+    argumentsValue.push((descriptor as PropertyDescriptor & { value: unknown }).value);
+  }
+  return argumentsValue;
+}
+
 function brandAndStage(
   state: BuildState,
   node: NumericExpressionNode,
@@ -338,7 +433,9 @@ function brandAndStage(
       ? 1 + (state.heights.get(node.operand) ?? 0)
       : node.kind === 'binary'
         ? 1 + Math.max(state.heights.get(node.left) ?? 0, state.heights.get(node.right) ?? 0)
-        : 0;
+        : node.kind === 'call'
+          ? 1 + Math.max(...node.arguments.map((argument) => state.heights.get(argument) ?? 0))
+          : 0;
   state.staged.push({
     session: state.session,
     node: expression,
@@ -393,6 +490,10 @@ function visitRegisteredExpression(
   } else if (registered.node.kind === 'binary') {
     visit(registered.node.left, `${path}.left`, depth + 1, state);
     visit(registered.node.right, `${path}.right`, depth + 1, state);
+  } else if (registered.node.kind === 'call') {
+    registered.node.arguments.forEach((argument, index) =>
+      visit(argument, `${path}.arguments[${index}]`, depth + 1, state),
+    );
   }
   state.active.delete(value);
   state.normalized.set(value, registered.node);
@@ -505,6 +606,32 @@ function visit(
     };
     chargeNode(state, node, path);
     expression = brandAndStage(state, node, state.sources.get(left) ?? state.sources.get(right));
+  } else if (record.kind === 'call') {
+    assertExactKeys(record, ['kind', 'function', 'arguments'], path);
+    if (
+      record.function !== 'abs' &&
+      record.function !== 'log2' &&
+      record.function !== 'sign' &&
+      record.function !== 'min' &&
+      record.function !== 'max'
+    ) {
+      fail('CP1000', `${path}.function`, 'expected abs, log2, sign, min, or max.');
+    }
+    const functionName = record.function as BlueprintNumericFunctionName;
+    const rawArguments = readCallArguments(record.arguments, functionName, `${path}.arguments`);
+    const argumentsValue = rawArguments.map((argument, index) =>
+      visit(argument, `${path}.arguments[${index}]`, depth + 1, state),
+    );
+    const node = {
+      kind: 'call' as const,
+      function: functionName,
+      arguments: Object.freeze(argumentsValue),
+    };
+    chargeNode(state, node, path);
+    const source = argumentsValue
+      .map((argument) => state.sources.get(argument))
+      .find((argumentSource) => argumentSource !== undefined);
+    expression = brandAndStage(state, node, source);
   } else {
     fail('CP1000', `${path}.kind`, 'unsupported numeric expression node kind.');
   }
@@ -663,6 +790,35 @@ export function evaluateBlueprintNumericExpression(
                   : left.value ** right.value;
         const value = assertBlueprintParameterNumberValue(
           unvalidated,
+          `${path}.value`,
+          'finite',
+          source,
+        );
+        result = { value, ...(source ? { source } : {}) };
+        break;
+      }
+      case 'call': {
+        const argumentsValue = registered.node.arguments.map((argument, index) =>
+          evaluate(argument, `${path}.arguments[${index}]`),
+        );
+        const source = argumentsValue.find(
+          ({ source: argumentSource }) => argumentSource !== undefined,
+        )?.source;
+        const values = argumentsValue.map(({ value }) => value);
+        const unvalidated =
+          registered.node.function === 'abs'
+            ? Math.abs(values[0]!)
+            : registered.node.function === 'log2'
+              ? Math.log2(values[0]!)
+              : registered.node.function === 'sign'
+                ? Math.sign(values[0]!)
+                : registered.node.function === 'min'
+                  ? Math.min(...values)
+                  : Math.max(...values);
+        const normalized =
+          registered.node.function === 'sign' && Object.is(unvalidated, -0) ? 0 : unvalidated;
+        const value = assertBlueprintParameterNumberValue(
+          normalized,
           `${path}.value`,
           'finite',
           source,

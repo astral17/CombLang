@@ -239,6 +239,310 @@ describe('host-local blueprint numeric expressions', () => {
     expect(evaluateBlueprintNumericExpression(session, negativeExponent)).toBe(0.25);
   });
 
+  test('constructs copied frozen calls with pinned arities and transactional validation', () => {
+    const session = createBlueprintParameterSession();
+    const argumentsValue: unknown[] = [
+      { kind: 'literal', value: 3 },
+      { kind: 'literal', value: 1 },
+    ];
+    const minimum = createBlueprintNumericExpression(session, {
+      kind: 'call',
+      function: 'min',
+      arguments: argumentsValue,
+    });
+    argumentsValue[0] = { kind: 'literal', value: 99 };
+    argumentsValue.push({ kind: 'literal', value: 0 });
+    expect(minimum).toMatchObject({
+      kind: 'call',
+      function: 'min',
+      arguments: [
+        { kind: 'literal', value: 3 },
+        { kind: 'literal', value: 1 },
+      ],
+    });
+    if (minimum.kind !== 'call') throw new Error('expected a call node');
+    expect(Object.isFrozen(minimum.arguments)).toBe(true);
+
+    for (const functionName of ['abs', 'log2', 'sign'] as const) {
+      expect(() =>
+        createBlueprintNumericExpression(session, {
+          kind: 'call',
+          function: functionName,
+          arguments: [],
+        }),
+      ).toThrowError(expect.objectContaining({ code: 'CP1000', path: '$.arguments' }));
+      expect(() =>
+        createBlueprintNumericExpression(session, {
+          kind: 'call',
+          function: functionName,
+          arguments: [
+            { kind: 'literal', value: 1 },
+            { kind: 'literal', value: 2 },
+          ],
+        }),
+      ).toThrowError(expect.objectContaining({ code: 'CP1000', path: '$.arguments' }));
+    }
+    expect(() =>
+      createBlueprintNumericExpression(session, {
+        kind: 'call',
+        function: 'unknown',
+        arguments: [{ kind: 'literal', value: 1 }],
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'CP1000', path: '$.function' }));
+    for (const functionName of ['min', 'max'] as const) {
+      for (const length of [0, 1, 256]) {
+        expect(() =>
+          createBlueprintNumericExpression(session, {
+            kind: 'call',
+            function: functionName,
+            arguments: new Array(length),
+          }),
+        ).toThrowError(expect.objectContaining({ code: 'CP1000', path: '$.arguments' }));
+      }
+      for (const length of [2, 255]) {
+        const expression = createBlueprintNumericExpression(session, {
+          kind: 'call',
+          function: functionName,
+          arguments: Array.from({ length }, (_, index) => ({ kind: 'literal', value: index })),
+        });
+        expect(evaluateBlueprintNumericExpression(session, expression)).toBe(
+          functionName === 'min' ? 0 : length - 1,
+        );
+      }
+    }
+
+    const sparse = new Array(2);
+    expect(() =>
+      createBlueprintNumericExpression(session, {
+        kind: 'call',
+        function: 'min',
+        arguments: sparse,
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'CP1000', path: '$.arguments[0]' }));
+    const accessorArguments = [
+      { kind: 'literal', value: 1 },
+      { kind: 'literal', value: 2 },
+    ];
+    let getterCalls = 0;
+    Object.defineProperty(accessorArguments, '0', {
+      enumerable: true,
+      get() {
+        getterCalls += 1;
+        return { kind: 'literal', value: 1 };
+      },
+    });
+    expect(() =>
+      createBlueprintNumericExpression(session, {
+        kind: 'call',
+        function: 'min',
+        arguments: accessorArguments,
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'CP1000', path: '$.arguments[0]' }));
+    expect(getterCalls).toBe(0);
+    expect(() =>
+      createBlueprintNumericExpression(session, {
+        kind: 'call',
+        function: 'min',
+        arguments: [
+          { kind: 'literal', value: 1 },
+          { kind: 'literal', value: 2 },
+          { kind: 'literal', value: 3 },
+        ],
+        extra: true,
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'CP1000', path: '$.extra' }));
+    expect(() =>
+      createBlueprintNumericExpression(session, {
+        kind: 'call',
+        function: 'min',
+        arguments: 'not an array',
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'CP1000', path: '$.arguments' }));
+    const extendedArguments = [
+      { kind: 'literal', value: 1 },
+      { kind: 'literal', value: 2 },
+    ];
+    Object.defineProperty(extendedArguments, 'label', { value: 'extra', enumerable: true });
+    expect(() =>
+      createBlueprintNumericExpression(session, {
+        kind: 'call',
+        function: 'min',
+        arguments: extendedArguments,
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'CP1000', path: '$.arguments.label' }));
+    const customPrototypeArguments = Object.setPrototypeOf(
+      [{ kind: 'literal', value: 1 }],
+      Object.create(Array.prototype),
+    );
+    expect(() =>
+      createBlueprintNumericExpression(session, {
+        kind: 'call',
+        function: 'abs',
+        arguments: customPrototypeArguments,
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'CP1000', path: '$.arguments' }));
+  });
+
+  test('evaluates all registered numeric calls in order with finite memoized DAG semantics', () => {
+    const session = createBlueprintParameterSession();
+    const negative = session.number('negative', { defaultValue: -3, source });
+    const positive = session.number('positive', { defaultValue: 4 });
+    const third = session.number('third', { defaultValue: 2 });
+    const call = (functionName: string, ...argumentsValue: unknown[]) => ({
+      kind: 'call',
+      function: functionName,
+      arguments: argumentsValue,
+    });
+    const expressions = [
+      createBlueprintNumericExpression(
+        session,
+        call('abs', { kind: 'parameter', parameter: negative }),
+      ),
+      createBlueprintNumericExpression(session, call('log2', { kind: 'literal', value: 8 })),
+      createBlueprintNumericExpression(session, call('sign', { kind: 'literal', value: -0 })),
+      createBlueprintNumericExpression(
+        session,
+        call(
+          'min',
+          { kind: 'parameter', parameter: negative },
+          { kind: 'parameter', parameter: positive },
+          { kind: 'parameter', parameter: third },
+        ),
+      ),
+      createBlueprintNumericExpression(
+        session,
+        call(
+          'max',
+          { kind: 'parameter', parameter: negative },
+          { kind: 'parameter', parameter: positive },
+          { kind: 'parameter', parameter: third },
+        ),
+      ),
+      createBlueprintNumericExpression(
+        session,
+        call(
+          'min',
+          call('abs', { kind: 'parameter', parameter: negative }),
+          call(
+            'max',
+            { kind: 'parameter', parameter: positive },
+            { kind: 'parameter', parameter: third },
+          ),
+        ),
+      ),
+      createBlueprintNumericExpression(session, call('abs', { kind: 'literal', value: 1.5 })),
+    ];
+    expect(
+      expressions.map((expression) => evaluateBlueprintNumericExpression(session, expression)),
+    ).toEqual([3, 3, 0, -3, 4, 3, 1.5]);
+
+    const overridden = createBlueprintNumericExpression(
+      session,
+      call(
+        'max',
+        { kind: 'parameter', parameter: negative },
+        { kind: 'parameter', parameter: positive },
+      ),
+    );
+    expect(
+      evaluateBlueprintNumericExpression(session, overridden, [
+        { parameter: negative, value: 9 },
+        { parameter: positive, value: 5 },
+      ]),
+    ).toBe(9);
+    expect(() =>
+      evaluateBlueprintNumericExpression(session, overridden, [
+        { parameter: negative, value: 1 },
+        { parameter: positive, value: 2 },
+        { parameter: third, value: 3 },
+      ]),
+    ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.bindings' }));
+
+    const losingArgument = session.number('losing argument', { source });
+    const minimumWithLosingBinding = createBlueprintNumericExpression(session, {
+      kind: 'call',
+      function: 'min',
+      arguments: [
+        { kind: 'literal', value: -100 },
+        { kind: 'parameter', parameter: losingArgument },
+      ],
+    });
+    expect(
+      inspectBlueprintNumericExpression(session, minimumWithLosingBinding, '$.minimum')
+        .dependencies,
+    ).toEqual([losingArgument]);
+    expect(() =>
+      evaluateBlueprintNumericExpression(session, minimumWithLosingBinding),
+    ).toThrowError(expect.objectContaining({ code: 'CP1002', span: source }));
+    expect(
+      evaluateBlueprintNumericExpression(session, minimumWithLosingBinding, [
+        { parameter: losingArgument, value: 50 },
+      ]),
+    ).toBe(-100);
+
+    const negativeZero = createBlueprintNumericExpression(
+      session,
+      call('sign', { kind: 'literal', value: -0 }),
+    );
+    const positiveZero = createBlueprintNumericExpression(
+      session,
+      call('sign', { kind: 'literal', value: 0 }),
+    );
+    expect(Object.is(evaluateBlueprintNumericExpression(session, negativeZero), -0)).toBe(false);
+    expect(Object.is(evaluateBlueprintNumericExpression(session, positiveZero), -0)).toBe(false);
+  });
+
+  test('locates log2 domain errors, supports a valid binding retry, and inspects ordered shared call edges', () => {
+    const session = createBlueprintParameterSession();
+    const domain = session.number('domain', { defaultValue: -1, source });
+    const left = session.number('left', { defaultValue: 4 });
+    const right = session.number('right', { defaultValue: 8 });
+    const shared = {
+      kind: 'call',
+      function: 'abs',
+      arguments: [{ kind: 'parameter', parameter: left }],
+    };
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'call',
+      function: 'max',
+      arguments: [
+        { kind: 'call', function: 'log2', arguments: [{ kind: 'parameter', parameter: domain }] },
+        shared,
+        { kind: 'call', function: 'abs', arguments: [{ kind: 'parameter', parameter: right }] },
+        shared,
+      ],
+    });
+    const inspection = inspectBlueprintNumericExpression(session, expression, '$.root');
+    expect(inspection.dependencies).toEqual([domain, left, right]);
+    expect(inspection.nodeCount).toBe(7);
+    expect(() => evaluateBlueprintNumericExpression(session, expression)).toThrowError(
+      expect.objectContaining({ code: 'CP1000', path: '$.arguments[0].value', span: source }),
+    );
+    const zeroLogarithm = createBlueprintNumericExpression(session, {
+      kind: 'call',
+      function: 'log2',
+      arguments: [{ kind: 'literal', value: 0 }],
+    });
+    expect(() => evaluateBlueprintNumericExpression(session, zeroLogarithm)).toThrowError(
+      expect.objectContaining({ code: 'CP1000', path: '$.value' }),
+    );
+    expect(
+      evaluateBlueprintNumericExpression(session, expression, [{ parameter: domain, value: 2 }]),
+    ).toBe(8);
+
+    const cyclic: Record<string, unknown> = { kind: 'call', function: 'abs', arguments: [] };
+    cyclic.arguments = [cyclic];
+    expect(() => createBlueprintNumericExpression(session, cyclic)).toThrowError(
+      expect.objectContaining({ code: 'CP1000', path: '$.arguments[0]' }),
+    );
+    const retry = createBlueprintNumericExpression(session, {
+      kind: 'call',
+      function: 'sign',
+      arguments: [{ kind: 'literal', value: 10 }],
+    });
+    expect(evaluateBlueprintNumericExpression(session, retry)).toBe(1);
+  });
+
   test('rejects power NaN and non-finite results with located CP1000 diagnostics', () => {
     const session = createBlueprintParameterSession();
     const base = session.number('base', { defaultValue: -2, source });
@@ -329,6 +633,15 @@ describe('host-local blueprint numeric expressions', () => {
     expect(() =>
       createBlueprintNumericExpression(session, { kind: 'parameter', parameter: foreignParameter }),
     ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.parameter', span: source }));
+    expect(() =>
+      createBlueprintNumericExpression(session, {
+        kind: 'call',
+        function: 'abs',
+        arguments: [{ kind: 'parameter', parameter: foreignParameter }],
+      }),
+    ).toThrowError(
+      expect.objectContaining({ code: 'CP1001', path: '$.arguments[0].parameter', span: source }),
+    );
     expect(() =>
       createBlueprintNumericExpression(session, { kind: 'parameter', parameter: forged }),
     ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.parameter' }));
@@ -429,6 +742,21 @@ describe('host-local blueprint numeric expressions', () => {
       }),
     ).toThrowError(expect.objectContaining({ code: 'CP1000', path: '$.right.value' }));
 
+    const stagedCallArgument = { kind: 'literal', value: 9 };
+    expect(() =>
+      createBlueprintNumericExpression(session, {
+        kind: 'call',
+        function: 'max',
+        arguments: [stagedCallArgument, { kind: 'invalid', value: 1 }],
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'CP1000', path: '$.arguments[1].kind' }));
+    const retriedCall = createBlueprintNumericExpression(session, {
+      kind: 'call',
+      function: 'abs',
+      arguments: [stagedCallArgument],
+    });
+    expect(evaluateBlueprintNumericExpression(session, retriedCall)).toBe(9);
+
     const expression = createBlueprintNumericExpression(session, partial);
     expect(evaluateBlueprintNumericExpression(session, expression)).toBe(6);
   });
@@ -440,6 +768,13 @@ describe('host-local blueprint numeric expressions', () => {
       deep = { kind: 'negate', operand: deep };
     }
     expect(() => createBlueprintNumericExpression(session, deep)).toThrowError(
+      expect.objectContaining({ code: 'CP1000', message: expect.stringContaining('depth limit') }),
+    );
+    let deepCalls: unknown = { kind: 'literal', value: 1 };
+    for (let depth = 0; depth <= constantConfigurationLimits.maxDepth; depth += 1) {
+      deepCalls = { kind: 'call', function: 'abs', arguments: [deepCalls] };
+    }
+    expect(() => createBlueprintNumericExpression(session, deepCalls)).toThrowError(
       expect.objectContaining({ code: 'CP1000', message: expect.stringContaining('depth limit') }),
     );
 
@@ -526,6 +861,15 @@ describe('host-local blueprint numeric expressions', () => {
       expect.objectContaining({ code: 'CP1001', message: expect.stringContaining('sealed') }),
     );
     expect(() =>
+      createBlueprintNumericExpression(session, {
+        kind: 'call',
+        function: 'abs',
+        arguments: [{ kind: 'literal', value: 1 }],
+      }),
+    ).toThrowError(
+      expect.objectContaining({ code: 'CP1001', message: expect.stringContaining('sealed') }),
+    );
+    expect(() =>
       session.number('invalid default', { defaultValue: expression as never }),
     ).toThrowError(expect.objectContaining({ code: 'CP1000' }));
     expect(() =>
@@ -552,6 +896,7 @@ describe('host-local blueprint numeric expressions', () => {
       kind: 'literal',
       value: 4,
     });
+    const foreignNumber = owner.number('foreign number', { defaultValue: 4 });
 
     expect(() => evaluateBlueprintNumericExpression(other, expression)).toThrowError(
       expect.objectContaining({ code: 'CP1001', path: '$.expression' }),
@@ -571,5 +916,19 @@ describe('host-local blueprint numeric expressions', () => {
         operand: expression,
       }),
     ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.operand' }));
+    expect(() =>
+      createBlueprintNumericExpression(other, {
+        kind: 'call',
+        function: 'abs',
+        arguments: [expression],
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.arguments[0]' }));
+    expect(() =>
+      createBlueprintNumericExpression(other, {
+        kind: 'call',
+        function: 'abs',
+        arguments: [{ kind: 'parameter', parameter: foreignNumber }],
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'CP1001', path: '$.arguments[0].parameter' }));
   });
 });
