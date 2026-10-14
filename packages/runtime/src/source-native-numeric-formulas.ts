@@ -90,14 +90,15 @@ export function createNativeNumericFormulaRenderer(
       case 'negate':
         return `(-${render(expression.operand, path, source)})`;
       case 'binary': {
-        const operator =
-          expression.operator === 'add'
-            ? '+'
-            : expression.operator === 'subtract'
-              ? '-'
-              : expression.operator === 'multiply'
-                ? '*'
-                : '/';
+        if (expression.operator === 'power') {
+          return `((${render(expression.left, path, source)}) ^ (${render(expression.right, path, source)}))`;
+        }
+        const operator = {
+          add: '+',
+          subtract: '-',
+          multiply: '*',
+          divide: '/',
+        }[expression.operator];
         return `(${render(expression.left, path, source)} ${operator} ${render(expression.right, path, source)})`;
       }
     }
@@ -171,11 +172,12 @@ export function createNativeNumericFormulaRenderer(
           case 'binary': {
             const left = measureNode(node.left);
             const right = measureNode(node.right);
+            const renderingOverhead = node.operator === 'power' ? 9 : 5;
             nodeMeasure = {
               key: intern(JSON.stringify(['binary', node.operator, left.key, right.key])),
               renderedBytes: saturatingAdd(
                 saturatingAdd(left.renderedBytes, right.renderedBytes),
-                5,
+                renderingOverhead,
               ),
             };
             break;

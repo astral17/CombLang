@@ -147,6 +147,34 @@ describe('author API documentation', () => {
     );
   });
 
+  test('runs the documented bounded power defaults, override, and native projection', async () => {
+    const source = read('parameters').match(
+      /#### Bounded power example[\s\S]*?```javascript\r?\n([\s\S]*?)\r?\n```/,
+    )?.[1];
+    if (source === undefined) throw new Error('Missing bounded power example');
+    const compilation = compile(source, await bundled);
+    const session = createSourceParameterBindingSession(compilation);
+    const amount = session.parameters[0];
+    if (amount === undefined) throw new Error('Missing documented Amount parameter');
+
+    const native = exportSourceCompilationNativeBlueprint(compilation, {
+      label: 'Documented power formulas',
+      maxDeciderConditionRows: 1024,
+    });
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '3', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '10', formula: '(((x) ^ (2)) + 1)', dependent: true },
+      { type: 'number', number: '8', formula: '((2) ^ (x))', dependent: true },
+    ]);
+    const counts = (circuit) =>
+      circuit.entities[0].control_behavior.sections.sections[0].filters.map(({ count }) => count);
+    const defaults = generateBlueprintJson(compilation.resolvedCircuit.ir).blueprint;
+    const bound = session.bind([{ id: amount.id, value: 4 }]);
+    const overridden = generateBlueprintJson(bound.resolvedCircuit.ir).blueprint;
+    expect(counts(defaults)).toEqual([3, 10, 8]);
+    expect(counts(overridden)).toEqual([4, 17, 16]);
+  });
+
   test.each(pages)('provides the standalone %s reference contract', (name) => {
     expect(existsSync(pageUrl(name))).toBe(true);
     const page = read(name);

@@ -1073,8 +1073,10 @@ output += Constant({ sections: [{ filters: [
 const input = new Network();
 const directOutput = new Network();
 const formulaOutput = new Network();
+const powerOutput = new Network();
 directOutput += Selector({ input, operation: 'select', index: amount });
-formulaOutput += Selector({ input, operation: 'select', index: amount / 2 + 3 });`);
+formulaOutput += Selector({ input, operation: 'select', index: amount / 2 + 3 });
+powerOutput += Selector({ input, operation: 'select', index: amount ** 2 });`);
     const nativePath = join(dirname(path), 'selector-formula-native.json');
     const overridesPath = join(dirname(path), 'selector-formula-overrides.json');
     await writeFile(overridesPath, JSON.stringify([{ id: 0, value: 14 }]));
@@ -1090,13 +1092,14 @@ formulaOutput += Selector({ input, operation: 'select', index: amount / 2 + 3 })
     expect(native.blueprint.parameters).toEqual([
       { type: 'number', number: '10', name: 'Amount', variable: 'x' },
       { type: 'number', number: '8', formula: '((x / 2) + 3)', dependent: true },
+      { type: 'number', number: '100', formula: '((x) ^ (2))', dependent: true },
     ]);
     expect(
       native.blueprint.entities.map(
         ({ control_behavior }: { control_behavior: { index_constant?: number } }) =>
           control_behavior.index_constant,
       ),
-    ).toEqual([10, 8]);
+    ).toEqual([10, 8, 100]);
 
     expect(
       await run(['blueprint', 'export', '--json', '--overrides', overridesPath, path], environment),
@@ -1108,7 +1111,7 @@ formulaOutput += Selector({ input, operation: 'select', index: amount / 2 + 3 })
         ({ control_behavior }: { control_behavior: { index_constant?: number } }) =>
           control_behavior.index_constant,
       ),
-    ).toEqual([14, 10]);
+    ).toEqual([14, 10, 196]);
 
     await writeFile(overridesPath, JSON.stringify([{ id: 0, value: 11 }]));
     const failedOutput = join(dirname(path), 'selector-formula-fractional.json');

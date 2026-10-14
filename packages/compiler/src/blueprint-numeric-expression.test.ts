@@ -184,6 +184,95 @@ describe('host-local blueprint numeric expressions', () => {
     );
   });
 
+  test('evaluates registered power with JavaScript grouping, orientations, and finite fractions', () => {
+    const session = createBlueprintParameterSession();
+    const amount = session.number('amount', { defaultValue: 3, source });
+    const ref = { kind: 'parameter' as const, parameter: amount };
+    const literal = (value: number) => ({ kind: 'literal' as const, value });
+    const binary = (left: unknown, right: unknown) => ({
+      kind: 'binary' as const,
+      operator: 'power' as const,
+      left,
+      right,
+    });
+    const powerThenAdd = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: binary(ref, literal(2)),
+      right: literal(1),
+    });
+    const parameterOnRight = createBlueprintNumericExpression(session, binary(literal(2), ref));
+    const rightAssociated = createBlueprintNumericExpression(
+      session,
+      binary(literal(2), binary(ref, literal(2))),
+    );
+    const leftAssociated = createBlueprintNumericExpression(
+      session,
+      binary(binary(literal(2), ref), literal(2)),
+    );
+    const fractionalIntermediate = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'multiply',
+      left: binary(ref, literal(-1)),
+      right: literal(12),
+    });
+    const zeroToZero = createBlueprintNumericExpression(session, binary(literal(0), literal(0)));
+    const negativeExponent = createBlueprintNumericExpression(
+      session,
+      binary(literal(2), literal(-2)),
+    );
+
+    expect(evaluateBlueprintNumericExpression(session, powerThenAdd)).toBe(10);
+    expect(
+      evaluateBlueprintNumericExpression(session, powerThenAdd, [{ parameter: amount, value: 4 }]),
+    ).toBe(17);
+    expect(evaluateBlueprintNumericExpression(session, parameterOnRight)).toBe(8);
+    expect(
+      evaluateBlueprintNumericExpression(session, parameterOnRight, [
+        { parameter: amount, value: 4 },
+      ]),
+    ).toBe(16);
+    expect(evaluateBlueprintNumericExpression(session, rightAssociated)).toBe(512);
+    expect(evaluateBlueprintNumericExpression(session, leftAssociated)).toBe(64);
+    expect(evaluateBlueprintNumericExpression(session, fractionalIntermediate)).toBe(4);
+    expect(evaluateBlueprintNumericExpression(session, zeroToZero)).toBe(1);
+    expect(evaluateBlueprintNumericExpression(session, negativeExponent)).toBe(0.25);
+  });
+
+  test('rejects power NaN and non-finite results with located CP1000 diagnostics', () => {
+    const session = createBlueprintParameterSession();
+    const base = session.number('base', { defaultValue: -2, source });
+    const exponent = session.number('exponent', { defaultValue: 3, source });
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'power',
+      left: { kind: 'parameter', parameter: base },
+      right: { kind: 'parameter', parameter: exponent },
+    });
+
+    expect(evaluateBlueprintNumericExpression(session, expression)).toBe(-8);
+    expect(() =>
+      evaluateBlueprintNumericExpression(session, expression, [
+        { parameter: exponent, value: 0.5 },
+      ]),
+    ).toThrowError(expect.objectContaining({ code: 'CP1000', span: source }));
+
+    for (const [left, right] of [
+      [0, -1],
+      [2, 1024],
+    ] as const) {
+      const invalid = createBlueprintNumericExpression(session, {
+        kind: 'binary',
+        operator: 'power',
+        left: { kind: 'literal', value: left },
+        right: { kind: 'literal', value: right },
+      });
+      expect(() => evaluateBlueprintNumericExpression(session, invalid)).toThrowError(
+        expect.objectContaining({ code: 'CP1000' }),
+      );
+    }
+  });
+
   test('canonicalizes same-session opaque source views to raw number references', () => {
     const session = createBlueprintParameterSession();
     const parameter = session.number('Limit', { defaultValue: 5, source });
@@ -326,7 +415,7 @@ describe('host-local blueprint numeric expressions', () => {
     expect(() =>
       createBlueprintNumericExpression(session, {
         kind: 'binary',
-        operator: 'power',
+        operator: 'modulo',
         left: partial,
         right: { kind: 'literal', value: 2 },
       }),

@@ -1482,8 +1482,10 @@ const amount = Param.number('Amount', 10, { variable: 'x' });
 const input = new Network();
 const directOutput = new Network();
 const formulaOutput = new Network();
+const powerOutput = new Network();
 directOutput += Selector({ input, operation: 'select', index: amount });
-formulaOutput += Selector({ input, operation: 'select', index: amount / 2 + 3 });`,
+formulaOutput += Selector({ input, operation: 'select', index: amount / 2 + 3 });
+powerOutput += Selector({ input, operation: 'select', index: amount ** 2 });`,
             },
             parameterBinding: true,
             blueprintExport: { parameters: true },
@@ -1499,6 +1501,7 @@ formulaOutput += Selector({ input, operation: 'select', index: amount / 2 + 3 })
       expect(parsed.result.blueprintExport.document.blueprint.parameters).toEqual([
         { type: 'number', number: '10', name: 'Amount', variable: 'x' },
         { type: 'number', number: '8', formula: '((x / 2) + 3)', dependent: true },
+        { type: 'number', number: '100', formula: '((x) ^ (2))', dependent: true },
       ]);
       expect(
         parsed.result.blueprintExport.document.blueprint.entities.map(({ control_behavior }) =>
@@ -1508,7 +1511,7 @@ formulaOutput += Selector({ input, operation: 'select', index: amount / 2 + 3 })
             ? control_behavior.index_constant
             : undefined,
         ),
-      ).toEqual([10, 8]);
+      ).toEqual([10, 8, 100]);
 
       const binding = parsed.parameterBinding;
       if (binding?.ok !== true || binding.token === undefined) {
@@ -1551,8 +1554,8 @@ formulaOutput += Selector({ input, operation: 'select', index: amount / 2 + 3 })
               ? producer.index
               : undefined,
           );
-      expect(indices(defaults)).toEqual([10, 8]);
-      expect(indices(overridden)).toEqual([14, 10]);
+      expect(indices(defaults)).toEqual([10, 8, 100]);
+      expect(indices(overridden)).toEqual([14, 10, 196]);
       expect(retry.plan).toEqual(overridden.plan);
       expect(reset.plan).toEqual(defaults.plan);
       expect(defaults.resolvedCircuit.ir.producers.map(({ id }) => id)).toEqual(
@@ -1567,7 +1570,7 @@ formulaOutput += Selector({ input, operation: 'select', index: amount / 2 + 3 })
             ? control_behavior.index_constant
             : undefined,
         ),
-      ).toEqual([14, 10]);
+      ).toEqual([14, 10, 196]);
       expect(artifact.blueprint.blueprint).not.toHaveProperty('parameters');
       expect(globals[localExpressionRunKey]).toBe(1);
     } finally {

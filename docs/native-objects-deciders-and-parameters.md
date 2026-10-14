@@ -329,10 +329,12 @@ formed from owning number parameters and finite numbers are also accepted in
 exact `left`/`right` constant slots, using the existing local numeric DAG without
 extra hardware or source re-execution. Registered expressions are also accepted
 in numeric `index` of a Selector `select` configuration with the same local
-binding behavior. Binary `/` uses finite JavaScript-number division in this local
-configuration DAG, not Factorio device arithmetic; intermediate fractions are
-allowed, but each final field keeps its integer or finite-double rule. A zero
-denominator fails with a located error. These expressions do not enable Network property keys,
+binding behavior. Binary `/` and `**` use finite JavaScript-number arithmetic
+in this local configuration DAG, not Factorio device arithmetic; intermediate
+fractions are allowed, but each final field keeps its integer or finite-double
+rule. A zero denominator or non-finite power result fails with a located error.
+TypeScript `^` remains XOR; only native formula projection renders `**` as `^`.
+These expressions do not enable Network property keys,
 `input + amount`, compact `IF`/`when` outputs, dynamic operations or coercion.
 Concrete Signal and `Each` output behavior is unchanged.
 
@@ -551,8 +553,9 @@ that leaf, including duplicated rows; each must retain the declared original.
 This is not matching parameter occurrences by equal numeric values.
 Existing concrete source binding remains
 separate. Direct source parameter multipliers support local finite-double binding,
-but remain unsupported by native metadata export; registered
-numeric-expression DAGs are internal host APIs, not new source syntax.
+but remain unsupported by native metadata export. The registered DAG is internal
+host state; supported source expressions use existing TypeScript operators only
+in the reviewed configuration slots, not a new general-purpose expression API.
 Plain unparameterized devices, including compound Deciders and Signal-index
 Selectors, and concrete section multipliers remain allowed. Concrete Decider
 then/else outputs, comparators, input lanes and wildcard conditions are preserved.
@@ -600,11 +603,13 @@ their normal JavaScript property behavior.
 
 ## Dependencies and formulas
 
-An internal host-local numeric-expression DAG now covers finite literals,
-registered number-parameter references, unary negation, and binary addition,
-subtraction, and multiplication, with bounded construction and a pure
-default/binding evaluator. This internal foundation neither parses nor emits
-Factorio formulas and does not establish native formula arithmetic semantics.
+An internal host-local numeric-expression DAG covers finite literals, registered
+number-parameter references, unary negation, and binary addition, subtraction,
+multiplication, division and exponentiation, with bounded construction and a
+pure default/binding evaluator. Source `**` uses finite JavaScript-number
+semantics, distinct from Factorio device arithmetic. The private native renderer
+maps `**` to `^` with explicit grouping, but does not establish game acceptance,
+evaluation or placement semantics.
 The reviewed host-local integration is limited to Arithmetic constant operand
 values, Decider `condition.compare.right` thresholds and `mode: 'constant'`
 output values in both normal and else output lists, Constant section multipliers
@@ -614,19 +619,17 @@ multiple ordered output rows; binding evaluates it to concrete values without
 coalescing duplicate rows. Arithmetic/Decider results and filter-count
 expressions and Selector indices require a safe integer before the existing int32 normalization; a
 Constant multiplier is only required to be finite and remains a double in
-concrete configuration. This DAG integration does not itself add source formula
-operators or translate DAGs into native strings, establish placement-time
-Factorio semantics, or imply simulator
-support for non-unit multipliers.
+concrete configuration. Local binding does not floor or clamp intermediate
+values; non-finite results are rejected, and negative-base fractional powers
+therefore fail. These host-local rules do not imply simulator support for
+non-unit multipliers or native Formula behavior.
 
 Explicit native `variable`, `formula` and `dependent` metadata is preserved by
 the numeric declarations described above, separately from the internal typed DAG.
 It does not create or validate recipe/property dependency nodes, assign native
 parameter indices or evaluate cycles. Recipe ingredients/products and parameter
-properties remain future dependency work. A future operator syntax/backend may
-use typed expression/dependency nodes and compile them to native strings; it
-must follow independently reviewed target-version capabilities. Raw native
-formula strings are not required to be an AST and are never treated as host DAGs.
+properties remain future dependency work. Raw native formula strings are not
+required to be an AST and are never treated as host DAGs.
 
 ## Conformance boundary
 

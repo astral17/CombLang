@@ -91,6 +91,49 @@ output += Decider({ condition: input[A] > amount, outputs: [input[A]], elseOutpu
 output += Selector({ input, operation: 'select', index: amount });`;
 
 describe('owning source native parameter export', () => {
+  test('exports grouped power formulas while retaining exact physical Constant defaults', () => {
+    const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const C = Signal('virtual', 'signal-C');
+const D = Signal('virtual', 'signal-D');
+const E = Signal('virtual', 'signal-E');
+const amount = Param.number('Amount', 3, { variable: 'x' });
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: A, value: amount },
+  { signal: B, value: (-amount) ** 2 },
+  { signal: C, value: -(amount ** 2) },
+  { signal: D, value: (-2) ** amount },
+  { signal: E, value: 2 ** amount },
+] }] });`);
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '3', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '9', formula: '(((-x)) ^ (2))', dependent: true },
+      { type: 'number', number: '-9', formula: '(-((x) ^ (2)))', dependent: true },
+      { type: 'number', number: '-8', formula: '((-2) ^ (x))', dependent: true },
+      { type: 'number', number: '8', formula: '((2) ^ (x))', dependent: true },
+    ]);
+    const json = emitNativeBlueprintJson(native);
+    expect(json.blueprint.entities[0]).toMatchObject({
+      control_behavior: {
+        sections: {
+          sections: [
+            {
+              filters: [
+                { name: 'signal-A', count: 3 },
+                { name: 'signal-B', count: 9 },
+                { name: 'signal-C', count: -9 },
+                { name: 'signal-D', count: -8 },
+                { name: 'signal-E', count: 8 },
+              ],
+            },
+          ],
+        },
+      },
+    });
+  });
+
   test.each([false, true])(
     'Arithmetic Signal output still rejects native metadata (mixed numeric: %s) without losing concrete defaults',
     (mixed) => {
@@ -2495,6 +2538,13 @@ output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-
       'filter',
     ],
     [
+      'reciprocal section multiplier',
+      `const scale = Param.number('Scale', 2);
+const output = new Network();
+output += Constant({ sections: [{ multiplier: scale ** -1, filters: [] }] });`,
+      'power-multiplier',
+    ],
+    [
       'unit-default section multiplier',
       `const scale = Param.number('Scale', 2);
 const output = new Network();
@@ -2512,7 +2562,11 @@ output += Constant({ sections: [{ multiplier: scale * 0.5, filters: [] }] });`,
       expect(bound.plan.producers[0]).toMatchObject(
         slot === 'filter'
           ? { configuration: { sections: [{ multiplier: 1, filters: [{ value: 0 }] }] } }
-          : { configuration: { sections: [{ multiplier: 1.5, filters: [] }] } },
+          : {
+              configuration: {
+                sections: [{ multiplier: slot === 'power-multiplier' ? 1 / 3 : 1.5, filters: [] }],
+              },
+            },
       );
       expect(exportFailure(compilation)).toMatchObject({
         code: 'CP1002',

@@ -1868,10 +1868,10 @@ const result = amount % 1;`,
         anchor: 'amount % 1',
       },
       {
-        name: 'unsupported power operator',
+        name: 'unsupported bitwise XOR operator',
         text: `const amount = Param.number('Amount', 5);
-const result = amount ** 2;`,
-        anchor: 'amount ** 2',
+const result = amount ^ 2;`,
+        anchor: 'amount ^ 2',
       },
       {
         name: 'unsupported bitwise operator',
@@ -2084,6 +2084,142 @@ selectorOutput += Selector({ input, operation: 'select', index: 20 / denominator
     }
   });
 
+  test('binds power across reviewed local slots and preserves topology after invalid overrides', () => {
+    const key = '__comblang_power_expression_source_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const had = Object.hasOwn(globals, key);
+    const before = globals[key];
+    globals[key] = 0;
+    const text = `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 3);
+const rootBase = Param.number('Root base', 9);
+const negativeBase = Param.number('Negative base', -2);
+const exponent = Param.number('Exponent', 3);
+const input = new Network();
+const arithmeticOutput = new Network();
+const rootOutput = new Network();
+const groupingOutput = new Network();
+const constantOutput = new Network();
+const exactOutput = new Network();
+const ifOutput = new Network();
+const fluentOutput = new Network();
+const selectorOutput = new Network();
+const derived = amount ** 2 + 1;
+arithmeticOutput += Arithmetic({ left: derived, operation: 'add', right: 0, output: A });
+rootOutput += Arithmetic({ left: rootBase ** 0.5, operation: 'add', right: 0, output: A });
+groupingOutput += Arithmetic({ left: (-amount) ** 2, operation: 'add', right: 0, output: A });
+groupingOutput += Arithmetic({ left: -(amount ** 2), operation: 'add', right: 0, output: A });
+constantOutput += Constant({ sections: [{ multiplier: amount ** -1, filters: [{ signal: A, value: derived }] }] });
+exactOutput += Decider({ condition: input[A] > derived, outputs: [input[A]] });
+ifOutput += IF(input[A] > derived, input[A]);
+fluentOutput += when(input[A] > derived).then(input[A]);
+selectorOutput += Selector({ input, operation: 'select', index: amount ** 2 });
+selectorOutput += Selector({ input, operation: 'select', index: 2 ** amount });
+arithmeticOutput += Arithmetic({ left: negativeBase ** exponent, operation: 'add', right: 0, output: A });`;
+    try {
+      const compilation = compileSourceProgram(
+        { path: 'power-parameter-slots.factorio.ts', text },
+        parameterHost(),
+        [],
+        (stage) => {
+          if (stage === 'execute') globals[key] = Number(globals[key]) + 1;
+        },
+      );
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      expect(globals[key]).toBe(1);
+      const [amount, rootBase, negativeBase, exponent] =
+        listSourceCompilationParameters(compilation);
+      const artifact = structuredClone(sourceCompilationArtifact(compilation));
+      const originalIr = structuredClone(compilation.execution?.circuit.ir);
+      const defaults = bindSourceCompilationCircuit(compilation);
+      const overridden = bindSourceCompilationCircuit(compilation, [
+        { parameter: amount!.parameter, value: 4 },
+        { parameter: rootBase!.parameter, value: 4 },
+      ]);
+      const values = (pair: ReturnType<typeof bindSourceCompilationCircuit>) => ({
+        arithmetic: pair.plan.producers.filter(({ kind }) => kind === 'arithmetic'),
+        constant: pair.plan.producers.find(({ kind }) => kind === 'constant'),
+        deciders: pair.plan.producers.filter(({ kind }) => kind === 'decider'),
+        selectors: pair.plan.producers.filter(({ kind }) => kind === 'selector'),
+      });
+      const defaultValues = values(defaults);
+      const reboundValues = values(overridden);
+      expect(defaultValues.arithmetic).toMatchObject([
+        { left: { kind: 'constant', value: 10 } },
+        { left: { kind: 'constant', value: 3 } },
+        { left: { kind: 'constant', value: 9 } },
+        { left: { kind: 'constant', value: -9 } },
+        { left: { kind: 'constant', value: -8 } },
+      ]);
+      expect(defaultValues.constant).toMatchObject({
+        configuration: { sections: [{ multiplier: 1 / 3, filters: [{ value: 10 }] }] },
+      });
+      expect(defaultValues.deciders).toHaveLength(3);
+      for (const producer of defaultValues.deciders) {
+        expect(producer).toMatchObject({ condition: { constant: 10 } });
+      }
+      expect(defaultValues.selectors).toMatchObject([
+        { operation: 'select', index: 9 },
+        { operation: 'select', index: 8 },
+      ]);
+      expect(reboundValues.arithmetic).toMatchObject([
+        { left: { kind: 'constant', value: 17 } },
+        { left: { kind: 'constant', value: 2 } },
+        { left: { kind: 'constant', value: 16 } },
+        { left: { kind: 'constant', value: -16 } },
+        { left: { kind: 'constant', value: -8 } },
+      ]);
+      expect(reboundValues.constant).toMatchObject({
+        configuration: { sections: [{ multiplier: 0.25, filters: [{ value: 17 }] }] },
+      });
+      for (const producer of reboundValues.deciders) {
+        expect(producer).toMatchObject({ condition: { constant: 17 } });
+      }
+      expect(reboundValues.selectors).toMatchObject([
+        { operation: 'select', index: 16 },
+        { operation: 'select', index: 16 },
+      ]);
+
+      for (const bindings of [
+        [{ parameter: rootBase!.parameter, value: 2 }],
+        [{ parameter: amount!.parameter, value: 0 }],
+        [{ parameter: exponent!.parameter, value: 0.5 }],
+      ]) {
+        expect(() => bindSourceCompilationCircuit(compilation, bindings)).toThrowError(
+          expect.objectContaining({ code: 'CP1000', span: expect.any(Object) }),
+        );
+      }
+      expect(() =>
+        bindSourceCompilationCircuit(compilation, [
+          { parameter: negativeBase!.parameter, value: -2 },
+          { parameter: exponent!.parameter, value: 0.5 },
+        ]),
+      ).toThrowError(expect.objectContaining({ code: 'CP1000', span: expect.any(Object) }));
+
+      expect(bindSourceCompilationCircuit(compilation)).toEqual(defaults);
+      expect(
+        bindSourceCompilationCircuit(compilation, [
+          { parameter: amount!.parameter, value: 4 },
+          { parameter: rootBase!.parameter, value: 4 },
+        ]),
+      ).toEqual(overridden);
+      expect(overridden.resolvedCircuit.ir.producers.map(({ id }) => id)).toEqual(
+        defaults.resolvedCircuit.ir.producers.map(({ id }) => id),
+      );
+      expect(
+        overridden.resolvedCircuit.ir.entities.map(({ id, placement }) => ({ id, placement })),
+      ).toEqual(
+        defaults.resolvedCircuit.ir.entities.map(({ id, placement }) => ({ id, placement })),
+      );
+      expect(sourceCompilationArtifact(compilation)).toEqual(artifact);
+      expect(compilation.execution?.circuit.ir).toEqual(originalIr);
+      expect(globals[key]).toBe(1);
+    } finally {
+      if (had) globals[key] = before;
+      else delete globals[key];
+    }
+  });
+
   test('preserves parameter-free JavaScript arithmetic, comparison and short-circuit order', () => {
     const key = '__comblang_parameter_free_operator_semantics';
     const globals = globalThis as Record<string, unknown>;
@@ -2094,14 +2230,33 @@ selectorOutput += Selector({ input, operation: 'select', index: 20 / denominator
         path: 'parameter-free-operators.factorio.ts',
         text: `let calls = 0;
 function sideEffect() { calls += 1; return true; }
-globalThis.${key} = ['a' + 'b', 20 / 4, 1 < 2, false && sideEffect(), calls];`,
+globalThis.${key} = ['a' + 'b', 20 / 4, 2 ** 3, 1 < 2, false && sideEffect(), calls];`,
       });
       expect(compilation.pipelineDiagnostics).toEqual([]);
-      expect(globals[key]).toEqual(['ab', 5, true, false, 0]);
+      expect(globals[key]).toEqual(['ab', 5, 8, true, false, 0]);
     } finally {
       if (had) globals[key] = before;
       else delete globals[key];
     }
+  });
+
+  test('keeps Network power dispatch on the existing arithmetic producer path', () => {
+    const compilation = compileSourceProgram({
+      path: 'network-power-dispatch.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output = new Network();
+input += CC(3 * A);
+output += input[A] ** 2;`,
+    });
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.plan?.producers).toHaveLength(2);
+    expect(compilation.plan?.producers[1]).toMatchObject({
+      kind: 'arithmetic',
+      operation: 'power',
+      left: { kind: 'signal', network: 'input', signal: { name: 'signal-A' } },
+      right: { kind: 'constant', value: 2 },
+    });
   });
 
   test('keeps ordinary unary minus native for negative zero, coercion and throws', () => {

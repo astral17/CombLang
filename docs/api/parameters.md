@@ -62,10 +62,12 @@ in several fields, its chosen value must satisfy every field's rules. Values
 are not rounded or clamped to make a failed binding pass.
 
 A number parameter may form a local source expression with finite numbers and
-other owning number parameters using binary `+`, `-`, `*`, `/` or unary `-`.
-Division uses finite JavaScript-number semantics inside this configuration DAG,
-not Factorio device arithmetic; a zero denominator produces a non-finite result
-and a located `CP1000` error. Fractions are allowed at intermediate nodes, while
+other owning number parameters using binary `+`, `-`, `*`, `/`, `**` or unary
+`-`. Division and exponentiation use finite JavaScript-number semantics inside
+this configuration DAG, not Factorio device arithmetic. Zero denominators,
+negative bases with non-integral exponents, zero with a negative exponent and
+overflow produce a non-finite result and a located `CP1000` error; JavaScript
+`0 ** 0` is 1. Fractions are allowed at intermediate nodes, while
 the final destination still applies the integer or finite-double rule above. The
 opaque result is evaluated by the registered numeric DAG only when it occupies
 an exact Arithmetic `left` or `right` constant slot, a direct Constant filter
@@ -75,9 +77,10 @@ condition (including nested AND/OR conditions), or a Selector `select` index.
 It creates no device and does not re-execute source during binding. Count,
 threshold and Selector-index results must be finite safe integers before existing signed-int32
 normalization; multipliers remain finite doubles. Parameter-free JavaScript
-arithmetic remains ordinary JavaScript. `%`, exponentiation and bitwise operators
-remain unsupported for symbolic expressions. Derived expressions are not booleans,
-circuit Conditions or native formula strings.
+arithmetic remains ordinary JavaScript. `%` and bitwise operators remain
+unsupported for symbolic expressions; TypeScript `^` remains bitwise XOR, not
+power. Derived expressions are not booleans, circuit Conditions or native
+formula strings.
 
 A Signal parameter in a Selector index changes which input Signal provides the
 index count; it does not specify the selected output. A Signal parameter is not
@@ -258,8 +261,8 @@ Selector numeric select index, and must not itself declare `formula` (even an
 empty string) or `dependent: true`. Typed formula export requires a linked
 physical circuit containing only Constant, Arithmetic, Decider and Selector
 producers. It
-accepts only signed-int32 literals/defaults and registered `+`, `-`, `*`, `/` and
-unary-negation nodes. The raw evaluated default must itself be signed int32 and
+accepts only signed-int32 literals/defaults and registered `+`, `-`, `*`, `/`,
+`**` and unary-negation nodes. The raw evaluated default must itself be signed int32 and
 match its physical field; fractional or wrapped defaults are rejected. Output is
 fully parenthesized without folding or reassociation and respects bounded node
 and byte limits. Repeated identical
@@ -280,9 +283,12 @@ matching a parameter original as well, unlike local nominal binding. Only typed
 local expressions in exact Arithmetic constant operands, direct Constant count
 slots, constant-right Decider thresholds and Selector numeric select indices
 receive this treatment; symbolic multipliers and derived expressions in other
-slots remain unsupported. Division formulas are only structurally projected:
-the generic pinned MathExpression grammar lists `/`, but this feature has no
-Factorio evaluation or placement evidence. Opaque formula strings remain opaque.
+slots remain unsupported. Native formula projection maps source `**` to native
+`^` and fully parenthesizes both operands and the expression tree. Division and
+power formulas are only structurally projected: the pinned generic
+MathExpression grammar lists `/` and `^`, but this feature has no Factorio
+formula evaluation or placement evidence. In TypeScript, `^` still means
+bitwise XOR. Opaque formula strings remain opaque.
 
 #### Bounded division example
 
@@ -307,6 +313,30 @@ output += Constant({
 });
 ```
 
+#### Bounded power example
+
+`**` follows JavaScript-number semantics in the local DAG. With Amount 3, the
+two derived Constant counts are 10 and 8; binding Amount to 4 produces 17 and 16. The native template keeps the physical defaults and writes derived rows
+using native `^` syntax: `(((x) ^ (2)) + 1)` and `((2) ^ (x))`. This is a
+bounded structural projection, not evidence that Factorio accepts or evaluates
+these formulas.
+
+```javascript
+const amount = Param.number('Amount', 3, { variable: 'x' });
+const output = new Network();
+output += Constant({
+  sections: [
+    {
+      filters: [
+        { signal: Signal('virtual', 'signal-A'), value: amount },
+        { signal: Signal('virtual', 'signal-B'), value: amount ** 2 + 1 },
+        { signal: Signal('virtual', 'signal-C'), value: 2 ** amount },
+      ],
+    },
+  ],
+});
+```
+
 A user-returned final placement export for a separate Constant-only generated `(x * 2)` case records
 normal virtual A=9 and B=18 at Amount=9 ([Factorio 2.1.21 fixture](../../fixtures/blueprint-exchange/factorio-2.1.21/generated-number-formula-placed.txt)).
 This is one bounded native placement observation: current mods were unspecified,
@@ -321,10 +351,10 @@ The generic MathExpression reference in the
 documents `+`, `-`, `*`, `/`, `^`, parentheses, and the built-ins `abs`, `log2`,
 `sign`, `max` and `min`.
 That generic grammar is broader than this typed exporter, which accepts only
-registered nested `+`, `-`, `*`, `/` and unary negation. In TypeScript, `^` is
-bitwise XOR, not exponentiation, and power syntax is outside this API. Explicit
-native `formula` metadata remains opaque: local binding does not parse or
-evaluate it.
+registered nested `+`, `-`, `*`, `/`, `**` and unary negation. In TypeScript,
+`^` is bitwise XOR, not exponentiation; only the private native projection
+translates registered `**` nodes to `^`. Explicit native `formula` metadata
+remains opaque: local binding does not parse or evaluate it.
 
 ### Bounded Constant Signal native export
 
@@ -415,7 +445,7 @@ consumed in exact Arithmetic numeric constant slots, direct Constant filter
 count/multiplier slots, or as the right numeric threshold in an exact Decider,
 fluent `when`, or `IF` condition, or a Selector `select` numeric index described above.
 Do not use derived expressions for
-modulo/power/bitwise operations, ordinary JavaScript comparisons,
+modulo/bitwise operations, ordinary JavaScript comparisons,
 truthiness, coercion, property access, parameter keys, compact arithmetic, other
 Constant fields, Decider outputs, other Selector fields, negated conditions, or
 Section scaling. Direct number-parameter circuit comparisons remain supported

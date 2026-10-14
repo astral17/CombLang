@@ -32,7 +32,7 @@ function literal(value: number) {
 }
 
 function binary(
-  operator: 'add' | 'subtract' | 'multiply' | 'divide',
+  operator: 'add' | 'subtract' | 'multiply' | 'divide' | 'power',
   left: unknown,
   right: unknown,
 ) {
@@ -103,7 +103,7 @@ describe('private native numeric formula renderer', () => {
     expect(multiply.key).not.toBe(measured[0]!.key);
     expect(renderer.renderUnique([multiply]).get(multiply.key)).toBe('(x * 2)');
 
-    const sameOperands = (['multiply', 'divide'] as const).map((operator) =>
+    const sameOperands = (['multiply', 'divide', 'power'] as const).map((operator) =>
       renderer.measure(
         createBlueprintNumericExpression(
           session,
@@ -112,9 +112,41 @@ describe('private native numeric formula renderer', () => {
         '$.sameOperands',
       ),
     );
-    expect(sameOperands.map(({ defaultValue }) => defaultValue)).toEqual([10, 10]);
-    expect(sameOperands[0]!.key).not.toBe(sameOperands[1]!.key);
-    expect([...renderer.renderUnique(sameOperands).values()]).toEqual(['(x * 1)', '(x / 1)']);
+    expect(sameOperands.map(({ defaultValue }) => defaultValue)).toEqual([10, 10, 10]);
+    expect(new Set(sameOperands.map(({ key }) => key)).size).toBe(3);
+    expect([...renderer.renderUnique(sameOperands).values()]).toEqual([
+      '(x * 1)',
+      '(x / 1)',
+      '((x) ^ (1))',
+    ]);
+  });
+
+  test('renders power with explicit operands, source grouping, and measured expansion', () => {
+    const { session, handles, renderer } = setup([
+      { name: 'x', value: 3 },
+      { name: 'y', value: 2 },
+    ]);
+    const x = parameter(handles.get('x')!);
+    const power = (left: unknown, right: unknown) => binary('power', left, right);
+    const cases = [
+      [power(x, literal(2)), '((x) ^ (2))', 9],
+      [power(literal(2), x), '((2) ^ (x))', 8],
+      [power(literal(-2), x), '((-2) ^ (x))', -8],
+      [power({ kind: 'negate', operand: x }, literal(2)), '(((-x)) ^ (2))', 9],
+      [{ kind: 'negate', operand: power(x, literal(2)) }, '(-((x) ^ (2)))', -9],
+      [power(power(x, literal(2)), literal(2)), '((((x) ^ (2))) ^ (2))', 81],
+      [power(x, power(literal(2), literal(3))), '((x) ^ (((2) ^ (3))))', 6561],
+    ] as const;
+    const measured = cases.map(([expression]) =>
+      renderer.measure(createBlueprintNumericExpression(session, expression), '$.power'),
+    );
+    const formulas = renderer.renderUnique(measured);
+
+    for (const [index, [, expected, defaultValue]] of cases.entries()) {
+      expect(formulas.get(measured[index]!.key)).toBe(expected);
+      expect(measured[index]!.renderedBytes).toBe(expected.length);
+      expect(measured[index]!.defaultValue).toBe(defaultValue);
+    }
   });
 
   test('rejects forged roots and non-int32 literals with located CP1002', () => {
@@ -164,24 +196,29 @@ describe('private native numeric formula renderer', () => {
     );
   });
 
-  test('measures shared expression expansion before rendering and enforces aggregate unique text bytes', () => {
-    const { session, handles, renderer } = setup([{ name: 'x', value: 0 }]);
-    let shared: unknown = parameter(handles.get('x')!);
-    for (let index = 0; index < 16; index += 1) shared = binary('multiply', shared, shared);
-    const overRootLimit = createBlueprintNumericExpression(session, shared);
-    expect(() => renderer.measure(overRootLimit, '$.tooLarge')).toThrow(
-      expect.objectContaining({ code: 'CP1002', path: '$.tooLarge' }),
-    );
+  test.each(['multiply', 'power'] as const)(
+    'bounds shared %s expansion and aggregate unique text bytes',
+    (operator) => {
+      const { session, handles, renderer } = setup([{ name: 'x', value: 0 }]);
+      let shared: unknown = parameter(handles.get('x')!);
+      for (let index = 0; index < 16; index += 1) shared = binary(operator, shared, shared);
+      const overRootLimit = createBlueprintNumericExpression(session, shared);
+      expect(() => renderer.measure(overRootLimit, '$.tooLarge')).toThrow(
+        expect.objectContaining({ code: 'CP1002', path: '$.tooLarge' }),
+      );
 
-    shared = parameter(handles.get('x')!);
-    for (let index = 0; index < 14; index += 1) shared = binary('multiply', shared, shared);
-    const first = createBlueprintNumericExpression(session, binary('multiply', shared, shared));
-    const second = createBlueprintNumericExpression(session, binary('add', shared, shared));
-    const measured = [renderer.measure(first, '$.first'), renderer.measure(second, '$.second')];
-    expect(measured[0]!.renderedBytes).toBeLessThan(262144);
-    expect(measured[1]!.renderedBytes).toBeLessThan(262144);
-    expect(() => renderer.renderUnique(measured)).toThrow(
-      expect.objectContaining({ code: 'CP1002', path: '$.second' }),
-    );
-  });
+      shared = parameter(handles.get('x')!);
+      const sharedDepth = operator === 'power' ? 13 : 14;
+      for (let index = 0; index < sharedDepth; index += 1)
+        shared = binary(operator, shared, shared);
+      const first = createBlueprintNumericExpression(session, binary(operator, shared, shared));
+      const second = createBlueprintNumericExpression(session, binary('add', shared, shared));
+      const measured = [renderer.measure(first, '$.first'), renderer.measure(second, '$.second')];
+      expect(measured[0]!.renderedBytes).toBeLessThan(262144);
+      expect(measured[1]!.renderedBytes).toBeLessThan(262144);
+      expect(() => renderer.renderUnique(measured)).toThrow(
+        expect.objectContaining({ code: 'CP1002', path: '$.second' }),
+      );
+    },
+  );
 });
