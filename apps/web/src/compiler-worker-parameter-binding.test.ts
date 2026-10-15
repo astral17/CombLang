@@ -55,7 +55,7 @@ const amount = Param.number('Amount', 5);
 const factor = Param.number('Factor', 2);
 const input = new Network();
 const output = new Network();
-input += Constant({ sections: [{ filters: [{ signal: A, value: (amount + 1) * factor }] }] });
+input += Constant({ sections: [{ filters: [{ signal: A, value: Math.abs((amount + 1) * factor) }] }] });
 output += Arithmetic({ left: input[A], operation: 'multiply', right: amount - 1, output: A });`,
 };
 
@@ -337,7 +337,7 @@ test('another fresh session', ({ network, tick, expectSignal }) => {
     expect(runCount()).toBe(1);
   });
 
-  test('keeps primary Constant and Arithmetic expressions local across Worker consumers and native rejection', async () => {
+  test('keeps primary Constant Math-function and Arithmetic expressions local across Worker consumers and native rejection', async () => {
     const globals = globalThis as Record<string, unknown>;
     const previous = globals[localExpressionRunKey];
     globals[localExpressionRunKey] = 0;

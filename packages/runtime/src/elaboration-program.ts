@@ -163,8 +163,10 @@ import {
   type BlueprintSignalParameterHandle,
 } from '../../compiler/src/blueprint-parameters.js';
 import {
+  assertBlueprintNumericFunctionArity,
   createBlueprintNumericExpression,
   evaluateBlueprintNumericExpression,
+  resolveBlueprintNumericFunctionName,
   type BlueprintNumericExpression,
 } from '../../compiler/src/blueprint-numeric-expression.js';
 import {
@@ -2814,6 +2816,65 @@ class ElaborationRecorder {
     }
     if (this.#isEntity(callable)) return this.#invokeEntity(callable, args, rawSpan);
     if (typeof callable !== 'function') throw new TypeError('Called value is not a function.');
+    const numericFunction = resolveBlueprintNumericFunctionName(callable);
+    const hasDirectNumericOperand = args.some(
+      ({ value }) =>
+        findBlueprintParameterHandle(value) !== undefined ||
+        findSourceNumericExpressionView(value) !== undefined,
+    );
+    if (numericFunction !== undefined && hasDirectNumericOperand) {
+      this.#recordDslCall();
+      try {
+        assertBlueprintNumericFunctionArity(numericFunction, args.length, '$.expression.arguments');
+      } catch (error) {
+        throw new ElaborationExecutionError(
+          error instanceof Error ? error.message : 'Invalid source numeric function arity.',
+          this.#span(rawSpan),
+          'RT2027',
+          undefined,
+          { cause: error },
+        );
+      }
+      if (this.#parameterCapture === undefined) {
+        throw new ElaborationExecutionError(
+          'Source numeric expressions require an owning parameter session.',
+          this.#span(rawSpan),
+          'RT2027',
+        );
+      }
+      const session = this.#parameterCapture.session;
+      const operands: unknown[] = [];
+      for (let index = 0; index < args.length; index += 1) {
+        const argument = args[index]!;
+        try {
+          operands.push(this.#numericExpressionOperand(argument.value, `$.arguments[${index}]`));
+        } catch (error) {
+          throw new ElaborationExecutionError(
+            error instanceof Error ? error.message : 'Invalid source numeric function argument.',
+            this.#span(argument.source),
+            'RT2027',
+            undefined,
+            { cause: error },
+          );
+        }
+      }
+      try {
+        const expression = createBlueprintNumericExpression(session, {
+          kind: 'call',
+          function: numericFunction,
+          arguments: operands,
+        });
+        return createSourceNumericExpressionView(session, expression, this.#span(rawSpan));
+      } catch (error) {
+        throw new ElaborationExecutionError(
+          error instanceof Error ? error.message : 'Invalid source numeric function call.',
+          this.#span(rawSpan),
+          'RT2027',
+          undefined,
+          { cause: error },
+        );
+      }
+    }
     const parameterDeclaration =
       findBlueprintParameterHandle(receiver) ??
       args

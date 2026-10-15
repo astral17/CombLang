@@ -113,6 +113,40 @@ describe('author API documentation', () => {
     ]);
   });
 
+  test('runs the documented registered Math formula example locally and through native projection', async () => {
+    const source = read('parameters').match(
+      /### Registered Math functions[\s\S]*?```javascript\r?\n([\s\S]*?)\r?\n```/,
+    )?.[1];
+    if (source === undefined) throw new Error('Missing registered Math function example');
+    const compilation = compile(source, await bundled);
+    const session = createSourceParameterBindingSession(compilation);
+    const amount = session.parameters[0];
+    if (amount === undefined) throw new Error('Missing documented Amount parameter');
+    const counts = (circuit) =>
+      generateBlueprintJson(
+        circuit,
+      ).blueprint.entities[0].control_behavior.sections.sections[0].filters.map(
+        ({ count }) => count,
+      );
+    expect(counts(compilation.resolvedCircuit.ir)).toEqual([8, 12, 3, -1, 16, 4]);
+    expect(counts(session.bind([{ id: amount.id, value: 16 }]).resolvedCircuit.ir)).toEqual([
+      16, 4, 4, -1, 16, 4,
+    ]);
+
+    const native = exportSourceCompilationNativeBlueprint(compilation, {
+      label: 'Documented Math formulas',
+      maxDeciderConditionRows: 1024,
+    });
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '8', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '12', formula: 'abs((x - 20))', dependent: true },
+      { type: 'number', number: '3', formula: 'log2(x)', dependent: true },
+      { type: 'number', number: '-1', formula: 'sign((x - 20))', dependent: true },
+      { type: 'number', number: '16', formula: 'max(x, 16)', dependent: true },
+      { type: 'number', number: '4', formula: 'min(x, 4)', dependent: true },
+    ]);
+  });
+
   test('runs the documented bounded division default, override, failure, and native projection', async () => {
     const source = read('parameters').match(
       /### Bounded division example[\s\S]*?```javascript\r?\n([\s\S]*?)\r?\n```/,
@@ -441,7 +475,7 @@ expectSignal(network('output'), Signal('virtual', 'signal-B')).toBe(111);`,
     },
   );
 
-  test('keeps parameter-free Math calls ordinary JavaScript and rejects opaque parameter calls', async () => {
+  test('keeps parameter-free Math ordinary and captures only the supported source Math calls', async () => {
     const environment = await bundled;
     const ordinary = result(
       `const amount = Math.abs(-5);
@@ -457,17 +491,48 @@ output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-
         .sections.sections[0].filters[0].count,
     ).toBe(5);
 
-    for (const expression of ['Math.abs(amount)', 'Math.abs(amount + 1)']) {
-      const opaque = result(
+    const supported = result(
+      `const amount = Param.number('Amount', -5, { variable: 'x' });
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: Signal('virtual', 'signal-A'), value: amount },
+  { signal: Signal('virtual', 'signal-B'), value: Math.abs(amount) },
+  { signal: Signal('virtual', 'signal-C'), value: Math.abs(amount + 1) },
+] }] });`,
+      environment,
+    );
+    expect(supported.pipelineDiagnostics).toEqual([]);
+    if (supported.resolvedCircuit === undefined)
+      throw new Error('Registered Math calls did not produce a concrete circuit');
+    expect(
+      generateBlueprintJson(
+        supported.resolvedCircuit.ir,
+      ).blueprint.entities[0].control_behavior.sections.sections[0].filters.map(
+        ({ count }) => count,
+      ),
+    ).toEqual([-5, 5, 4]);
+    expect(
+      exportSourceCompilationNativeBlueprint(supported, {
+        label: 'Registered Math example',
+        maxDeciderConditionRows: 1024,
+      }).parameters,
+    ).toEqual([
+      { type: 'number', number: '-5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '5', formula: 'abs(x)', dependent: true },
+      { type: 'number', number: '4', formula: 'abs((x + 1))', dependent: true },
+    ]);
+
+    for (const expression of ['Math.floor(amount)', 'Math.abs.bind(Math)(amount)']) {
+      const unsupported = result(
         `const amount = Param.number('Amount', -5);
 const output = new Network();
 output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-A'), value: ${expression} }] }] });`,
         environment,
       );
-      expect(opaque.pipelineDiagnostics).toEqual([
+      expect(unsupported.pipelineDiagnostics).toEqual([
         expect.objectContaining({ severity: 'error', span: expect.any(Object) }),
       ]);
-      expect(opaque.resolvedCircuit).toBeUndefined();
+      expect(unsupported.resolvedCircuit).toBeUndefined();
     }
   });
 

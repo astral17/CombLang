@@ -52,6 +52,41 @@ export interface BlueprintNumericBinaryExpression extends NumericExpressionNodeB
 
 type BlueprintNumericFunctionName = 'abs' | 'log2' | 'sign' | 'min' | 'max';
 
+export function assertBlueprintNumericFunctionArity(
+  functionName: BlueprintNumericFunctionName,
+  arity: number,
+  path: string,
+): void {
+  const minimumLength = functionName === 'min' || functionName === 'max' ? 2 : 1;
+  const maximumLength = functionName === 'min' || functionName === 'max' ? 255 : 1;
+  if (!Number.isInteger(arity) || arity < minimumLength || arity > maximumLength) {
+    const range = minimumLength === 1 ? 'exactly one' : 'between two and 255';
+    fail('CP1000', path, `${functionName} requires ${range} arguments.`);
+  }
+}
+
+const originalNumericFunctions = Object.freeze({
+  abs: Math.abs,
+  log2: Math.log2,
+  sign: Math.sign,
+  min: Math.min,
+  max: Math.max,
+});
+
+const numericFunctionNamesByIdentity = new Map<Function, BlueprintNumericFunctionName>(
+  Object.entries(originalNumericFunctions).map(([name, implementation]) => [
+    implementation,
+    name as BlueprintNumericFunctionName,
+  ]),
+);
+
+/** Resolves only the original Math builtin references captured by this module. */
+export function resolveBlueprintNumericFunctionName(
+  callable: unknown,
+): BlueprintNumericFunctionName | undefined {
+  return typeof callable === 'function' ? numericFunctionNamesByIdentity.get(callable) : undefined;
+}
+
 export interface BlueprintNumericCallExpression extends NumericExpressionNodeBase {
   readonly kind: 'call';
   readonly function: BlueprintNumericFunctionName;
@@ -375,12 +410,10 @@ function readCallArguments(
 
   const lengthDescriptor = Object.getOwnPropertyDescriptor(arrayValue, 'length');
   const length = lengthDescriptor?.value;
-  const minimumLength = functionName === 'min' || functionName === 'max' ? 2 : 1;
-  const maximumLength = functionName === 'min' || functionName === 'max' ? 255 : 1;
-  if (typeof length !== 'number' || length < minimumLength || length > maximumLength) {
-    const arity = minimumLength === 1 ? 'exactly one' : 'between two and 255';
-    fail('CP1000', path, `${functionName} requires ${arity} arguments.`);
+  if (typeof length !== 'number') {
+    fail('CP1000', path, 'numeric expression arguments must have an integer length.');
   }
+  assertBlueprintNumericFunctionArity(functionName, length, path);
 
   let keys: (string | symbol)[];
   try {
@@ -805,16 +838,11 @@ export function evaluateBlueprintNumericExpression(
           ({ source: argumentSource }) => argumentSource !== undefined,
         )?.source;
         const values = argumentsValue.map(({ value }) => value);
-        const unvalidated =
-          registered.node.function === 'abs'
-            ? Math.abs(values[0]!)
-            : registered.node.function === 'log2'
-              ? Math.log2(values[0]!)
-              : registered.node.function === 'sign'
-                ? Math.sign(values[0]!)
-                : registered.node.function === 'min'
-                  ? Math.min(...values)
-                  : Math.max(...values);
+        const unvalidated = Reflect.apply(
+          originalNumericFunctions[registered.node.function],
+          undefined,
+          values,
+        );
         const normalized =
           registered.node.function === 'sign' && Object.is(unvalidated, -0) ? 0 : unvalidated;
         const value = assertBlueprintParameterNumberValue(

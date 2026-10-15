@@ -412,6 +412,44 @@ describe('source blueprint export CLI', () => {
     }
   });
 
+  test('exports captured source Math calls through native parameter-template mode', async () => {
+    const { environment } = await parameterHost();
+    const path = await sourceFile(`const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const C = Signal('virtual', 'signal-C');
+const amount = Param.number('Amount', 8, { variable: 'x' });
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: A, value: amount },
+  { signal: B, value: Math.abs(amount - 20) },
+  { signal: C, value: Math.log2(amount) },
+] }] });`);
+    const { log, error } = capture();
+    try {
+      expect(await run(['blueprint', 'export', '--parameters', '--json', path], environment)).toBe(
+        0,
+      );
+      const document = JSON.parse(String(log.mock.calls[0]?.[0])).document;
+      expect(document.blueprint.parameters).toEqual([
+        { type: 'number', number: '8', name: 'Amount', variable: 'x' },
+        { type: 'number', number: '12', formula: 'abs((x - 20))', dependent: true },
+        { type: 'number', number: '3', formula: 'log2(x)', dependent: true },
+      ]);
+      expect(
+        document.blueprint.entities[0].control_behavior.sections.sections[0].filters.map(
+          ({ name, count }: { name: string; count: number }) => ({ name, count }),
+        ),
+      ).toEqual([
+        { name: 'signal-A', count: 8 },
+        { name: 'signal-B', count: 12 },
+        { name: 'signal-C', count: 3 },
+      ]);
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   test('exports parameter overrides from one concrete bound pair and keeps the default export intact', async () => {
     const { environment } = await parameterHost();
     const key = '__comblang_cli_override_export_runs';

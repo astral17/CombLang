@@ -82,6 +82,57 @@ unsupported for symbolic expressions; TypeScript `^` remains bitwise XOR, not
 power. Derived expressions are not booleans, circuit Conditions or native
 formula strings.
 
+### Registered Math functions
+
+The local numeric DAG also captures the original `Math.abs`, `Math.log2`,
+`Math.sign`, `Math.min` and `Math.max` functions when a call has at least one
+direct owning number parameter or derived numeric expression argument. In this
+symbolic form, `abs`, `log2` and `sign` require exactly one argument; `min` and
+`max` require 2–255. Every argument must be a finite number, an owning number
+parameter or an expression from the same parameter session. Results stay
+opaque and are available only in the exact local configuration slots listed
+above.
+
+Recognition uses the original function identity, not a `Math`/method spelling:
+aliases, destructuring, computed members and getters returning one of these
+original functions work. The callee is prepared before its arguments, and
+rebinding uses the same captured implementation even if source later changes a
+`Math` property. Calls without a direct symbolic argument remain ordinary
+JavaScript, including native coercion and arity behavior. Shadowed lookalikes,
+other Math methods, and `.bind`/`.call`/`.apply` wrappers do not gain symbolic
+support. Native formula projection of these call nodes is structural only;
+Factorio formula acceptance, evaluation and placement remain unverified.
+
+```javascript
+const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const C = Signal('virtual', 'signal-C');
+const D = Signal('virtual', 'signal-D');
+const E = Signal('virtual', 'signal-E');
+const F = Signal('virtual', 'signal-F');
+const amount = Param.number('Amount', 8, { variable: 'x' });
+const output = new Network();
+output += Constant({
+  sections: [
+    {
+      filters: [
+        { signal: A, value: amount },
+        { signal: B, value: Math.abs(amount - 20) },
+        { signal: C, value: Math.log2(amount) },
+        { signal: D, value: Math.sign(amount - 20) },
+        { signal: E, value: Math.max(amount, 16) },
+        { signal: F, value: Math.min(amount, 4) },
+      ],
+    },
+  ],
+});
+```
+
+The local defaults are 8, 12, 3, -1, 16 and 4. Binding Amount to 16 changes
+the concrete counts to 16, 4, 4, -1, 16 and 4 without rerunning the source.
+The typed native exporter can structurally represent these calls in supported
+formula slots, but that output is not Factorio conformance evidence.
+
 A Signal parameter in a Selector index changes which input Signal provides the
 index count; it does not specify the selected output. A Signal parameter is not
 a scalar input selection for Arithmetic and cannot replace `input[A]`.

@@ -334,6 +334,14 @@ in this local configuration DAG, not Factorio device arithmetic; intermediate
 fractions are allowed, but each final field keeps its integer or finite-double
 rule. A zero denominator or non-finite power result fails with a located error.
 TypeScript `^` remains XOR; only native formula projection renders `**` as `^`.
+Source calls to the original `Math.abs`, `Math.log2`, `Math.sign`, `Math.min`
+and `Math.max` functions can add registered call nodes when at least one direct
+argument is an owning number parameter or source numeric expression. Symbolic
+arity is exact-one for the first three and 2–255 for `min`/`max`; all arguments
+must belong to the same finite-number DAG. Calls without a direct symbolic
+argument keep ordinary JavaScript behavior. Identity-based capture also means
+aliases work, but same-named functions, other Math methods and call/apply/bind
+wrappers are not made symbolic. This adds no general-purpose source-call API.
 These expressions do not enable Network property keys,
 `input + amount`, compact `IF`/`when` outputs, dynamic operations or coercion.
 Concrete Signal and `Each` output behavior is unchanged.
@@ -526,9 +534,13 @@ Registered expressions have a separate bounded native-formula contract for
 exact Arithmetic constant operands, direct Constant filter counts,
 constant-right Decider thresholds and numeric Selector select indices; each
 formula dependency must also have an independent direct use in one of those
-four numeric slots. Formula mode accepts only linked Constant, Arithmetic,
-Decider and Selector producers, while the native Signal gate remains
-Constant-only. Its explicit default is also its native original and must be an integer
+four numeric slots. Its internal numeric DAG also projects registered calls to
+`abs(...)`, `log2(...)`, `sign(...)`, `min(...)` and `max(...)` in those same
+eligible formula slots. These are structural strings only; Factorio parsing,
+evaluation and placement of function formulas are not verified. Formula mode
+accepts only linked Constant, Arithmetic, Decider and Selector producers, while
+the native Signal gate remains Constant-only. Its explicit default is also its
+native original and must be an integer
 in [-2147483648, 2147483647]; it is not
 wrapped, rounded or allocated automatically. A zero count remains an explicit
 filter, and the native original string is `"0"`, including for a default of

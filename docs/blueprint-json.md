@@ -165,7 +165,14 @@ Registered `/` and `**` expressions use finite JavaScript-number arithmetic
 locally; zero denominators, non-finite power results and fractional final integer
 slots fail with `CP1000`. Native projection retains the expression tree and maps
 `**` to native `^`, but remains structural and has no Factorio formula evaluation
-or placement evidence. TypeScript `^` remains bitwise XOR.
+or placement evidence. The same local DAG recognizes calls to the original
+`Math.abs`, `Math.log2`, `Math.sign`, `Math.min` and `Math.max` references when a
+call directly receives an owning number parameter or source expression. Symbolic
+calls require one argument for `abs`/`log2`/`sign` and 2–255 for `min`/`max`;
+parameter-free calls remain ordinary JavaScript. Native export can retain these
+nodes as bounded function-formula text in its existing eligible slots, but that
+text is not Factorio parsing or placement evidence. TypeScript `^` remains
+bitwise XOR.
 Arithmetic, Decider and Selector formula placement and general formula validity
 remain unverified. Signal parameters
 are supported only for concrete virtual defaults with normal quality in direct
