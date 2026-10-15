@@ -1046,63 +1046,187 @@ output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-
 
   test('exports native Constant Signal parameters through the existing opt-in CLI route', async () => {
     const { environment } = await parameterHost();
-    const path =
-      await sourceFile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+    const key = '__comblang_cli_native_signal_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const previous = globals[key];
+    globals[key] = 0;
+    try {
+      const path = await sourceFile(`globalThis.${key} = Number(globalThis.${key} ?? 0) + 1;
+const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const plate = Param.signal('Plate', Signal('iron-plate'));
+const water = Param.signal('Water', Signal('fluid', 'water', 'normal'));
 const output = new Network();
 output += Constant({ sections: [{ filters: [
-  { signal: channel, value: 5 },
+  { signal: channel, value: amount * 2 },
   { signal: Signal('virtual', 'signal-A'), value: 13 },
-  { signal: Signal('item', 'iron-plate'), value: 7 },
+  { signal: plate, value: 7 },
+  { signal: Signal('iron-plate'), value: 8 },
+  { signal: water, value: 11 },
+  { signal: Signal('fluid', 'water'), value: 12 },
 ] }] });`);
-    const nativePath = join(dirname(path), 'constant-signal-parameters.json');
-    const concretePath = join(dirname(path), 'constant-signal-concrete.json');
-    const { log, error } = capture();
-    expect(
-      await run(
-        ['blueprint', 'export', '--parameters', '--json', '--output', nativePath, path],
-        environment,
-      ),
-    ).toBe(0);
-    const native = JSON.parse(await readFile(nativePath, 'utf8'));
-    expect(native.blueprint.parameters).toEqual([
-      {
-        type: 'id',
-        id: 'parameter-0',
-        name: 'Channel',
-        'quality-condition': { quality: 'normal', comparator: '=' },
-      },
-    ]);
-    expect(native.blueprint.entities[0].control_behavior.sections.sections[0].filters).toEqual([
-      { index: 1, name: 'parameter-0', quality: 'normal', comparator: '=', count: 5 },
-      { index: 2, name: 'parameter-0', quality: 'normal', comparator: '=', count: 13 },
-      { index: 3, name: 'iron-plate', quality: 'normal', comparator: '=', count: 7 },
-    ]);
+      const nativePath = join(dirname(path), 'constant-signal-parameters.json');
+      const concretePath = join(dirname(path), 'constant-signal-concrete.json');
+      const overridePath = join(dirname(path), 'constant-signal-overrides.json');
+      await writeFile(
+        overridePath,
+        JSON.stringify([
+          { id: 0, value: { type: 'virtual', name: 'signal-B' } },
+          { id: 1, value: 9 },
+          { id: 2, value: { type: 'item', name: 'copper-plate' } },
+          { id: 3, value: { type: 'fluid', name: 'crude-oil' } },
+        ]),
+      );
+      const { log, error } = capture();
+      expect(
+        await run(
+          ['blueprint', 'export', '--parameters', '--json', '--output', nativePath, path],
+          environment,
+        ),
+      ).toBe(0);
+      expect(globals[key]).toBe(1);
+      const native = JSON.parse(await readFile(nativePath, 'utf8'));
+      expect(native.blueprint.parameters).toEqual([
+        {
+          type: 'id',
+          id: 'parameter-0',
+          name: 'Channel',
+          'quality-condition': { quality: 'normal', comparator: '=' },
+        },
+        { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+        {
+          type: 'id',
+          id: 'parameter-1',
+          name: 'Plate',
+          'quality-condition': { quality: 'normal', comparator: '=' },
+        },
+        {
+          type: 'id',
+          id: 'parameter-2',
+          name: 'Water',
+          'quality-condition': { quality: 'normal', comparator: '=' },
+        },
+        { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
+      ]);
+      expect(native.blueprint.entities[0].control_behavior.sections.sections[0].filters).toEqual([
+        { index: 1, name: 'parameter-0', quality: 'normal', comparator: '=', count: 10 },
+        { index: 2, name: 'parameter-0', quality: 'normal', comparator: '=', count: 13 },
+        { index: 3, name: 'parameter-1', quality: 'normal', comparator: '=', count: 7 },
+        { index: 4, name: 'parameter-1', quality: 'normal', comparator: '=', count: 8 },
+        { index: 5, name: 'parameter-2', quality: 'normal', comparator: '=', count: 11 },
+        { index: 6, name: 'parameter-2', quality: 'normal', comparator: '=', count: 12 },
+      ]);
 
-    expect(
-      await run(['blueprint', 'export', '--json', '--output', concretePath, path], environment),
-    ).toBe(0);
-    const concrete = JSON.parse(await readFile(concretePath, 'utf8'));
-    expect(concrete.blueprint).not.toHaveProperty('parameters');
-    expect(concrete.blueprint.entities[0].control_behavior.sections.sections[0].filters).toEqual([
-      {
-        index: 1,
-        type: 'virtual',
-        name: 'signal-A',
-        quality: 'normal',
-        comparator: '=',
-        count: 5,
-      },
-      {
-        index: 2,
-        type: 'virtual',
-        name: 'signal-A',
-        quality: 'normal',
-        comparator: '=',
-        count: 13,
-      },
-      { index: 3, name: 'iron-plate', quality: 'normal', comparator: '=', count: 7 },
-    ]);
-    expect(error).not.toHaveBeenCalled();
+      expect(
+        await run(['blueprint', 'export', '--json', '--output', concretePath, path], environment),
+      ).toBe(0);
+      expect(globals[key]).toBe(2);
+      const concrete = JSON.parse(await readFile(concretePath, 'utf8'));
+      expect(concrete.blueprint).not.toHaveProperty('parameters');
+      expect(concrete.blueprint.entities[0].control_behavior.sections.sections[0].filters).toEqual([
+        {
+          index: 1,
+          type: 'virtual',
+          name: 'signal-A',
+          quality: 'normal',
+          comparator: '=',
+          count: 10,
+        },
+        {
+          index: 2,
+          type: 'virtual',
+          name: 'signal-A',
+          quality: 'normal',
+          comparator: '=',
+          count: 13,
+        },
+        { index: 3, name: 'iron-plate', quality: 'normal', comparator: '=', count: 7 },
+        { index: 4, name: 'iron-plate', quality: 'normal', comparator: '=', count: 8 },
+        {
+          index: 5,
+          type: 'fluid',
+          name: 'water',
+          quality: 'normal',
+          comparator: '=',
+          count: 11,
+        },
+        {
+          index: 6,
+          type: 'fluid',
+          name: 'water',
+          quality: 'normal',
+          comparator: '=',
+          count: 12,
+        },
+      ]);
+
+      expect(
+        await run(
+          ['blueprint', 'export', '--json', '--overrides', overridePath, path],
+          environment,
+        ),
+      ).toBe(0);
+      expect(globals[key]).toBe(3);
+      const bound = JSON.parse(String(log.mock.calls.at(-1)?.[0])).document;
+      expect(bound.blueprint).not.toHaveProperty('parameters');
+      expect(
+        bound.blueprint.entities.map(
+          (entity: { entity_number: number; position: unknown; direction: number }) => ({
+            entity_number: entity.entity_number,
+            position: entity.position,
+            direction: entity.direction,
+          }),
+        ),
+      ).toEqual(
+        concrete.blueprint.entities.map(
+          (entity: { entity_number: number; position: unknown; direction: number }) => ({
+            entity_number: entity.entity_number,
+            position: entity.position,
+            direction: entity.direction,
+          }),
+        ),
+      );
+      expect(bound.blueprint.wires).toEqual(concrete.blueprint.wires);
+      expect(bound.blueprint.entities[0].control_behavior.sections.sections[0].filters).toEqual([
+        {
+          index: 1,
+          type: 'virtual',
+          name: 'signal-B',
+          quality: 'normal',
+          comparator: '=',
+          count: 18,
+        },
+        {
+          index: 2,
+          type: 'virtual',
+          name: 'signal-A',
+          quality: 'normal',
+          comparator: '=',
+          count: 13,
+        },
+        { index: 3, name: 'copper-plate', quality: 'normal', comparator: '=', count: 7 },
+        { index: 4, name: 'iron-plate', quality: 'normal', comparator: '=', count: 8 },
+        {
+          index: 5,
+          type: 'fluid',
+          name: 'crude-oil',
+          quality: 'normal',
+          comparator: '=',
+          count: 11,
+        },
+        { index: 6, type: 'fluid', name: 'water', quality: 'normal', comparator: '=', count: 12 },
+      ]);
+
+      log.mockClear();
+      expect(await run(['blueprint', 'export', '--json', path], environment)).toBe(0);
+      expect(globals[key]).toBe(4);
+      const reset = JSON.parse(String(log.mock.calls[0]?.[0])).document;
+      expect(reset).toEqual(concrete);
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete globals[key];
+      else globals[key] = previous;
+    }
   });
 
   test('exports and binds fractional, divided, and powered Selector formulas without publishing failures', async () => {

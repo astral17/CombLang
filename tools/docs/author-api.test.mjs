@@ -459,7 +459,7 @@ expectSignal(network('output'), Signal('virtual', 'signal-B')).toBe(111);`,
     );
   });
 
-  test('exports the literal Constant Signal example and keeps local overrides nominal', async () => {
+  test('exports the mixed-namespace Constant Signal example and keeps local overrides nominal', async () => {
     const compilation = compile(blocks('parameters')[1], await bundled);
     const native = exportSourceCompilationNativeBlueprint(compilation, {
       label: 'Documented Constant Signal',
@@ -472,15 +472,43 @@ expectSignal(network('output'), Signal('virtual', 'signal-B')).toBe(111);`,
         name: 'Channel',
         'quality-condition': { quality: 'normal', comparator: '=' },
       },
+      {
+        type: 'id',
+        id: 'parameter-1',
+        name: 'Material',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      {
+        type: 'id',
+        id: 'parameter-2',
+        name: 'Coolant',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
     ]);
     expect(native.entities[0].native.control_behavior.sections.sections[0].filters).toEqual([
       { index: 1, name: 'parameter-0', quality: 'normal', comparator: '=', count: 5 },
       { index: 2, name: 'parameter-0', quality: 'normal', comparator: '=', count: 13 },
-      { index: 3, name: 'iron-plate', quality: 'normal', comparator: '=', count: 7 },
-      { index: 4, type: 'fluid', name: 'water', quality: 'normal', comparator: '=', count: 11 },
+      { index: 3, name: 'parameter-1', quality: 'normal', comparator: '=', count: 7 },
+      { index: 4, name: 'parameter-1', quality: 'normal', comparator: '=', count: 17 },
+      { index: 5, name: 'parameter-2', quality: 'normal', comparator: '=', count: 11 },
+      { index: 6, name: 'parameter-2', quality: 'normal', comparator: '=', count: 19 },
     ]);
     const session = createSourceParameterBindingSession(compilation);
     const bound = session.bind([{ id: 0, value: { type: 'virtual', name: 'signal-B' } }]);
+    const boundBlueprint = generateBlueprintJson(bound.resolvedCircuit.ir).blueprint;
+    expect(boundBlueprint).not.toHaveProperty('parameters');
+    expect(
+      boundBlueprint.entities[0].control_behavior.sections.sections[0].filters.map(
+        ({ type, name, count }) => ({ type, name, count }),
+      ),
+    ).toEqual([
+      { type: 'virtual', name: 'signal-B', count: 5 },
+      { type: 'virtual', name: 'signal-A', count: 13 },
+      { name: 'iron-plate', count: 7 },
+      { name: 'iron-plate', count: 17 },
+      { type: 'fluid', name: 'water', count: 11 },
+      { type: 'fluid', name: 'water', count: 19 },
+    ]);
     expect(
       runResolvedDirectPlanTests(
         bound.plan,

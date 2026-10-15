@@ -693,6 +693,164 @@ output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-
     }
   });
 
+  test('projects normal-quality item, fluid, and virtual defaults across matching Constant rows', () => {
+    const compilation = compile(`const plate = Param.signal('Plate', Signal('iron-plate'));
+const amount = Param.number('Amount', 9, { variable: 'x' });
+const water = Param.signal('Water', Signal('fluid', 'water', 'normal'));
+const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const output = new Network();
+output += Constant({ isOn: false, sections: [
+  { active: false, multiplier: 1.5, group: 'Mixed', filters: [
+    { signal: plate, value: amount * 2 },
+    { signal: Signal('item', 'iron-plate', 'normal'), value: 2 },
+    { signal: water, value: 3 },
+    { signal: Signal('fluid', 'water'), value: 4 },
+    { signal: channel, value: 5 },
+    { signal: Signal('virtual', 'signal-A', 'normal'), value: 6 },
+    { signal: Signal('item', 'iron-gear-wheel', 'rare'), value: 7 },
+  ] },
+  { active: true, multiplier: -2, filters: [
+    { signal: plate, value: 8 },
+    { signal: water, value: 10 },
+  ] },
+] }).at(4.5, -0.5);
+output += Constant({ sections: [{ filters: [
+  { signal: Signal('iron-plate'), value: 11 },
+  { signal: Signal('fluid', 'water', 'normal'), value: 12 },
+] }] }).at(-4.5, 0.5);`);
+
+    const artifact = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+    const localParameterByLabel = new Map(
+      sourceApi
+        .listSourceCompilationParameters(compilation)
+        .map(({ label, kind, parameter }) => [label, { kind, parameter }] as const),
+    );
+    const local = sourceApi.bindSourceCompilationParameters(compilation, [
+      { parameter: localParameterByLabel.get('Plate')!.parameter, value: signal('copper-plate') },
+      {
+        parameter: localParameterByLabel.get('Water')!.parameter,
+        value: signal('fluid', 'crude-oil'),
+      },
+      {
+        parameter: localParameterByLabel.get('Channel')!.parameter,
+        value: signal('virtual', 'signal-B'),
+      },
+    ]);
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    const emitted = emitNativeBlueprintJson(native);
+    type ProjectedFilter = {
+      type?: string;
+      name?: string;
+      quality?: string;
+      [key: string]: unknown;
+    };
+    type ProjectedEntity = {
+      control_behavior?: {
+        sections?: { sections?: { filters?: ProjectedFilter[] }[] };
+      };
+    };
+    const expectedEntities = structuredClone(
+      emitNativeBlueprintJson(buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options))
+        .blueprint.entities,
+    ) as unknown as ProjectedEntity[];
+    const placeholderByIdentity = new Map([
+      ['item\u0000iron-plate\u0000', 'parameter-0'],
+      ['fluid\u0000water\u0000', 'parameter-1'],
+      ['virtual\u0000signal-A\u0000', 'parameter-2'],
+    ]);
+    for (const entity of expectedEntities) {
+      for (const section of entity.control_behavior?.sections?.sections ?? []) {
+        for (const filter of section.filters ?? []) {
+          const identity = `${filter.type ?? 'item'}\u0000${filter.name}\u0000${filter.quality === 'normal' ? '' : (filter.quality ?? '')}`;
+          const placeholder = placeholderByIdentity.get(identity);
+          if (placeholder === undefined) continue;
+          delete filter.type;
+          filter.name = placeholder;
+        }
+      }
+    }
+
+    expect(native.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Plate',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      { type: 'number', number: '9', name: 'Amount', variable: 'x' },
+      {
+        type: 'id',
+        id: 'parameter-1',
+        name: 'Water',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      {
+        type: 'id',
+        id: 'parameter-2',
+        name: 'Channel',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      { type: 'number', number: '18', formula: '(x * 2)', dependent: true },
+    ]);
+    expect(sourceApi.exportSourceCompilationNativeBlueprint(compilation, options)).toEqual(native);
+    expect(emitted.blueprint.entities).toEqual(expectedEntities);
+
+    const rowsByEntity = (
+      entities: ReturnType<typeof generateBlueprintJson>['blueprint']['entities'],
+    ) =>
+      entities.map((entity) => {
+        const behavior = entity.control_behavior as {
+          sections: { sections: { filters: { type?: string; name: string; count: number }[] }[] };
+        };
+        return behavior.sections.sections.flatMap(({ filters: rows }) =>
+          rows.map(({ type, name, count }) => ({ type, name, count })),
+        );
+      });
+    const localRows = rowsByEntity(generateBlueprintJson(local).blueprint.entities);
+    const defaultRows = rowsByEntity(
+      generateBlueprintJson(compilation.resolvedCircuit!.ir).blueprint.entities,
+    );
+    expect(defaultRows).toEqual([
+      [
+        { type: undefined, name: 'iron-plate', count: 18 },
+        { type: undefined, name: 'iron-plate', count: 2 },
+        { type: 'fluid', name: 'water', count: 3 },
+        { type: 'fluid', name: 'water', count: 4 },
+        { type: 'virtual', name: 'signal-A', count: 5 },
+        { type: 'virtual', name: 'signal-A', count: 6 },
+        { type: undefined, name: 'iron-gear-wheel', count: 7 },
+        { type: undefined, name: 'iron-plate', count: 8 },
+        { type: 'fluid', name: 'water', count: 10 },
+      ],
+      [
+        { type: undefined, name: 'iron-plate', count: 11 },
+        { type: 'fluid', name: 'water', count: 12 },
+      ],
+    ]);
+    expect(localRows).toEqual([
+      [
+        { type: undefined, name: 'copper-plate', count: 18 },
+        { type: undefined, name: 'iron-plate', count: 2 },
+        { type: 'fluid', name: 'crude-oil', count: 3 },
+        { type: 'fluid', name: 'water', count: 4 },
+        { type: 'virtual', name: 'signal-B', count: 5 },
+        { type: 'virtual', name: 'signal-A', count: 6 },
+        { type: undefined, name: 'iron-gear-wheel', count: 7 },
+        { type: undefined, name: 'copper-plate', count: 8 },
+        { type: 'fluid', name: 'crude-oil', count: 10 },
+      ],
+      [
+        { type: undefined, name: 'iron-plate', count: 11 },
+        { type: 'fluid', name: 'water', count: 12 },
+      ],
+    ]);
+
+    expect(native.wires).toEqual(
+      buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).wires,
+    );
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(artifact);
+  });
+
   test('replays the generated Constant Signal template against the reported placed export', async () => {
     const compilation =
       compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
@@ -981,13 +1139,14 @@ output += Constant({ sections: [{ filters: [
 const output = new Network();
 output += Constant({ sections: [{ filters: [
   { signal: Signal('item', 'parameter-0'), value: 1 },
+  { signal: Signal('virtual', 'parameter-1'), value: 2 },
   { signal: Signal('fluid', 'parameter-2'), value: 2 },
 ] }] });
 output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });`);
     expect(sourceApi.exportSourceCompilationNativeBlueprint(skipped, options).parameters).toEqual([
       {
         type: 'id',
-        id: 'parameter-1',
+        id: 'parameter-3',
         name: 'Channel',
         'quality-condition': { quality: 'normal', comparator: '=' },
       },
@@ -1014,9 +1173,9 @@ output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] })
   });
 
   test.each([
-    ["Signal('item', 'iron-plate')", '$.parameters[0].defaultValue'],
     ["Signal('virtual', 'signal-A', 'legendary')", '$.parameters[0].defaultValue'],
     ["Signal('virtual', 'parameter-0')", '$.parameters[0].defaultValue'],
+    ["Signal('item', 'parameter-0')", '$.parameters[0].defaultValue'],
   ])('rejects unsupported Signal default %s at its declaration', (defaultValue, path) => {
     const compilation = compile(`const channel = Param.signal('Channel', ${defaultValue});
 const output = new Network();
@@ -1045,6 +1204,23 @@ output += Constant({ sections: [{ filters: [{ signal: ${conflictingSignal}, valu
       });
     },
   );
+
+  test('rejects same-name namespace conflicts between declarations without relying on literal rows', () => {
+    const compilation = compile(`const item = Param.signal('Item', Signal('signal-A'));
+const fluid = Param.signal('Fluid', Signal('fluid', 'signal-A'));
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: item, value: 5 }] }] });
+output += Constant({ sections: [{ filters: [{ signal: fluid, value: 7 }] }] });`);
+    const artifact = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+
+    expect(exportFailure(compilation)).toMatchObject({
+      code: 'CP1002',
+      path: '$.parameters[1].defaultValue',
+      span: sourceApi.listSourceCompilationParameters(compilation)[1]!.source,
+      message: expect.stringContaining('different namespace or quality'),
+    });
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(artifact);
+  });
 
   test('rejects unused Signal handles, duplicate canonical originals and non-Constant circuits atomically', () => {
     const unused = compile(`const A = Signal('virtual', 'signal-A');

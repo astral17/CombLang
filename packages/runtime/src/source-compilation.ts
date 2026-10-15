@@ -374,17 +374,17 @@ export function exportSourceCompilationNativeBlueprint(
       } catch {
         reject(
           `$.parameters[${index}].defaultValue`,
-          'native Signal defaults must be concrete virtual signals.',
+          'native Signal defaults must be concrete item, fluid, or virtual signals.',
           declaration.source,
         );
       }
       if (
-        original.type !== 'virtual' ||
+        (original.type !== 'item' && original.type !== 'fluid' && original.type !== 'virtual') ||
         (original.quality !== undefined && original.quality !== 'normal')
       ) {
         reject(
           `$.parameters[${index}].defaultValue`,
-          'native Signal defaults support only virtual signals with omitted or normal quality.',
+          'native Signal defaults support only item, fluid, or virtual signals with omitted or normal quality.',
           declaration.source,
         );
       }
@@ -403,10 +403,19 @@ export function exportSourceCompilationNativeBlueprint(
           declaration.source,
         );
       }
+      const sameName = signalInfoByOriginalName.get(original.name) ?? [];
+      for (const sameNameInfo of sameName) {
+        if (sameNameInfo.key !== key) {
+          reject(
+            `$.parameters[${index}].defaultValue`,
+            `Signal declarations with the same name ${JSON.stringify(original.name)} have a different namespace or quality from declaration ${JSON.stringify(sameNameInfo.declaration.label)} at ${sameNameInfo.declaration.source.fileId}:${sameNameInfo.declaration.source.start}-${sameNameInfo.declaration.source.end}.`,
+            declaration.source,
+          );
+        }
+      }
       const info = Object.freeze({ declaration, original, key: key! });
       signalInfoByParameter.set(declaration.parameter, info);
       signalInfoByOriginalKey.set(key!, info);
-      const sameName = signalInfoByOriginalName.get(original.name) ?? [];
       sameName.push(info);
       signalInfoByOriginalName.set(original.name, sameName);
       continue;

@@ -7,6 +7,7 @@ import * as blueprintExchangeCodec from '@comblang/blueprint/exchange-codec';
 import {
   createTrustedEntityReplayContext,
   entityReplayContextTransport,
+  generateBlueprintJson,
   syntheticZeroPortEntityProfile,
 } from '@comblang/compiler';
 import type { EntityProfile } from '@comblang/compiler/entity';
@@ -1441,7 +1442,7 @@ output += Constant({ sections: [{ filters: [{ signal: A, value: 2 }] }] });`,
           ...parameterFile,
           text: parameterFile.text.replace(
             "Signal('virtual', 'signal-A')",
-            "Signal('item', 'iron-plate')",
+            "Signal('virtual', 'signal-A', 'legendary')",
           ),
         },
         parameterBinding: true,
@@ -1498,6 +1499,147 @@ output += Arithmetic({ left: amount * 2, operation: 'add', right: 1, output: A }
       arithmetic_conditions: { first_constant: 10, second_constant: 1 },
     });
     expect(response.parameterBinding).toMatchObject({ ok: true, token: expect.any(String) });
+  });
+
+  test('exports item/fluid Constant Signal templates and keeps Worker bindings local', async () => {
+    const key = '__worker_mixed_signal_namespace_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const previous = globals[key];
+    globals[key] = 0;
+    try {
+      const runtime = parameterRuntime();
+      const parsed = structuredClone(
+        await runtime.handle(
+          parseRequest(56, {
+            file: {
+              path: 'worker-item-fluid-signal-template.factorio.ts',
+              text: `globalThis.${key} = Number(globalThis.${key} ?? 0) + 1;
+const plate = Param.signal('Plate', Signal('iron-plate'));
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const water = Param.signal('Water', Signal('fluid', 'water', 'normal'));
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: plate, value: amount * 2 },
+  { signal: Signal('iron-plate'), value: 3 },
+  { signal: water, value: 4 },
+  { signal: Signal('fluid', 'water'), value: 5 },
+] }] });`,
+            },
+            parameterBinding: true,
+            blueprintExport: { parameters: true },
+          }),
+        ),
+      );
+
+      expect(globals[key]).toBe(1);
+      expect(parsed.result.pipelineDiagnostics).toEqual([]);
+      expect(parsed.result.blueprintExport).toMatchObject({ ok: true });
+      if (parsed.result.blueprintExport?.ok !== true) {
+        throw new Error('Expected a successful Worker item/fluid template export.');
+      }
+      expect(parsed.result.blueprintExport.document.blueprint.parameters).toEqual([
+        {
+          type: 'id',
+          id: 'parameter-0',
+          name: 'Plate',
+          'quality-condition': { quality: 'normal', comparator: '=' },
+        },
+        { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+        {
+          type: 'id',
+          id: 'parameter-1',
+          name: 'Water',
+          'quality-condition': { quality: 'normal', comparator: '=' },
+        },
+        { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
+      ]);
+      expect(
+        parsed.result.blueprintExport.document.blueprint.entities[0]!.control_behavior,
+      ).toMatchObject({
+        sections: {
+          sections: [
+            {
+              filters: [
+                { name: 'parameter-0', count: 10 },
+                { name: 'parameter-0', count: 3 },
+                { name: 'parameter-1', count: 4 },
+                { name: 'parameter-1', count: 5 },
+              ],
+            },
+          ],
+        },
+      });
+
+      const binding = parsed.parameterBinding;
+      if (binding?.ok !== true || binding.token === undefined) {
+        throw new Error('Expected a retained Worker Signal binding session.');
+      }
+      let revision = parsed.revision;
+      const bind = (overrides: readonly SourceParameterOverride[] = []) =>
+        structuredClone(
+          runtime.handleBinding({
+            kind: 'bind-parameters',
+            revision: ++revision,
+            sourceRevision: parsed.revision,
+            token: binding.token!,
+            overrides,
+          }),
+        );
+      const concrete = (response: CompilerWorkerBoundResponse) => {
+        if (!response.result.ok) throw new Error('Expected a concrete Worker binding.');
+        return response.result;
+      };
+      const defaults = concrete(bind());
+      const overridden = concrete(
+        bind([
+          { id: 0, value: { type: 'item', name: 'copper-plate' } },
+          { id: 1, value: 9 },
+          { id: 2, value: { type: 'fluid', name: 'crude-oil' } },
+        ]),
+      );
+      const reset = concrete(bind());
+      const rows = (result: typeof defaults) => {
+        const document = generateBlueprintJson(result.resolvedCircuit.ir);
+        return document.blueprint.entities.map((entity) => {
+          const behavior = entity.control_behavior as {
+            sections: { sections: { filters: { type?: string; name: string; count: number }[] }[] };
+          };
+          return behavior.sections.sections.flatMap(({ filters: filtersInSection }) =>
+            filtersInSection.map(({ type, name, count }) => ({ type, name, count })),
+          );
+        });
+      };
+      expect(rows(defaults)).toEqual([
+        [
+          { type: undefined, name: 'iron-plate', count: 10 },
+          { type: undefined, name: 'iron-plate', count: 3 },
+          { type: 'fluid', name: 'water', count: 4 },
+          { type: 'fluid', name: 'water', count: 5 },
+        ],
+      ]);
+      expect(rows(overridden)).toEqual([
+        [
+          { type: undefined, name: 'copper-plate', count: 18 },
+          { type: undefined, name: 'iron-plate', count: 3 },
+          { type: 'fluid', name: 'crude-oil', count: 4 },
+          { type: 'fluid', name: 'water', count: 5 },
+        ],
+      ]);
+      expect(rows(reset)).toEqual(rows(defaults));
+      expect(defaults.resolvedCircuit.ir.producers.map(({ id }) => id)).toEqual(
+        overridden.resolvedCircuit.ir.producers.map(({ id }) => id),
+      );
+      expect(generateBlueprintJson(defaults.resolvedCircuit.ir).blueprint.wires).toEqual(
+        generateBlueprintJson(overridden.resolvedCircuit.ir).blueprint.wires,
+      );
+      expect(generateBlueprintJson(overridden.resolvedCircuit.ir).blueprint).not.toHaveProperty(
+        'parameters',
+      );
+      expect(globals[key]).toBe(1);
+    } finally {
+      if (previous === undefined) delete globals[key];
+      else globals[key] = previous;
+    }
   });
 
   test('exports Selector index formulas and rebinds their concrete defaults through the Worker', async () => {

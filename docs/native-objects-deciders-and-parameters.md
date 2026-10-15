@@ -359,12 +359,17 @@ requested native export is outside that supported slice.
 ### Constant filter Signal parameters
 
 The explicit native parameter exporter supports a Signal declaration only when
-its default is a concrete virtual Signal with omitted or normal quality and its
-handle occupies a Constant filter Signal slot. Requires the existing exact
-Constant provisioning capabilities:
+its default is a concrete item, fluid, or virtual Signal with omitted or normal
+quality and its handle occupies a Constant filter Signal slot. For example,
+`Param.signal('Material', Signal('iron-plate'))` and
+`Param.signal('Coolant', Signal('fluid', 'water', 'normal'))` use the same
+bounded projection as a virtual Signal. Requires the existing exact Constant
+provisioning capabilities:
 
 ```ts
 const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const material = Param.signal('Material', Signal('iron-plate'));
+const coolant = Param.signal('Coolant', Signal('fluid', 'water', 'normal'));
 const output = new Network();
 output += Constant({
   sections: [
@@ -372,8 +377,10 @@ output += Constant({
       filters: [
         { signal: channel, value: 5 },
         { signal: Signal('virtual', 'signal-A'), value: 13 },
-        { signal: Signal('item', 'iron-plate'), value: 7 },
-        { signal: Signal('fluid', 'water'), value: 11 },
+        { signal: material, value: 7 },
+        { signal: Signal('iron-plate'), value: 17 },
+        { signal: coolant, value: 11 },
+        { signal: Signal('fluid', 'water'), value: 19 },
       ],
     },
   ],
@@ -382,18 +389,20 @@ output += Constant({
 
 Local binding remains nominal: overriding `channel` changes its marked filter
 row(s), not an ordinary equal A filter. Native metadata is based on source
-identity, so native export replaces every equal A filter in supported Constant
-roles with the allocated first-free `parameter-0` through `parameter-9` name.
-The filter placeholder omits `type: 'virtual'`; metadata records the declaration
-label and `quality-condition: { quality: 'normal', comparator: '=' }`. Counts,
-other rows, sections, placement, wires and topology stay unchanged. The source
-default remains concrete and is not persisted as a fabricated native field.
+identity, so native export replaces every matching item, fluid, or virtual row
+in supported Constant roles with the allocated first-free `parameter-0` through
+`parameter-9` name. A matching placeholder omits its original `type`; explicit
+normal quality and every other filter/section/entity field remain unchanged.
+Metadata records the declaration label and
+`quality-condition: { quality: 'normal', comparator: '=' }`. The concrete source
+default remains local-only: it is not persisted as a native placement default
+and does not restrict the namespace selected when placing the generic ID row.
 
 Existing Constant filter names across types/qualities reserve placeholder names.
 Exhaustion, unused Signal declarations, distinct handles with the same
-normalized original, a same-name namespace/quality conflict, non-virtual or
-non-normal defaults, virtual wildcards and Signal use in another slot fail
-atomically with located `CP1002`. Any other producer kind or unlinked physical
+normalized original, a same-name namespace/quality conflict, non-normal
+qualities, virtual wildcards and Signal use in another slot fail atomically with
+located `CP1002`. Any other producer kind or unlinked physical
 Entity also rejects a source compilation that declares a Signal parameter.
 Numeric-only exports and ordinary concrete binding are unaffected. The reviewed
 input transition is user-supplied Factorio 2.1.21 Space Age evidence with mods
@@ -402,8 +411,9 @@ virtual/normal Constant template: both matching rows became virtual signal-B
 with counts 5 and 13, while iron-plate and water, the red wire, relative layout
 and directions were preserved; parameter metadata was absent after placement.
 This is a bounded user-reported observation, not an independently run game
-gate. Parameterized save/reopen, other namespaces, qualities or native roles,
-arbitrary wires, and browser/mobile native placement remain unverified.
+gate. Item/fluid placement and selection, parameterized save/reopen, other
+qualities or native roles, arbitrary wires, and browser/mobile native placement
+remain unverified.
 
 ### Numeric metadata
 

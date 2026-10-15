@@ -175,10 +175,10 @@ nodes as bounded function-formula text in its existing eligible slots, but that
 text is not Factorio parsing or placement evidence. TypeScript `^` remains
 bitwise XOR.
 Arithmetic, Decider and Selector formula placement and general formula validity
-remain unverified. Signal parameters
-are supported only for concrete virtual defaults with normal quality in direct
-Constant filter Signal slots, subject to the bounded placeholder and circuit
-rules in the Param reference. Other Signal slots/defaults, unsupported
+remain unverified. Signal parameters are supported only for concrete item,
+fluid, or virtual defaults with omitted or normal quality in direct Constant
+filter Signal slots, subject to the bounded placeholder and circuit rules in the
+Param reference. Other Signal slots/defaults, unsupported
 expressions, unused parameters, ambiguous equal originals and non-int32 declared
 numeric originals fail explicitly in `--parameters` native-metadata mode. Formula
 operands may be any finite numeric literal, but each raw evaluated formula

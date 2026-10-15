@@ -470,20 +470,25 @@ remains opaque: local binding does not parse or evaluate it.
 
 ### Bounded Constant Signal native export
 
-The native exporter supports a concrete virtual Signal default with omitted or
-normal quality when its parameter handle occupies a Constant filter Signal
-slot. Source runs once and retains that concrete default for ordinary local
-binding. Native export allocates the first free `parameter-0` through
-`parameter-9` name, reserving names already present in Constant filter rows,
-and emits an ID parameter with the declaration label and normal-quality `=`
-condition. The source default is not written back into the circuit or stored as
-a fabricated native field.
+The native exporter supports concrete item, fluid, or virtual Signal defaults
+with omitted or normal quality when their parameter handles occupy Constant
+filter Signal slots. For example, `Param.signal('Material', Signal('iron-plate'))`
+and `Param.signal('Coolant', Signal('fluid', 'water', 'normal'))` use the same
+bounded path as a virtual Signal. Source runs once and retains each complete
+concrete default for ordinary local binding. Native export allocates the first
+free `parameter-0` through `parameter-9` name, reserving names already present in
+Constant filter rows, and emits an ID parameter with the declaration label and
+normal-quality `=` condition. The concrete source default is neither persisted
+as a native placement default nor used to constrain the namespace selected when
+placing the template.
 
 Complete example (requires the selected environment's existing Constant
 provisioning capabilities):
 
 ```ts
 const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const material = Param.signal('Material', Signal('iron-plate'));
+const coolant = Param.signal('Coolant', Signal('fluid', 'water', 'normal'));
 const output = new Network();
 output += Constant({
   sections: [
@@ -491,36 +496,42 @@ output += Constant({
       filters: [
         { signal: channel, value: 5 },
         { signal: Signal('virtual', 'signal-A'), value: 13 },
-        { signal: Signal('item', 'iron-plate'), value: 7 },
-        { signal: Signal('fluid', 'water'), value: 11 },
+        { signal: material, value: 7 },
+        { signal: Signal('iron-plate'), value: 17 },
+        { signal: coolant, value: 11 },
+        { signal: Signal('fluid', 'water'), value: 19 },
       ],
     },
   ],
 });
 ```
 
-The native template uses the item-default name `parameter-0` for both virtual
-A rows, preserving counts 5 and 13; iron-plate and water remain unchanged.
-The ordinary A row is replaced because Factorio metadata is based on original
-identity, not the local nominal handle. A local override to B changes only the
-marked `channel` row(s); the ordinary A row stays A. Repeated uses of one handle
-are supported, but distinct handles with the same normalized original are not.
-Different namespaces or non-normal qualities sharing the original name are
-ambiguous and reject at the declaration.
+The native template uses item-default placeholder names `parameter-0` through
+`parameter-2` for the virtual A, item iron-plate, and fluid water identities.
+Every matching row is replaced—including ordinary concrete rows—while counts
+and explicit normal quality remain intact. The ordinary A row is replaced
+because native metadata is based on normalized source identity, not the local
+nominal handle. A local override to B changes only the marked `channel` row(s);
+the ordinary A row stays A. The item/fluid/virtual source defaults remain the
+local binding defaults; the generic native ID rows do not promise which
+namespace/name is selected at placement. Repeated uses of one handle are
+supported, but distinct handles with the same normalized original are not.
+Declarations or ordinary Constant rows with the same name but a different
+namespace or quality are ambiguous and reject with a located error.
 
 This slice accepts only direct Constant filter Signal slots and circuits whose
 producers are Constant; any physical Entity must be linked to its producer.
-Item/fluid defaults, non-normal qualities, virtual wildcards, source defaults
-named `parameter-N`, placeholder-pool exhaustion, unused declarations and
-Signal use in any other native slot reject atomically with located `CP1002`.
+Non-normal qualities, virtual wildcards, source defaults named `parameter-N`,
+placeholder-pool exhaustion, unused declarations and Signal use in any other
+native slot reject atomically with located `CP1002`.
 No general native replacement, formula evaluation, or broader native acceptance
 is implied. For one user-reported placement of this generated
 virtual/normal Constant template in Factorio 2.1.21 (mods unspecified), both
 matching rows became virtual signal-B with counts 5 and 13; iron-plate and water,
 the red wire, relative layout and directions were preserved. The placed export
 contains no parameter metadata. This bounded report is not an independently run
-game gate. Parameterized save/reopen, other namespaces, qualities or native
-roles, and browser/mobile behavior remain unverified.
+game gate. Item/fluid placement and selection, parameterized save/reopen, other
+qualities or native roles, and browser/mobile behavior remain unverified.
 
 Complete metadata example; requires trusted canonical Constant authority:
 
