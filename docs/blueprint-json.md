@@ -61,8 +61,10 @@ Entity-capable prototype environment.
 Default export uses concrete defaults and emits no parameter metadata, even
 when the source declares parameters. The label defaults to `CombLang generated
 circuit`; Decider expansion retains the 1024-row limit. Explicit `--parameters`
-requests supported numeric and bounded Constant/Arithmetic/Selector Signal native
-metadata from that same owning compilation; it never falls back to concrete output after rejection. Without declarations, both modes
+requests supported numeric metadata and bounded Signal metadata from that same
+owning compilation. Signal handles remain limited to Constant/Arithmetic/Selector
+source slots, while matching concrete fields in linked Deciders are also
+replacement targets; export never falls back to concrete output after rejection. Without declarations, both modes
 produce an ordinary document without empty parameter rows. Concrete
 `--overrides` mode accepts only an empty array when there are no declarations.
 
@@ -179,9 +181,10 @@ remain unverified. Signal parameters are supported only for concrete item,
 fluid, or virtual defaults with omitted or normal quality in direct Constant
 filter `signal`, exact Arithmetic `output`, Selector select-index Signal or
 Selector count-output slots, subject to the bounded placeholder and linked
-Constant/Arithmetic/Selector producer rules in the Param reference. Matching
-concrete Signals in eligible Constant, Arithmetic and Selector fields are also
-replaced. A `select.index` Signal supplies the numeric index from the input
+Constant/Arithmetic/Selector/Decider producer rules in the Param reference. Matching
+concrete Signals in eligible Constant, Arithmetic, Selector and Decider fields are
+also replaced. Decider support replaces concrete matches; it does not add nominal
+Signal parameter slots. A `select.index` Signal supplies the numeric index from the input
 network; a `count.output` Signal names the result that receives the count.
 Other Signal slots/defaults, unsupported
 expressions, unused parameters, ambiguous equal originals and non-int32 declared
@@ -300,7 +303,9 @@ export-result envelope. With no declarations, the result is ordinary concrete
 JSON in either mode. Turning the checkbox off restores concrete artifact export.
 
 Only the supported native numeric slots and bounded Constant/Arithmetic/Selector
-Signal roles described in the Param API are exported. Unsupported Signal parameters or other export failures show located diagnostics in the
+Signal parameter slots described in the Param API are captured. Matching
+concrete Decider condition and then/else Signal fields are replacement targets,
+not new nominal parameter slots. Unsupported Signal parameters or other export failures show located diagnostics in the
 blueprint panel and disable copy; a missing Worker export result is also an
 explicit unavailable error, never a concrete fallback. Successful compilation
 still permits concrete simulation and circuit tests. Pending recompilation,

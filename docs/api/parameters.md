@@ -61,6 +61,13 @@ number declaration is retained
 as an original row even when its original value has no direct physical slot;
 truly unreferenced declarations remain unsupported.
 
+This nominal Signal slot matrix does not add Decider condition or output slots.
+However, once a Signal handle is authenticated in one of the supported slots,
+native projection also replaces equal concrete Signal identities in linked
+Decider condition and then/else output fields. This is a native replacement
+target only; a `Param.signal` handle cannot be introduced into a Decider source
+condition or output.
+
 Arithmetic constants, Constant filter counts, Decider thresholds and numeric
 Selector indices require finite safe integers, then normalize to signed int32.
 Constant section multipliers remain finite doubles. If one parameter is reused
@@ -268,12 +275,12 @@ fail explicitly in that mode. When a typed formula is present, its physical
 circuit must contain only linked Constant, Arithmetic, Decider and Selector
 producers; without typed formulas, existing direct-number export support for
 Decider/Selector remains unchanged. Native Signal export accepts only linked
-Constant, Arithmetic and Selector producers, with Signal handles restricted to
-Constant filter `signal`, exact Arithmetic `output`, Selector `select.index`
-Signal and Selector `count.output` slots. Native replacement also affects
-matching concrete Signal literals in eligible Constant, Arithmetic and
-Selector fields; nominal independence in local binding does not establish
-independence in Factorio placement.
+Constant, Arithmetic, Selector and Decider producers, with Signal handles
+restricted to Constant filter `signal`, exact Arithmetic `output`, Selector
+`select.index` Signal and Selector `count.output` slots. Native replacement also
+affects matching concrete Signal literals in eligible Constant, Arithmetic,
+Selector and Decider fields; nominal independence in local binding does not
+establish independence in Factorio placement.
 
 ### Bounded typed native numeric formulas
 
@@ -284,8 +291,8 @@ narrow structural export, not general formula parsing or native validation.
 Each dependency must be an owned number declaration with an explicit valid
 variable and no formula/dependent metadata. Its declared original is retained
 whether or not that value occurs directly in a physical slot; no dummy field or
-device is added. The native Signal gate accepts linked Constant, Arithmetic and
-Selector producers; Signal handles use the exact fields described in the
+device is added. The native Signal gate accepts linked Constant, Arithmetic,
+Selector and Decider producers; Signal handles use the exact fields described in the
 bounded Signal section. Selector formula
 projection has no Factorio placement evidence. In the example, `Amount` also
 appears in direct Arithmetic and Decider slots; the formula slots are separate:
@@ -563,36 +570,60 @@ does not rename the selected output. The count output Signal names the result
 that receives the number of distinct non-zero input Signals. This example is
 structural only; native Factorio selection and placement remain pending.
 
+Mixed Constant/Decider replacement example:
+
+```javascript
+const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });
+output += Decider({ condition: input[A] > 0, outputs: [input[A]], elseOutputs: [2 * A] });
+```
+
+Concrete local binding is nominal: overriding `channel` changes the Constant
+filter to the selected Signal, while the literal `A` in the Decider remains A.
+Native parameter projection instead replaces the matching concrete identity in
+the linked Decider's `first_signal`, `second_signal`, `outputs[].signal`, and
+`else_outputs[].signal` fields as well as the authenticated Constant slot. This
+is structural output only; it does not claim Factorio import or placement
+behavior.
+
 The Constant example allocates `parameter-0` through `parameter-2`; the mixed
-example uses `parameter-0` for virtual A. Every matching eligible occurrence is
+examples use `parameter-0` for virtual A. Every matching eligible occurrence is
 replaced—including ordinary concrete Constant rows, Arithmetic Signal fields,
-and Selector `index_signal`/`count_signal` fields—while counts and unrelated
+Selector `index_signal`/`count_signal` fields, and concrete Decider condition
+and then/else output fields—while counts and unrelated
 circuit fields remain intact. Native metadata
 is based on normalized source identity, not the local nominal handle. A local
 override to B changes only marked `channel` slots; an ordinary equal A row/input
-stays A under local binding. The concrete source default remains the local
+and concrete Decider fields stay A under local binding. The concrete source default remains the local
 binding default; a generic native ID row does not promise which namespace/name
 is selected at placement. Repeated uses of one handle are supported, but
 distinct handles with the same normalized original are not. Any eligible
 concrete field with the same name but a different namespace or quality is
-ambiguous and rejects with a located error.
+ambiguous and rejects with a located error. Names from all matching eligible
+Constant, Arithmetic, Selector and linked Decider Signal fields reserve the
+shared `parameter-0` through `parameter-9` pool.
 
 This slice accepts direct Constant filter Signal slots, exact Arithmetic
 output slots, Selector select-index Signal slots and Selector count-output
-slots, in circuits whose producers are linked Constant, Arithmetic or Selector
-producers; any physical Entity must be linked to its producer. Arithmetic
+slots, in circuits whose producers are linked Constant, Arithmetic, Selector
+or Decider producers; any physical Entity must be linked to its producer. A
+Decider is admitted only as a concrete replacement target; its source condition
+and output fields do not accept nominal Signal handles. Arithmetic
 Signal parameters are not supported in input operands or Network keys. Numeric
 Selector index parameters and formulas keep their existing numeric path.
 Non-normal qualities, virtual wildcards, source defaults named `parameter-N`,
-placeholder-pool exhaustion, unused declarations, Decider/other producers and
-Signal use in any other native slot reject atomically with located `CP1002`.
-No general native replacement, formula evaluation, or broader native acceptance
-is implied. For one user-reported placement of this generated
+placeholder-pool exhaustion, unused declarations, other unlinked producer
+families, symbolic Decider outputs and Signal handles in any other native slot
+reject atomically with located `CP1002`. No general native replacement, formula
+evaluation, or broader native acceptance is implied. For one user-reported placement of this generated
 virtual/normal Constant template in Factorio 2.1.21 (mods unspecified), both
 matching Constant rows became virtual signal-B with counts 5 and 13; iron-plate
 and water, the red wire, relative layout and directions were preserved. This
-evidence covers only the Constant example, not Arithmetic output or Selector
-Signal substitution.
+evidence covers only the Constant example, not Arithmetic output, Selector
+Signal substitution, or Decider field replacement.
 The placed export contains no parameter metadata. This bounded report is not an
 independently run game gate. Item/fluid placement and selection, Arithmetic or
 Selector Signal placement, parameterized save/reopen, other qualities or native

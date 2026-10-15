@@ -278,8 +278,10 @@ Constant/Arithmetic/Decider/Selector producers; derived multiplier formulas
 remain unsupported. Formula-only dependencies keep their declaration/original
 rows without allocating physical fields, subject to explicit valid variables
 and direct-leaf metadata. Native Signal export accepts only linked Constant,
-Arithmetic and Selector producers, with handles limited to Constant filter,
-Arithmetic output and the two Selector Signal slots.
+Arithmetic, Selector and Decider producers; handles remain limited to Constant
+filter, Arithmetic output and the two Selector Signal slots. Linked Decider
+Signal fields are concrete replacement targets only, not additional source
+parameter slots.
 
 Explicit native parameter metadata export rejects symbolic multipliers with
 located `CP1002`, even at default 1 or when the same handle is a supported filter
@@ -369,9 +371,12 @@ Arithmetic `output`, Selector `select.index` Signal or Selector `count.output`
 slot. For example,
 `Param.signal('Material', Signal('iron-plate'))` and
 `Param.signal('Coolant', Signal('fluid', 'water', 'normal'))` use the same
-bounded projection as a virtual Signal. The circuit may contain only linked
-Constant, Arithmetic and Selector producers. The example uses the existing
-exact Constant and Arithmetic provisioning capabilities:
+bounded projection as a virtual Signal. Its handle must occupy one of those
+supported Constant, Arithmetic or Selector slots. Linked Decider producers may
+also coexist as concrete replacement targets; their condition and output fields
+do not capture `Param.signal` handles. Every physical Entity must be linked to a
+producer. The example uses the existing exact Constant and Arithmetic
+provisioning capabilities:
 
 ```ts
 const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
@@ -400,8 +405,11 @@ output += Arithmetic({ left: input[A], operation: 'add', right: 3, output: chann
 Local binding remains nominal: overriding `channel` changes its marked filter
 row(s), not an ordinary equal A filter. Native metadata is based on source
 identity, so native export replaces every matching item, fluid, or virtual
-Signal field in supported Constant, Arithmetic and Selector roles with the allocated
-first-free `parameter-0` through `parameter-9` name. This includes Constant
+Signal field in supported Constant, Arithmetic and Selector roles and linked
+Decider condition/then/else fields with the allocated first-free
+`parameter-0` through `parameter-9` name. Decider targets are exactly
+`first_signal`, `second_signal`, `outputs[].signal`, and
+`else_outputs[].signal`; wildcard-tagged fields are skipped. This includes Constant
 filters, Arithmetic `first_signal`, `second_signal`, and `output_signal`,
 Selector `select.index_signal`, and Selector `count.count_signal`;
 ordinary concrete fields matching a declared default are replaced too. A
@@ -412,14 +420,14 @@ Metadata records the declaration label and
 default remains local-only: it is not persisted as a native placement default
 and does not restrict the namespace selected when placing the generic ID row.
 
-Existing eligible Constant, Arithmetic and Selector Signal names across
-types/qualities reserve placeholder names.
+Existing eligible Constant, Arithmetic, Selector and linked Decider Signal
+names across types/qualities reserve placeholder names.
 Exhaustion, unused Signal declarations, distinct handles with the same
 normalized original, a same-name namespace/quality conflict, non-normal
-qualities, virtual wildcards, Arithmetic input Signal parameters and Signal use
-in another slot fail atomically with located `CP1002`. Decider/other producers
-or an unlinked physical
-Entity also rejects a source compilation that declares a Signal parameter.
+qualities, virtual wildcards, Arithmetic input Signal parameters, symbolic
+Decider outputs and Signal use in another native slot fail atomically with
+located `CP1002`. Other producer families or an unlinked physical Entity also
+reject a source compilation that declares a Signal parameter.
 Numeric-only exports and ordinary concrete binding are unaffected. The reviewed
 input transition is user-supplied Factorio 2.1.21 Space Age evidence with mods
 unspecified. The user also supplied the placed export for this one generated
@@ -427,9 +435,9 @@ virtual/normal Constant template: both matching rows became virtual signal-B
 with counts 5 and 13, while iron-plate and water, the red wire, relative layout
 and directions were preserved; parameter metadata was absent after placement.
 This is a bounded user-reported Constant observation, not an independently run
-game gate; it does not verify Arithmetic output or Selector Signal
-substitution. Item/fluid placement and selection, Arithmetic/Selector Signal
-placement, parameterized save/reopen, other qualities or native roles, arbitrary
+game gate; it does not verify Arithmetic output, Selector Signal substitution,
+or Decider field replacement. Item/fluid placement and selection,
+Arithmetic/Selector Signal placement, Decider replacement, parameterized save/reopen, other qualities or native roles, arbitrary
 wires, and browser/mobile native placement remain unverified.
 
 ### Numeric metadata
@@ -568,10 +576,11 @@ remain unsupported. Its internal numeric DAG also projects registered calls to
 `abs(...)`, `log2(...)`, `sign(...)`, `min(...)` and `max(...)` in those same
 eligible formula slots. These are structural strings only; Factorio parsing,
 evaluation and placement of function formulas are not verified. Formula mode
-accepts only linked Constant, Arithmetic, Decider and Selector producers, while
-the native Signal gate accepts only Constant, Arithmetic and Selector
-producers, with handles limited to Constant filter, Arithmetic output and the
-two Selector Signal slots. Its explicit default is also its
+accepts only linked Constant, Arithmetic, Decider and Selector producers,
+while native Signal export accepts linked Constant, Arithmetic, Selector and
+Decider producers with handles limited to Constant filter, Arithmetic output
+and the two Selector Signal slots. Decider fields are concrete replacement
+targets only. A Signal declaration's explicit default is also its
 native original and must be an integer
 in [-2147483648, 2147483647]; it is not
 wrapped, rounded or allocated automatically. A zero count remains an explicit

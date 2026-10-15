@@ -1644,7 +1644,9 @@ output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] })
         ? `output += Constant({ sections: [{ filters: [{ signal: Signal('item', 'parameter-${index}'), value: ${index} }] }] });`
         : index < 6
           ? `output += Arithmetic({ left: ${index}, operation: 'add', right: 1, output: Signal('item', 'parameter-${index}') });`
-          : `output += Selector({ input, operation: 'count', output: Signal('item', 'parameter-${index}') });`,
+          : index === 6
+            ? `output += Decider({ condition: input[Signal('item', 'parameter-${index}')] > 0, outputs: [input[Signal('item', 'parameter-${index}')]] });`
+            : `output += Selector({ input, operation: 'count', output: Signal('item', 'parameter-${index}') });`,
     ).join('\n');
     const exhausted =
       compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
@@ -1751,12 +1753,24 @@ output += Constant({ sections: [{ filters: [
     });
   });
 
-  test('rejects unused or duplicate Signal declarations used only beside Selector literals', () => {
+  test('rejects unused or duplicate Signal declarations used only beside Selector or Decider literals', () => {
     const unused = compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
 const input = new Network();
 const output = new Network();
 output += Selector({ input, operation: 'count', output: Signal('virtual', 'signal-A') });`);
     expect(exportFailure(unused)).toMatchObject({
+      code: 'CP1002',
+      path: '$.parameters[0]',
+      message: expect.stringContaining('unused declarations'),
+    });
+
+    const unusedDecider =
+      compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output = new Network();
+output += Decider({ condition: input[A] > 0, outputs: [input[A]] });`);
+    expect(exportFailure(unusedDecider)).toMatchObject({
       code: 'CP1002',
       path: '$.parameters[0]',
       message: expect.stringContaining('unused declarations'),
@@ -1775,23 +1789,358 @@ countNetwork += Selector({ input, operation: 'count', output: countOutput });`);
     });
   });
 
-  test('rejects Decider producers in native Signal templates atomically', () => {
-    const source = `const input = new Network();
-output += Decider({ condition: input[Signal('virtual', 'signal-A')] > 0, outputs: [input[Signal('virtual', 'signal-A')] ] });`;
-    const compilation =
-      compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+  test('replaces concrete Decider Signals when a Signal handle is authenticated elsewhere', () => {
+    const key = '__comblang_decider_signal_projection_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const existed = Object.hasOwn(globals, key);
+    const previous = globals[key];
+    globals[key] = 0;
+    try {
+      const compilation = compile(`globalThis.${key} = Number(globalThis.${key} ?? 0) + 1;
+const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const input = new Network();
 const output = new Network();
 output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });
-${source}`);
+output += Arithmetic({ left: 1, operation: 'add', right: 2, output: channel }).at(2, 3);
+output += Selector({ input, operation: 'select', index: channel }).at(3, 4);
+output += Decider({ condition: (input[A] > input[B] || input[B] < input[A]) && input[A] > 2,
+  outputs: [input[A], 2 * A, 2 * A], elseOutputs: [input[A], 3 * A] }).at(1, 2, 4);`);
+      const artifact = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+      const baseline = buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options);
+      const expectedEntities = structuredClone(baseline.entities) as {
+        entityNumber: number;
+        native: Record<string, unknown>;
+      }[];
+      const replaceExpectedSignal = (value: unknown): Record<string, unknown> => {
+        const signalField = value as Record<string, unknown>;
+        const { type: _type, ...preserved } = signalField;
+        return { ...preserved, name: 'parameter-0' };
+      };
+      const expectedConstantBehavior = expectedEntities[0]!.native.control_behavior as Record<
+        string,
+        unknown
+      >;
+      const expectedSections = expectedConstantBehavior.sections as {
+        sections: { filters: Record<string, unknown>[] }[];
+      };
+      const expectedFilter = expectedSections.sections[0]!.filters[0]!;
+      expectedSections.sections[0]!.filters[0] = replaceExpectedSignal(expectedFilter);
+      const expectedArithmeticBehavior = expectedEntities[1]!.native.control_behavior as Record<
+        string,
+        unknown
+      >;
+      const expectedArithmetic = expectedArithmeticBehavior.arithmetic_conditions as Record<
+        string,
+        unknown
+      >;
+      expectedArithmetic.output_signal = replaceExpectedSignal(expectedArithmetic.output_signal);
+      const expectedSelectorBehavior = expectedEntities[2]!.native.control_behavior as Record<
+        string,
+        unknown
+      >;
+      expectedSelectorBehavior.index_signal = replaceExpectedSignal(
+        expectedSelectorBehavior.index_signal,
+      );
+      const expectedDeciderBehavior = expectedEntities[3]!.native.control_behavior as Record<
+        string,
+        unknown
+      >;
+      const expectedDecider = expectedDeciderBehavior.decider_conditions as {
+        conditions: Record<string, unknown>[];
+        outputs: Record<string, unknown>[];
+        else_outputs: Record<string, unknown>[];
+      };
+      for (const row of expectedDecider.conditions) {
+        for (const field of ['first_signal', 'second_signal'] as const) {
+          const signalField = row[field] as Record<string, unknown> | undefined;
+          if (signalField?.name === 'signal-A') {
+            row[field] = replaceExpectedSignal(signalField);
+          }
+        }
+      }
+      for (const row of [...expectedDecider.outputs, ...expectedDecider.else_outputs]) {
+        const signalField = row.signal as Record<string, unknown> | undefined;
+        if (signalField?.name === 'signal-A') row.signal = replaceExpectedSignal(signalField);
+      }
+
+      const declarations = sourceApi.listSourceCompilationParameters(compilation);
+      const channel = declarations.find(({ kind }) => kind === 'signal')!.parameter;
+      const local = sourceApi.bindSourceCompilationCircuit(compilation, [
+        { parameter: channel, value: signal('virtual', 'signal-B') },
+      ]);
+      const localEntities = generateBlueprintJson(local.resolvedCircuit.ir).blueprint.entities;
+      expect(localEntities[0]!.control_behavior).toMatchObject({
+        sections: { sections: [{ filters: [{ name: 'signal-B' }] }] },
+      });
+      expect(localEntities[1]!.control_behavior).toMatchObject({
+        arithmetic_conditions: { output_signal: { name: 'signal-B' } },
+      });
+      expect(localEntities[2]!.control_behavior).toMatchObject({
+        index_signal: { name: 'signal-B' },
+      });
+      expect(localEntities[3]!.control_behavior).toMatchObject({
+        decider_conditions: {
+          conditions: [
+            { first_signal: { name: 'signal-A' }, second_signal: { name: 'signal-B' } },
+            { first_signal: { name: 'signal-A' } },
+            { first_signal: { name: 'signal-B' }, second_signal: { name: 'signal-A' } },
+            { first_signal: { name: 'signal-A' } },
+          ],
+          outputs: [
+            { signal: { name: 'signal-A' } },
+            { signal: { name: 'signal-A' }, constant: 2 },
+            { signal: { name: 'signal-A' }, constant: 2 },
+          ],
+        },
+      });
+      expect(local.resolvedCircuit.ir.networks).toEqual(compilation.resolvedCircuit!.ir.networks);
+      expect(
+        local.resolvedCircuit.ir.producers.map(({ id, entityId, destinations }) => ({
+          id,
+          entityId,
+          destinations,
+        })),
+      ).toEqual(
+        compilation.resolvedCircuit!.ir.producers.map(({ id, entityId, destinations }) => ({
+          id,
+          entityId,
+          destinations,
+        })),
+      );
+      expect(local.resolvedCircuit.ir.entities?.map(({ id }) => id)).toEqual(
+        compilation.resolvedCircuit!.ir.entities?.map(({ id }) => id),
+      );
+
+      const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      const retry = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      const json = emitNativeBlueprintJson(native).blueprint;
+      expect(native.parameters).toEqual([
+        {
+          type: 'id',
+          id: 'parameter-0',
+          name: 'Channel',
+          'quality-condition': { quality: 'normal', comparator: '=' },
+        },
+      ]);
+      expect(native.entities).toEqual(expectedEntities);
+      expect(native.wires).toEqual(baseline.wires);
+      expect(json.entities[3]).toMatchObject({
+        name: 'decider-combinator',
+        position: { x: 1, y: 2 },
+        direction: 4,
+        control_behavior: {
+          decider_conditions: {
+            conditions: [
+              { first_signal: { name: 'parameter-0' }, second_signal: { name: 'signal-B' } },
+              { first_signal: { name: 'parameter-0' }, constant: 2 },
+              { first_signal: { name: 'signal-B' }, second_signal: { name: 'parameter-0' } },
+              { first_signal: { name: 'parameter-0' }, constant: 2 },
+            ],
+            outputs: [
+              { signal: { name: 'parameter-0' }, copy_count_from_input: true },
+              { signal: { name: 'parameter-0' }, constant: 2 },
+              { signal: { name: 'parameter-0' }, constant: 2 },
+            ],
+            else_outputs: [
+              { signal: { name: 'parameter-0' }, copy_count_from_input: true },
+              { signal: { name: 'parameter-0' }, constant: 3 },
+            ],
+          },
+        },
+      });
+      expect(retry).toEqual(native);
+      expect(
+        sourceApi.bindSourceCompilationCircuit(compilation).resolvedCircuit.ir.producers,
+      ).toEqual(compilation.resolvedCircuit!.ir.producers);
+      expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(artifact);
+      expect(globals[key]).toBe(1);
+    } finally {
+      if (existed) globals[key] = previous;
+      else delete globals[key];
+    }
+  });
+
+  test.each([
+    ['IF', 'output += IF(input[A] > 0, [input[A], 2 * A], { fallback: 3 * A });'],
+    [
+      'when().then().else()',
+      'const gate = when(input[A] > 0).then(input[A], 2 * A); gate.else(3 * A); output += gate;',
+    ],
+  ])('replaces concrete Signals from the %s capture path', (_form, deciderSource) => {
+    const compilation =
+      compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });
+${deciderSource}`);
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    const decider = native.entities.find(
+      ({ native: entity }) => entity.name === 'decider-combinator',
+    );
+    const behavior = decider?.native.control_behavior as Record<string, unknown> | undefined;
+    expect(behavior?.decider_conditions).toMatchObject({
+      conditions: [{ first_signal: { name: 'parameter-0' } }],
+      outputs: [{ signal: { name: 'parameter-0' } }, { signal: { name: 'parameter-0' } }],
+      else_outputs: [{ signal: { name: 'parameter-0' } }],
+    });
+  });
+
+  test.each([
+    ['item', 'iron-plate'],
+    ['fluid', 'water'],
+    ['virtual', 'signal-A'],
+  ])('preserves explicit normal quality when replacing Decider %s Signal %s', (type, name) => {
+    const concrete = `Signal('${type}', '${name}', 'normal')`;
+    const compilation = compile(`const channel = Param.signal('Channel', ${concrete});
+const A = ${concrete};
+const input = new Network();
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });
+output += Decider({ condition: input[A] > 0, outputs: [input[A]], elseOutputs: [2 * A] });`);
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    const decider = native.entities.find(
+      ({ native: entity }) => entity.name === 'decider-combinator',
+    );
+    const behavior = decider?.native.control_behavior as Record<string, unknown> | undefined;
+    const config = behavior?.decider_conditions as
+      | {
+          readonly conditions: readonly { readonly first_signal?: unknown }[];
+          readonly outputs: readonly { readonly signal?: unknown }[];
+          readonly else_outputs: readonly { readonly signal?: unknown }[];
+        }
+      | undefined;
+    const conditions = config?.conditions;
+    const outputRows = config?.outputs;
+    const elseRows = config?.else_outputs;
+    expect(conditions?.[0]?.first_signal).toEqual({ name: 'parameter-0', quality: 'normal' });
+    expect(outputRows?.[0]?.signal).toEqual({ name: 'parameter-0', quality: 'normal' });
+    expect(elseRows?.[0]?.signal).toEqual({ name: 'parameter-0', quality: 'normal' });
+  });
+
+  test.each([
+    [
+      'first_signal',
+      'input[reserved] > 0',
+      'outputs: [input[A]]',
+      '',
+      {
+        conditions: [{ first_signal: { name: 'parameter-0' } }],
+        outputs: [{ signal: { name: 'parameter-1' } }],
+      },
+    ],
+    [
+      'second_signal',
+      'input[A] > input[reserved]',
+      'outputs: [input[A]]',
+      '',
+      {
+        conditions: [
+          { first_signal: { name: 'parameter-1' }, second_signal: { name: 'parameter-0' } },
+        ],
+        outputs: [{ signal: { name: 'parameter-1' } }],
+      },
+    ],
+    [
+      'outputs[].signal',
+      'input[A] > 0',
+      'outputs: [input[reserved], input[A]]',
+      '',
+      {
+        conditions: [{ first_signal: { name: 'parameter-1' } }],
+        outputs: [{ signal: { name: 'parameter-0' } }, { signal: { name: 'parameter-1' } }],
+      },
+    ],
+    [
+      'else_outputs[].signal',
+      'input[A] > 0',
+      'outputs: [input[A]]',
+      ', elseOutputs: [3 * reserved]',
+      {
+        conditions: [{ first_signal: { name: 'parameter-1' } }],
+        outputs: [{ signal: { name: 'parameter-1' } }],
+        else_outputs: [{ signal: { name: 'parameter-0' } }],
+      },
+    ],
+  ])(
+    'reserves a placeholder-like name found only in Decider %s',
+    (_slot, condition, outputs, elseOutputs, expected) => {
+      const compilation =
+        compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const A = Signal('virtual', 'signal-A');
+const reserved = Signal('virtual', 'parameter-0');
+const input = new Network();
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });
+output += Decider({ condition: ${condition}, ${outputs}${elseOutputs} });`);
+      const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      expect(native.parameters).toMatchObject([{ id: 'parameter-1' }]);
+      expect(emitNativeBlueprintJson(native).blueprint.entities[1]!.control_behavior).toMatchObject(
+        {
+          decider_conditions: expected,
+        },
+      );
+    },
+  );
+
+  test.each([
+    ['right operand namespace', "Signal('item', 'signal-A')", 'right'],
+    ['right operand quality', "Signal('virtual', 'signal-A', 'rare')", 'right'],
+    ['else output namespace', "Signal('item', 'signal-A')", 'else'],
+    ['else output quality', "Signal('virtual', 'signal-A', 'rare')", 'else'],
+  ])('rejects a Decider-only same-name conflict in its %s', (_label, conflicting, slot) => {
+    const compilation =
+      compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const A = Signal('virtual', 'signal-A');
+const conflicting = ${conflicting};
+const input = new Network();
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });
+output += Decider({ condition: input[A] > ${slot === 'right' ? 'input[conflicting]' : '0'},
+  outputs: [input[A]]${slot === 'else' ? ', elseOutputs: [3 * conflicting]' : ''} });`);
     const artifact = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
     expect(exportFailure(compilation)).toMatchObject({
       code: 'CP1002',
-      path: '$.parameters[0]',
-      message: expect.stringContaining(
-        'requires every producer to be Constant, Arithmetic or Selector',
-      ),
+      path: '$.parameters[0].defaultValue',
+      message: expect.stringContaining('different namespace or quality'),
     });
     expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(artifact);
+  });
+
+  test('does not treat wildcard-tagged Decider Signals as concrete or add absent comparison slots', () => {
+    const compilation =
+      compile(`const channel = Param.signal('Wildcard-like name', Signal('item', 'signal-each'));
+const B = Signal('virtual', 'signal-B');
+const input = new Network();
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });
+output += Decider({ condition: (Each(input) > input[B]) || input[B] > 0,
+  outputs: [Each(input), 2 * EACH] });`);
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    const decider = emitNativeBlueprintJson(native).blueprint.entities[1]!;
+    const behavior = decider.control_behavior as {
+      decider_conditions: {
+        conditions: Record<string, unknown>[];
+        outputs: Record<string, unknown>[];
+      };
+    };
+    expect(behavior.decider_conditions.conditions[0]).toMatchObject({
+      first_signal: { name: 'signal-each' },
+      second_signal: { name: 'signal-B' },
+    });
+    expect(behavior.decider_conditions.conditions[1]).toMatchObject({
+      first_signal: { name: 'signal-B' },
+      constant: 0,
+    });
+    expect(behavior.decider_conditions.conditions[1]).not.toHaveProperty('second_signal');
+    expect(behavior.decider_conditions.outputs[0]).toMatchObject({
+      signal: { name: 'signal-each', type: 'virtual' },
+    });
+    expect(behavior.decider_conditions.outputs[1]).toMatchObject({
+      signal: { name: 'signal-each' },
+    });
   });
 
   test('rejects unlinked physical Entities in Signal export while leaving numeric export unaffected', () => {

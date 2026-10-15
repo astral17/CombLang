@@ -334,14 +334,17 @@ output += ${device};`;
     },
   );
 
-  test('allows Selector Signal templates and copies the exact native document', async () => {
+  test('allows Selector Signal templates with concrete Decider replacement in the copied document', async () => {
     const text = `const index = Param.signal('Index', Signal('virtual', 'signal-index'));
 const countOutput = Param.signal('Count output', Signal('virtual', 'signal-count'));
+const A = Signal('virtual', 'signal-index');
 const input = new Network();
 const selected = new Network();
 const counted = new Network();
+const decided = new Network();
 selected += Selector({ input, operation: 'select', index });
-counted += Selector({ input, operation: 'count', output: countOutput });`;
+counted += Selector({ input, operation: 'count', output: countOutput });
+decided += Decider({ condition: input[A] > 0, outputs: [input[A]], elseOutputs: [2 * A] });`;
     const runtime = new CompilerWorkerRuntime();
     const response = await runtime.handle({
       kind: 'parse',
@@ -368,6 +371,15 @@ counted += Selector({ input, operation: 'count', output: countOutput });`;
     expect(response.result.blueprintExport.document.blueprint.entities).toMatchObject([
       { control_behavior: { operation: 'select', index_signal: { name: 'parameter-0' } } },
       { control_behavior: { operation: 'count', count_signal: { name: 'parameter-1' } } },
+      {
+        control_behavior: {
+          decider_conditions: {
+            conditions: [{ first_signal: { name: 'parameter-0' }, constant: 0 }],
+            outputs: [{ signal: { name: 'parameter-0' }, copy_count_from_input: true }],
+            else_outputs: [{ signal: { name: 'parameter-0' }, constant: 2 }],
+          },
+        },
+      },
     ]);
     expect(panel.text).not.toContain('CP1002 error');
   });

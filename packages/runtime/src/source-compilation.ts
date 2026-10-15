@@ -451,12 +451,13 @@ export function exportSourceCompilationNativeBlueprint(
       (producer) =>
         producer.kind !== 'constant' &&
         producer.kind !== 'arithmetic' &&
-        producer.kind !== 'selector',
+        producer.kind !== 'selector' &&
+        producer.kind !== 'decider',
     );
     if (unsupportedProducer !== undefined) {
       reject(
         signalPath,
-        'native Signal export requires every producer to be Constant, Arithmetic or Selector.',
+        'native Signal export requires every producer to be Constant, Arithmetic, Selector or Decider.',
         firstSignal.source,
       );
     }
@@ -523,11 +524,21 @@ export function exportSourceCompilationNativeBlueprint(
     ReturnType<typeof inspectConstantConfigurationTemplate>['session'] | undefined;
   let formulaRenderer: ReturnType<typeof createNativeNumericFormulaRenderer> | undefined;
   if (signalDeclarations.length > 0) {
+    const concreteDeciderConditionSignals = (condition: LogicalDeciderCondition): SignalId[] => {
+      if (condition.kind !== 'compare') {
+        return condition.conditions.flatMap(concreteDeciderConditionSignals);
+      }
+      return [
+        ...(condition.left.kind === 'signal' ? [condition.left.signal] : []),
+        ...(condition.right.kind === 'signal' ? [condition.right.signal] : []),
+      ];
+    };
     for (const producer of compilation.resolvedCircuit.ir.producers) {
       if (
         producer.kind !== 'constant' &&
         producer.kind !== 'arithmetic' &&
-        producer.kind !== 'selector'
+        producer.kind !== 'selector' &&
+        producer.kind !== 'decider'
       ) {
         continue;
       }
@@ -564,7 +575,17 @@ export function exportSourceCompilationNativeBlueprint(
                 : !canonicalBlueprintParameterHandle(producer.config.output)
                   ? [producer.config.output as SignalId]
                   : []
-              : [];
+              : producer.kind === 'decider'
+                ? [
+                    ...concreteDeciderConditionSignals(producer.config.condition),
+                    ...producer.config.outputs.flatMap((output) =>
+                      output.signal.kind === 'signal' ? [output.signal.signal] : [],
+                    ),
+                    ...(producer.config.elseOutputs ?? []).flatMap((output) =>
+                      output.signal.kind === 'signal' ? [output.signal.signal] : [],
+                    ),
+                  ]
+                : [];
       for (const concreteSignal of concreteSignals) {
         const key = signalKey(concreteSignal);
         reservedSignalPlaceholderNames.add(concreteSignal.name);
@@ -572,7 +593,7 @@ export function exportSourceCompilationNativeBlueprint(
           if (sameName.key !== key) {
             reject(
               `$.parameters[${declarations.indexOf(sameName.declaration)}].defaultValue`,
-              `${producer.kind === 'constant' ? 'Constant filter' : producer.kind === 'arithmetic' ? 'Arithmetic Signal field' : 'Selector Signal field'} ${JSON.stringify(concreteSignal.name)} has a different namespace or quality from the declared Signal default.`,
+              `${producer.kind === 'constant' ? 'Constant filter' : producer.kind === 'arithmetic' ? 'Arithmetic Signal field' : producer.kind === 'selector' ? 'Selector Signal field' : 'Decider Signal field'} ${JSON.stringify(concreteSignal.name)} has a different namespace or quality from the declared Signal default.`,
               sameName.declaration.source,
             );
           }
@@ -1771,6 +1792,162 @@ export function exportSourceCompilationNativeBlueprint(
         patchedByNumber.set(
           entityNumber,
           Object.freeze({ ...entity.native, control_behavior: nextBehavior }),
+        );
+      }
+      continue;
+    }
+    if (producer.kind === 'decider') {
+      if (entity === undefined) {
+        const declaration = signalDeclarations[0]!;
+        reject(
+          `$.parameters[${declarations.indexOf(declaration)}]`,
+          'projected Decider producer is missing its native entity.',
+          declaration.source,
+        );
+      }
+      const behavior = readRecord(entity.native.control_behavior);
+      const decider = readRecord(behavior?.decider_conditions);
+      const projectionPath = `$.parameters[${declarations.indexOf(signalDeclarations[0]!)}]`;
+      if (behavior === undefined || decider === undefined) {
+        reject(
+          projectionPath,
+          'projected Decider configuration is missing during authenticated native export.',
+          signalDeclarations[0]!.source,
+        );
+      }
+      const replaceProjectedSignal = (
+        value: unknown,
+        expected: SignalId,
+        slotPath: string,
+      ): Record<string, unknown> | undefined => {
+        const expectedKey = signalKey(expected);
+        const signalField = readRecord(value);
+        if (signalField === undefined || nativeSignalKey(signalField) !== expectedKey) {
+          reject(
+            projectionPath,
+            `concrete Decider Signal at ${slotPath} did not survive authenticated native projection unchanged.`,
+            signalDeclarations[0]!.source,
+          );
+        }
+        const placeholder = replacementsByOriginal.get(expectedKey);
+        if (placeholder === undefined) return undefined;
+        const preservedFields = { ...signalField };
+        delete preservedFields.type;
+        return Object.freeze({ ...preservedFields, name: placeholder });
+      };
+      let deciderChanged = false;
+      const sourceRows = nativeDeciderConditionGroups(
+        producer.config.condition,
+        options.maxDeciderConditionRows,
+      ).flat();
+      const conditions = decider.conditions;
+      let nextConditions: readonly unknown[] | undefined;
+      if (!Array.isArray(conditions) || conditions.length !== sourceRows.length) {
+        reject(
+          projectionPath,
+          'Decider condition rows changed during authenticated native projection.',
+          signalDeclarations[0]!.source,
+        );
+      }
+      let conditionsChanged = false;
+      const projectedRows = conditions.map((conditionValue, index) => {
+        const condition = readRecord(conditionValue);
+        const sourceRow = sourceRows[index]!;
+        if (condition === undefined) {
+          reject(
+            projectionPath,
+            `Decider condition row ${index} changed during authenticated native projection.`,
+            signalDeclarations[0]!.source,
+          );
+        }
+        let conditionChanged = false;
+        const nextCondition: Record<string, unknown> = { ...condition };
+        if (sourceRow.left.kind === 'signal') {
+          const replacement = replaceProjectedSignal(
+            condition.first_signal,
+            sourceRow.left.signal,
+            `conditions[${index}].first_signal`,
+          );
+          if (replacement !== undefined) {
+            nextCondition.first_signal = replacement;
+            conditionChanged = true;
+          }
+        }
+        if (sourceRow.right.kind === 'signal') {
+          const replacement = replaceProjectedSignal(
+            condition.second_signal,
+            sourceRow.right.signal,
+            `conditions[${index}].second_signal`,
+          );
+          if (replacement !== undefined) {
+            nextCondition.second_signal = replacement;
+            conditionChanged = true;
+          }
+        }
+        if (!conditionChanged) return conditionValue;
+        conditionsChanged = true;
+        return Object.freeze(nextCondition);
+      });
+      if (conditionsChanged) {
+        deciderChanged = true;
+        nextConditions = Object.freeze(projectedRows);
+      }
+      const replaceOutputSignals = (
+        nativeValue: unknown,
+        sourceOutputs: typeof producer.config.outputs,
+        branch: 'outputs' | 'else_outputs',
+      ): readonly unknown[] | undefined => {
+        if (!Array.isArray(nativeValue) || nativeValue.length !== sourceOutputs.length) {
+          reject(
+            projectionPath,
+            `Decider ${branch} changed during authenticated native projection.`,
+            signalDeclarations[0]!.source,
+          );
+        }
+        let outputsChanged = false;
+        const nextOutputs = nativeValue.map((outputValue, index) => {
+          const output = readRecord(outputValue);
+          const sourceOutput = sourceOutputs[index]!;
+          if (output === undefined) {
+            reject(
+              projectionPath,
+              `Decider ${branch}[${index}] changed during authenticated native projection.`,
+              signalDeclarations[0]!.source,
+            );
+          }
+          if (sourceOutput.signal.kind !== 'signal') return outputValue;
+          const replacement = replaceProjectedSignal(
+            output.signal,
+            sourceOutput.signal.signal,
+            `${branch}[${index}].signal`,
+          );
+          if (replacement === undefined) return outputValue;
+          outputsChanged = true;
+          return Object.freeze({ ...output, signal: replacement });
+        });
+        if (!outputsChanged) return undefined;
+        deciderChanged = true;
+        return Object.freeze(nextOutputs);
+      };
+      const nextOutputs = replaceOutputSignals(decider.outputs, producer.config.outputs, 'outputs');
+      const nextElseOutputs =
+        producer.config.elseOutputs === undefined
+          ? undefined
+          : replaceOutputSignals(decider.else_outputs, producer.config.elseOutputs, 'else_outputs');
+      if (deciderChanged) {
+        const nextDecider = Object.freeze({
+          ...decider,
+          ...(nextConditions === undefined ? {} : { conditions: nextConditions }),
+          ...(nextOutputs === undefined ? {} : { outputs: nextOutputs }),
+          ...(nextElseOutputs === undefined ? {} : { else_outputs: nextElseOutputs }),
+        });
+        const nextBehavior = Object.freeze({ ...behavior, decider_conditions: nextDecider });
+        patchedByNumber.set(
+          entityNumber,
+          Object.freeze({
+            ...entity.native,
+            control_behavior: nextBehavior,
+          }) as (typeof projected.entities)[number]['native'],
         );
       }
       continue;

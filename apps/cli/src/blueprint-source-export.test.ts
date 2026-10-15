@@ -1057,6 +1057,8 @@ const amount = Param.number('Amount', 5, { variable: 'x' });
 const plate = Param.signal('Plate', Signal('iron-plate'));
 const water = Param.signal('Water', Signal('fluid', 'water', 'normal'));
 const output = new Network();
+const input = new Network();
+const A = Signal('virtual', 'signal-A');
 output += Constant({ sections: [{ filters: [
   { signal: channel, value: amount * 2 },
   { signal: Signal('virtual', 'signal-A'), value: 13 },
@@ -1064,7 +1066,8 @@ output += Constant({ sections: [{ filters: [
   { signal: Signal('iron-plate'), value: 8 },
   { signal: water, value: 11 },
   { signal: Signal('fluid', 'water'), value: 12 },
-] }] });`);
+] }] });
+output += Decider({ condition: input[A] > 0, outputs: [input[A]], elseOutputs: [2 * A] });`);
       const nativePath = join(dirname(path), 'constant-signal-parameters.json');
       const concretePath = join(dirname(path), 'constant-signal-concrete.json');
       const overridePath = join(dirname(path), 'constant-signal-overrides.json');
@@ -1116,6 +1119,11 @@ output += Constant({ sections: [{ filters: [
         { index: 5, name: 'parameter-2', quality: 'normal', comparator: '=', count: 11 },
         { index: 6, name: 'parameter-2', quality: 'normal', comparator: '=', count: 12 },
       ]);
+      expect(native.blueprint.entities[1].control_behavior.decider_conditions).toMatchObject({
+        conditions: [{ first_signal: { name: 'parameter-0' }, constant: 0 }],
+        outputs: [{ signal: { name: 'parameter-0' }, copy_count_from_input: true }],
+        else_outputs: [{ signal: { name: 'parameter-0' }, constant: 2 }],
+      });
 
       expect(
         await run(['blueprint', 'export', '--json', '--output', concretePath, path], environment),
@@ -1159,6 +1167,11 @@ output += Constant({ sections: [{ filters: [
           count: 12,
         },
       ]);
+      expect(concrete.blueprint.entities[1].control_behavior.decider_conditions).toMatchObject({
+        conditions: [{ first_signal: { name: 'signal-A' }, constant: 0 }],
+        outputs: [{ signal: { name: 'signal-A' }, copy_count_from_input: true }],
+        else_outputs: [{ signal: { name: 'signal-A' }, constant: 2 }],
+      });
 
       expect(
         await run(
@@ -1216,6 +1229,11 @@ output += Constant({ sections: [{ filters: [
         },
         { index: 6, type: 'fluid', name: 'water', quality: 'normal', comparator: '=', count: 12 },
       ]);
+      expect(bound.blueprint.entities[1].control_behavior.decider_conditions).toMatchObject({
+        conditions: [{ first_signal: { name: 'signal-A' }, constant: 0 }],
+        outputs: [{ signal: { name: 'signal-A' }, copy_count_from_input: true }],
+        else_outputs: [{ signal: { name: 'signal-A' }, constant: 2 }],
+      });
 
       log.mockClear();
       expect(await run(['blueprint', 'export', '--json', path], environment)).toBe(0);
@@ -1623,13 +1641,6 @@ gate.else(4 * B);`;
       '$.constantTemplates[0].sections[0].multiplier',
     ],
     [
-      "const amount = Param.signal('Channel', A);",
-      `const input = new Network();
-output += Arithmetic({ left: 2, operation: 'add', right: 5, output: amount });
-output += Decider({ condition: input[A] > 0, outputs: [input[A]] });`,
-      '$.parameters[0]',
-    ],
-    [
       "const amount = Param.number('Unused', 5);",
       'Constant({ sections: [{ filters: [{ signal: A, value: 3 }] }] })',
       '$.parameters[0]',
@@ -1675,13 +1686,18 @@ output += Decider({ condition: input[A] > 0, outputs: [input[A]] });`,
       });
       const multiplier = semanticPath.startsWith('$.constantTemplates');
       expect(text.slice(report.error.span.start, report.error.span.end)).toContain(
-        multiplier ? 'Constant(' : 'Param.',
+        multiplier
+          ? 'Constant('
+          : semanticPath.startsWith('$.deciderTemplates')
+            ? 'Decider('
+            : 'Param.',
       );
       expect(report).not.toHaveProperty('document');
       await expect(stat(output)).rejects.toMatchObject({ code: 'ENOENT' });
       expect(await run(['blueprint', 'export', '--parameters', path], environment)).toBe(2);
       expect(log).toHaveBeenCalledTimes(1);
-      expect(String(error.mock.calls.at(-1)?.[0])).toContain(`${path}:${multiplier ? 4 : 2}:`);
+      const sourceLine = text.slice(0, report.error.span.start).split(/\r?\n/).length;
+      expect(String(error.mock.calls.at(-1)?.[0])).toContain(`${path}:${sourceLine}:`);
       expect(String(error.mock.calls.at(-1)?.[0])).toContain(semanticPath);
       expect(await run(['blueprint', 'export', '--json', path], environment)).toBe(0);
       expect(JSON.parse(String(log.mock.calls[1]?.[0])).document.blueprint).not.toHaveProperty(

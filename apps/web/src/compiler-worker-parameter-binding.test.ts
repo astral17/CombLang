@@ -1562,11 +1562,14 @@ output += Arithmetic({ left: 2, operation: 'add', right: amount * 2, output: res
             path: 'worker-selector-signal-templates.factorio.ts',
             text: `const index = Param.signal('Index', Signal('virtual', 'signal-index'));
 const countOutput = Param.signal('Count output', Signal('fluid', 'water', 'normal'));
+const A = Signal('virtual', 'signal-index');
 const input = new Network();
 const selectOutput = new Network();
 const countNetwork = new Network();
+const deciderOutput = new Network();
 selectOutput += Selector({ input, operation: 'select', index });
-countNetwork += Selector({ input, operation: 'count', output: countOutput });`,
+countNetwork += Selector({ input, operation: 'count', output: countOutput });
+deciderOutput += Decider({ condition: input[A] > 0, outputs: [input[A]], elseOutputs: [2 * A] });`,
           },
           parameterBinding: true,
           blueprintExport: { parameters: true },
@@ -1600,6 +1603,13 @@ countNetwork += Selector({ input, operation: 'count', output: countOutput });`,
     expect(blueprint.entities[1]!.control_behavior).toMatchObject({
       operation: 'count',
       count_signal: { name: 'parameter-1', quality: 'normal' },
+    });
+    expect(blueprint.entities[2]!.control_behavior).toMatchObject({
+      decider_conditions: {
+        conditions: [{ first_signal: { name: 'parameter-0' }, constant: 0 }],
+        outputs: [{ signal: { name: 'parameter-0' }, copy_count_from_input: true }],
+        else_outputs: [{ signal: { name: 'parameter-0' }, constant: 2 }],
+      },
     });
     expect(parsed.parameterBinding).toMatchObject({
       ok: true,

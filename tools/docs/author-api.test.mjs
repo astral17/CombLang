@@ -549,6 +549,56 @@ expectSignal(network('output'), Signal('virtual', 'signal-B')).toBe(111);`,
     });
   });
 
+  test('keeps documented local Decider binding nominal while native export replaces concrete matches', async () => {
+    const source = read('parameters').match(
+      /Mixed Constant\/Decider replacement example:\r?\n\r?\n```javascript\r?\n([\s\S]*?)```/,
+    )?.[1];
+    if (source === undefined) throw new Error('Missing mixed Constant/Decider example');
+    const compilation = compile(source, await bundled);
+    const session = createSourceParameterBindingSession(compilation);
+    const channel = session.parameters.find(({ label }) => label === 'Channel');
+    if (channel === undefined) throw new Error('Missing documented Channel parameter');
+    const local = generateBlueprintJson(
+      session.bind([{ id: channel.id, value: { type: 'virtual', name: 'signal-B' } }])
+        .resolvedCircuit.ir,
+    ).blueprint;
+    expect(local.entities[0].control_behavior.sections.sections[0].filters[0]).toMatchObject({
+      name: 'signal-B',
+    });
+    expect(local.entities[1].control_behavior.decider_conditions).toMatchObject({
+      conditions: [{ first_signal: { name: 'signal-A' } }],
+      outputs: [{ signal: { name: 'signal-A' } }],
+      else_outputs: [{ signal: { name: 'signal-A' } }],
+    });
+
+    const native = exportSourceCompilationNativeBlueprint(compilation, {
+      label: 'Documented Constant and Decider Signal replacement',
+      maxDeciderConditionRows: 1024,
+    });
+    expect(native.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Channel',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    const constant = native.entities.find(
+      ({ native: entity }) => entity.name === 'constant-combinator',
+    );
+    const decider = native.entities.find(
+      ({ native: entity }) => entity.name === 'decider-combinator',
+    );
+    expect(constant?.native.control_behavior.sections.sections[0].filters[0]).toMatchObject({
+      name: 'parameter-0',
+    });
+    expect(decider?.native.control_behavior.decider_conditions).toMatchObject({
+      conditions: [{ first_signal: { name: 'parameter-0' }, constant: 0 }],
+      outputs: [{ signal: { name: 'parameter-0' }, copy_count_from_input: true }],
+      else_outputs: [{ signal: { name: 'parameter-0' }, constant: 2 }],
+    });
+  });
+
   test('exports the executable Selector index/count Signal example', async () => {
     const page = readFileSync(new URL('../../docs/api/parameters.md', import.meta.url), 'utf8');
     const source = page.match(
