@@ -1466,6 +1466,40 @@ output += Constant({ sections: [{ filters: [{ signal: A, value: 2 }] }] });`,
     ).toBeDefined();
   });
 
+  test('exports an Arithmetic formula-only parameter through the Worker', async () => {
+    const runtime = parameterRuntime();
+    const response = await runtime.handle(
+      parseRequest(55, {
+        file: {
+          path: 'worker-formula-only-parameter.factorio.ts',
+          text: `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const output = new Network();
+output += Arithmetic({ left: amount * 2, operation: 'add', right: 1, output: A });`,
+        },
+        parameterBinding: true,
+        blueprintExport: { parameters: true },
+      }),
+    );
+
+    expect(response.result.pipelineDiagnostics).toEqual([]);
+    expect(response.result.blueprintExport).toMatchObject({ ok: true });
+    if (response.result.blueprintExport?.ok !== true) {
+      throw new Error('Expected a successful Worker formula-only template export.');
+    }
+    expect(response.result.blueprintExport.document.blueprint.parameters).toEqual([
+      { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
+    ]);
+    expect(response.result.blueprintExport.document.blueprint.entities).toHaveLength(1);
+    expect(
+      response.result.blueprintExport.document.blueprint.entities[0]!.control_behavior,
+    ).toMatchObject({
+      arithmetic_conditions: { first_constant: 10, second_constant: 1 },
+    });
+    expect(response.parameterBinding).toMatchObject({ ok: true, token: expect.any(String) });
+  });
+
   test('exports Selector index formulas and rebinds their concrete defaults through the Worker', async () => {
     const globals = globalThis as Record<string, unknown>;
     const previous = globals[localExpressionRunKey];

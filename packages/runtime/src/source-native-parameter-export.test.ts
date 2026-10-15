@@ -1582,7 +1582,7 @@ output += Arithmetic({ left: amount, operation: 'add', right: constantEquivalent
     expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(originalArtifact);
   });
 
-  test('exports a direct Constant count dependency and its typed expression without changing local binding', () => {
+  test('retains a Math formula-only Constant dependency without adding its original physically', () => {
     const key = '__comblang_native_constant_formula_runs';
     const globals = globalThis as Record<string, unknown>;
     const existed = Object.hasOwn(globals, key);
@@ -1593,8 +1593,7 @@ output += Arithmetic({ left: amount, operation: 'add', right: constantEquivalent
 const amount = Param.number('Amount', 5, { variable: 'x' });
 const output = new Network();
 output += Constant({ sections: [{ filters: [
-  { signal: Signal('virtual', 'signal-A'), value: amount },
-  { signal: Signal('virtual', 'signal-B'), value: amount * 2 },
+  { signal: Signal('virtual', 'signal-B'), value: Math.abs(amount * 2) },
 ] }] });`);
       const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
       const amount = sourceApi.listSourceCompilationParameters(compilation)[0]!.parameter;
@@ -1611,8 +1610,8 @@ output += Constant({ sections: [{ filters: [
           section.filters.map(({ count }) => count),
         );
       };
-      expect(counts(defaults)).toEqual([5, 10]);
-      expect(counts(overridden)).toEqual([9, 18]);
+      expect(counts(defaults)).toEqual([10]);
+      expect(counts(overridden)).toEqual([18]);
       expect(generateBlueprintJson(overridden.resolvedCircuit.ir).blueprint).not.toHaveProperty(
         'parameters',
       );
@@ -1620,12 +1619,13 @@ output += Constant({ sections: [{ filters: [
       const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
       expect(native.parameters).toEqual([
         { type: 'number', number: '5', name: 'Amount', variable: 'x' },
-        { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
+        { type: 'number', number: '10', formula: 'abs((x * 2))', dependent: true },
       ]);
+      expect(native.entities).toHaveLength(1);
       expect(emitNativeBlueprintJson(native).blueprint.entities[0]!.control_behavior).toMatchObject(
         {
           sections: {
-            sections: [{ filters: [{ count: 5 }, { count: 10 }] }],
+            sections: [{ filters: [{ count: 10 }] }],
           },
         },
       );
@@ -1941,15 +1941,46 @@ output += Arithmetic({ left: amount, operation: 'add', right: (amount * 2 + 3) *
     }
   });
 
-  test('requires an independent direct physical numeric use for every formula dependency', () => {
+  test('retains a formula-only Arithmetic dependency without adding its original physically', () => {
     const compilation = compile(`const A = Signal('virtual', 'signal-A');
 const amount = Param.number('Amount', 5, { variable: 'x' });
 const output = new Network();
 output += Arithmetic({ left: amount * 2, operation: 'add', right: 1, output: A });`);
-    expect(exportFailure(compilation)).toMatchObject({
-      code: 'CP1002',
-      path: '$.arithmeticTemplates[0].left.value',
-      message: expect.stringContaining('direct Constant count, Arithmetic constant operand'),
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
+    ]);
+    expect(native.entities).toHaveLength(1);
+    expect(emitNativeBlueprintJson(native).blueprint.entities[0]!.control_behavior).toMatchObject({
+      arithmetic_conditions: {
+        first_constant: 10,
+        second_constant: 1,
+        operation: '+',
+      },
+    });
+  });
+
+  test('retains two formula-only leaves used by both Arithmetic constant operands', () => {
+    const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const factor = Param.number('Factor', 2, { variable: 'y' });
+const output = new Network();
+output += Arithmetic({ left: (amount + factor) * 2, operation: 'add', right: Math.abs(amount - factor), output: A });`);
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '2', name: 'Factor', variable: 'y' },
+      { type: 'number', number: '14', formula: '((x + y) * 2)', dependent: true },
+      { type: 'number', number: '3', formula: 'abs((x - y))', dependent: true },
+    ]);
+    expect(native.entities).toHaveLength(1);
+    expect(emitNativeBlueprintJson(native).blueprint.entities[0]!.control_behavior).toMatchObject({
+      arithmetic_conditions: {
+        first_constant: 14,
+        second_constant: 3,
+        operation: '+',
+      },
     });
   });
 
@@ -1987,16 +2018,23 @@ output += Decider({ condition: input[A] > amount, outputs: [input[A]] });`);
     expect(native.entities).toHaveLength(2);
   });
 
-  test('does not retain a formula-only dependency through a Decider expression threshold', () => {
+  test('retains a formula-only Decider expression dependency without adding its original physically', () => {
     const compilation = compile(`const A = Signal('virtual', 'signal-A');
 const amount = Param.number('Amount', 5, { variable: 'x' });
 const input = new Network(), output = new Network();
 output += Decider({ condition: input[A] > amount * 2, outputs: [input[A]] });`);
-    expect(exportFailure(compilation)).toMatchObject({
-      code: 'CP1002',
-      path: '$.deciderTemplates[0].condition.right.value',
-      message: expect.stringContaining('must also occur as a direct Constant count'),
-    });
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
+    ]);
+    expect(native.entities).toHaveLength(1);
+    const conditions = (
+      emitNativeBlueprintJson(native).blueprint.entities[0]!.control_behavior as {
+        decider_conditions: { conditions: { constant: number }[] };
+      }
+    ).decider_conditions.conditions;
+    expect(conditions.map(({ constant }) => constant)).toEqual([10]);
   });
 
   test.each([
@@ -2032,13 +2070,13 @@ output += Decider({ condition: input[A] > amount && input[A] < ${expression}, ou
   test.each([
     [
       'exact Decider',
-      'output += Decider({ condition: input[A] > amount && input[A] < amount + 1, outputs: [input[A]] });',
+      'output += Decider({ condition: input[A] > amount + 1 && input[A] < (amount * 2) + 3, outputs: [input[A]] });',
     ],
     [
       'IF',
-      'output += IF(input[A] > amount && input[A] < amount + 1, [input[A]], { fallback: 1 * A });',
+      'output += IF(input[A] > amount + 1 && input[A] < (amount * 2) + 3, [input[A]], { fallback: 1 * A });',
     ],
-  ])('exports derived thresholds in %s configurations', (_form, configuration) => {
+  ])('exports formula-only derived thresholds in %s configurations', (_form, configuration) => {
     const compilation = compile(`const A = Signal('virtual', 'signal-A');
 const amount = Param.number('Amount', 5, { variable: 'x' });
 const input = new Network(), output = new Network();
@@ -2047,13 +2085,14 @@ ${configuration}`);
     expect(native.parameters).toEqual([
       { type: 'number', number: '5', name: 'Amount', variable: 'x' },
       { type: 'number', number: '6', formula: '(x + 1)', dependent: true },
+      { type: 'number', number: '13', formula: '((x * 2) + 3)', dependent: true },
     ]);
     const rows = (
       emitNativeBlueprintJson(native).blueprint.entities[0]!.control_behavior as {
         decider_conditions: { conditions: { constant: number }[] };
       }
     ).decider_conditions.conditions;
-    expect(rows.map(({ constant }) => constant)).toEqual([5, 6]);
+    expect(rows.map(({ constant }) => constant)).toEqual([6, 13]);
     expect(native.entities).toEqual(
       buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).entities,
     );
@@ -2233,33 +2272,31 @@ output += Arithmetic({ left: amount, operation: 'add', right: amount * 2, output
 
   test.each([
     {
-      name: 'missing direct dependency use',
-      declarations: `const amount = Param.number('Amount', 5, { variable: 'x' });`,
-      filters: `{ signal: Signal('virtual', 'signal-A'), value: amount * 2 }`,
-      path: '$.constantTemplates[0].sections[0].filters[0].value',
-      message: 'must also occur as a direct Constant count',
-    },
-    {
       name: 'missing explicit variable',
       declarations: `const amount = Param.number('Amount', 5);`,
-      filters: `{ signal: Signal('virtual', 'signal-A'), value: amount },
-  { signal: Signal('virtual', 'signal-B'), value: amount * 2 }`,
+      filters: `{ signal: Signal('virtual', 'signal-B'), value: amount * 2 }`,
       path: '$.parameters[0].metadata.variable',
       message: 'require an explicit variable name',
     },
     {
+      name: 'unreferenced declaration remains unsupported',
+      declarations: `const amount = Param.number('Amount', 5, { variable: 'x' });
+const unused = Param.number('Unused', 7, { variable: 'y' });`,
+      filters: `{ signal: Signal('virtual', 'signal-B'), value: amount * 2 }`,
+      path: '$.parameters[1]',
+      message: 'does not support unused declarations',
+    },
+    {
       name: 'reserved builtin variable',
       declarations: `const amount = Param.number('Amount', 5, { variable: 'abs' });`,
-      filters: `{ signal: Signal('virtual', 'signal-A'), value: amount },
-  { signal: Signal('virtual', 'signal-B'), value: amount * 2 }`,
+      filters: `{ signal: Signal('virtual', 'signal-B'), value: amount * 2 }`,
       path: '$.parameters[0].metadata.variable',
       message: 'non-reserved identifiers',
     },
     {
       name: 'malformed variable identifier',
       declarations: `const amount = Param.number('Amount', 5, { variable: '1bad' });`,
-      filters: `{ signal: Signal('virtual', 'signal-A'), value: amount },
-  { signal: Signal('virtual', 'signal-B'), value: amount * 2 }`,
+      filters: `{ signal: Signal('virtual', 'signal-B'), value: amount * 2 }`,
       path: '$.parameters[0].metadata.variable',
       message: 'non-reserved identifiers',
     },
@@ -2267,8 +2304,8 @@ output += Arithmetic({ left: amount, operation: 'add', right: amount * 2, output
       name: 'duplicate typed-mode variables',
       declarations: `const amount = Param.number('Amount', 5, { variable: 'x' });
 const other = Param.number('Other', 7, { variable: 'x' });`,
-      filters: `{ signal: Signal('virtual', 'signal-A'), value: amount },
-  { signal: Signal('virtual', 'signal-B'), value: other },
+      filters: `{ signal: Signal('virtual', 'signal-A'), value: amount + 1 },
+  { signal: Signal('virtual', 'signal-B'), value: other - 1 },
   { signal: Signal('virtual', 'signal-C'), value: amount + other }`,
       path: '$.parameters[1].metadata.variable',
       message: 'already used by declaration',
@@ -2276,53 +2313,53 @@ const other = Param.number('Other', 7, { variable: 'x' });`,
     {
       name: 'dependent formula leaf',
       declarations: `const amount = Param.number('Amount', 5, { variable: 'x', formula: '', dependent: true });`,
-      filters: `{ signal: Signal('virtual', 'signal-A'), value: amount },
-  { signal: Signal('virtual', 'signal-B'), value: amount * 2 }`,
+      filters: `{ signal: Signal('virtual', 'signal-B'), value: amount * 2 }`,
       path: '$.parameters[0].metadata',
       message: 'direct leaf parameters without formula metadata',
     },
     {
-      name: 'derived original collides with declared original',
+      name: 'raw formula metadata on dependency leaf',
+      declarations: `const amount = Param.number('Amount', 5, { variable: 'x', formula: 'x * 2' });`,
+      filters: `{ signal: Signal('virtual', 'signal-A'), value: amount * 3 }`,
+      path: '$.parameters[0].metadata',
+      message: 'direct leaf parameters without formula metadata',
+    },
+    {
+      name: 'derived original collides with a declared original absent from physical slots',
       declarations: `const amount = Param.number('Amount', 5, { variable: 'x' });
 const target = Param.number('Target', 10, { variable: 'y' });`,
-      filters: `{ signal: Signal('virtual', 'signal-A'), value: amount },
-  { signal: Signal('virtual', 'signal-B'), value: target },
-  { signal: Signal('virtual', 'signal-C'), value: amount * 2 }`,
-      path: '$.constantTemplates[0].sections[0].filters[2].value',
+      filters: `{ signal: Signal('virtual', 'signal-A'), value: amount * 2 },
+  { signal: Signal('virtual', 'signal-B'), value: target + 1 }`,
+      path: '$.constantTemplates[0].sections[0].filters[0].value',
       message: 'collides with a declared number original',
     },
     {
       name: 'equal derived original has a different formula',
       declarations: `const amount = Param.number('Amount', 5, { variable: 'x' });
 const other = Param.number('Other', 7, { variable: 'y' });`,
-      filters: `{ signal: Signal('virtual', 'signal-A'), value: amount },
-  { signal: Signal('virtual', 'signal-B'), value: other },
-  { signal: Signal('virtual', 'signal-C'), value: amount + 1 },
+      filters: `{ signal: Signal('virtual', 'signal-C'), value: amount + 1 },
   { signal: Signal('virtual', 'signal-D'), value: other - 1 }`,
-      path: '$.constantTemplates[0].sections[0].filters[3].value',
+      path: '$.constantTemplates[0].sections[0].filters[1].value',
       message: 'already used by a different formula',
     },
     {
       name: 'evaluated default is outside int32',
       declarations: `const amount = Param.number('Amount', 2147483647, { variable: 'x' });`,
-      filters: `{ signal: Signal('virtual', 'signal-A'), value: amount },
-  { signal: Signal('virtual', 'signal-B'), value: amount + 1 }`,
-      path: '$.constantTemplates[0].sections[0].filters[1].value',
+      filters: `{ signal: Signal('virtual', 'signal-B'), value: amount + 1 }`,
+      path: '$.constantTemplates[0].sections[0].filters[0].value',
       message: 'signed int32 integers',
     },
     {
       name: 'large expression literal produces a final default outside int32',
       declarations: `const amount = Param.number('Amount', 5, { variable: 'x' });`,
-      filters: `{ signal: Signal('virtual', 'signal-A'), value: amount },
-  { signal: Signal('virtual', 'signal-B'), value: amount + 2147483648 }`,
-      path: '$.constantTemplates[0].sections[0].filters[1].value',
+      filters: `{ signal: Signal('virtual', 'signal-B'), value: amount + 2147483648 }`,
+      path: '$.constantTemplates[0].sections[0].filters[0].value',
       message: 'signed int32 integers',
     },
     {
       name: 'reserved recipe reference variable',
       declarations: `const amount = Param.number('Amount', 5, { variable: 'p12_recipe' });`,
-      filters: `{ signal: Signal('virtual', 'signal-A'), value: amount },
-  { signal: Signal('virtual', 'signal-B'), value: amount * 2 }`,
+      filters: `{ signal: Signal('virtual', 'signal-B'), value: amount * 2 }`,
       path: '$.parameters[0].metadata.variable',
       message: 'non-reserved identifiers',
     },
@@ -2360,25 +2397,33 @@ output += Arithmetic({ left: input[Signal('virtual', 'signal-A')], operation: 'a
     const compilation = compile(`const A = Signal('virtual', 'signal-A');
 const B = Signal('virtual', 'signal-B');
 const C = Signal('virtual', 'signal-C');
+const D = Signal('virtual', 'signal-D');
+const E = Signal('virtual', 'signal-E');
 const amount = Param.number('Amount', 5, { variable: 'x' });
+const factor = Param.number('Factor', 2, { variable: 'y' });
 const input = new Network(), output = new Network();
 const selectorInput = new Network();
 const directSelectorOutput = new Network(), formulaSelectorOutput = new Network();
-const next = amount + 1;
+const next = factor + 1;
 directSelectorOutput += Selector({ input: selectorInput, operation: 'select', index: amount });
 formulaSelectorOutput += Selector({ input: selectorInput, operation: 'select', index: next });
 output += Constant({ sections: [{ filters: [
   { signal: A, value: amount },
   { signal: B, value: amount * 2 },
   { signal: C, value: amount * 3 },
+  { signal: D, value: (amount + factor) * 2 },
+  { signal: E, value: factor + 1 },
 ] }] });
-output += Arithmetic({ left: input[A], operation: 'add', right: amount * 2, output: B });
+output += Arithmetic({ left: input[A], operation: 'add', right: (amount + factor) * 2, output: B });
 output += Decider({ condition: input[A] > amount && input[A] < amount + 1 && input[A] != amount * 2, outputs: [input[A]] });`);
     const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
     expect(native.parameters).toEqual([
       { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '2', name: 'Factor', variable: 'y' },
+      { type: 'number', number: '3', formula: '(y + 1)', dependent: true },
       { type: 'number', number: '6', formula: '(x + 1)', dependent: true },
       { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
+      { type: 'number', number: '14', formula: '((x + y) * 2)', dependent: true },
       { type: 'number', number: '15', formula: '(x * 3)', dependent: true },
     ]);
     expect(native.entities).toEqual(
@@ -2386,16 +2431,55 @@ output += Decider({ condition: input[A] > amount && input[A] < amount + 1 && inp
     );
     const entities = emitNativeBlueprintJson(native).blueprint.entities;
     expect(entities[0]!.control_behavior).toMatchObject({ operation: 'select', index_constant: 5 });
-    expect(entities[1]!.control_behavior).toMatchObject({ operation: 'select', index_constant: 6 });
+    expect(entities[1]!.control_behavior).toMatchObject({ operation: 'select', index_constant: 3 });
     expect(entities[2]!.control_behavior).toMatchObject({
-      sections: { sections: [{ filters: [{ count: 5 }, { count: 10 }, { count: 15 }] }] },
+      sections: {
+        sections: [
+          { filters: [{ count: 5 }, { count: 10 }, { count: 15 }, { count: 14 }, { count: 3 }] },
+        ],
+      },
     });
     expect(entities[3]!.control_behavior).toMatchObject({
-      arithmetic_conditions: { second_constant: 10 },
+      arithmetic_conditions: { second_constant: 14 },
     });
     expect(entities[4]!.control_behavior).toMatchObject({
       decider_conditions: { conditions: [{ constant: 5 }, { constant: 6 }, { constant: 10 }] },
     });
+  });
+
+  test('preserves declaration order while formulas remain stable across reordered source captures', () => {
+    const first = compile(`const amount = Param.number('Amount', 5, { variable: 'x' });
+const factor = Param.number('Factor', 2, { variable: 'y' });
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: Signal('virtual', 'signal-A'), value: amount * 2 },
+  { signal: Signal('virtual', 'signal-B'), value: factor + 1 },
+] }] });`);
+    const reordered = compile(`const factor = Param.number('Factor', 2, { variable: 'y' });
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: Signal('virtual', 'signal-B'), value: factor + 1 },
+  { signal: Signal('virtual', 'signal-A'), value: amount * 2 },
+] }] });`);
+    const firstNative = sourceApi.exportSourceCompilationNativeBlueprint(first, options);
+    const reorderedNative = sourceApi.exportSourceCompilationNativeBlueprint(reordered, options);
+    const formulaRows = (native: typeof firstNative) =>
+      (native.parameters ?? [])
+        .filter((parameter) => 'formula' in parameter)
+        .map((parameter) => JSON.stringify(parameter))
+        .sort();
+
+    expect((firstNative.parameters ?? []).slice(0, 2)).toMatchObject([
+      { number: '5', name: 'Amount', variable: 'x' },
+      { number: '2', name: 'Factor', variable: 'y' },
+    ]);
+    expect((reorderedNative.parameters ?? []).slice(0, 2)).toMatchObject([
+      { number: '2', name: 'Factor', variable: 'y' },
+      { number: '5', name: 'Amount', variable: 'x' },
+    ]);
+    expect(formulaRows(firstNative)).toEqual(formulaRows(reorderedNative));
+    expect(formulaRows(firstNative)).toHaveLength(2);
   });
 
   test('rejects conflicting formula originals across Selector and Arithmetic families', () => {
@@ -2416,7 +2500,7 @@ output += Arithmetic({ left: input[A], operation: 'add', right: other - 1, outpu
     });
   });
 
-  test('exports Selector index formulas retained only by direct Selector index use', () => {
+  test('retains a formula-only Selector index dependency without adding its original physically', () => {
     let sourceExecutions = 0;
     const compilation = sourceApi.compileSourceProgram(
       {
@@ -2424,9 +2508,7 @@ output += Arithmetic({ left: input[A], operation: 'add', right: other - 1, outpu
         text: `const amount = Param.number('Amount', 5, { variable: 'x' });
 const next = amount + 1;
 const input = new Network();
-const directOutput = new Network();
 const formulaOutput = new Network();
-directOutput += Selector({ input, operation: 'select', index: amount });
 formulaOutput += Selector({ input, operation: 'select', index: next });`,
       },
       parameterHost(),
@@ -2442,17 +2524,23 @@ formulaOutput += Selector({ input, operation: 'select', index: next });`,
     const overridden = sourceApi.bindSourceCompilationCircuit(compilation, [
       { parameter, value: 9 },
     ]);
+    expect(() =>
+      sourceApi.bindSourceCompilationCircuit(compilation, [{ parameter, value: 9.5 }]),
+    ).toThrow();
+    const retry = sourceApi.bindSourceCompilationCircuit(compilation, [{ parameter, value: 9 }]);
     const reset = sourceApi.bindSourceCompilationCircuit(compilation, []);
     const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
 
     expect(defaults.plan.producers.filter(({ kind }) => kind === 'selector')).toMatchObject([
-      { operation: 'select', index: 5 },
       { operation: 'select', index: 6 },
     ]);
     expect(overridden.plan.producers.filter(({ kind }) => kind === 'selector')).toMatchObject([
-      { operation: 'select', index: 9 },
       { operation: 'select', index: 10 },
     ]);
+    expect(retry.plan).toEqual(overridden.plan);
+    expect(defaults.resolvedCircuit.ir.producers.map(({ id }) => id)).toEqual(
+      overridden.resolvedCircuit.ir.producers.map(({ id }) => id),
+    );
     expect(reset).toEqual(defaults);
     expect(native.parameters).toEqual([
       { type: 'number', number: '5', name: 'Amount', variable: 'x' },
@@ -2469,28 +2557,23 @@ formulaOutput += Selector({ input, operation: 'select', index: next });`,
           ? undefined
           : [behavior.operation, behavior.index_constant, behavior.index_signal];
       }),
-    ).toEqual([
-      ['select', 5, undefined],
-      ['select', 6, undefined],
-    ]);
+    ).toEqual([['select', 6, undefined]]);
+    expect(native.entities).toHaveLength(1);
     expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
     expect(sourceExecutions).toBe(1);
   });
 
-  test.each([
-    { original: 5, direct: false, message: 'must also occur as a direct Constant count' },
-    { original: 2147483647, direct: true, message: 'signed int32 integers' },
-  ])(
-    'keeps Selector formula-only retention and native default bounds strict ($original)',
-    ({ original, direct, message }) => {
+  test.each([{ original: 2147483647, message: 'signed int32 integers' }])(
+    'keeps Selector formula-only native default bounds strict ($original)',
+    ({ original, message }) => {
       const compilation =
         compile(`const amount = Param.number('Amount', ${original}, { variable: 'x' });
 const input = new Network();
 const output = new Network();
-${direct ? `output += Selector({ input, operation: 'select', index: amount });\n` : ''}output += Selector({ input, operation: 'select', index: amount + 1 });`);
+output += Selector({ input, operation: 'select', index: amount + 1 });`);
       const error = exportFailure(compilation);
       expect(error.code).toBe('CP1002');
-      expect(error.path).toBe(`$.selectorTemplates[${direct ? 1 : 0}].index`);
+      expect(error.path).toBe('$.selectorTemplates[0].index');
       expect(error.message).toContain(message);
     },
   );
@@ -2508,7 +2591,7 @@ const B = Signal('virtual', 'signal-B');
 const amount = Param.number('Amount', 5, { variable: 'x' });
 const input = new Network();
 const output = new Network();
-const gate = when((input[A] >= amount) && ((input[A] > amount * 2 || input[A] == 0) && (input[A] < 10 || input[A] != 1)))
+const gate = when((input[A] >= amount + 1) && ((input[A] > amount * 2 || input[A] == 0) && (input[A] < 10 || input[A] != 1)))
   .at(4, 5, 2)
   .then(input[A]);
 output += gate;
@@ -2541,6 +2624,7 @@ gate.else(4 * B);`);
       });
       expect(native.parameters).toEqual([
         { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+        { type: 'number', number: '6', formula: '(x + 1)', dependent: true },
         { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
       ]);
       expect(native.entities).toEqual(
@@ -2583,6 +2667,8 @@ gate.else(4 * B);`);
         };
       const defaultsRows = conditionConstants(defaults).decider_conditions.conditions;
       const overriddenRows = conditionConstants(overridden).decider_conditions.conditions;
+      expect(defaultsRows.some(({ constant }) => constant === 5)).toBe(false);
+      expect(overriddenRows.some(({ constant }) => constant === 5)).toBe(false);
       expect(defaultsRows.filter(({ constant }) => constant === 10)).toHaveLength(4);
       expect(overriddenRows.filter(({ constant }) => constant === 18)).toHaveLength(2);
       expect(reset.plan).toEqual(defaults.plan);

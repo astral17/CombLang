@@ -275,15 +275,16 @@ registered expressions in exact Arithmetic constant operands, direct Constant
 filter counts, constant-right Decider thresholds and Selector numeric select
 indices. A formula-mode circuit is limited to linked
 Constant/Arithmetic/Decider/Selector producers; derived multiplier formulas
-remain unsupported. Selector formulas require an independent direct use for
-each dependency under the same native formula retention rule. Native Signal
-export retains its stricter Constant-only gate.
+remain unsupported. Formula-only dependencies keep their declaration/original
+rows without allocating physical fields, subject to explicit valid variables
+and direct-leaf metadata. Native Signal export retains its stricter
+Constant-only gate.
 
 Explicit native parameter metadata export rejects symbolic multipliers with
 located `CP1002`, even at default 1 or when the same handle is a supported filter
-count. A derived Constant count can be exported only with direct uses and valid
-explicit variables for every dependency; derived multiplier expressions remain
-unsupported with `CP1002`. A fractional declaration can fail the existing native original-int32 check
+count. A derived Constant count can be exported with formula-only dependencies
+that have valid explicit variables and direct-leaf metadata; derived multiplier
+expressions remain unsupported with `CP1002`. A fractional declaration can fail the existing native original-int32 check
 first. Ordinary concrete CLI/Worker export retains the default multiplier;
 native-export failure is separate from successful compilation. The
 [browser parameter controls](blueprint-json.md#optional-worker-local-parameter-binding)
@@ -532,9 +533,11 @@ filter count, Arithmetic constant operand (`left` or `right`), Selector
 `Decider`, `when`, or `IF`, including leaves of nested AND/OR conditions.
 Registered expressions have a separate bounded native-formula contract for
 exact Arithmetic constant operands, direct Constant filter counts,
-constant-right Decider thresholds and numeric Selector select indices; each
-formula dependency must also have an independent direct use in one of those
-four numeric slots. Its internal numeric DAG also projects registered calls to
+constant-right Decider thresholds and numeric Selector select indices. Each
+dependency must be an owned number declaration with an explicit valid variable
+and no formula/dependent metadata; its original row is retained even when that
+original value has no direct physical use. Truly unreferenced declarations
+remain unsupported. Its internal numeric DAG also projects registered calls to
 `abs(...)`, `log2(...)`, `sign(...)`, `min(...)` and `max(...)` in those same
 eligible formula slots. These are structural strings only; Factorio parsing,
 evaluation and placement of function formulas are not verified. Formula mode

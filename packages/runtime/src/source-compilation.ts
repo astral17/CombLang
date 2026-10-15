@@ -461,7 +461,6 @@ export function exportSourceCompilationNativeBlueprint(
   }
   const used = new Set<BlueprintParameterHandle>();
   const reservedSignalPlaceholderNames = new Set<string>();
-  const directNativeNumericParameters = new Set<BlueprintParameterHandle>();
   type PendingNativeNumericFormula =
     | {
         readonly kind: 'decider-threshold-expression';
@@ -637,7 +636,6 @@ export function exportSourceCompilationNativeBlueprint(
         if (parameter !== undefined && parameter.kind === 'number') {
           accepted.add(parameter);
           used.add(parameter);
-          directNativeNumericParameters.add(parameter);
           occurrences.push({
             kind: 'selector-index',
             captureId: capture.captureId,
@@ -751,7 +749,6 @@ export function exportSourceCompilationNativeBlueprint(
       if (parameter !== undefined && parameter.kind === 'number') {
         accepted.add(parameter);
         used.add(parameter);
-        directNativeNumericParameters.add(parameter);
         occurrences.push({
           kind: 'decider-threshold',
           conditionPath,
@@ -830,7 +827,6 @@ export function exportSourceCompilationNativeBlueprint(
       const parameter = canonicalBlueprintParameterHandle(operand.value);
       if (parameter === undefined) continue;
       used.add(parameter);
-      directNativeNumericParameters.add(parameter);
       occurrences.push({
         kind: 'arithmetic-operand',
         captureId: capture.captureId,
@@ -951,7 +947,6 @@ export function exportSourceCompilationNativeBlueprint(
         }
         accepted.add(parameter);
         used.add(parameter);
-        directNativeNumericParameters.add(parameter);
         occurrences.push({
           kind: 'constant-count',
           captureId: capture.captureId,
@@ -1030,13 +1025,6 @@ export function exportSourceCompilationNativeBlueprint(
             `$.parameters[${declarationIndex}].metadata`,
             'native numeric formula dependencies must be direct leaf parameters without formula metadata.',
             declaration.source,
-          );
-        }
-        if (!directNativeNumericParameters.has(dependency)) {
-          reject(
-            formula.path,
-            `formula dependency ${JSON.stringify(declaration.label)} must also occur as a direct Constant count, Arithmetic constant operand, Decider right threshold, or Selector select index.`,
-            formula.source,
           );
         }
       }

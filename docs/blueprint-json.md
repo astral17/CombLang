@@ -156,9 +156,10 @@ metadata. Numeric `variable`, `formula` and `dependent` fields are preserved
 opaquely. Separately, the opt-in native-template exporter can render registered
 numeric expressions used directly in Constant filter counts, exact Arithmetic
 constant operands, constant-right Decider thresholds and Selector `select`
-indices as bounded derived formula rows; every dependency requires a separate
-direct Constant count, Arithmetic constant operand, Decider right-threshold or
-Selector select-index use and an explicit variable. A user-returned Constant-only `(x * 2)`
+indices as bounded derived formula rows. Each typed dependency must be an owned
+number declaration with an explicit valid variable and direct-leaf metadata;
+its original row is retained even when the original value has no direct physical
+use. Truly unreferenced declarations still reject. A user-returned Constant-only `(x * 2)`
 placement records A=9 and B=18 at Amount=9; see the
 [bounded native observation](api/parameters.md#bounded-typed-native-numeric-formulas).
 Registered `/` and `**` expressions use finite JavaScript-number arithmetic

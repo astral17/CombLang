@@ -82,6 +82,36 @@ function run(compilation, body) {
 }
 
 describe('author API documentation', () => {
+  test('runs the documented formula-only dependency through local binding and native projection', async () => {
+    const source = read('parameters').match(
+      /#### Formula-only dependency example[\s\S]*?```javascript\r?\n([\s\S]*?)\r?\n```/,
+    )?.[1];
+    if (source === undefined) throw new Error('Missing formula-only dependency example');
+    const compilation = compile(source, await bundled);
+    const session = createSourceParameterBindingSession(compilation);
+    const amount = session.parameters[0];
+    if (amount === undefined) throw new Error('Missing documented Amount parameter');
+    const counts = (circuit) =>
+      generateBlueprintJson(
+        circuit,
+      ).blueprint.entities[0].control_behavior.sections.sections[0].filters.map(
+        ({ count }) => count,
+      );
+
+    expect(counts(compilation.resolvedCircuit.ir)).toEqual([10]);
+    expect(counts(session.bind([{ id: amount.id, value: 7 }]).resolvedCircuit.ir)).toEqual([14]);
+    expect(counts(session.bind([]).resolvedCircuit.ir)).toEqual([10]);
+    const native = exportSourceCompilationNativeBlueprint(compilation, {
+      label: 'Documented formula-only dependency',
+      maxDeciderConditionRows: 1024,
+    });
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '10', formula: 'abs((x * 2))', dependent: true },
+    ]);
+    expect(native.entities).toHaveLength(1);
+  });
+
   test('runs the bounded typed formula example across Arithmetic and final fluent Decider capture', async () => {
     const source = read('parameters').match(
       /### Bounded typed native numeric formulas[\s\S]*?```javascript\r?\n([\s\S]*?)\r?\n```/,

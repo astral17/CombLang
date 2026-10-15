@@ -1185,26 +1185,64 @@ largeOutput += Selector({ input, operation: 'select', index: (amount + 214748364
     });
     await expect(stat(failedOutput)).rejects.toMatchObject({ code: 'ENOENT' });
 
-    const rejectedPath = await sourceFile(
+    const formulaOnlyPath = await sourceFile(
       `const amount = Param.number('Amount', 5, { variable: 'x' });
 const input = new Network();
 const output = new Network();
 output += Selector({ input, operation: 'select', index: amount + 1 });`,
       'selector-formula-only.factorio.ts',
     );
-    const rejectedOutput = join(dirname(rejectedPath), 'must-not-exist.json');
+    const formulaOnlyOutput = join(dirname(formulaOnlyPath), 'selector-formula-only-native.json');
     expect(
       await run(
-        ['blueprint', 'export', '--parameters', '--json', '--output', rejectedOutput, rejectedPath],
+        [
+          'blueprint',
+          'export',
+          '--parameters',
+          '--json',
+          '--output',
+          formulaOnlyOutput,
+          formulaOnlyPath,
+        ],
         environment,
       ),
-    ).toBe(2);
-    const failure = JSON.parse(String(log.mock.calls.at(-1)?.[0]));
-    expect(failure).toMatchObject({
-      ok: false,
-      error: { code: 'CP1002', path: '$.selectorTemplates[0].index' },
+    ).toBe(0);
+    const formulaOnly = JSON.parse(await readFile(formulaOnlyOutput, 'utf8'));
+    expect(formulaOnly.blueprint.parameters).toEqual([
+      { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '6', formula: '(x + 1)', dependent: true },
+    ]);
+    expect(formulaOnly.blueprint.entities).toHaveLength(1);
+    expect(formulaOnly.blueprint.entities[0].control_behavior).toMatchObject({
+      operation: 'select',
+      index_constant: 6,
     });
-    await expect(stat(rejectedOutput)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const formulaOnlyConcreteOutput = join(
+      dirname(formulaOnlyPath),
+      'selector-formula-only-concrete.json',
+    );
+    expect(
+      await run(
+        [
+          'blueprint',
+          'export',
+          '--json',
+          '--overrides',
+          overridesPath,
+          '--output',
+          formulaOnlyConcreteOutput,
+          formulaOnlyPath,
+        ],
+        environment,
+      ),
+    ).toBe(0);
+    const formulaOnlyConcrete = JSON.parse(await readFile(formulaOnlyConcreteOutput, 'utf8'));
+    expect(formulaOnlyConcrete.blueprint).not.toHaveProperty('parameters');
+    expect(formulaOnlyConcrete.blueprint.entities[0].control_behavior).toMatchObject({
+      operation: 'select',
+      index_constant: 12,
+    });
     expect(error).not.toHaveBeenCalled();
   });
 
@@ -1324,9 +1362,11 @@ gate.else(4 * B);`;
     ).toMatchObject([{ constant: 9 }, { constant: 27 }]);
 
     const rejectedSource = formulaSource
-      .replace('{ signal: A, value: amount },\n  ', '')
-      .replace('left: amount, operation:', "left: input[Signal('virtual', 'signal-A')], operation:")
-      .replace('input[A] > amount && input[A] < amount * 3', 'input[A] > amount * 3');
+      .replace('{ signal: B, value: amount * 2 }', '{ signal: B, value: amount + 5 }')
+      .replace(
+        'input[A] > amount && input[A] < amount * 3',
+        'input[A] > amount && input[A] < amount * 2',
+      );
     const rejectedPath = await sourceFile(rejectedSource, 'unsupported-formula.factorio.ts');
     const rejectedOutput = join(dirname(rejectedPath), 'must-not-exist.json');
     expect(
@@ -1340,7 +1380,7 @@ gate.else(4 * B);`;
       ok: false,
       error: {
         code: 'CP1002',
-        path: '$.deciderTemplates[0].condition.right.value',
+        path: '$.constantTemplates[0].sections[0].filters[1].value',
         span: { start: expect.any(Number), end: expect.any(Number) },
       },
     });
@@ -1437,12 +1477,12 @@ gate.else(4 * B);`;
     },
   );
 
-  test('Selector formula without a retained variable is a located atomic native-export failure', async () => {
+  test('Selector formula without an explicit variable is a located atomic native-export failure', async () => {
     const { environment } = await parameterHost();
     const { log } = capture();
     for (const device of ["Selector({ input, operation: 'select', index: amount + 1 })"]) {
       const path = await sourceFile(`const A = Signal('virtual', 'signal-A');
-const amount = Param.number('Amount', 5, { variable: 'x' });
+const amount = Param.number('Amount', 5);
 const input = new Network(); const output = new Network(); output += ${device};`);
       const output = join(dirname(path), 'unsupported.json');
       log.mockClear();
@@ -1456,7 +1496,7 @@ const input = new Network(); const output = new Network(); output += ${device};`
       expect(report.ok).toBe(false);
       expect(report.error).toMatchObject({
         code: 'CP1002',
-        path: '$.selectorTemplates[0].index',
+        path: '$.parameters[0].metadata.variable',
       });
       expect(report.error.span).toBeDefined();
       await expect(stat(output)).rejects.toMatchObject({ code: 'ENOENT' });

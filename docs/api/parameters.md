@@ -49,11 +49,13 @@ limited derived source expressions described below:
 | `Selector` with `operation: 'count'`  | `output`                                                                            | Signal                                     |
 
 For native typed-formula export, a registered expression in an exact Arithmetic
-constant `left`/`right` operand, direct Constant filter `value`, constant-right
+constant `left`/`right` operand, Constant filter `value`, constant-right
 threshold of an exact Decider/`when`/`IF` condition, or numeric `index` of a
 Selector `select` can produce a formula row. Constant section multipliers remain
 local binding only. Native Signal placeholders are a separate bounded feature
-for Constant filter `signal` slots.
+for Constant filter `signal` slots. A referenced number declaration is retained
+as an original row even when its original value has no direct physical slot;
+truly unreferenced declarations remain unsupported.
 
 Arithmetic constants, Constant filter counts, Decider thresholds and numeric
 Selector indices require finite safe integers, then normalize to signed int32.
@@ -267,15 +269,15 @@ local binding does not establish independence in Factorio placement.
 ### Bounded typed native numeric formulas
 
 A registered local numeric expression in an exact Arithmetic constant operand,
-direct Constant filter count, constant-right Decider condition threshold, or
+Constant filter count, constant-right Decider condition threshold, or
 Selector `select` index can produce a derived native formula row. This is a
 narrow structural export, not general formula parsing or native validation.
-Each dependency must also occur independently as a direct numeric use in a
-Constant count, Arithmetic constant operand, Decider threshold, or Selector
-select index, with an explicit variable and no formula/dependent metadata. The
-native Signal gate remains Constant-only. Selector formula projection has no
-Factorio placement evidence. In the example, `Amount` is retained by its direct
-Arithmetic left operand and Decider threshold; the formula slots are separate:
+Each dependency must be an owned number declaration with an explicit valid
+variable and no formula/dependent metadata. Its declared original is retained
+whether or not that value occurs directly in a physical slot; no dummy field or
+device is added. The native Signal gate remains Constant-only. Selector formula
+projection has no Factorio placement evidence. In the example, `Amount` also
+appears in direct Arithmetic and Decider slots; the formula slots are separate:
 
 ```javascript
 const A = Signal('virtual', 'signal-A');
@@ -306,10 +308,10 @@ In typed-formula mode, every supplied numeric `metadata.variable` must be valid
 and unique. Each dependency must be an owned number declaration with an
 explicit `metadata.variable` matching `[A-Za-z][A-Za-z0-9_]*`; built-ins `abs`,
 `log2`, `sign`, `max`, `min` and recipe-reference names such as `p12_recipe` are
-reserved. Each dependency must also occur independently as a direct physical
-Constant filter count, Arithmetic constant operand, Decider right threshold or
-Selector numeric select index, and must not itself declare `formula` (even an
-empty string) or `dependent: true`. Typed formula export requires a linked
+reserved. A declaration referenced only inside a typed expression is still
+used and its explicit original row is exported; truly unreferenced declarations
+remain errors. A dependency must not itself declare `formula` (even an empty
+string) or `dependent: true`. Typed formula export requires a linked
 physical circuit containing only Constant, Arithmetic, Decider and Selector
 producers. It
 accepts finite numeric literals, including decimal/scientific values outside
@@ -345,6 +347,27 @@ power formulas are only structurally projected: the pinned generic
 MathExpression grammar lists `/` and `^`, but this feature has no Factorio
 formula evaluation or placement evidence. In TypeScript, `^` still means
 bitwise XOR. Opaque formula strings remain opaque.
+
+#### Formula-only dependency example
+
+`Amount` is referenced only by a typed formula here. Export still retains its
+declared original row (`5`) followed by the derived row (`10`); the only
+physical count remains `10`. Binding Amount to 7 changes that count to 14, and
+reset restores 10. No dummy device or physical count of 5 is introduced. These
+rows are structural native-template output, not evidence that Factorio accepts
+or evaluates the generated function formula.
+
+```javascript
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const output = new Network();
+output += Constant({
+  sections: [
+    {
+      filters: [{ signal: Signal('virtual', 'signal-A'), value: Math.abs(amount * 2) }],
+    },
+  ],
+});
+```
 
 #### Bounded division example
 
@@ -437,8 +460,10 @@ The generic MathExpression reference in the
 [pinned Factorio 2.1.21 API input](../../tools/factorio-api/fixtures/2.1.21/runtime-api.json)
 documents `+`, `-`, `*`, `/`, `^`, parentheses, and the built-ins `abs`, `log2`,
 `sign`, `max` and `min`.
-That generic grammar is broader than this typed exporter, which accepts only
-registered nested `+`, `-`, `*`, `/`, `**` and unary negation. In TypeScript,
+The typed exporter supports registered nested `+`, `-`, `*`, `/`, `**`, unary
+negation, and calls to `abs`, `log2`, `sign`, `min` and `max` under the
+argument and slot restrictions documented above. This is not a general parser
+for the referenced grammar. In TypeScript,
 `^` is bitwise XOR, not exponentiation; only the private native projection
 translates registered `**` nodes to `^`. Explicit native `formula` metadata
 remains opaque: local binding does not parse or evaluate it.
@@ -630,5 +655,6 @@ and Scale to 3 produces multiplier 1.5 and count 30 without changing the
 Constant or its topology. Non-unit multiplier simulation remains unsupported
 (`FC1003`/Unknown), and native numeric-template export rejects this program
 because its symbolic multiplier is outside the supported formula slice. A
-derived count alone additionally needs direct physical uses and explicit native
-variables for every dependency; neither result claims Factorio formula semantics.
+derived count in a supported slot retains its dependency originals without a
+direct physical use, but still requires explicit native variables and direct
+leaf metadata; neither result claims Factorio formula semantics.
