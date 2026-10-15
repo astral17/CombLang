@@ -522,6 +522,33 @@ expectSignal(network('output'), Signal('virtual', 'signal-B')).toBe(111);`,
     ).toMatchObject({ passed: 1, failed: 0 });
   });
 
+  test('exports the executable mixed Constant and Arithmetic Signal example', async () => {
+    const page = readFileSync(new URL('../../docs/api/parameters.md', import.meta.url), 'utf8');
+    const source = page.match(
+      /Mixed Constant\/Arithmetic example:\r?\n\r?\n```javascript\r?\n([\s\S]*?)```/,
+    )?.[1];
+    if (source === undefined) throw new Error('Missing mixed native Signal example');
+    const compilation = compile(source, await bundled);
+    const native = exportSourceCompilationNativeBlueprint(compilation, {
+      label: 'Documented mixed Signal slots',
+      maxDeciderConditionRows: 1024,
+    });
+    expect(native.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Channel',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    const arithmetic = native.entities.find(
+      ({ native: entity }) => entity.name === 'arithmetic-combinator',
+    );
+    expect(arithmetic?.native.control_behavior.arithmetic_conditions.output_signal).toEqual({
+      name: 'parameter-0',
+    });
+  });
+
   test.each(['amount % 1;', '5 * result;', 'input + amount;', 'amount.defaultValue;'])(
     'does not give opaque source parameters unsupported ordinary-value APIs: %s',
     async (suffix) => {

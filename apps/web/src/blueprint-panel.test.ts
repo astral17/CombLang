@@ -263,7 +263,7 @@ output += Constant({ sections: [{ multiplier: scale, filters: [{ signal: A, valu
       7,
     ],
   ] as const)(
-    'unsupported Signal export at %s stays located and unavailable for copy, with working concrete simulation/tests',
+    'supports Signal export at %s while preserving concrete simulation/tests',
     async (_name, declaration, device, count) => {
       const text = `const A = Signal('virtual', 'signal-A');
 const channel = Param.signal('Channel', A);
@@ -291,8 +291,21 @@ output += ${device};`;
         },
         (diagnostic) => formatSourceDiagnostic(diagnostic, text),
       );
-      expect(panel.copyPayload).toBeUndefined();
-      expect(panel.text).toContain('CP1002 error at 2:');
+      expect(response.result.blueprintExport).toMatchObject({ ok: true });
+      if (response.result.blueprintExport?.ok !== true) {
+        throw new Error('Expected a native Arithmetic output Signal template.');
+      }
+      expect(panel.copyPayload).toBe(
+        JSON.stringify(response.result.blueprintExport.document, null, 2),
+      );
+      const projectedBehavior = response.result.blueprintExport.document.blueprint.entities[0]!
+        .control_behavior as {
+        arithmetic_conditions: { output_signal: unknown };
+      };
+      expect(projectedBehavior.arithmetic_conditions.output_signal).toEqual({
+        name: 'parameter-0',
+      });
+      expect(panel.text).not.toContain('CP1002 error');
       const controller = new SourceSimulationController(artifact);
       controller.stepFrom(0);
       expect(controller.signalValueAt(1, 'output', A)).toBe(count);

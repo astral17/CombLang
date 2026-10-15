@@ -1229,6 +1229,38 @@ output += Constant({ sections: [{ filters: [
     }
   });
 
+  test('exports an output-only Arithmetic Signal parameter with a numeric formula operand', async () => {
+    const { environment } = await parameterHost();
+    const path =
+      await sourceFile(`const result = Param.signal('Result', Signal('virtual', 'signal-B'));
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const output = new Network();
+output += Arithmetic({ left: 2, operation: 'add', right: amount * 2, output: result });`);
+    const { log, error } = capture();
+    expect(await run(['blueprint', 'export', '--parameters', '--json', path], environment)).toBe(0);
+    expect(error.mock.calls).toEqual([]);
+    const resultEnvelope = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(resultEnvelope.ok).toBe(true);
+    expect(resultEnvelope.document.blueprint.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Result',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
+    ]);
+    const conditions =
+      resultEnvelope.document.blueprint.entities[0].control_behavior.arithmetic_conditions;
+    expect(conditions).toMatchObject({
+      first_constant: 2,
+      second_constant: 10,
+      output_signal: { name: 'parameter-0' },
+    });
+    expect(conditions.output_signal).not.toHaveProperty('type');
+  });
+
   test('exports and binds fractional, divided, and powered Selector formulas without publishing failures', async () => {
     const { environment } = await parameterHost();
     const path = await sourceFile(`const amount = Param.number('Amount', 10, { variable: 'x' });
@@ -1524,12 +1556,16 @@ gate.else(4 * B);`;
     ],
     [
       "const amount = Param.signal('Channel', A);",
-      "Arithmetic({ left: 2, operation: 'add', right: 5, output: amount })",
+      `const input = new Network();
+output += Arithmetic({ left: 2, operation: 'add', right: 5, output: amount });
+output += Decider({ condition: input[A] > 0, outputs: [input[A]] });`,
       '$.parameters[0]',
     ],
     [
       "const amount = Param.signal('Channel', A); const count = Param.number('Amount', 5);",
-      "Arithmetic({ left: 2, operation: 'add', right: count, output: amount })",
+      `const input = new Network();
+output += Arithmetic({ left: 2, operation: 'add', right: count, output: amount });
+output += Selector({ input, operation: 'select', index: 1 });`,
       '$.parameters[0]',
     ],
     [
@@ -1556,7 +1592,8 @@ gate.else(4 * B);`;
     'explicit metadata rejection keeps located CP1002 and never writes or falls back: %s',
     async (declaration, device, semanticPath) => {
       const { environment } = await parameterHost();
-      const text = `const A = Signal('virtual', 'signal-A');\n${declaration}\nconst output = new Network();\noutput += ${device};`;
+      const appendedDevice = device.startsWith('const input =') ? device : `output += ${device};`;
+      const text = `const A = Signal('virtual', 'signal-A');\n${declaration}\nconst output = new Network();\n${appendedDevice}`;
       const path = await sourceFile(text);
       const output = join(dirname(path), 'rejected.json');
       const { log, error } = capture();

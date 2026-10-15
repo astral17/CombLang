@@ -61,8 +61,8 @@ Entity-capable prototype environment.
 Default export uses concrete defaults and emits no parameter metadata, even
 when the source declares parameters. The label defaults to `CombLang generated
 circuit`; Decider expansion retains the 1024-row limit. Explicit `--parameters`
-requests supported numeric and bounded Constant Signal native metadata from
-that same owning compilation; it never falls back to concrete output after rejection. Without declarations, both modes
+requests supported numeric and bounded Constant/Arithmetic-output Signal native
+metadata from that same owning compilation; it never falls back to concrete output after rejection. Without declarations, both modes
 produce an ordinary document without empty parameter rows. Concrete
 `--overrides` mode accepts only an empty array when there are no declarations.
 
@@ -177,8 +177,10 @@ bitwise XOR.
 Arithmetic, Decider and Selector formula placement and general formula validity
 remain unverified. Signal parameters are supported only for concrete item,
 fluid, or virtual defaults with omitted or normal quality in direct Constant
-filter Signal slots, subject to the bounded placeholder and circuit rules in the
-Param reference. Other Signal slots/defaults, unsupported
+filter `signal` slots or exact Arithmetic `output` slots, subject to the bounded
+placeholder and Constant/Arithmetic circuit rules in the Param reference.
+Matching concrete Signals in eligible Constant and Arithmetic fields are also
+replaced. Other Signal slots/defaults, unsupported
 expressions, unused parameters, ambiguous equal originals and non-int32 declared
 numeric originals fail explicitly in `--parameters` native-metadata mode. Formula
 operands may be any finite numeric literal, but each raw evaluated formula
@@ -294,7 +296,7 @@ blueprint** copies that displayed readable JSON, not an exchange string or an
 export-result envelope. With no declarations, the result is ordinary concrete
 JSON in either mode. Turning the checkbox off restores concrete artifact export.
 
-Only the supported native numeric slots and bounded Constant Signal role
+Only the supported native numeric slots and bounded Constant/Arithmetic-output Signal roles
 described in the Param API are exported. Unsupported Signal parameters or other export failures show located diagnostics in the
 blueprint panel and disable copy; a missing Worker export result is also an
 explicit unavailable error, never a concrete fallback. Successful compilation

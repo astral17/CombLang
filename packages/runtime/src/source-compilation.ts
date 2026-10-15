@@ -75,6 +75,7 @@ import {
 import {
   validateNativeBlueprintFcir,
   type NativeBlueprintFcir,
+  type NativeBlueprintJsonObject,
   type NativeBlueprintParameter,
 } from '../../compiler/src/native-blueprint-ir.js';
 import {
@@ -446,11 +447,13 @@ export function exportSourceCompilationNativeBlueprint(
     const firstSignalIndex = declarations.indexOf(firstSignal);
     const signalPath = `$.parameters[${firstSignalIndex}]`;
     const producers = compilation.resolvedCircuit.ir.producers;
-    const unsupportedProducer = producers.find((producer) => producer.kind !== 'constant');
+    const unsupportedProducer = producers.find(
+      (producer) => producer.kind !== 'constant' && producer.kind !== 'arithmetic',
+    );
     if (unsupportedProducer !== undefined) {
       reject(
         signalPath,
-        'native Signal export requires every producer to be Constant.',
+        'native Signal export requires every producer to be Constant or Arithmetic.',
         firstSignal.source,
       );
     }
@@ -518,15 +521,32 @@ export function exportSourceCompilationNativeBlueprint(
   let formulaRenderer: ReturnType<typeof createNativeNumericFormulaRenderer> | undefined;
   if (signalDeclarations.length > 0) {
     for (const producer of compilation.resolvedCircuit.ir.producers) {
-      if (producer.kind !== 'constant') continue;
+      if (producer.kind !== 'constant' && producer.kind !== 'arithmetic') continue;
       const configuration =
         'configuration' in producer.config ? producer.config.configuration : undefined;
       const concreteSignals =
-        configuration === undefined
-          ? (producer.config.outputs?.map(({ signal }) => signal) ?? [])
-          : configuration.sections.flatMap((section) =>
-              section.filters.map(({ signal }) => signal),
-            );
+        producer.kind === 'constant'
+          ? configuration === undefined
+            ? (producer.config.outputs?.map(({ signal }) => signal) ?? [])
+            : configuration.sections.flatMap((section) =>
+                section.filters.map(({ signal }) => signal),
+              )
+          : producer.kind === 'arithmetic'
+            ? [
+                ...(producer.config.left.kind === 'signal' &&
+                !canonicalBlueprintParameterHandle(producer.config.left.signal)
+                  ? [producer.config.left.signal as SignalId]
+                  : []),
+                ...(producer.config.right.kind === 'signal' &&
+                !canonicalBlueprintParameterHandle(producer.config.right.signal)
+                  ? [producer.config.right.signal as SignalId]
+                  : []),
+                ...(producer.config.output.kind === 'signal' &&
+                !canonicalBlueprintParameterHandle(producer.config.output.signal)
+                  ? [producer.config.output.signal as SignalId]
+                  : []),
+              ]
+            : [];
       for (const concreteSignal of concreteSignals) {
         const key = signalKey(concreteSignal);
         reservedSignalPlaceholderNames.add(concreteSignal.name);
@@ -534,7 +554,7 @@ export function exportSourceCompilationNativeBlueprint(
           if (sameName.key !== key) {
             reject(
               `$.parameters[${declarations.indexOf(sameName.declaration)}].defaultValue`,
-              `Constant filter signal ${JSON.stringify(concreteSignal.name)} has a different namespace or quality from the declared Signal default.`,
+              `${producer.kind === 'constant' ? 'Constant filter' : 'Arithmetic Signal field'} ${JSON.stringify(concreteSignal.name)} has a different namespace or quality from the declared Signal default.`,
               sameName.declaration.source,
             );
           }
@@ -565,6 +585,7 @@ export function exportSourceCompilationNativeBlueprint(
         filterIndex: number;
         parameter: BlueprintParameterHandle;
       }
+    | { kind: 'arithmetic-signal-output'; parameter: BlueprintParameterHandle }
     | { kind: 'arithmetic-operand'; side: 'first' | 'second'; parameter: BlueprintParameterHandle }
     | {
         kind: 'arithmetic-operand-expression';
@@ -780,11 +801,44 @@ export function exportSourceCompilationNativeBlueprint(
   state.source.arithmeticTemplates.forEach((capture, captureIndex) => {
     const path = `$.arithmeticTemplates[${captureIndex}]`;
     const registration = inspectArithmeticConfigurationTemplate(capture.template, path);
+    const acceptedSignals = new Set<BlueprintParameterHandle>();
+    if (capture.template.output.kind === 'signal') {
+      const outputPath = `${path}.output.signal`;
+      const outputParameter = canonicalBlueprintParameterHandle(capture.template.output.signal);
+      if (outputParameter !== undefined) {
+        if (outputParameter.kind !== 'signal' || !signalInfoByParameter.has(outputParameter)) {
+          reject(
+            outputPath,
+            'native source export supports only declared Signal parameters in exact Arithmetic output slots.',
+            capture.source,
+          );
+        }
+        acceptedSignals.add(outputParameter);
+        used.add(outputParameter);
+        occurrences.push({
+          kind: 'arithmetic-signal-output',
+          captureId: capture.captureId,
+          parameter: outputParameter,
+          path: outputPath,
+          source: capture.source,
+        });
+      }
+    }
     for (const [key, side] of [
       ['left', 'first'],
       ['right', 'second'],
     ] as const) {
       const operand = capture.template[key];
+      if (operand.kind === 'signal') {
+        const operandParameter = canonicalBlueprintParameterHandle(operand.signal);
+        if (operandParameter !== undefined) {
+          reject(
+            `${path}.${key}.signal`,
+            'native source export supports Signal parameters only in exact Arithmetic output slots.',
+            capture.source,
+          );
+        }
+      }
       if (operand.kind !== 'constant') continue;
       const operandPath = `${path}.${key}.value`;
       if (isRegisteredBlueprintNumericExpression(operand.value)) {
@@ -844,6 +898,17 @@ export function exportSourceCompilationNativeBlueprint(
         path: operandPath,
         source: capture.source,
       });
+    }
+    if (
+      registration.usedParameters.some(
+        (parameter) => parameter.kind === 'signal' && !acceptedSignals.has(parameter),
+      )
+    ) {
+      reject(
+        path,
+        'native source export supports Signal parameters only in exact Arithmetic output slots.',
+        capture.source,
+      );
     }
   });
   state.source.constantTemplates.forEach((capture, captureIndex) => {
@@ -1154,7 +1219,7 @@ export function exportSourceCompilationNativeBlueprint(
     if (info === undefined) {
       reject(
         `$.parameters[${index}]`,
-        'native Signal declaration has no authenticated Constant filter use.',
+        'native Signal declaration has no authenticated Constant filter or Arithmetic output use.',
         declaration.source,
       );
     }
@@ -1170,7 +1235,7 @@ export function exportSourceCompilationNativeBlueprint(
     if (placeholder === undefined) {
       reject(
         `$.parameters[${index}]`,
-        'native Constant Signal placeholder pool parameter-0 through parameter-9 is exhausted.',
+        'native Signal placeholder pool parameter-0 through parameter-9 is exhausted.',
         declaration.source,
       );
     }
@@ -1256,7 +1321,8 @@ export function exportSourceCompilationNativeBlueprint(
       occurrence.kind === 'constant-signal'
         ? 'constant'
         : occurrence.kind === 'arithmetic-operand' ||
-            occurrence.kind === 'arithmetic-operand-expression'
+            occurrence.kind === 'arithmetic-operand-expression' ||
+            occurrence.kind === 'arithmetic-signal-output'
           ? 'arithmetic'
           : occurrence.kind === 'selector-index' || occurrence.kind === 'selector-index-expression'
             ? 'selector'
@@ -1274,6 +1340,59 @@ export function exportSourceCompilationNativeBlueprint(
     }
     // The canonical projector assigns producer entity numbers in NCIR producer order.
     const entity = entities.get(relation.producerIndex + 1);
+    if (occurrence.kind === 'arithmetic-signal-output') {
+      const info = signalInfoByParameter.get(occurrence.parameter);
+      const producer = replacement.circuit.producers[relation.producerIndex];
+      const behavior = entity?.native.control_behavior as
+        | {
+            readonly arithmetic_conditions?: {
+              readonly output_signal?: {
+                readonly type?: string;
+                readonly name?: string;
+                readonly quality?: string;
+              };
+            };
+          }
+        | undefined;
+      const projectedSignal = behavior?.arithmetic_conditions?.output_signal;
+      const projectedType = projectedSignal?.type ?? 'item';
+      const projectedName = projectedSignal?.name;
+      const projectedQuality = projectedSignal?.quality;
+      let projectedKey: string | undefined;
+      if (typeof projectedType === 'string' && typeof projectedName === 'string') {
+        try {
+          projectedKey = signalKey({
+            type: projectedType as SignalId['type'],
+            name: projectedName,
+            ...(typeof projectedQuality === 'string' ? { quality: projectedQuality } : {}),
+          });
+        } catch {
+          projectedKey = undefined;
+        }
+      }
+      const sourceOutput = producer?.kind === 'arithmetic' ? producer.config.output : undefined;
+      let sourceKey: string | undefined;
+      if (sourceOutput?.kind === 'signal') {
+        try {
+          sourceKey = signalKey(sourceOutput.signal as SignalId);
+        } catch {
+          sourceKey = undefined;
+        }
+      }
+      if (
+        info === undefined ||
+        sourceOutput?.kind !== 'signal' ||
+        sourceKey !== info.key ||
+        projectedKey !== info.key
+      ) {
+        reject(
+          occurrence.path,
+          'marked Arithmetic output Signal default did not survive authenticated native projection unchanged.',
+          occurrence.source,
+        );
+      }
+      continue;
+    }
     if (occurrence.kind === 'selector-index') {
       const behavior = entity?.native.control_behavior as
         { readonly operation?: string; readonly index_constant?: number } | undefined;
@@ -1485,9 +1604,59 @@ export function exportSourceCompilationNativeBlueprint(
       ? (value as Record<string, unknown>)
       : undefined;
   for (const [producerIndex, producer] of replacement.circuit.producers.entries()) {
-    if (producer.kind !== 'constant' || replacementsByOriginal.size === 0) continue;
+    if (replacementsByOriginal.size === 0) continue;
     const entityNumber = producerIndex + 1;
     const entity = entities.get(entityNumber);
+    if (producer.kind === 'arithmetic') {
+      if (entity === undefined) {
+        const declaration = signalDeclarations[0]!;
+        reject(
+          `$.parameters[${declarations.indexOf(declaration)}]`,
+          'projected Arithmetic producer is missing its native entity.',
+          declaration.source,
+        );
+      }
+      const behavior = readRecord(entity.native.control_behavior);
+      const arithmetic = readRecord(behavior?.arithmetic_conditions);
+      if (behavior === undefined || arithmetic === undefined) continue;
+      let arithmeticChanged = false;
+      const nextArithmetic: Record<string, unknown> = { ...arithmetic };
+      for (const field of ['first_signal', 'second_signal', 'output_signal'] as const) {
+        const signalField = readRecord(arithmetic[field]);
+        const name = signalField?.name;
+        const type = signalField?.type ?? 'item';
+        const quality = signalField?.quality;
+        if (typeof name !== 'string' || typeof type !== 'string') continue;
+        let key: string;
+        try {
+          key = signalKey({
+            type: type as SignalId['type'],
+            name,
+            ...(typeof quality === 'string' ? { quality } : {}),
+          });
+        } catch {
+          continue;
+        }
+        const placeholder = replacementsByOriginal.get(key);
+        if (placeholder === undefined || signalField === undefined) continue;
+        const preservedFields = { ...signalField };
+        delete preservedFields.type;
+        nextArithmetic[field] = Object.freeze({ ...preservedFields, name: placeholder });
+        arithmeticChanged = true;
+      }
+      if (arithmeticChanged) {
+        const nextBehavior = Object.freeze({
+          ...behavior,
+          arithmetic_conditions: Object.freeze(nextArithmetic),
+        }) as unknown as NativeBlueprintJsonObject;
+        patchedByNumber.set(
+          entityNumber,
+          Object.freeze({ ...entity.native, control_behavior: nextBehavior }),
+        );
+      }
+      continue;
+    }
+    if (producer.kind !== 'constant') continue;
     if (entity === undefined) {
       const declaration = signalDeclarations[0]!;
       reject(

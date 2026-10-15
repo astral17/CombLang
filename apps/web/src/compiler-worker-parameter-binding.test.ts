@@ -1501,6 +1501,58 @@ output += Arithmetic({ left: amount * 2, operation: 'add', right: 1, output: A }
     expect(response.parameterBinding).toMatchObject({ ok: true, token: expect.any(String) });
   });
 
+  test('exports an output-only Arithmetic Signal parameter with a numeric formula operand', async () => {
+    const runtime = parameterRuntime();
+    const parsed = structuredClone(
+      await runtime.handle(
+        parseRequest(57, {
+          file: {
+            path: 'worker-arithmetic-output-signal-template.factorio.ts',
+            text: `const result = Param.signal('Result', Signal('virtual', 'signal-B'));
+const amount = Param.number('Amount', 5, { variable: 'x' });
+const output = new Network();
+output += Arithmetic({ left: 2, operation: 'add', right: amount * 2, output: result });`,
+          },
+          parameterBinding: true,
+          blueprintExport: { parameters: true },
+        }),
+      ),
+    );
+    expect(parsed.result.pipelineDiagnostics).toEqual([]);
+    expect(parsed.result.blueprintExport).toMatchObject({ ok: true });
+    if (parsed.result.blueprintExport?.ok !== true) {
+      throw new Error('Expected an output-only Arithmetic Signal template export.');
+    }
+    const document = parsed.result.blueprintExport.document.blueprint;
+    expect(document.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Result',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      { type: 'number', number: '5', name: 'Amount', variable: 'x' },
+      { type: 'number', number: '10', formula: '(x * 2)', dependent: true },
+    ]);
+    const projectedBehavior = document.entities[0]!.control_behavior as {
+      arithmetic_conditions: { output_signal: unknown };
+    };
+    const conditions = projectedBehavior.arithmetic_conditions;
+    expect(conditions).toMatchObject({
+      first_constant: 2,
+      second_constant: 10,
+      output_signal: { name: 'parameter-0' },
+    });
+    expect(conditions.output_signal).not.toHaveProperty('type');
+    if (parsed.parameterBinding?.ok !== true) {
+      throw new Error('Expected a retained Worker parameter binding session.');
+    }
+    expect(parsed.parameterBinding.parameters).toMatchObject([
+      { id: 0, kind: 'signal', label: 'Result', defaultValue: signal('virtual', 'signal-B') },
+      { id: 1, kind: 'number', label: 'Amount', defaultValue: 5 },
+    ]);
+  });
+
   test('exports item/fluid Constant Signal templates and keeps Worker bindings local', async () => {
     const key = '__worker_mixed_signal_namespace_runs';
     const globals = globalThis as Record<string, unknown>;

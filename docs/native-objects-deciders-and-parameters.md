@@ -277,8 +277,9 @@ indices. A formula-mode circuit is limited to linked
 Constant/Arithmetic/Decider/Selector producers; derived multiplier formulas
 remain unsupported. Formula-only dependencies keep their declaration/original
 rows without allocating physical fields, subject to explicit valid variables
-and direct-leaf metadata. Native Signal export retains its stricter
-Constant-only gate.
+and direct-leaf metadata. Native Signal export accepts only Constant and
+Arithmetic producers, with handles limited to Constant filter and Arithmetic
+output slots.
 
 Explicit native parameter metadata export rejects symbolic multipliers with
 located `CP1002`, even at default 1 or when the same handle is a supported filter
@@ -351,25 +352,29 @@ This is concrete binding, also available through the
 [browser parameter controls](blueprint-json.md#optional-worker-local-parameter-binding),
 not native ID replacement. Ordinary export of the original compilation uses
 defaults; the browser's concrete bound preview uses its selected values.
-Native ID replacement for an Arithmetic output remains unsupported. A separate,
-bounded native Signal path exists only for direct Constant filter Signal slots;
-see the next section. Worker compilation/simulation/tests remain usable when a
-requested native export is outside that supported slice.
+Native ID replacement supports an exact Arithmetic `output` alongside direct
+Constant filter Signal slots; see the next section. Arithmetic input operands
+remain concrete-only for Signal values. Worker compilation/simulation/tests
+remain usable when a requested native export is outside that supported slice.
 
-### Constant filter Signal parameters
+### Bounded native Signal parameters
 
 The explicit native parameter exporter supports a Signal declaration only when
 its default is a concrete item, fluid, or virtual Signal with omitted or normal
-quality and its handle occupies a Constant filter Signal slot. For example,
+quality and its handle occupies a Constant filter Signal slot or exact
+Arithmetic `output` slot. For example,
 `Param.signal('Material', Signal('iron-plate'))` and
 `Param.signal('Coolant', Signal('fluid', 'water', 'normal'))` use the same
-bounded projection as a virtual Signal. Requires the existing exact Constant
-provisioning capabilities:
+bounded projection as a virtual Signal. The circuit may contain only linked
+Constant and Arithmetic producers. The example uses the existing exact Constant
+and Arithmetic provisioning capabilities:
 
 ```ts
 const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const A = Signal('virtual', 'signal-A');
 const material = Param.signal('Material', Signal('iron-plate'));
 const coolant = Param.signal('Coolant', Signal('fluid', 'water', 'normal'));
+const input = CC(2 * A);
 const output = new Network();
 output += Constant({
   sections: [
@@ -385,24 +390,30 @@ output += Constant({
     },
   ],
 });
+output += Arithmetic({ left: input[A], operation: 'add', right: 3, output: channel });
 ```
 
 Local binding remains nominal: overriding `channel` changes its marked filter
 row(s), not an ordinary equal A filter. Native metadata is based on source
-identity, so native export replaces every matching item, fluid, or virtual row
-in supported Constant roles with the allocated first-free `parameter-0` through
-`parameter-9` name. A matching placeholder omits its original `type`; explicit
-normal quality and every other filter/section/entity field remain unchanged.
+identity, so native export replaces every matching item, fluid, or virtual
+Signal field in supported Constant and Arithmetic roles with the allocated
+first-free `parameter-0` through `parameter-9` name. This includes Constant
+filters and Arithmetic `first_signal`, `second_signal`, and `output_signal`;
+ordinary concrete fields matching a declared default are replaced too. A
+matching placeholder omits its original `type`; explicit normal quality and
+every other filter/section/arithmetic/entity field remain unchanged.
 Metadata records the declaration label and
 `quality-condition: { quality: 'normal', comparator: '=' }`. The concrete source
 default remains local-only: it is not persisted as a native placement default
 and does not restrict the namespace selected when placing the generic ID row.
 
-Existing Constant filter names across types/qualities reserve placeholder names.
+Existing eligible Constant and Arithmetic Signal names across types/qualities
+reserve placeholder names.
 Exhaustion, unused Signal declarations, distinct handles with the same
 normalized original, a same-name namespace/quality conflict, non-normal
-qualities, virtual wildcards and Signal use in another slot fail atomically with
-located `CP1002`. Any other producer kind or unlinked physical
+qualities, virtual wildcards, Arithmetic input Signal parameters and Signal use
+in another slot fail atomically with located `CP1002`. Decider/Selector
+producers or an unlinked physical
 Entity also rejects a source compilation that declares a Signal parameter.
 Numeric-only exports and ordinary concrete binding are unaffected. The reviewed
 input transition is user-supplied Factorio 2.1.21 Space Age evidence with mods
@@ -410,8 +421,9 @@ unspecified. The user also supplied the placed export for this one generated
 virtual/normal Constant template: both matching rows became virtual signal-B
 with counts 5 and 13, while iron-plate and water, the red wire, relative layout
 and directions were preserved; parameter metadata was absent after placement.
-This is a bounded user-reported observation, not an independently run game
-gate. Item/fluid placement and selection, parameterized save/reopen, other
+This is a bounded user-reported Constant observation, not an independently run
+game gate; it does not verify Arithmetic output substitution. Item/fluid
+placement and selection, Arithmetic output, parameterized save/reopen, other
 qualities or native roles, arbitrary wires, and browser/mobile native placement
 remain unverified.
 
@@ -552,7 +564,8 @@ remain unsupported. Its internal numeric DAG also projects registered calls to
 eligible formula slots. These are structural strings only; Factorio parsing,
 evaluation and placement of function formulas are not verified. Formula mode
 accepts only linked Constant, Arithmetic, Decider and Selector producers, while
-the native Signal gate remains Constant-only. Its explicit default is also its
+the native Signal gate accepts only Constant and Arithmetic producers, with
+handles limited to Constant filter and Arithmetic output slots. Its explicit default is also its
 native original and must be an integer
 in [-2147483648, 2147483647]; it is not
 wrapped, rounded or allocated automatically. A zero count remains an explicit
@@ -565,10 +578,10 @@ are rejected at the second declaration, with a reference to the first.
 
 For valid captured compilations, unsupported declarations or uses fail
 atomically with `CP1002`, a declaration or device-call source span, and a
-semantic path. Signal and unused parameters, symbolic Decider outputs (including
-else outputs), Selector Signal indices/count outputs, and symbolic multipliers
-remain outside this subset and fail with `CP1002` even when their local results
-are constant-equivalent. A marked Selector numeric formula is authenticated at
+semantic path. Unused parameters, Arithmetic input Signal parameters, symbolic
+Decider outputs (including else outputs), Selector Signal indices/count outputs,
+and symbolic multipliers remain outside this subset and fail with `CP1002` even
+when their local results are constant-equivalent. A marked Selector numeric formula is authenticated at
 the exact `select.index` slot and must survive projection unchanged in
 `index_constant`, not `index_signal`. Selector native formula placement remains
 unverified. A marked Decider threshold is tracked by its
@@ -609,9 +622,10 @@ and file/stdout conventions. Existing parameter-free export bytes are
 unchanged. This native-export subset preserves explicit numeric formula
 strings, supports bounded typed formulas in exact Arithmetic constant operands,
 direct Constant count slots, constant-right Decider thresholds and numeric
-Selector select indices, and supports bounded Constant Signal
-placeholders. It does not add a general native-parameter index syntax, recipe/property
-dependencies, other Signal slots or multiplier substitution.
+Selector select indices, and supports bounded Signal placeholders in Constant
+filter and exact Arithmetic output slots. It does not add a general
+native-parameter index syntax, recipe/property dependencies, other Signal slots
+or multiplier substitution.
 Concrete Worker binding and the parameter controls are
 separate implemented features; they do not enable those native semantics. See
 [optional Worker result export](blueprint-json.md#optional-worker-result-export)

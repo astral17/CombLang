@@ -220,23 +220,38 @@ output += Constant({ sections: [{ filters: [
   });
 
   test.each([false, true])(
-    'Arithmetic Signal output still rejects native metadata (mixed numeric: %s) without losing concrete defaults',
+    'exports authenticated Arithmetic Signal output metadata (mixed numeric: %s)',
     (mixed) => {
       const text = `${mixed ? "const amount = Param.number('Amount', 5);\n" : ''}const channel = Param.signal('Result', Signal('virtual', 'signal-B'));
 const output = new Network();
 output += Arithmetic({ left: 2, operation: 'add', right: ${mixed ? 'amount' : '5'}, output: channel });`;
       const compilation = compile(text);
       const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
-      const error = exportFailure(compilation);
-      expect(error).toMatchObject({
-        code: 'CP1002',
-        path: `$.parameters[${mixed ? 1 : 0}]`,
-        span: sourceApi
-          .listSourceCompilationParameters(compilation)
-          .find(({ label }) => label === 'Result')!.source,
+      const declarations = sourceApi.listSourceCompilationParameters(compilation);
+      const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      expect(native.parameters).toEqual([
+        ...(mixed ? [{ type: 'number', number: '5', name: 'Amount' }] : []),
+        {
+          type: 'id',
+          id: 'parameter-0',
+          name: 'Result',
+          'quality-condition': { quality: 'normal', comparator: '=' },
+        },
+      ]);
+      const projected = emitNativeBlueprintJson(native).blueprint.entities[0]!;
+      expect(projected.control_behavior).toMatchObject({
+        arithmetic_conditions: {
+          first_constant: 2,
+          second_constant: 5,
+          output_signal: { name: 'parameter-0' },
+        },
       });
-      expect(text.slice(error.span!.start, error.span!.end)).toBe(
-        "Param.signal('Result', Signal('virtual', 'signal-B'))",
+      expect(
+        (projected.control_behavior as { arithmetic_conditions: Record<string, unknown> })
+          .arithmetic_conditions.output_signal,
+      ).not.toHaveProperty('type');
+      expect(native.wires).toEqual(
+        buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).wires,
       );
       const concrete = generateBlueprintJson(compilation.resolvedCircuit!.ir);
       expect(concrete.blueprint).not.toHaveProperty('parameters');
@@ -250,18 +265,142 @@ output += Arithmetic({ left: 2, operation: 'add', right: ${mixed ? 'amount' : '5
           },
         },
       });
-      const bound = sourceApi.bindSourceCompilationCircuit(compilation);
+      const signalParameter = declarations.find(({ label }) => label === 'Result')!;
+      const numericParameter = declarations.find(({ label }) => label === 'Amount');
+      const defaultPair = sourceApi.bindSourceCompilationCircuit(compilation);
+      const defaultReplay = executeResolvedDirectPlan(
+        defaultPair.plan,
+        defaultPair.resolvedCircuit,
+      );
+      expect(
+        defaultReplay.circuit
+          .createSimulation()
+          .step()
+          .read(defaultReplay.network('output').id)
+          .get(signal('virtual', 'signal-B')),
+      ).toBe(7);
+      const bound = sourceApi.bindSourceCompilationCircuit(compilation, [
+        { parameter: signalParameter.parameter, value: signal('item', 'iron-plate') },
+        ...(numericParameter === undefined
+          ? []
+          : [{ parameter: numericParameter.parameter, value: 8 }]),
+      ]);
       const replay = executeResolvedDirectPlan(bound.plan, bound.resolvedCircuit);
       expect(
         replay.circuit
           .createSimulation()
           .step()
           .read(replay.network('output').id)
+          .get(signal('item', 'iron-plate')),
+      ).toBe(mixed ? 10 : 7);
+      const reset = sourceApi.bindSourceCompilationCircuit(compilation);
+      const resetReplay = executeResolvedDirectPlan(reset.plan, reset.resolvedCircuit);
+      expect(
+        resetReplay.circuit
+          .createSimulation()
+          .step()
+          .read(resetReplay.network('output').id)
           .get(signal('virtual', 'signal-B')),
       ).toBe(7);
       expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
     },
   );
+
+  test.each([
+    { defaultValue: "Signal('item', 'iron-plate')" },
+    { defaultValue: "Signal('item', 'iron-plate', 'normal')", quality: 'normal' },
+    { defaultValue: "Signal('fluid', 'water')" },
+    { defaultValue: "Signal('fluid', 'water', 'normal')", quality: 'normal' },
+    { defaultValue: "Signal('virtual', 'signal-A')" },
+    { defaultValue: "Signal('virtual', 'signal-A', 'normal')", quality: 'normal' },
+  ])(
+    'exports native Arithmetic output default $defaultValue in the exact output slot',
+    ({ defaultValue, quality }) => {
+      const compilation = compile(`const result = Param.signal('Result', ${defaultValue});
+const output = new Network();
+output += Arithmetic({ left: 2, operation: 'add', right: 3, output: result });`);
+      const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      expect(native.parameters).toEqual([
+        {
+          type: 'id',
+          id: 'parameter-0',
+          name: 'Result',
+          'quality-condition': { quality: 'normal', comparator: '=' },
+        },
+      ]);
+      const arithmetic = emitNativeBlueprintJson(native).blueprint.entities[0]!
+        .control_behavior as { arithmetic_conditions: Record<string, unknown> };
+      expect(arithmetic.arithmetic_conditions.output_signal).toEqual({
+        name: 'parameter-0',
+        ...(quality === undefined ? {} : { quality }),
+      });
+      expect(arithmetic.arithmetic_conditions).toMatchObject({
+        first_constant: 2,
+        second_constant: 3,
+      });
+    },
+  );
+
+  test('replaces matching Constant and Arithmetic Signal slots without changing other native fields', () => {
+    const compilation = compile(`const original = Signal('virtual', 'signal-A', 'normal');
+const result = Param.signal('Result', original);
+const plate = Signal('item', 'iron-plate');
+const input = CC(3 * original, 4 * plate);
+const output = new Network();
+output += Arithmetic({ left: input[original], operation: 'add', right: input[original], output: result }).at(2, 3);
+output += Arithmetic({ left: input[original], operation: 'multiply', right: input[plate], output: original }).at(4, 5);
+output += Arithmetic({ left: Each(input), operation: 'subtract', right: 9, output: Each }).at(6, 7);`);
+    const concrete = structuredClone(
+      emitNativeBlueprintJson(buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options))
+        .blueprint.entities,
+    );
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    const actual = emitNativeBlueprintJson(native).blueprint.entities;
+    const replacePlaceholder = (signalField: Record<string, unknown>) => {
+      const { type: _type, ...preserved } = signalField;
+      return { ...preserved, name: 'parameter-0' };
+    };
+    const constantBehavior = concrete[0]!.control_behavior as {
+      sections: { sections: { filters: Record<string, unknown>[] }[] };
+    };
+    const firstFilter = constantBehavior.sections.sections[0]!.filters[0]!;
+    const { type: _constantType, ...preservedFilter } = firstFilter;
+    constantBehavior.sections.sections[0]!.filters[0] = {
+      ...preservedFilter,
+      name: 'parameter-0',
+    };
+    const arithmeticEntities = concrete.slice(1);
+    for (const [index, entity] of arithmeticEntities.slice(0, 2).entries()) {
+      const behavior = entity.control_behavior as {
+        arithmetic_conditions: Record<string, unknown>;
+      };
+      const conditions = behavior.arithmetic_conditions;
+      conditions.first_signal = replacePlaceholder(
+        conditions.first_signal as Record<string, unknown>,
+      );
+      if (index === 0) {
+        conditions.second_signal = replacePlaceholder(
+          conditions.second_signal as Record<string, unknown>,
+        );
+      }
+      conditions.output_signal = replacePlaceholder(
+        conditions.output_signal as Record<string, unknown>,
+      );
+    }
+    expect(native.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Result',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    expect(actual).toEqual(concrete);
+    expect(actual[3]).toEqual(concrete[3]);
+    expect(native.wires).toEqual(
+      buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).wires,
+    );
+  });
 
   test('compiles the complete documented numeric metadata example and exports its exact rows', () => {
     const page = readFileSync(
@@ -1134,7 +1273,7 @@ output += Constant({ sections: [{ filters: [
     expect(sourceApi.exportSourceCompilationNativeBlueprint(compilation, options)).toEqual(native);
   });
 
-  test('skips occupied Constant filter names and rejects exhaustion of the reviewed placeholder pool', () => {
+  test('reserves Arithmetic Signal names and rejects exhaustion across both supported families', () => {
     const skipped = compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
 const output = new Network();
 output += Constant({ sections: [{ filters: [
@@ -1152,15 +1291,15 @@ output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] })
       },
     ]);
 
-    const occupiedConstants = Array.from(
-      { length: 10 },
-      (_, index) =>
-        `output += Constant({ sections: [{ filters: [{ signal: Signal('item', 'parameter-${index}'), value: ${index} }] }] });`,
+    const occupiedSlots = Array.from({ length: 10 }, (_, index) =>
+      index < 5
+        ? `output += Constant({ sections: [{ filters: [{ signal: Signal('item', 'parameter-${index}'), value: ${index} }] }] });`
+        : `output += Arithmetic({ left: ${index}, operation: 'add', right: 1, output: Signal('item', 'parameter-${index}') });`,
     ).join('\n');
     const exhausted =
       compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
 const output = new Network();
-${occupiedConstants}
+${occupiedSlots}
 output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });`);
     const artifact = structuredClone(sourceApi.sourceCompilationArtifact(exhausted));
     expect(exportFailure(exhausted)).toMatchObject({
@@ -1170,6 +1309,25 @@ output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] })
       message: expect.stringContaining('parameter-9'),
     });
     expect(sourceApi.sourceCompilationArtifact(exhausted)).toEqual(artifact);
+  });
+
+  test('reserves placeholder-like names found only in Arithmetic Signal inputs', () => {
+    const compilation =
+      compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const input = new Network();
+const output = new Network();
+output += Arithmetic({ left: input[Signal('item', 'parameter-0')], operation: 'add', right: input[Signal('virtual', 'parameter-1')], output: Signal('fluid', 'parameter-2') });
+output += Arithmetic({ left: 1, operation: 'add', right: 2, output: channel });`);
+    expect(
+      sourceApi.exportSourceCompilationNativeBlueprint(compilation, options).parameters,
+    ).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-3',
+        name: 'Channel',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
   });
 
   test.each([
@@ -1222,7 +1380,7 @@ output += Constant({ sections: [{ filters: [{ signal: fluid, value: 7 }] }] });`
     expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(artifact);
   });
 
-  test('rejects unused Signal handles, duplicate canonical originals and non-Constant circuits atomically', () => {
+  test('rejects unused Signal handles and duplicate canonical originals atomically', () => {
     const unused = compile(`const A = Signal('virtual', 'signal-A');
 const channel = Param.signal('Channel', A);
 const output = new Network();
@@ -1240,18 +1398,32 @@ output += Constant({ sections: [{ filters: [
       code: 'CP1002',
       path: '$.parameters[1].defaultValue',
     });
+  });
 
-    const mixed = compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
-const input = new Network();
+  test.each([
+    [
+      'Decider',
+      `const input = new Network();
+output += Decider({ condition: input[Signal('virtual', 'signal-A')] > 0, outputs: [input[Signal('virtual', 'signal-A')] ] });`,
+    ],
+    [
+      'Selector',
+      `const input = new Network();
+output += Selector({ input, operation: 'select', index: 1 });`,
+    ],
+  ])('rejects %s producers in native Signal templates', (_family, source) => {
+    const compilation =
+      compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
 const output = new Network();
 output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });
-output += Arithmetic({ left: input[Signal('virtual', 'signal-A')], operation: 'add', right: 1, output: Signal('virtual', 'signal-B') });`);
-    const artifact = structuredClone(sourceApi.sourceCompilationArtifact(mixed));
-    expect(exportFailure(mixed)).toMatchObject({
+${source}`);
+    const artifact = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+    expect(exportFailure(compilation)).toMatchObject({
       code: 'CP1002',
       path: '$.parameters[0]',
+      message: expect.stringContaining('requires every producer to be Constant or Arithmetic'),
     });
-    expect(sourceApi.sourceCompilationArtifact(mixed)).toEqual(artifact);
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(artifact);
   });
 
   test('rejects unlinked physical Entities in Signal export while leaving numeric export unaffected', () => {
@@ -1265,6 +1437,58 @@ void extra;`);
       code: 'CP1002',
       path: '$.parameters[0]',
       message: expect.stringContaining('unlinked physical Entities'),
+    });
+  });
+
+  test.each([
+    ['first_signal', "Signal('item', 'signal-A')"],
+    ['second_signal', "Signal('virtual', 'signal-A', 'rare')"],
+    ['output_signal', "Signal('item', 'signal-A')"],
+  ])('rejects an Arithmetic %s same-name namespace/quality conflict', (slot, conflict) => {
+    const left = slot === 'first_signal' ? conflict : "Signal('virtual', 'signal-C')";
+    const right = slot === 'second_signal' ? conflict : "Signal('virtual', 'signal-D')";
+    const extraOutput =
+      slot === 'output_signal'
+        ? `output += Arithmetic({ left: 1, operation: 'add', right: 2, output: ${conflict} });`
+        : '';
+    const compilation =
+      compile(`const result = Param.signal('Result', Signal('virtual', 'signal-A'));
+const input = new Network();
+const output = new Network();
+output += Arithmetic({ left: input[${left}], operation: 'add', right: input[${right}], output: result });
+${extraOutput}`);
+    const artifact = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+    expect(exportFailure(compilation)).toMatchObject({
+      code: 'CP1002',
+      path: '$.parameters[0].defaultValue',
+      message: expect.stringContaining('different namespace or quality'),
+    });
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(artifact);
+  });
+
+  test.each(["Signal('virtual', 'signal-A', 'legendary')", "Signal('item', 'parameter-0')"])(
+    'rejects unsupported Arithmetic output Signal default %s at its declaration',
+    (defaultValue) => {
+      const compilation = compile(`const result = Param.signal('Result', ${defaultValue});
+const output = new Network();
+output += Arithmetic({ left: 1, operation: 'add', right: 2, output: result });`);
+      expect(exportFailure(compilation)).toMatchObject({
+        code: 'CP1002',
+        path: '$.parameters[0].defaultValue',
+        span: sourceApi.listSourceCompilationParameters(compilation)[0]!.source,
+      });
+    },
+  );
+
+  test('rejects an unused Signal default even when an equal concrete Arithmetic output exists', () => {
+    const compilation =
+      compile(`const result = Param.signal('Result', Signal('virtual', 'signal-A'));
+const output = new Network();
+output += Arithmetic({ left: 1, operation: 'add', right: 2, output: Signal('virtual', 'signal-A') });`);
+    expect(exportFailure(compilation)).toMatchObject({
+      code: 'CP1002',
+      path: '$.parameters[0]',
+      message: expect.stringContaining('unused declarations'),
     });
   });
 
