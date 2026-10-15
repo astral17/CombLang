@@ -549,6 +549,43 @@ expectSignal(network('output'), Signal('virtual', 'signal-B')).toBe(111);`,
     });
   });
 
+  test('exports the executable Selector index/count Signal example', async () => {
+    const page = readFileSync(new URL('../../docs/api/parameters.md', import.meta.url), 'utf8');
+    const source = page.match(
+      /Selector index\/count example:\r?\n\r?\n```javascript\r?\n([\s\S]*?)```/,
+    )?.[1];
+    if (source === undefined) throw new Error('Missing Selector index/count Signal example');
+    const compilation = compile(source, await bundled);
+    const native = exportSourceCompilationNativeBlueprint(compilation, {
+      label: 'Documented Selector Signal slots',
+      maxDeciderConditionRows: 1024,
+    });
+    expect(native.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Index',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      {
+        type: 'id',
+        id: 'parameter-1',
+        name: 'Count output',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    const select = native.entities.find(
+      ({ native: entity }) =>
+        entity.name === 'selector-combinator' && entity.control_behavior.operation === 'select',
+    );
+    const count = native.entities.find(
+      ({ native: entity }) =>
+        entity.name === 'selector-combinator' && entity.control_behavior.operation === 'count',
+    );
+    expect(select?.native.control_behavior.index_signal).toEqual({ name: 'parameter-0' });
+    expect(count?.native.control_behavior.count_signal).toEqual({ name: 'parameter-1' });
+  });
+
   test.each(['amount % 1;', '5 * result;', 'input + amount;', 'amount.defaultValue;'])(
     'does not give opaque source parameters unsupported ordinary-value APIs: %s',
     async (suffix) => {

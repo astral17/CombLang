@@ -334,6 +334,44 @@ output += ${device};`;
     },
   );
 
+  test('allows Selector Signal templates and copies the exact native document', async () => {
+    const text = `const index = Param.signal('Index', Signal('virtual', 'signal-index'));
+const countOutput = Param.signal('Count output', Signal('virtual', 'signal-count'));
+const input = new Network();
+const selected = new Network();
+const counted = new Network();
+selected += Selector({ input, operation: 'select', index });
+counted += Selector({ input, operation: 'count', output: countOutput });`;
+    const runtime = new CompilerWorkerRuntime();
+    const response = await runtime.handle({
+      kind: 'parse',
+      revision: 1,
+      file: { path: 'selector-signal-template.factorio.ts', text },
+      prototypeProfile: profile,
+      ...blueprintExportRequest(true),
+    });
+    expect(response.result.pipelineDiagnostics).toEqual([]);
+    expect(response.result.blueprintExport).toMatchObject({ ok: true });
+    if (response.result.blueprintExport?.ok !== true) {
+      throw new Error('Expected a native Selector Signal template.');
+    }
+    const panel = selectBlueprintPanel(
+      {
+        parameters: true,
+        exported: response.result.blueprintExport,
+      },
+      (diagnostic) => formatSourceDiagnostic(diagnostic, text),
+    );
+    expect(panel.copyPayload).toBe(
+      JSON.stringify(response.result.blueprintExport.document, null, 2),
+    );
+    expect(response.result.blueprintExport.document.blueprint.entities).toMatchObject([
+      { control_behavior: { operation: 'select', index_signal: { name: 'parameter-0' } } },
+      { control_behavior: { operation: 'count', count_signal: { name: 'parameter-1' } } },
+    ]);
+    expect(panel.text).not.toContain('CP1002 error');
+  });
+
   test('no declarations and warning-only source allow copy; bad source/profile clears it', async () => {
     const runtime = new CompilerWorkerRuntime();
     const response = await runtime.handle({

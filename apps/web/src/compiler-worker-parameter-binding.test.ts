@@ -1553,6 +1553,68 @@ output += Arithmetic({ left: 2, operation: 'add', right: amount * 2, output: res
     ]);
   });
 
+  test('exports Selector Signal index and count-output parameters through the Worker', async () => {
+    const runtime = parameterRuntime();
+    const parsed = structuredClone(
+      await runtime.handle(
+        parseRequest(58, {
+          file: {
+            path: 'worker-selector-signal-templates.factorio.ts',
+            text: `const index = Param.signal('Index', Signal('virtual', 'signal-index'));
+const countOutput = Param.signal('Count output', Signal('fluid', 'water', 'normal'));
+const input = new Network();
+const selectOutput = new Network();
+const countNetwork = new Network();
+selectOutput += Selector({ input, operation: 'select', index });
+countNetwork += Selector({ input, operation: 'count', output: countOutput });`,
+          },
+          parameterBinding: true,
+          blueprintExport: { parameters: true },
+        }),
+      ),
+    );
+    expect(parsed.result.pipelineDiagnostics).toEqual([]);
+    expect(parsed.result.blueprintExport).toMatchObject({ ok: true });
+    if (parsed.result.blueprintExport?.ok !== true) {
+      throw new Error('Expected Selector Signal template export through the Worker.');
+    }
+    const blueprint = parsed.result.blueprintExport.document.blueprint;
+    expect(blueprint.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Index',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      {
+        type: 'id',
+        id: 'parameter-1',
+        name: 'Count output',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    expect(blueprint.entities[0]!.control_behavior).toMatchObject({
+      operation: 'select',
+      index_signal: { name: 'parameter-0' },
+    });
+    expect(blueprint.entities[1]!.control_behavior).toMatchObject({
+      operation: 'count',
+      count_signal: { name: 'parameter-1', quality: 'normal' },
+    });
+    expect(parsed.parameterBinding).toMatchObject({
+      ok: true,
+      parameters: [
+        { id: 0, kind: 'signal', label: 'Index', defaultValue: signal('virtual', 'signal-index') },
+        {
+          id: 1,
+          kind: 'signal',
+          label: 'Count output',
+          defaultValue: signal('fluid', 'water', 'normal'),
+        },
+      ],
+    });
+  });
+
   test('exports item/fluid Constant Signal templates and keeps Worker bindings local', async () => {
     const key = '__worker_mixed_signal_namespace_runs';
     const globals = globalThis as Record<string, unknown>;

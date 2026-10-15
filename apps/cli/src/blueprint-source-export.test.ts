@@ -1261,6 +1261,74 @@ output += Arithmetic({ left: 2, operation: 'add', right: amount * 2, output: res
     expect(conditions.output_signal).not.toHaveProperty('type');
   });
 
+  test('exports Selector Signal index and count-output parameters through the CLI', async () => {
+    const { environment } = await parameterHost();
+    const path =
+      await sourceFile(`const index = Param.signal('Index', Signal('virtual', 'signal-index'));
+const countOutput = Param.signal('Count output', Signal('fluid', 'water', 'normal'));
+const input = new Network();
+const selectOutput = new Network();
+const countNetwork = new Network();
+selectOutput += Selector({ input, operation: 'select', index });
+countNetwork += Selector({ input, operation: 'count', output: countOutput });`);
+    const { log, error } = capture();
+    expect(await run(['blueprint', 'export', '--parameters', '--json', path], environment)).toBe(0);
+    expect(error.mock.calls).toEqual([]);
+    const result = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(result.ok).toBe(true);
+    expect(result.document.blueprint.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Index',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      {
+        type: 'id',
+        id: 'parameter-1',
+        name: 'Count output',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    const [selectEntity, countEntity] = result.document.blueprint.entities;
+    expect(selectEntity.control_behavior).toMatchObject({
+      operation: 'select',
+      index_signal: { name: 'parameter-0' },
+    });
+    expect(selectEntity.control_behavior.index_signal).not.toHaveProperty('type');
+    expect(countEntity.control_behavior).toMatchObject({
+      operation: 'count',
+      count_signal: { name: 'parameter-1', quality: 'normal' },
+    });
+    expect(countEntity.control_behavior.count_signal).not.toHaveProperty('type');
+
+    log.mockClear();
+    expect(await run(['blueprint', 'export', '--json', path], environment)).toBe(0);
+    const concrete = JSON.parse(String(log.mock.calls[0]?.[0])).document.blueprint;
+    expect(concrete).not.toHaveProperty('parameters');
+    expect(
+      concrete.entities.map(
+        (entity: { entity_number: number; control_behavior: { operation: string } }) => ({
+          entity_number: entity.entity_number,
+          operation: entity.control_behavior.operation,
+        }),
+      ),
+    ).toEqual([
+      { entity_number: selectEntity.entity_number, operation: 'select' },
+      { entity_number: countEntity.entity_number, operation: 'count' },
+    ]);
+    expect(concrete.wires).toEqual(result.document.blueprint.wires);
+    expect(concrete.entities[0]!.control_behavior.index_signal).toEqual({
+      type: 'virtual',
+      name: 'signal-index',
+    });
+    expect(concrete.entities[1]!.control_behavior.count_signal).toEqual({
+      type: 'fluid',
+      name: 'water',
+      quality: 'normal',
+    });
+  });
+
   test('exports and binds fractional, divided, and powered Selector formulas without publishing failures', async () => {
     const { environment } = await parameterHost();
     const path = await sourceFile(`const amount = Param.number('Amount', 10, { variable: 'x' });
@@ -1559,13 +1627,6 @@ gate.else(4 * B);`;
       `const input = new Network();
 output += Arithmetic({ left: 2, operation: 'add', right: 5, output: amount });
 output += Decider({ condition: input[A] > 0, outputs: [input[A]] });`,
-      '$.parameters[0]',
-    ],
-    [
-      "const amount = Param.signal('Channel', A); const count = Param.number('Amount', 5);",
-      `const input = new Network();
-output += Arithmetic({ left: 2, operation: 'add', right: count, output: amount });
-output += Selector({ input, operation: 'select', index: 1 });`,
       '$.parameters[0]',
     ],
     [

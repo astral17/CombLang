@@ -448,12 +448,15 @@ export function exportSourceCompilationNativeBlueprint(
     const signalPath = `$.parameters[${firstSignalIndex}]`;
     const producers = compilation.resolvedCircuit.ir.producers;
     const unsupportedProducer = producers.find(
-      (producer) => producer.kind !== 'constant' && producer.kind !== 'arithmetic',
+      (producer) =>
+        producer.kind !== 'constant' &&
+        producer.kind !== 'arithmetic' &&
+        producer.kind !== 'selector',
     );
     if (unsupportedProducer !== undefined) {
       reject(
         signalPath,
-        'native Signal export requires every producer to be Constant or Arithmetic.',
+        'native Signal export requires every producer to be Constant, Arithmetic or Selector.',
         firstSignal.source,
       );
     }
@@ -521,7 +524,13 @@ export function exportSourceCompilationNativeBlueprint(
   let formulaRenderer: ReturnType<typeof createNativeNumericFormulaRenderer> | undefined;
   if (signalDeclarations.length > 0) {
     for (const producer of compilation.resolvedCircuit.ir.producers) {
-      if (producer.kind !== 'constant' && producer.kind !== 'arithmetic') continue;
+      if (
+        producer.kind !== 'constant' &&
+        producer.kind !== 'arithmetic' &&
+        producer.kind !== 'selector'
+      ) {
+        continue;
+      }
       const configuration =
         'configuration' in producer.config ? producer.config.configuration : undefined;
       const concreteSignals =
@@ -546,7 +555,16 @@ export function exportSourceCompilationNativeBlueprint(
                   ? [producer.config.output.signal as SignalId]
                   : []),
               ]
-            : [];
+            : producer.kind === 'selector'
+              ? producer.config.operation === 'select'
+                ? typeof producer.config.index !== 'number' &&
+                  !canonicalBlueprintParameterHandle(producer.config.index)
+                  ? [producer.config.index as SignalId]
+                  : []
+                : !canonicalBlueprintParameterHandle(producer.config.output)
+                  ? [producer.config.output as SignalId]
+                  : []
+              : [];
       for (const concreteSignal of concreteSignals) {
         const key = signalKey(concreteSignal);
         reservedSignalPlaceholderNames.add(concreteSignal.name);
@@ -554,7 +572,7 @@ export function exportSourceCompilationNativeBlueprint(
           if (sameName.key !== key) {
             reject(
               `$.parameters[${declarations.indexOf(sameName.declaration)}].defaultValue`,
-              `${producer.kind === 'constant' ? 'Constant filter' : 'Arithmetic Signal field'} ${JSON.stringify(concreteSignal.name)} has a different namespace or quality from the declared Signal default.`,
+              `${producer.kind === 'constant' ? 'Constant filter' : producer.kind === 'arithmetic' ? 'Arithmetic Signal field' : 'Selector Signal field'} ${JSON.stringify(concreteSignal.name)} has a different namespace or quality from the declared Signal default.`,
               sameName.declaration.source,
             );
           }
@@ -607,6 +625,8 @@ export function exportSourceCompilationNativeBlueprint(
         conditionPath: readonly number[];
         measured: MeasuredNativeNumericFormula;
       }
+    | { kind: 'selector-index-signal'; parameter: BlueprintParameterHandle }
+    | { kind: 'selector-count-output'; parameter: BlueprintParameterHandle }
   ))[] = [];
   state.source.selectorTemplates.forEach((capture, captureIndex) => {
     const path = `$.selectorTemplates[${captureIndex}]`;
@@ -663,23 +683,63 @@ export function exportSourceCompilationNativeBlueprint(
         });
       } else {
         const parameter = canonicalBlueprintParameterHandle(index);
-        if (parameter !== undefined && parameter.kind === 'number') {
-          accepted.add(parameter);
-          used.add(parameter);
-          occurrences.push({
-            kind: 'selector-index',
-            captureId: capture.captureId,
-            parameter,
-            path: indexPath,
-            source: capture.source,
-          });
+        if (parameter !== undefined) {
+          if (parameter.kind === 'number') {
+            accepted.add(parameter);
+            used.add(parameter);
+            occurrences.push({
+              kind: 'selector-index',
+              captureId: capture.captureId,
+              parameter,
+              path: indexPath,
+              source: capture.source,
+            });
+          } else {
+            if (!signalInfoByParameter.has(parameter)) {
+              reject(
+                indexPath,
+                'native source export supports only declared Signal parameters in the exact Selector select-index slot.',
+                capture.source,
+              );
+            }
+            accepted.add(parameter);
+            used.add(parameter);
+            occurrences.push({
+              kind: 'selector-index-signal',
+              captureId: capture.captureId,
+              parameter,
+              path: indexPath,
+              source: capture.source,
+            });
+          }
         }
+      }
+    } else {
+      const outputPath = `${path}.output`;
+      const parameter = canonicalBlueprintParameterHandle(capture.template.output);
+      if (parameter !== undefined) {
+        if (parameter.kind !== 'signal' || !signalInfoByParameter.has(parameter)) {
+          reject(
+            outputPath,
+            'native source export supports only declared Signal parameters in the exact Selector count-output slot.',
+            capture.source,
+          );
+        }
+        accepted.add(parameter);
+        used.add(parameter);
+        occurrences.push({
+          kind: 'selector-count-output',
+          captureId: capture.captureId,
+          parameter,
+          path: outputPath,
+          source: capture.source,
+        });
       }
     }
     if (registration.usedParameters.some((parameter) => !accepted.has(parameter))) {
       reject(
         `${path}.${capture.template.operation === 'select' ? 'index' : 'output'}`,
-        'native source export supports only direct numeric or registered formula Selector select indices.',
+        'native source export supports direct numeric or formula Selector indices and declared Signal parameters in exact select-index or count-output slots.',
         capture.source,
       );
     }
@@ -1219,7 +1279,7 @@ export function exportSourceCompilationNativeBlueprint(
     if (info === undefined) {
       reject(
         `$.parameters[${index}]`,
-        'native Signal declaration has no authenticated Constant filter or Arithmetic output use.',
+        'native Signal declaration has no authenticated Constant, Arithmetic or Selector slot use.',
         declaration.source,
       );
     }
@@ -1311,6 +1371,26 @@ export function exportSourceCompilationNativeBlueprint(
   const defaults = new Map(
     declarations.map((declaration) => [declaration.parameter, declaration.defaultValue]),
   );
+  const readRecord = (value: unknown): Record<string, unknown> | undefined =>
+    value !== null && typeof value === 'object' && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
+  const nativeSignalKey = (value: unknown): string | undefined => {
+    const field = readRecord(value);
+    const name = field?.name;
+    const type = field?.type ?? 'item';
+    const quality = field?.quality;
+    if (typeof name !== 'string' || typeof type !== 'string') return undefined;
+    try {
+      return signalKey({
+        type: type as SignalId['type'],
+        name,
+        ...(typeof quality === 'string' ? { quality } : {}),
+      });
+    } catch {
+      return undefined;
+    }
+  };
   type Comparison = Extract<LogicalDeciderCondition, { kind: 'compare' }>;
   const deciderRowIndices = new Map<number, Map<Comparison, number[]>>();
   for (const occurrence of occurrences) {
@@ -1324,7 +1404,10 @@ export function exportSourceCompilationNativeBlueprint(
             occurrence.kind === 'arithmetic-operand-expression' ||
             occurrence.kind === 'arithmetic-signal-output'
           ? 'arithmetic'
-          : occurrence.kind === 'selector-index' || occurrence.kind === 'selector-index-expression'
+          : occurrence.kind === 'selector-index' ||
+              occurrence.kind === 'selector-index-expression' ||
+              occurrence.kind === 'selector-index-signal' ||
+              occurrence.kind === 'selector-count-output'
             ? 'selector'
             : 'decider';
     if (
@@ -1418,6 +1501,46 @@ export function exportSourceCompilationNativeBlueprint(
         reject(
           occurrence.path,
           'marked Selector index expression did not survive native projection at its evaluated default.',
+          occurrence.source,
+        );
+      }
+      continue;
+    }
+    if (
+      occurrence.kind === 'selector-index-signal' ||
+      occurrence.kind === 'selector-count-output'
+    ) {
+      const info = signalInfoByParameter.get(occurrence.parameter);
+      const producer = replacement.circuit.producers[relation.producerIndex];
+      const expectedOperation = occurrence.kind === 'selector-index-signal' ? 'select' : 'count';
+      const sourceSignal =
+        producer?.kind === 'selector' && producer.config.operation === expectedOperation
+          ? producer.config.operation === 'select'
+            ? typeof producer.config.index === 'number'
+              ? undefined
+              : producer.config.index
+            : producer.config.output
+          : undefined;
+      const behavior = readRecord(entity?.native.control_behavior);
+      const projectedSignal =
+        expectedOperation === 'select' ? behavior?.index_signal : behavior?.count_signal;
+      let sourceKey: string | undefined;
+      if (sourceSignal !== undefined) {
+        try {
+          sourceKey = signalKey(sourceSignal as SignalId);
+        } catch {
+          sourceKey = undefined;
+        }
+      }
+      if (
+        info === undefined ||
+        sourceKey !== info.key ||
+        behavior?.operation !== expectedOperation ||
+        nativeSignalKey(projectedSignal) !== info.key
+      ) {
+        reject(
+          occurrence.path,
+          `marked Selector ${expectedOperation === 'select' ? 'index' : 'count output'} Signal default did not survive authenticated native projection unchanged.`,
           occurrence.source,
         );
       }
@@ -1599,10 +1722,6 @@ export function exportSourceCompilationNativeBlueprint(
     replacementsByOriginal.set(info.key, placeholder);
   }
   const patchedByNumber = new Map<number, (typeof projected.entities)[number]['native']>();
-  const readRecord = (value: unknown): Record<string, unknown> | undefined =>
-    value !== null && typeof value === 'object' && !Array.isArray(value)
-      ? (value as Record<string, unknown>)
-      : undefined;
   for (const [producerIndex, producer] of replacement.circuit.producers.entries()) {
     if (replacementsByOriginal.size === 0) continue;
     const entityNumber = producerIndex + 1;
@@ -1654,6 +1773,34 @@ export function exportSourceCompilationNativeBlueprint(
           Object.freeze({ ...entity.native, control_behavior: nextBehavior }),
         );
       }
+      continue;
+    }
+    if (producer.kind === 'selector') {
+      if (entity === undefined) {
+        const declaration = signalDeclarations[0]!;
+        reject(
+          `$.parameters[${declarations.indexOf(declaration)}]`,
+          'projected Selector producer is missing its native entity.',
+          declaration.source,
+        );
+      }
+      const behavior = readRecord(entity.native.control_behavior);
+      if (behavior === undefined) continue;
+      const field = producer.config.operation === 'select' ? 'index_signal' : 'count_signal';
+      const signalField = readRecord(behavior[field]);
+      const key = nativeSignalKey(signalField);
+      const placeholder = key === undefined ? undefined : replacementsByOriginal.get(key);
+      if (signalField === undefined || placeholder === undefined) continue;
+      const preservedFields = { ...signalField };
+      delete preservedFields.type;
+      const nextBehavior = Object.freeze({
+        ...behavior,
+        [field]: Object.freeze({ ...preservedFields, name: placeholder }),
+      }) as unknown as NativeBlueprintJsonObject;
+      patchedByNumber.set(
+        entityNumber,
+        Object.freeze({ ...entity.native, control_behavior: nextBehavior }),
+      );
       continue;
     }
     if (producer.kind !== 'constant') continue;

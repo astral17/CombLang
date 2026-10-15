@@ -8,7 +8,8 @@ import {
 } from '@comblang/compiler';
 import type { EntityProfile } from '@comblang/compiler/entity';
 import type { EntityPrototype } from '@comblang/prototypes';
-import { signal } from '@comblang/factorio';
+import { signal, SparseBus } from '@comblang/factorio';
+import { evaluateSelector } from '@comblang/simulator';
 import { emitNativeBlueprintJson } from '../../compiler/src/native-blueprint-emitter.js';
 import { buildNativeBlueprintFcir } from '../../compiler/src/native-blueprint-projector.js';
 import { BlueprintParameterError } from '../../compiler/src/blueprint-parameters.js';
@@ -340,6 +341,342 @@ output += Arithmetic({ left: 2, operation: 'add', right: 3, output: result });`)
       });
     },
   );
+
+  test.each([
+    { operation: 'select', field: 'index_signal', type: 'item', name: 'iron-plate' },
+    {
+      operation: 'select',
+      field: 'index_signal',
+      type: 'item',
+      name: 'iron-plate',
+      quality: 'normal',
+    },
+    { operation: 'select', field: 'index_signal', type: 'fluid', name: 'water' },
+    { operation: 'select', field: 'index_signal', type: 'fluid', name: 'water', quality: 'normal' },
+    { operation: 'select', field: 'index_signal', type: 'virtual', name: 'signal-A' },
+    {
+      operation: 'select',
+      field: 'index_signal',
+      type: 'virtual',
+      name: 'signal-A',
+      quality: 'normal',
+    },
+    { operation: 'count', field: 'count_signal', type: 'item', name: 'iron-plate' },
+    {
+      operation: 'count',
+      field: 'count_signal',
+      type: 'item',
+      name: 'iron-plate',
+      quality: 'normal',
+    },
+    { operation: 'count', field: 'count_signal', type: 'fluid', name: 'water' },
+    { operation: 'count', field: 'count_signal', type: 'fluid', name: 'water', quality: 'normal' },
+    { operation: 'count', field: 'count_signal', type: 'virtual', name: 'signal-A' },
+    {
+      operation: 'count',
+      field: 'count_signal',
+      type: 'virtual',
+      name: 'signal-A',
+      quality: 'normal',
+    },
+  ] as const)(
+    'exports a native Selector $operation Signal parameter with $type default $name',
+    ({ operation, field, type, name, ...qualityOption }) => {
+      const defaultValue = `Signal('${type}', '${name}'${
+        'quality' in qualityOption ? `, '${qualityOption.quality}'` : ''
+      })`;
+      const selector =
+        operation === 'select'
+          ? `Selector({ input, operation: 'select', index: channel, selectMax: false })`
+          : `Selector({ input, operation: 'count', output: channel })`;
+      const compilation = compile(`const channel = Param.signal('Channel', ${defaultValue});
+const input = new Network();
+const output = new Network();
+output += ${selector}.at(3, 4);`);
+      const artifact = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+      const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      expect(native.parameters).toEqual([
+        {
+          type: 'id',
+          id: 'parameter-0',
+          name: 'Channel',
+          'quality-condition': { quality: 'normal', comparator: '=' },
+        },
+      ]);
+      const entity = emitNativeBlueprintJson(native).blueprint.entities[0]!;
+      const nativeSignal = (entity.control_behavior as Record<string, unknown>)[field] as
+        Record<string, unknown> | undefined;
+      expect(entity).toMatchObject({
+        entity_number: 1,
+        position: { x: 3, y: 4 },
+        control_behavior: {
+          operation,
+          [field]: { name: 'parameter-0' },
+        },
+      });
+      expect(nativeSignal).toEqual({
+        name: 'parameter-0',
+        ...('quality' in qualityOption ? { quality: qualityOption.quality } : {}),
+      });
+      expect(nativeSignal).not.toHaveProperty('type');
+      expect(native.wires).toEqual(
+        buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).wires,
+      );
+      const declaration = sourceApi.listSourceCompilationParameters(compilation)[0]!;
+      const override = signal('virtual', 'signal-override');
+      const bound = sourceApi.bindSourceCompilationCircuit(compilation, [
+        { parameter: declaration.parameter, value: override },
+      ]);
+      const selectorProducer = bound.resolvedCircuit.ir.producers.find(
+        (producer) => producer.kind === 'selector',
+      );
+      expect(selectorProducer?.kind).toBe('selector');
+      if (selectorProducer?.kind === 'selector') {
+        expect(
+          selectorProducer.config.operation === 'select'
+            ? selectorProducer.config.index
+            : selectorProducer.config.output,
+        ).toEqual(override);
+      }
+      const reset = sourceApi.bindSourceCompilationCircuit(compilation);
+      expect(reset.resolvedCircuit.ir.producers).toEqual(compilation.resolvedCircuit!.ir.producers);
+      expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(artifact);
+    },
+  );
+
+  test('replaces matching Selector Signal fields across Constant, Arithmetic and Selector', () => {
+    const compilation = compile(`const original = Signal('virtual', 'signal-A');
+const input = new Network();
+const output = new Network();
+const constant = Constant({ sections: [{ filters: [{ signal: original, value: 1 }] }] });
+output += constant;
+output += Arithmetic({ left: input[original], operation: 'add', right: input[original], output: original }).at(2, 3);
+output += Selector({ input, operation: 'select', index: original, selectMax: false }).at(4, 5);
+output += Selector({ input, operation: 'count', output: original }).at(6, 7);
+output += Selector({ input, operation: 'select', index: 2, selectMax: true }).at(8, 9);
+const channel = Param.signal('Channel', original);
+const marked = Constant({ sections: [{ filters: [{ signal: channel, value: 9 }] }] });
+output += marked;`);
+    const baseline = emitNativeBlueprintJson(
+      buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options),
+    ).blueprint.entities;
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    const actual = emitNativeBlueprintJson(native).blueprint.entities;
+    expect(native.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Channel',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    expect(actual).toHaveLength(baseline.length);
+    for (const [index, entity] of baseline.entries()) {
+      expect(actual[index]!.entity_number).toBe(entity!.entity_number);
+      if (entity!.name === 'arithmetic-combinator') {
+        expect(actual[index]!.control_behavior).toMatchObject({
+          arithmetic_conditions: {
+            first_signal: { name: 'parameter-0' },
+            second_signal: { name: 'parameter-0' },
+            output_signal: { name: 'parameter-0' },
+          },
+        });
+      } else if (entity!.name === 'selector-combinator') {
+        const behavior = actual[index]!.control_behavior as Record<string, unknown>;
+        if (behavior.operation === 'select' && 'index_constant' in behavior) {
+          expect(actual[index]).toEqual(entity);
+        } else {
+          const selectorSignal =
+            behavior.operation === 'select' ? behavior.index_signal : behavior.count_signal;
+          expect(selectorSignal).toMatchObject({ name: 'parameter-0' });
+          expect(selectorSignal).not.toHaveProperty('type');
+        }
+      }
+    }
+    expect(actual[actual.length - 1]!.control_behavior).toMatchObject({
+      sections: { sections: [{ filters: [{ name: 'parameter-0' }] }] },
+    });
+    expect(native.wires).toEqual(
+      buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).wires,
+    );
+  });
+
+  test.each([
+    [
+      'select.index_signal',
+      "Selector({ input, operation: 'select', index: Signal('item', 'signal-A') })",
+    ],
+    [
+      'count.count_signal',
+      "Selector({ input, operation: 'count', output: Signal('virtual', 'signal-A', 'rare') })",
+    ],
+  ])(
+    'rejects Selector same-name namespace/quality ambiguity in %s atomically',
+    (_slot, selector) => {
+      const compilation =
+        compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });
+const input = new Network();
+output += ${selector};`);
+      const artifact = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+      expect(exportFailure(compilation)).toMatchObject({
+        code: 'CP1002',
+        path: '$.parameters[0].defaultValue',
+        message: expect.stringContaining('different namespace or quality'),
+      });
+      expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(artifact);
+    },
+  );
+
+  test('uses a Signal index as the numeric selector index, while count Signal names its output', () => {
+    const compilation =
+      compile(`const index = Param.signal('Index', Signal('virtual', 'signal-index'));
+const countOutput = Param.signal('Count output', Signal('virtual', 'signal-count'));
+const indexSignal = Signal('virtual', 'signal-index');
+const red = Signal('virtual', 'signal-red');
+const blue = Signal('virtual', 'signal-blue');
+const input = new Network();
+const selectOutput = new Network();
+const countNetwork = new Network();
+input += CC(1 * indexSignal, 8 * red, 4 * blue);
+selectOutput += Selector({ input, operation: 'select', index, selectMax: true });
+countNetwork += Selector({ input, operation: 'count', output: countOutput });`);
+    const declarations = sourceApi.listSourceCompilationParameters(compilation);
+    const index = declarations.find(({ label }) => label === 'Index')!;
+    const countOutput = declarations.find(({ label }) => label === 'Count output')!;
+    const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+    const defaults = sourceApi.bindSourceCompilationCircuit(compilation);
+    const overridden = sourceApi.bindSourceCompilationCircuit(compilation, [
+      { parameter: index.parameter, value: signal('virtual', 'signal-override-index') },
+      { parameter: countOutput.parameter, value: signal('item', 'iron-plate') },
+    ]);
+    const reset = sourceApi.bindSourceCompilationCircuit(compilation);
+    const run = (pair: ReturnType<typeof sourceApi.bindSourceCompilationCircuit>) => {
+      const selectors = pair.resolvedCircuit.ir.producers.filter(
+        (producer) => producer.kind === 'selector',
+      );
+      const select = selectors.find(
+        (producer) => producer.kind === 'selector' && producer.config.operation === 'select',
+      );
+      const count = selectors.find(
+        (producer) => producer.kind === 'selector' && producer.config.operation === 'count',
+      );
+      if (
+        select?.kind !== 'selector' ||
+        select.config.operation !== 'select' ||
+        count?.kind !== 'selector' ||
+        count.config.operation !== 'count'
+      ) {
+        throw new Error('Expected bound select and count Selector configurations.');
+      }
+      const busInput = {
+        red: new SparseBus([
+          [signal('virtual', 'signal-index'), 1],
+          [signal('virtual', 'signal-red'), 8],
+          [signal('virtual', 'signal-blue'), 4],
+        ]),
+        green: new SparseBus(),
+      };
+      const selected = evaluateSelector(
+        {
+          operation: 'select',
+          index: select.config.index,
+          selectMax: select.config.selectMax,
+        },
+        busInput,
+      );
+      const counted = evaluateSelector(
+        { operation: 'count', output: count.config.output },
+        busInput,
+      );
+      return { selected, counted };
+    };
+    const defaultSignals = run(defaults);
+    expect(defaultSignals.selected.get(signal('virtual', 'signal-blue'))).toBe(4);
+    expect(defaultSignals.selected.get(signal('virtual', 'signal-index'))).toBe(0);
+    expect(defaultSignals.counted.get(signal('virtual', 'signal-count'))).toBe(3);
+    const overriddenSignals = run(overridden);
+    expect(overriddenSignals.selected.get(signal('virtual', 'signal-red'))).toBe(8);
+    expect(overriddenSignals.counted.get(signal('item', 'iron-plate'))).toBe(3);
+    expect(run(reset)).toEqual(defaultSignals);
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
+  });
+
+  test('keeps numeric formula indices distinct from a parameterized count output', () => {
+    const compilation = compile(`const amount = Param.number('Amount', 2, { variable: 'x' });
+const countOutput = Param.signal('Count output', Signal('virtual', 'signal-count'));
+const input = new Network();
+const selectOutput = new Network();
+const countNetwork = new Network();
+selectOutput += Selector({ input, operation: 'select', index: amount + 1 });
+countNetwork += Selector({ input, operation: 'count', output: countOutput });`);
+    const amount = sourceApi
+      .listSourceCompilationParameters(compilation)
+      .find(({ label }) => label === 'Amount')!;
+    const countOutput = sourceApi
+      .listSourceCompilationParameters(compilation)
+      .find(({ label }) => label === 'Count output')!;
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '2', name: 'Amount', variable: 'x' },
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Count output',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      { type: 'number', number: '3', formula: '(x + 1)', dependent: true },
+    ]);
+    const entities = emitNativeBlueprintJson(native).blueprint.entities;
+    expect(entities[0]!.control_behavior).toMatchObject({ operation: 'select', index_constant: 3 });
+    expect(entities[1]!.control_behavior).toMatchObject({
+      operation: 'count',
+      count_signal: { name: 'parameter-0' },
+    });
+    const rebound = sourceApi.bindSourceCompilationCircuit(compilation, [
+      { parameter: amount.parameter, value: 5 },
+      { parameter: countOutput.parameter, value: signal('item', 'iron-plate') },
+    ]);
+    expect(rebound.resolvedCircuit.ir.producers).toMatchObject([
+      { kind: 'selector', config: { operation: 'select', index: 6 } },
+      {
+        kind: 'selector',
+        config: { operation: 'count', output: { type: 'item', name: 'iron-plate' } },
+      },
+    ]);
+  });
+
+  test('exports and binds both Selector Signal slots without re-running the source', () => {
+    const key = '__comblang_selector_signal_capture_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const existed = Object.hasOwn(globals, key);
+    const previous = globals[key];
+    globals[key] = 0;
+    try {
+      const compilation = compile(`globalThis.${key} += 1;
+const index = Param.signal('Index', Signal('virtual', 'signal-index'));
+const countOutput = Param.signal('Count output', Signal('virtual', 'signal-count'));
+const input = new Network();
+const selectOutput = new Network();
+const countNetwork = new Network();
+selectOutput += Selector({ input, operation: 'select', index });
+countNetwork += Selector({ input, operation: 'count', output: countOutput });`);
+      expect(globals[key]).toBe(1);
+      const declarations = sourceApi.listSourceCompilationParameters(compilation);
+      sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      sourceApi.bindSourceCompilationCircuit(
+        compilation,
+        declarations.map(({ parameter, defaultValue }) => ({ parameter, value: defaultValue })),
+      );
+      sourceApi.bindSourceCompilationCircuit(compilation);
+      sourceApi.sourceCompilationArtifact(compilation);
+      expect(globals[key]).toBe(1);
+    } finally {
+      if (existed) globals[key] = previous;
+      else delete globals[key];
+    }
+  });
 
   test('replaces matching Constant and Arithmetic Signal slots without changing other native fields', () => {
     const compilation = compile(`const original = Signal('virtual', 'signal-A', 'normal');
@@ -1273,7 +1610,7 @@ output += Constant({ sections: [{ filters: [
     expect(sourceApi.exportSourceCompilationNativeBlueprint(compilation, options)).toEqual(native);
   });
 
-  test('reserves Arithmetic Signal names and rejects exhaustion across both supported families', () => {
+  test('reserves placeholder names across all Signal fields and rejects cross-family exhaustion', () => {
     const skipped = compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
 const output = new Network();
 output += Constant({ sections: [{ filters: [
@@ -1291,13 +1628,27 @@ output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] })
       },
     ]);
 
+    const selectorSlots =
+      compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const input = new Network();
+const output = new Network();
+output += Selector({ input, operation: 'select', index: Signal('virtual', 'parameter-0') });
+output += Selector({ input, operation: 'count', output: Signal('item', 'parameter-1') });
+output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });`);
+    expect(
+      sourceApi.exportSourceCompilationNativeBlueprint(selectorSlots, options).parameters,
+    ).toMatchObject([{ id: 'parameter-2' }]);
+
     const occupiedSlots = Array.from({ length: 10 }, (_, index) =>
-      index < 5
+      index < 3
         ? `output += Constant({ sections: [{ filters: [{ signal: Signal('item', 'parameter-${index}'), value: ${index} }] }] });`
-        : `output += Arithmetic({ left: ${index}, operation: 'add', right: 1, output: Signal('item', 'parameter-${index}') });`,
+        : index < 6
+          ? `output += Arithmetic({ left: ${index}, operation: 'add', right: 1, output: Signal('item', 'parameter-${index}') });`
+          : `output += Selector({ input, operation: 'count', output: Signal('item', 'parameter-${index}') });`,
     ).join('\n');
     const exhausted =
       compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const input = new Network();
 const output = new Network();
 ${occupiedSlots}
 output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });`);
@@ -1400,18 +1751,33 @@ output += Constant({ sections: [{ filters: [
     });
   });
 
-  test.each([
-    [
-      'Decider',
-      `const input = new Network();
-output += Decider({ condition: input[Signal('virtual', 'signal-A')] > 0, outputs: [input[Signal('virtual', 'signal-A')] ] });`,
-    ],
-    [
-      'Selector',
-      `const input = new Network();
-output += Selector({ input, operation: 'select', index: 1 });`,
-    ],
-  ])('rejects %s producers in native Signal templates', (_family, source) => {
+  test('rejects unused or duplicate Signal declarations used only beside Selector literals', () => {
+    const unused = compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const input = new Network();
+const output = new Network();
+output += Selector({ input, operation: 'count', output: Signal('virtual', 'signal-A') });`);
+    expect(exportFailure(unused)).toMatchObject({
+      code: 'CP1002',
+      path: '$.parameters[0]',
+      message: expect.stringContaining('unused declarations'),
+    });
+
+    const duplicate = compile(`const index = Param.signal('Index', Signal('virtual', 'signal-A'));
+const countOutput = Param.signal('Count output', Signal('virtual', 'signal-A', 'normal'));
+const input = new Network();
+const selectOutput = new Network();
+const countNetwork = new Network();
+selectOutput += Selector({ input, operation: 'select', index });
+countNetwork += Selector({ input, operation: 'count', output: countOutput });`);
+    expect(exportFailure(duplicate)).toMatchObject({
+      code: 'CP1002',
+      path: '$.parameters[1].defaultValue',
+    });
+  });
+
+  test('rejects Decider producers in native Signal templates atomically', () => {
+    const source = `const input = new Network();
+output += Decider({ condition: input[Signal('virtual', 'signal-A')] > 0, outputs: [input[Signal('virtual', 'signal-A')] ] });`;
     const compilation =
       compile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
 const output = new Network();
@@ -1421,7 +1787,9 @@ ${source}`);
     expect(exportFailure(compilation)).toMatchObject({
       code: 'CP1002',
       path: '$.parameters[0]',
-      message: expect.stringContaining('requires every producer to be Constant or Arithmetic'),
+      message: expect.stringContaining(
+        'requires every producer to be Constant, Arithmetic or Selector',
+      ),
     });
     expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(artifact);
   });
@@ -1770,23 +2138,25 @@ output += Arithmetic({ left: ${side === 'left' ? 'amount' : 'input[A]'}, operati
 
   test.each([
     "Arithmetic({ left: other, operation: 'add', right: 2, output: A })",
-    'Decider({ condition: input[A] > other, outputs: [input[A]] })',
     "Selector({ input, operation: 'select', index: other })",
-  ])('rejects equal originals across Constant and %s without changing either capture', (device) => {
-    const compilation = compile(`${exactSource}
+  ])(
+    'rejects equal originals across Constant and supported %s without changing either capture',
+    (device) => {
+      const compilation = compile(`${exactSource}
 const other = Param.number('Other', 5);
 const input = new Network();
 output += ${device};`);
-    const before = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
-    expect(exportFailure(compilation)).toMatchObject({
-      code: 'CP1002',
-      path: '$.parameters[1].defaultValue',
-      span: sourceApi.listSourceCompilationParameters(compilation)[1]!.source,
-      message: expect.stringContaining('"Amount" at'),
-    });
-    expect(sourceApi.bindSourceCompilationParameters(compilation).producers).toHaveLength(2);
-    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(before);
-  });
+      const before = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+      expect(exportFailure(compilation)).toMatchObject({
+        code: 'CP1002',
+        path: '$.parameters[1].defaultValue',
+        span: sourceApi.listSourceCompilationParameters(compilation)[1]!.source,
+        message: expect.stringContaining('"Amount" at'),
+      });
+      expect(sourceApi.bindSourceCompilationParameters(compilation).producers).toHaveLength(2);
+      expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(before);
+    },
+  );
 
   test('exports Arithmetic defaults independently of previous concrete overrides', () => {
     const compilation = compile(`const A = Signal('virtual', 'signal-A');
@@ -1803,18 +2173,6 @@ output += Arithmetic({ left: amount, operation: 'multiply', right: 2, output: A 
   });
 
   test.each([
-    [
-      'symbolic Selector Signal index',
-      "Param.signal('Channel', A)",
-      "Selector({ input, operation: 'select', index: amount })",
-      '$.parameters[0]',
-    ],
-    [
-      'symbolic Selector count output',
-      "Param.signal('Channel', A)",
-      "Selector({ input, operation: 'count', output: amount })",
-      '$.parameters[0]',
-    ],
     [
       'unused number',
       "Param.number('Amount', 5)",
@@ -1891,14 +2249,13 @@ output += ${device};`;
     },
   );
 
-  test('allows plain unparameterized Arithmetic, Decider and Selector beside a marked count', () => {
+  test('allows plain unparameterized Arithmetic and Selector beside a marked count', () => {
     const compilation = compile(`${exactSource}
 const input = new Network();
 output += Arithmetic({ left: input[A], operation: 'add', right: 2, output: A });
-output += Decider({ condition: (input[A] > 3) && (input[A] < 9 || input[A] != 0), outputs: [input[A]] });
 output += Selector({ input, operation: 'select', index: 1 });`);
     const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
-    expect(native.entities).toHaveLength(4);
+    expect(native.entities).toHaveLength(3);
     expect(native.parameters).toHaveLength(1);
     expect(native.entities).toEqual(
       buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).entities,
