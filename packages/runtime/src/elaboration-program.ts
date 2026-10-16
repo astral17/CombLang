@@ -161,7 +161,6 @@ import {
 import {
   assertBlueprintNumericFunctionArity,
   createBlueprintNumericExpression,
-  evaluateBlueprintNumericExpression,
   resolveBlueprintNumericFunctionName,
   type BlueprintNumericExpression,
 } from '../../compiler/src/blueprint-numeric-expression.js';
@@ -178,6 +177,12 @@ import {
   prepareSelectorConfigurationSource,
   SelectorConfigurationSourceError,
 } from './selector-configuration-source.js';
+import {
+  bindPreparedDeciderComparisonSource,
+  DeciderComparisonSourceError,
+  prepareDeciderComparisonSource,
+  type PreparedDeciderComparisonSource,
+} from './decider-comparison-source.js';
 
 interface RawSpan {
   readonly start: number;
@@ -1756,73 +1761,17 @@ class ElaborationRecorder {
     },
     compare: (operator: string, left: unknown, right: unknown, rawSpan: RawSpan): unknown => {
       this.#rejectDerivedNumericExpression(left, rawSpan);
-      let normalizedRight = right;
-      let parameter: BlueprintNumberParameterHandle | BlueprintNumericExpression | undefined;
       const rightExpression = findSourceNumericExpressionView(right);
-      if (rightExpression !== undefined) {
+      if (rightExpression === undefined) this.#rejectDerivedNumericExpression(right, rawSpan);
+      let rightIsParameter = findBlueprintParameterHandle(right) !== undefined;
+      let leftIsParameter = findBlueprintParameterHandle(left) !== undefined;
+      if (this.#parameterCapture !== undefined) {
         try {
-          if (this.#parameterCapture === undefined) {
-            throw new Error('Source numeric expressions require an owning parameter session.');
-          }
-          if (rightExpression.session !== this.#parameterCapture.session) {
-            throw new Error('Source numeric expression belongs to a different parameter session.');
-          }
-          if (!this.#isCircuitDslValue(left)) {
-            throw new Error(
-              'A source numeric expression is supported only as the right constant of a Decider condition.',
-            );
-          }
-          normalizedRight = circuitConstant(
-            evaluateBlueprintNumericExpression(
-              this.#parameterCapture.session,
-              rightExpression.expression,
-            ),
-          );
-          parameter = rightExpression.expression;
+          rightIsParameter ||= rightExpression === undefined && isBlueprintParameterShaped(right);
+          leftIsParameter ||= isBlueprintParameterShaped(left);
         } catch (error) {
           throw new ElaborationExecutionError(
-            error instanceof Error ? error.message : 'Invalid Decider numeric expression slot.',
-            this.#span(rawSpan),
-            'RT2027',
-            undefined,
-            { cause: error },
-          );
-        }
-      } else {
-        this.#rejectDerivedNumericExpression(right, rawSpan);
-      }
-      const rightIsParameter =
-        rightExpression !== undefined ||
-        findBlueprintParameterHandle(right) !== undefined ||
-        isBlueprintParameterShaped(right);
-      const leftIsParameter =
-        findBlueprintParameterHandle(left) !== undefined || isBlueprintParameterShaped(left);
-      if (
-        rightExpression === undefined &&
-        this.#parameterCapture !== undefined &&
-        (rightIsParameter || leftIsParameter)
-      ) {
-        try {
-          if (!rightIsParameter || leftIsParameter || !this.#isCircuitDslValue(left)) {
-            throw new Error(
-              'A source number parameter is supported only as the direct right constant of a Decider condition.',
-            );
-          }
-          const slot = lookupBlueprintParameterSlot(
-            right,
-            'number',
-            this.#parameterCapture.session,
-            '$.condition.right',
-          );
-          if (slot === undefined) throw new Error('Expected a registered number parameter.');
-          if (typeof slot.registration.defaultValue !== 'number') {
-            throw new Error('Decider right-constant number parameters require a finite default.');
-          }
-          normalizedRight = circuitConstant(slot.registration.defaultValue);
-          parameter = slot.handle as BlueprintNumberParameterHandle;
-        } catch (error) {
-          throw new ElaborationExecutionError(
-            error instanceof Error ? error.message : 'Invalid Decider number parameter slot.',
+            error instanceof Error ? error.message : 'Invalid Decider numeric source value.',
             this.#span(rawSpan),
             'RT2027',
             undefined,
@@ -1830,24 +1779,45 @@ class ElaborationRecorder {
           );
         }
       }
-      const result = operators.dispatchComparison(
-        operator,
-        left,
-        normalizedRight,
-        rawSpan,
-        this.#operatorContext,
-      );
-      if (parameter !== undefined) {
-        if (!this.#isCondition(result)) {
+      const rightIsSymbolic = rightExpression !== undefined || rightIsParameter;
+      if (rightIsSymbolic || leftIsParameter) {
+        if (!rightIsSymbolic || leftIsParameter || !this.#isCircuitDslValue(left)) {
           throw new ElaborationExecutionError(
-            'A source number parameter must be used in a circuit Condition.',
+            rightExpression !== undefined
+              ? 'A source numeric expression is supported only as the right constant of a Decider condition.'
+              : 'A source number parameter is supported only as the direct right constant of a Decider condition.',
             this.#span(rawSpan),
             'RT2027',
           );
         }
-        this.#deciderParameterSlots.set(result.condition as object, parameter);
+        const head = operators.prepareConstantComparisonHead(
+          operator,
+          left,
+          right,
+          rawSpan,
+          this.#operatorContext,
+        );
+        let prepared: PreparedDeciderComparisonSource;
+        let value: number;
+        try {
+          prepared = prepareDeciderComparisonSource(head, right, this.#parameterCapture?.session, {
+            snapshotSignal: (signal) => this.#signalSnapshot(signal),
+          });
+          value = bindPreparedDeciderComparisonSource(prepared);
+        } catch (error) {
+          if (!(error instanceof DeciderComparisonSourceError)) throw error;
+          const message = error.message.startsWith(`${error.path}: `)
+            ? error.message.slice(error.path.length + 2)
+            : error.message;
+          throw new ElaborationExecutionError(message, this.#span(rawSpan), 'RT2027', undefined, {
+            cause: error,
+          });
+        }
+        const result = operators.constantComparisonCondition(head, value, this.#operatorContext);
+        this.#deciderParameterSlots.set(result.condition as object, prepared.root);
+        return result;
       }
-      return result;
+      return operators.dispatchComparison(operator, left, right, rawSpan, this.#operatorContext);
     },
     controlTest: (value: unknown, rawSpan: RawSpan): unknown => {
       this.#rejectParameterControlValue(value, rawSpan);

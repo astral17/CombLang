@@ -11,28 +11,35 @@ import {
   type CombinatorDescriptor,
   type DslValue,
   type NetworkValue,
+  type SelectedValue,
   type SectionValue,
+  type SelectedRuntimeState,
+  type SignalHandle,
+  type WildcardName,
 } from './elaboration-values.js';
 
 function dispatchFixture() {
   const registry = new RuntimeValueRegistry();
   const source = sourceSpan(sourceFileId('operator-policy.factorio.ts'), 0, 1);
-  const network = registry.brandNetwork(
-    {
-      kind: 'network',
-      name: 'input',
-      declaration: source,
-      capability: 'owned',
-      generation: 0,
-    },
-    {
-      ownership: {
+  const makeNetwork = (name: string) =>
+    registry.brandNetwork(
+      {
+        kind: 'network',
+        name,
+        declaration: source,
+        capability: 'owned',
         generation: 0,
-        owner: 'top-level',
-        readonlyBorrows: new Set(),
       },
-    },
-  );
+      {
+        ownership: {
+          generation: 0,
+          owner: 'top-level',
+          readonlyBorrows: new Set(),
+        },
+      },
+    );
+  const network = makeNetwork('input');
+  const secondary = makeNetwork('secondary');
   const signal = registry.brandSignal(Signal('virtual', 'signal-A'));
   let calls = 0;
   let lastDescriptor: CombinatorDescriptor | undefined;
@@ -98,7 +105,28 @@ function dispatchFixture() {
     },
     brand: (value) => registry.brand(value),
   };
-  return { context, network, signal, calls: () => calls, descriptor: () => lastDescriptor };
+  const selected = (selection: SignalHandle | WildcardName, pair = false): SelectedValue => {
+    let state: SelectedRuntimeState;
+    if (typeof selection !== 'string') {
+      state = pair
+        ? { kind: 'pair', network, networks: [network, secondary], selection }
+        : { kind: 'concrete', network, selection, readonlyNetwork: network };
+    } else {
+      state = pair
+        ? { kind: 'pair', network, networks: [network, secondary], selection }
+        : { kind: 'wildcard', network, selection };
+    }
+    return registry.brandSelected({ kind: 'selected' }, state);
+  };
+  return {
+    context,
+    network,
+    secondary,
+    signal,
+    selected,
+    calls: () => calls,
+    descriptor: () => lastDescriptor,
+  };
 }
 
 describe('elaboration operator policy', () => {
@@ -200,6 +228,57 @@ describe('elaboration operator policy', () => {
         operators.dispatchBinary('*', value, fixture.signal, 0, fixture.context),
       ).toThrow(/safe integers/);
     }
+  });
+
+  test.each([
+    ['Signal', Signal('virtual', 'signal-A'), false, 'compare-signal', 'signal-A'],
+    ['Each', 'each', false, 'compare-each', undefined],
+    ['Anything', 'anything', false, 'compare-wildcard', undefined],
+    ['Everything', 'everything', true, 'compare-wildcard', undefined],
+  ] as const)(
+    'shares normalized constant head for selected %s comparisons',
+    (_name, selection, pair, kind, signalName) => {
+      const fixture = dispatchFixture();
+      const selected = fixture.selected(selection, pair);
+      const head = operators.prepareConstantComparisonHead(
+        '>',
+        selected,
+        { opaque: true },
+        0,
+        fixture.context,
+      );
+
+      expect(head).toMatchObject({
+        kind,
+        comparator: '>',
+        ...(signalName === undefined ? {} : { signal: { name: signalName } }),
+        ...(pair
+          ? { refKind: 'pair', networks: ['input', 'secondary'] }
+          : { refKind: 'single', network: 'input' }),
+      });
+      expect(fixture.calls()).toBe(1);
+      expect(operators.constantComparisonCondition(head, 3, fixture.context)).toMatchObject({
+        kind: 'condition',
+        condition: { kind, comparator: '>', constant: 3 },
+      });
+      expect(fixture.calls()).toBe(1);
+    },
+  );
+
+  test('keeps selected-to-selected and wildcard-to-Signal comparisons on their existing path', () => {
+    const fixture = dispatchFixture();
+    const signalA = fixture.selected(Signal('virtual', 'signal-A'));
+    const signalB = fixture.selected(Signal('virtual', 'signal-B'));
+    expect(operators.dispatchComparison('>', signalA, signalB, 0, fixture.context)).toMatchObject({
+      condition: { kind: 'compare-signals', comparator: '>' },
+    });
+    expect(fixture.calls()).toBe(1);
+
+    const each = fixture.selected('each');
+    expect(operators.dispatchComparison('<=', each, signalA, 0, fixture.context)).toMatchObject({
+      condition: { kind: 'compare-wildcard-signal', comparator: '<=', left: { wildcard: 'each' } },
+    });
+    expect(fixture.calls()).toBe(2);
   });
 
   test('scales a Section only through a finite left-handed multiplier', () => {

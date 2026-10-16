@@ -195,6 +195,7 @@ const exact = Decider({ condition: input[A] > amount, outputs: [input[A]] });`;
       expect.objectContaining({
         code: 'RT2027',
         span: { fileId: parsed.id, start: useStart, end: useEnd },
+        cause: expect.objectContaining({ path: '$.condition.right' }),
       }),
     );
   });
