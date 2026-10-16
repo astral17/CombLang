@@ -3043,8 +3043,29 @@ Selector({ input, operation: 'count', output: numberParameter });`;
     );
     expect(wrongSlot.pipelineDiagnostics).toEqual([
       expect.objectContaining({
+        code: 'RT2027',
+        message: expect.stringContaining('$.output'),
         severity: 'error',
         span: expect.objectContaining({ start: wrongSlotSource.lastIndexOf('numberParameter') }),
+      }),
+    ]);
+
+    const variableConfigurationSource = `const numberParameter = Param.number('Not a signal', 4);
+const input = new Network();
+const configuration: unknown = { input, operation: 'count', output: numberParameter };
+Selector(configuration);`;
+    const variableConfiguration = compileSourceProgram(
+      { path: 'selector-variable-configuration.factorio.ts', text: variableConfigurationSource },
+      parameterHost(),
+    );
+    expect(variableConfiguration.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'RT2027',
+        message: expect.stringContaining('$.output'),
+        span: expect.objectContaining({
+          start: variableConfigurationSource.lastIndexOf('configuration'),
+          end: variableConfigurationSource.lastIndexOf('configuration') + 'configuration'.length,
+        }),
       }),
     ]);
 

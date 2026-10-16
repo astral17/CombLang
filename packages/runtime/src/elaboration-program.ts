@@ -150,17 +150,13 @@ import {
   type DeciderTemplateCondition,
   type DeciderTemplateOutput,
 } from '../../compiler/src/decider-configuration-template.js';
-import {
-  createSelectorConfigurationTemplate,
-  type SelectorConfigurationTemplate,
-} from '../../compiler/src/selector-configuration-template.js';
+import { type SelectorConfigurationTemplate } from '../../compiler/src/selector-configuration-template.js';
 import {
   createBlueprintParameterSourceView,
   findBlueprintParameterHandle,
   BlueprintParameterError,
   type BlueprintNumberParameterHandle,
   type BlueprintParameterSession,
-  type BlueprintSignalParameterHandle,
 } from '../../compiler/src/blueprint-parameters.js';
 import {
   assertBlueprintNumericFunctionArity,
@@ -177,6 +173,11 @@ import {
   createSourceNumericExpressionView,
   findSourceNumericExpressionView,
 } from './source-numeric-expressions.js';
+import {
+  bindPreparedSelectorConfigurationSource,
+  prepareSelectorConfigurationSource,
+  SelectorConfigurationSourceError,
+} from './selector-configuration-source.js';
 
 interface RawSpan {
   readonly start: number;
@@ -241,26 +242,6 @@ interface NormalizedDeciderConfiguration {
   readonly outputs: readonly DeciderOutputCandidate[];
   readonly elseOutputs?: readonly DeciderOutputCandidate[];
 }
-
-type SelectorParameterSlots =
-  | {
-      readonly operation: 'select';
-      readonly index:
-        | BlueprintNumberParameterHandle
-        | BlueprintSignalParameterHandle
-        | BlueprintNumericExpression;
-    }
-  | { readonly operation: 'count'; readonly output: BlueprintSignalParameterHandle };
-
-type NormalizedSelectorConfiguration =
-  | (Pick<
-      Extract<DirectPlanSelector, { readonly operation: 'select' }>,
-      'operation' | 'input' | 'selectMax' | 'index'
-    > & { readonly parameterSlots?: Extract<SelectorParameterSlots, { operation: 'select' }> })
-  | (Pick<
-      Extract<DirectPlanSelector, { readonly operation: 'count' }>,
-      'operation' | 'input' | 'output'
-    > & { readonly parameterSlots?: Extract<SelectorParameterSlots, { operation: 'count' }> });
 
 interface DeciderOutputCandidate {
   readonly output: PlanDeciderOutput;
@@ -1121,12 +1102,68 @@ class ElaborationRecorder {
             'RT2027',
           );
         }
-        const configuration = this.#normalizeSelectorConfigurationSource(
-          first!.value,
-          first!.source,
-          first!.fieldSources,
-        );
-        const { parameterSlots, ...descriptorConfiguration } = configuration;
+        const sourceSpanFor = (path: string): SourceSpan => {
+          const field = /^\$\.(input|operation|selectMax|index|output)(?:\.|\[|$)/.exec(path)?.[1];
+          const fieldSource = field === undefined ? undefined : first!.fieldSources?.[field];
+          return this.#span(fieldSource ?? first!.source);
+        };
+        const diagnosticMessage = (error: SelectorConfigurationSourceError): string =>
+          error.cause instanceof BlueprintParameterError ||
+          !error.message.startsWith(`${error.path}: `)
+            ? error.message
+            : error.message.slice(error.path.length + 2);
+        let prepared: ReturnType<typeof prepareSelectorConfigurationSource>;
+        try {
+          prepared = prepareSelectorConfigurationSource(
+            first!.value,
+            {
+              normalizeInput: (candidate, inputSource) => {
+                if (!this.#isNetwork(candidate) && !this.#isPair(candidate)) {
+                  throw new ElaborationExecutionError(
+                    'Selector configuration input must be a Network or pair(a, b).',
+                    this.#span(inputSource),
+                    'RT2027',
+                  );
+                }
+                this.#assertReadableValue(candidate, inputSource);
+                return this.#planNetworkRef(
+                  candidate,
+                ) as unknown as SelectorConfigurationTemplate['input'];
+              },
+              isSignal: (candidate): candidate is SignalId => this.#isSignal(candidate),
+              snapshotSignal: (candidate) => this.#signalSnapshot(candidate),
+            },
+            this.#parameterCapture?.session,
+            first!.source,
+            first!.fieldSources,
+          );
+        } catch (error) {
+          if (error instanceof SelectorConfigurationSourceError) {
+            throw new ElaborationExecutionError(
+              diagnosticMessage(error),
+              error.configurationShape ? this.#span(first!.source) : sourceSpanFor(error.path),
+              'RT2027',
+              undefined,
+              { cause: error.cause ?? error },
+            );
+          }
+          throw error;
+        }
+        let descriptorConfiguration: ReturnType<typeof bindPreparedSelectorConfigurationSource>;
+        try {
+          descriptorConfiguration = bindPreparedSelectorConfigurationSource(prepared);
+        } catch (error) {
+          if (error instanceof SelectorConfigurationSourceError) {
+            throw new ElaborationExecutionError(
+              diagnosticMessage(error),
+              error.configurationShape ? this.#span(first!.source) : sourceSpanFor(error.path),
+              'RT2027',
+              undefined,
+              { cause: error.cause ?? error },
+            );
+          }
+          throw error;
+        }
         const producer = this.#createCombinator(
           {
             kind: 'selector',
@@ -1136,9 +1173,13 @@ class ElaborationRecorder {
           },
           rawSpan,
         );
-        if (parameterSlots !== undefined && this.#parameterCapture !== undefined) {
+        if (
+          prepared.hasParameterSlots &&
+          'template' in prepared &&
+          this.#parameterCapture !== undefined
+        ) {
           const { captureId } = this.#combinators.capture(producer);
-          this.#captureSelectorTemplate(producer, captureId, parameterSlots);
+          this.#captureSelectorTemplate(producer, captureId, prepared.template);
         }
         return producer;
       }),
@@ -4672,254 +4713,6 @@ class ElaborationRecorder {
     );
   }
 
-  #normalizeSelectorConfigurationSource(
-    value: unknown,
-    source: RawSpan,
-    fieldSources?: CallArgument['fieldSources'],
-  ): NormalizedSelectorConfiguration {
-    const spanFor = (field: keyof NonNullable<CallArgument['fieldSources']>): SourceSpan =>
-      this.#span(fieldSources?.[field] ?? source);
-    const parameterSlot = (
-      candidate: unknown,
-      kind: 'number' | 'signal',
-      field: 'index' | 'output',
-    ) => {
-      try {
-        return lookupBlueprintParameterSlot(
-          candidate,
-          kind,
-          this.#parameterCapture!.session,
-          `$.${field}`,
-        );
-      } catch (error) {
-        throw new ElaborationExecutionError(
-          error instanceof Error ? error.message : `Invalid Selector ${field} parameter slot.`,
-          spanFor(field),
-          'RT2027',
-          undefined,
-          { cause: error },
-        );
-      }
-    };
-    if (!isPlainDataRecord(value)) {
-      throw new ElaborationExecutionError(
-        'Selector configuration must be a plain data record.',
-        this.#span(source),
-        'RT2027',
-      );
-    }
-    const keys = Reflect.ownKeys(value);
-    const operation = value.operation;
-    const allowed =
-      operation === 'count'
-        ? new Set(['input', 'operation', 'output'])
-        : operation === 'select'
-          ? new Set(['input', 'operation', 'selectMax', 'index'])
-          : new Set(['input', 'operation', 'selectMax', 'index', 'output']);
-    if (keys.some((key) => typeof key !== 'string' || !allowed.has(key))) {
-      throw new ElaborationExecutionError(
-        'Selector configuration fields are operation-specific: select requires input and may use selectMax/index; count requires input/output.',
-        this.#span(source),
-        'RT2027',
-      );
-    }
-    if (operation !== 'select' && operation !== 'count') {
-      throw new ElaborationExecutionError(
-        'Selector configuration operation must be "select" or "count".',
-        spanFor('operation'),
-        'RT2027',
-      );
-    }
-    if (!Object.prototype.hasOwnProperty.call(value, 'input')) {
-      throw new ElaborationExecutionError(
-        'Selector configuration is missing required field "input".',
-        this.#span(source),
-        'RT2027',
-      );
-    }
-    const inputValue = value.input;
-    if (!this.#isNetwork(inputValue) && !this.#isPair(inputValue)) {
-      throw new ElaborationExecutionError(
-        'Selector configuration input must be a Network or pair(a, b).',
-        spanFor('input'),
-        'RT2027',
-      );
-    }
-    this.#assertReadableValue(inputValue, {
-      start: fieldSources?.input?.start ?? source.start,
-      end: fieldSources?.input?.end ?? source.end,
-    });
-    const input = this.#planNetworkRef(inputValue);
-    if (operation === 'select') {
-      const selectMax = value.selectMax === undefined ? true : value.selectMax;
-      if (typeof selectMax !== 'boolean') {
-        throw new ElaborationExecutionError(
-          'Selector configuration selectMax must be a boolean.',
-          spanFor('selectMax'),
-          'RT2027',
-        );
-      }
-      const indexValue = value.index === undefined ? 0 : value.index;
-      let index: number | SignalId;
-      let parameterSlots: Extract<SelectorParameterSlots, { operation: 'select' }> | undefined;
-      const expressionView = findSourceNumericExpressionView(indexValue);
-      const registration = findBlueprintParameterHandle(indexValue);
-      if (expressionView !== undefined) {
-        if (this.#parameterCapture === undefined) {
-          throw new ElaborationExecutionError(
-            'Selector numeric expressions require an owning parameter session.',
-            spanFor('index'),
-            'RT2027',
-          );
-        }
-        if (expressionView.session !== this.#parameterCapture.session) {
-          throw new ElaborationExecutionError(
-            'Source numeric expression belongs to a different parameter session.',
-            spanFor('index'),
-            'RT2027',
-          );
-        }
-        try {
-          index = circuitConstant(
-            evaluateBlueprintNumericExpression(
-              this.#parameterCapture.session,
-              expressionView.expression,
-            ),
-          );
-        } catch (error) {
-          throw new ElaborationExecutionError(
-            error instanceof Error ? error.message : 'Invalid Selector index numeric expression.',
-            spanFor('index'),
-            'RT2027',
-            undefined,
-            { cause: error },
-          );
-        }
-        parameterSlots = { operation: 'select', index: expressionView.expression };
-      } else if (registration !== undefined || isBlueprintParameterShaped(indexValue)) {
-        if (this.#parameterCapture === undefined) {
-          throw new ElaborationExecutionError(
-            'Selector parameter slots require a captured source parameter session.',
-            spanFor('index'),
-            'RT2027',
-          );
-        }
-        if (registration?.kind === 'signal') {
-          const slot = parameterSlot(indexValue, 'signal', 'index');
-          if (slot === undefined || typeof slot.registration.defaultValue !== 'object') {
-            throw new ElaborationExecutionError(
-              'Selector index Signal parameter requires a Signal default value.',
-              spanFor('index'),
-              'RT2027',
-            );
-          }
-          index = this.#signalSnapshot(slot.registration.defaultValue as SignalId);
-          parameterSlots = {
-            operation: 'select',
-            index: slot.handle as BlueprintSignalParameterHandle,
-          };
-        } else {
-          const slot = parameterSlot(indexValue, 'number', 'index');
-          if (slot === undefined || typeof slot.registration.defaultValue !== 'number') {
-            throw new ElaborationExecutionError(
-              'Selector index number parameter requires a numeric default value.',
-              spanFor('index'),
-              'RT2027',
-            );
-          }
-          try {
-            index = circuitConstant(slot.registration.defaultValue);
-          } catch (error) {
-            throw new ElaborationExecutionError(
-              error instanceof Error ? error.message : 'Invalid Selector index parameter default.',
-              spanFor('index'),
-              'RT2027',
-              undefined,
-              { cause: error },
-            );
-          }
-          parameterSlots = {
-            operation: 'select',
-            index: slot.handle as BlueprintNumberParameterHandle,
-          };
-        }
-      } else if (this.#isSignal(indexValue)) {
-        index = this.#signalSnapshot(indexValue);
-      } else if (typeof indexValue === 'number') {
-        try {
-          index = circuitConstant(indexValue);
-        } catch (error) {
-          throw new ElaborationExecutionError(
-            'Selector configuration index must be a safe integer or a Signal.',
-            spanFor('index'),
-            'RT2027',
-            undefined,
-            { cause: error },
-          );
-        }
-      } else {
-        throw new ElaborationExecutionError(
-          'Selector configuration index must be a safe integer or a Signal.',
-          spanFor('index'),
-          'RT2027',
-        );
-      }
-      return {
-        operation,
-        input,
-        selectMax,
-        index,
-        ...(parameterSlots === undefined ? {} : { parameterSlots }),
-      };
-    }
-    if (!Object.prototype.hasOwnProperty.call(value, 'output')) {
-      throw new ElaborationExecutionError(
-        'Selector count configuration is missing required field "output".',
-        this.#span(source),
-        'RT2027',
-      );
-    }
-    let output: SignalId;
-    let parameterSlots: Extract<SelectorParameterSlots, { operation: 'count' }> | undefined;
-    const outputRegistration = findBlueprintParameterHandle(value.output);
-    if (outputRegistration !== undefined || isBlueprintParameterShaped(value.output)) {
-      if (this.#parameterCapture === undefined) {
-        throw new ElaborationExecutionError(
-          'Selector parameter slots require a captured source parameter session.',
-          spanFor('output'),
-          'RT2027',
-        );
-      }
-      const slot = parameterSlot(value.output, 'signal', 'output');
-      if (slot === undefined || typeof slot.registration.defaultValue !== 'object') {
-        throw new ElaborationExecutionError(
-          'Selector count-output Signal parameter requires a Signal default value.',
-          spanFor('output'),
-          'RT2027',
-        );
-      }
-      output = this.#signalSnapshot(slot.registration.defaultValue as SignalId);
-      parameterSlots = {
-        operation: 'count',
-        output: slot.handle as BlueprintSignalParameterHandle,
-      };
-    } else if (this.#isSignal(value.output)) {
-      output = this.#signalSnapshot(value.output);
-    } else {
-      throw new ElaborationExecutionError(
-        'Selector count configuration output must be a Signal.',
-        spanFor('output'),
-        'RT2027',
-      );
-    }
-    return {
-      operation,
-      input,
-      output,
-      ...(parameterSlots === undefined ? {} : { parameterSlots }),
-    };
-  }
-
   #deciderConditionTemplate(condition: PlanDeciderCondition): {
     readonly value: DeciderTemplateCondition;
     readonly hasNumberParameter: boolean;
@@ -5034,31 +4827,12 @@ class ElaborationRecorder {
   #captureSelectorTemplate(
     value: CombinatorValue,
     captureId: string,
-    parameterSlots: SelectorParameterSlots,
+    template: SelectorConfigurationTemplate,
   ): void {
     if (this.#parameterCapture === undefined) return;
     const descriptor = this.#combinators.stateFor(value).descriptor;
-    if (descriptor.kind !== 'selector' || descriptor.operation !== parameterSlots.operation) {
-      throw new Error('Selector parameter slots were associated with a mismatched producer.');
-    }
-    const input = descriptor.input as unknown as LogicalNetworkRef;
-    const template =
-      descriptor.operation === 'select' && parameterSlots.operation === 'select'
-        ? createSelectorConfigurationTemplate(this.#parameterCapture.session, {
-            operation: 'select',
-            input,
-            selectMax: descriptor.selectMax,
-            index: parameterSlots.index,
-          })
-        : descriptor.operation === 'count' && parameterSlots.operation === 'count'
-          ? createSelectorConfigurationTemplate(this.#parameterCapture.session, {
-              operation: 'count',
-              input,
-              output: parameterSlots.output,
-            })
-          : undefined;
-    if (template === undefined) {
-      throw new Error('Selector parameter slots could not be projected to a template.');
+    if (descriptor.kind !== 'selector' || descriptor.operation !== template.operation) {
+      throw new Error('Selector template was associated with a mismatched producer.');
     }
     this.#selectorTemplates.push(
       Object.freeze({ captureId, template, source: Object.freeze({ ...descriptor.source }) }),
