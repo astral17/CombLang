@@ -49,6 +49,20 @@ function signalKey(value: unknown, path: string, context: SignalValueSourceConte
   }
 }
 
+/** Normalizes one trusted signal key for source configuration slots. */
+export function normalizeSignalValueKey(
+  value: unknown,
+  context: SignalValueSourceContext,
+  path: string,
+): SignalId {
+  return signalKey(value, path, context);
+}
+
+/** Applies the shared circuit-constant conversion to one literal source count. */
+export function normalizeSignalCountValue(value: unknown, path: string): number {
+  return count(value, path);
+}
+
 function isPlainObject(value: object): boolean {
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;

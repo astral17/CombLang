@@ -11,9 +11,12 @@ import type { EntityPrototype } from '@comblang/prototypes';
 import { sourceFileId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 import { inspectConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-template.js';
+import { bindConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-binding.js';
+import { createBlueprintNumericExpression } from '../../compiler/src/blueprint-numeric-expression.js';
 import { createBlueprintParameterSession } from '../../compiler/src/blueprint-parameters.js';
 import {
   ConstantConfigurationSourceError,
+  prepareConstantConfigurationSource,
   normalizeConstantConfigurationSourceWithParameters,
 } from './constant-configuration-source.js';
 import { bindCapturedSourceConfigurationTemplates } from './executed-blueprint-configuration-binding.js';
@@ -25,6 +28,7 @@ import {
   listSourceCompilationParameters,
   sourceCompilationArtifact,
 } from './source-compilation.js';
+import { createSourceNumericExpressionView } from './source-numeric-expressions.js';
 
 const sourceFile = sourceFileId('constant-source-parameter-coverage.ts');
 
@@ -574,15 +578,53 @@ const exact = Constant({ sections: [{ ${field === 'filter' ? `filters: [{ signal
     },
   );
 
-  test('rejects missing defaults at either direct filter slot', () => {
+  test('prepares missing defaults symbolically; concrete binding still requires values at exact paths', () => {
     const session = createBlueprintParameterSession();
     const amount = session.number('amount');
+    const scale = session.number('scale');
     const signalSlot = session.signal('signal');
     const A = signal('virtual', 'signal-A');
     const context = {
       isSignal: (value: unknown): value is typeof A => value === A,
       isSignalValue: (_value: unknown): _value is never => false,
     };
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: scale },
+      right: { kind: 'literal', value: 1 },
+    });
+    const view = createSourceNumericExpressionView(session, expression, {
+      fileId: sourceFile,
+      start: 0,
+      end: 1,
+    });
+    const prepared = prepareConstantConfigurationSource(
+      {
+        sections: [{ multiplier: view }, { filters: [{ signal: signalSlot, value: amount }] }],
+      },
+      context,
+      session,
+    );
+    expect(prepared.hasParameterSlots).toBe(true);
+    expect(prepared.template.sections[0]!.multiplier).toBe(expression);
+    expect(prepared.template.sections[1]!.filters[0]).toEqual({
+      signal: signalSlot,
+      value: amount,
+    });
+    expect(
+      inspectConstantConfigurationTemplate(prepared.template, '$.template').usedParameters,
+    ).toEqual([scale, signalSlot, amount]);
+    expect(
+      bindConstantConfigurationTemplate(prepared.template, [
+        { parameter: scale, value: 2 },
+        { parameter: signalSlot, value: A },
+        { parameter: amount, value: 5 },
+      ]),
+    ).toMatchObject({
+      sections: [{ multiplier: 3 }, { filters: [{ signal: A, value: 5 }] }],
+    });
+
     expect(() =>
       normalizeConstantConfigurationSourceWithParameters(
         { sections: [{ filters: [{ signal: A, value: amount }] }] },
@@ -592,7 +634,8 @@ const exact = Constant({ sections: [{ ${field === 'filter' ? `filters: [{ signal
     ).toThrowError(
       expect.objectContaining({
         name: 'ConstantConfigurationSourceError',
-        message: expect.stringContaining('number parameter requires a numeric default'),
+        path: '$.sections[0].filters[0].value',
+        message: expect.stringContaining('has no binding or default'),
       } satisfies Partial<ConstantConfigurationSourceError>),
     );
     expect(() =>
@@ -604,7 +647,21 @@ const exact = Constant({ sections: [{ ${field === 'filter' ? `filters: [{ signal
     ).toThrowError(
       expect.objectContaining({
         name: 'ConstantConfigurationSourceError',
-        message: expect.stringContaining('Signal parameter requires a concrete default'),
+        path: '$.sections[0].filters[0].signal',
+        message: expect.stringContaining('has no binding or default'),
+      } satisfies Partial<ConstantConfigurationSourceError>),
+    );
+    expect(() =>
+      normalizeConstantConfigurationSourceWithParameters(
+        { sections: [{ multiplier: view }] },
+        context,
+        session,
+      ),
+    ).toThrowError(
+      expect.objectContaining({
+        name: 'ConstantConfigurationSourceError',
+        path: '$.sections[0].multiplier',
+        message: expect.stringContaining('has no binding or default'),
       } satisfies Partial<ConstantConfigurationSourceError>),
     );
   });

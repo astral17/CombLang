@@ -140,10 +140,7 @@ import {
   createArithmeticConfigurationTemplate,
   type ArithmeticConfigurationTemplate,
 } from '../../compiler/src/arithmetic-configuration-template.js';
-import {
-  createConstantConfigurationTemplate,
-  type ConstantConfigurationTemplate,
-} from '../../compiler/src/constant-configuration-template.js';
+import type { ConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-template.js';
 import {
   createDeciderConfigurationTemplate,
   type DeciderConfigurationTemplate,
@@ -997,19 +994,12 @@ class ElaborationRecorder {
           undefined,
           true,
         );
-        if (
-          normalized.templateConfiguration !== undefined &&
-          this.#parameterCapture !== undefined
-        ) {
+        if (normalized.template !== undefined && this.#parameterCapture !== undefined) {
           const { captureId } = this.#combinators.capture(producer);
-          const template = createConstantConfigurationTemplate(
-            this.#parameterCapture.session,
-            normalized.templateConfiguration,
-          );
           this.#constantTemplates.push(
             Object.freeze({
               captureId,
-              template,
+              template: normalized.template,
               source: Object.freeze({ ...this.#span(rawSpan) }),
             }),
           );
