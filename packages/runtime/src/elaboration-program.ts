@@ -127,7 +127,7 @@ import {
   type TrustedEntityReplayContext,
 } from '@comblang/compiler/entity-replay-context';
 import type { EntityPlacement, LogicalNetworkRef } from '@comblang/compiler/ir';
-import type { ArithmeticOperation, LogicalArithmeticOutput } from '@comblang/compiler/ir';
+import type { ArithmeticOperation } from '@comblang/compiler/ir';
 import {
   BlueprintEntitySignalConversionError,
   detachBlueprintEntitySignalHandles,
@@ -136,10 +136,13 @@ import {
   BlueprintParameterCapture,
   type CapturedBlueprintParameter,
 } from './blueprint-parameter-capture.js';
+import type { ArithmeticConfigurationTemplate } from '../../compiler/src/arithmetic-configuration-template.js';
 import {
-  createArithmeticConfigurationTemplate,
-  type ArithmeticConfigurationTemplate,
-} from '../../compiler/src/arithmetic-configuration-template.js';
+  ArithmeticConfigurationSourceError,
+  bindPreparedArithmeticConfigurationSource,
+  prepareArithmeticConfigurationSource,
+  type PreparedArithmeticConfigurationSource,
+} from './arithmetic-configuration-source.js';
 import type { ConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-template.js';
 import {
   createDeciderConfigurationTemplate,
@@ -228,15 +231,9 @@ type ExactArithmeticConfiguration = Omit<
   | 'placement'
 >;
 
-interface NormalizedArithmeticConfiguration {
+interface BoundArithmeticConfigurationSource {
   readonly configuration: ExactArithmeticConfiguration;
-  readonly parameterSlots:
-    | {
-        readonly left?: BlueprintNumberParameterHandle | BlueprintNumericExpression;
-        readonly right?: BlueprintNumberParameterHandle | BlueprintNumericExpression;
-        readonly output?: BlueprintSignalParameterHandle;
-      }
-    | undefined;
+  readonly prepared: PreparedArithmeticConfigurationSource;
 }
 
 interface NormalizedDeciderConfiguration {
@@ -448,20 +445,6 @@ function isRawSpan(value: unknown): value is RawSpan {
     typeof (value as RawSpan).end === 'number'
   );
 }
-
-const exactArithmeticOperations = Object.freeze([
-  'add',
-  'subtract',
-  'multiply',
-  'divide',
-  'modulo',
-  'power',
-  'left-shift',
-  'right-shift',
-  'bit-and',
-  'bit-or',
-  'bit-xor',
-] as const satisfies readonly ArithmeticOperation[]);
 
 function isPlainDataRecord(value: unknown): value is Record<string, unknown> {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -1022,7 +1005,7 @@ class ElaborationRecorder {
           );
         }
         const argument = arguments_[0]!;
-        const normalized = this.#normalizeArithmeticConfigurationSource(
+        const normalized = this.#prepareArithmeticConfigurationSource(
           argument.value,
           argument.source,
           rawSpan,
@@ -1043,9 +1026,9 @@ class ElaborationRecorder {
           },
           rawSpan,
         );
-        if (normalized.parameterSlots !== undefined) {
+        if (normalized.prepared.hasParameterSlots && 'template' in normalized.prepared) {
           const { captureId } = this.#combinators.capture(producer);
-          this.#captureArithmeticTemplate(producer, captureId, normalized.parameterSlots);
+          this.#captureArithmeticTemplate(producer, captureId, normalized.prepared.template);
         }
         return producer;
       }),
@@ -3076,35 +3059,13 @@ class ElaborationRecorder {
   #captureArithmeticTemplate(
     value: CombinatorValue,
     captureId: string,
-    parameterSlots: {
-      readonly left?: BlueprintNumberParameterHandle | BlueprintNumericExpression;
-      readonly right?: BlueprintNumberParameterHandle | BlueprintNumericExpression;
-      readonly output?: BlueprintSignalParameterHandle;
-    },
+    template: ArithmeticConfigurationTemplate,
   ): void {
     if (this.#parameterCapture === undefined) return;
     const descriptor = this.#combinators.stateFor(value).descriptor;
     if (descriptor.kind !== 'arithmetic') {
       throw new Error('Arithmetic parameter slots were associated with a non-Arithmetic producer.');
     }
-    const templateOperand = (
-      operand: PlanArithmeticOperand,
-      parameter: BlueprintNumberParameterHandle | BlueprintNumericExpression | undefined,
-    ): unknown => {
-      if (parameter !== undefined) return { kind: 'constant', value: parameter };
-      return operand.kind === 'signal'
-        ? { ...operand, signal: this.#signalSnapshot(operand.signal) }
-        : operand;
-    };
-    const template = createArithmeticConfigurationTemplate(this.#parameterCapture.session, {
-      left: templateOperand(descriptor.left, parameterSlots.left),
-      operation: descriptor.operation,
-      right: templateOperand(descriptor.right, parameterSlots.right),
-      output:
-        descriptor.output.kind === 'signal'
-          ? { kind: 'signal', signal: parameterSlots.output ?? descriptor.output.signal }
-          : { kind: 'each' },
-    });
     this.#arithmeticTemplates.push(
       Object.freeze({ captureId, template, source: Object.freeze({ ...descriptor.source }) }),
     );
@@ -4479,218 +4440,49 @@ class ElaborationRecorder {
     );
   }
 
-  #normalizeArithmeticConfigurationSource(
+  #prepareArithmeticConfigurationSource(
     value: unknown,
     source: RawSpan,
     useSite: RawSpan,
-  ): NormalizedArithmeticConfiguration {
-    if (!isPlainDataRecord(value)) {
-      throw new ElaborationExecutionError(
-        'Arithmetic configuration must be a plain data record.',
-        this.#span(source),
-        'RT2027',
-      );
-    }
-    const allowed = new Set(['left', 'operation', 'right', 'output']);
-    const keys = Reflect.ownKeys(value);
-    if (keys.some((key) => typeof key !== 'string' || !allowed.has(key))) {
-      throw new ElaborationExecutionError(
-        'Arithmetic configuration must contain exactly left, operation, right, and output fields.',
-        this.#span(source),
-        'RT2027',
-      );
-    }
-    for (const key of allowed) {
-      if (!Object.prototype.hasOwnProperty.call(value, key)) {
-        throw new ElaborationExecutionError(
-          `Arithmetic configuration is missing required field ${JSON.stringify(key)}.`,
-          this.#span(source),
-          'RT2027',
-        );
-      }
-    }
-    const operation = value.operation;
-    if (
-      typeof operation !== 'string' ||
-      !exactArithmeticOperations.includes(operation as (typeof exactArithmeticOperations)[number])
-    ) {
-      throw new ElaborationExecutionError(
-        `Arithmetic configuration operation must be one of ${exactArithmeticOperations.join(', ')}.`,
-        this.#span(source),
-        'RT2027',
-      );
-    }
-    let left: PlanArithmeticOperand;
-    let right: PlanArithmeticOperand;
-    let leftParameter: BlueprintNumberParameterHandle | BlueprintNumericExpression | undefined;
-    let rightParameter: BlueprintNumberParameterHandle | BlueprintNumericExpression | undefined;
+  ): BoundArithmeticConfigurationSource {
+    let prepared: PreparedArithmeticConfigurationSource;
     try {
-      const normalizeOperand = (
-        operand: unknown,
-        field: 'left' | 'right',
-      ): {
-        readonly operand: PlanArithmeticOperand;
-        readonly parameter?: BlueprintNumberParameterHandle | BlueprintNumericExpression;
-      } => {
-        if (this.#parameterCapture === undefined) {
-          return { operand: this.#arithmeticOperand(operand as DslValue, source) };
-        }
-        const expressionView = findSourceNumericExpressionView(operand);
-        if (expressionView !== undefined) {
-          if (expressionView.session !== this.#parameterCapture.session) {
-            throw new ElaborationExecutionError(
-              'Source numeric expression belongs to a different parameter session.',
-              this.#span(useSite),
-              'RT2027',
-            );
-          }
-          try {
-            return {
-              operand: {
-                kind: 'constant',
-                value: circuitConstant(
-                  evaluateBlueprintNumericExpression(
-                    this.#parameterCapture.session,
-                    expressionView.expression,
-                  ),
-                ),
-              },
-              parameter: expressionView.expression,
-            };
-          } catch (error) {
-            throw new ElaborationExecutionError(
-              error instanceof Error
-                ? error.message
-                : `Invalid Arithmetic ${field} numeric expression.`,
-              this.#span(useSite),
-              'RT2027',
-              undefined,
-              { cause: error },
-            );
-          }
-        }
-        let slot;
-        try {
-          slot = lookupBlueprintParameterSlot(
-            operand,
-            'number',
-            this.#parameterCapture.session,
-            `$.${field}`,
-          );
-        } catch (error) {
-          throw new ElaborationExecutionError(
-            error instanceof Error ? error.message : 'Invalid Arithmetic parameter slot.',
-            this.#span(useSite),
-            'RT2027',
-            undefined,
-            { cause: error },
-          );
-        }
-        if (slot === undefined) {
-          return { operand: this.#arithmeticOperand(operand as DslValue, source) };
-        }
-        if (typeof slot.registration.defaultValue !== 'number') {
-          throw new ElaborationExecutionError(
-            `Arithmetic ${field} number parameter requires a numeric default value.`,
-            this.#span(useSite),
-            'RT2027',
-          );
-        }
-        try {
-          return {
-            operand: {
-              kind: 'constant',
-              value: circuitConstant(slot.registration.defaultValue),
-            },
-            parameter: slot.handle as BlueprintNumberParameterHandle,
-          };
-        } catch (error) {
-          throw new ElaborationExecutionError(
-            error instanceof Error ? error.message : 'Invalid Arithmetic number parameter default.',
-            this.#span(useSite),
-            'RT2027',
-            undefined,
-            { cause: error },
-          );
-        }
+      prepared = prepareArithmeticConfigurationSource(
+        value,
+        {
+          normalizeCircuitOperand: (operand, operandSource) =>
+            this.#arithmeticOperand(operand as DslValue, operandSource),
+          isSignal: (candidate): candidate is SignalId => this.#isSignal(candidate),
+          snapshotSignal: (candidate) => this.#signalSnapshot(candidate),
+          isEachOutput: (candidate) =>
+            this.#isWildcardToken(candidate) && candidate.value === 'each',
+        },
+        this.#parameterCapture?.session,
+        source,
+      );
+      return {
+        configuration: bindPreparedArithmeticConfigurationSource(prepared),
+        prepared,
       };
-      const normalizedLeft = normalizeOperand(value.left, 'left');
-      const normalizedRight = normalizeOperand(value.right, 'right');
-      left = normalizedLeft.operand;
-      right = normalizedRight.operand;
-      leftParameter = normalizedLeft.parameter;
-      rightParameter = normalizedRight.parameter;
     } catch (error) {
       if (error instanceof ElaborationExecutionError) throw error;
+      if (error instanceof ArithmeticConfigurationSourceError) {
+        throw new ElaborationExecutionError(
+          error.message,
+          this.#span(useSite),
+          'RT2027',
+          undefined,
+          { cause: error.cause ?? error },
+        );
+      }
       throw new ElaborationExecutionError(
-        error instanceof Error ? error.message : 'Invalid Arithmetic operand.',
+        error instanceof Error ? error.message : 'Invalid Arithmetic configuration.',
         this.#span(source),
         'RT2027',
         undefined,
         { cause: error },
       );
     }
-    const outputValue = value.output;
-    let output: LogicalArithmeticOutput;
-    let outputParameter: BlueprintSignalParameterHandle | undefined;
-    let outputSlot;
-    if (this.#parameterCapture !== undefined) {
-      try {
-        outputSlot = lookupBlueprintParameterSlot(
-          outputValue,
-          'signal',
-          this.#parameterCapture.session,
-          '$.output',
-        );
-      } catch (error) {
-        throw new ElaborationExecutionError(
-          error instanceof Error ? error.message : 'Invalid Arithmetic output parameter slot.',
-          this.#span(useSite),
-          'RT2027',
-          undefined,
-          { cause: error },
-        );
-      }
-    }
-    if (outputSlot !== undefined) {
-      if (
-        outputSlot.registration.defaultValue === null ||
-        typeof outputSlot.registration.defaultValue !== 'object'
-      ) {
-        throw new ElaborationExecutionError(
-          'Arithmetic output Signal parameter requires a Signal default value.',
-          this.#span(useSite),
-          'RT2027',
-        );
-      }
-      output = {
-        kind: 'signal',
-        signal: this.#signalSnapshot(outputSlot.registration.defaultValue as SignalId),
-      };
-      outputParameter = outputSlot.handle as BlueprintSignalParameterHandle;
-    } else if (this.#isSignal(outputValue)) {
-      output = { kind: 'signal', signal: this.#signalSnapshot(outputValue) };
-    } else if (this.#isWildcardToken(outputValue) && outputValue.value === 'each') {
-      output = { kind: 'each' };
-    } else {
-      throw new ElaborationExecutionError(
-        'Arithmetic configuration output must be a concrete Signal or Each/EACH.',
-        this.#span(source),
-        'RT2027',
-      );
-    }
-    const parameterSlots =
-      leftParameter === undefined && rightParameter === undefined && outputParameter === undefined
-        ? undefined
-        : {
-            ...(leftParameter === undefined ? {} : { left: leftParameter }),
-            ...(rightParameter === undefined ? {} : { right: rightParameter }),
-            ...(outputParameter === undefined ? {} : { output: outputParameter }),
-          };
-    return {
-      configuration: { left, operation: operation as ArithmeticOperation, right, output },
-      parameterSlots,
-    };
   }
 
   #createSectionValue(arguments_: readonly CallArgument[], rawSpan: RawSpan): SectionValue {

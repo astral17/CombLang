@@ -385,6 +385,31 @@ const exact = Arithmetic({ left: 2, operation: 'add', right: globalThis[Symbol.f
     }
   });
 
+  test('binds expressions at the source call and reports only the owning field path', () => {
+    const text = `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5);
+const invalid = amount / 0;
+Arithmetic({ left: 2, operation: 'add', right: invalid, output: A });`;
+    const parsed = parseFile({ path: sourceFile, text });
+    const callStart = text.indexOf('Arithmetic(');
+    const callSpan = {
+      fileId: parsed.id,
+      start: callStart,
+      end: text.indexOf(');', callStart) + 1,
+    };
+    let caught: unknown;
+    try {
+      executeWithParameter(text, () => '');
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toMatchObject({ code: 'RT2027', span: callSpan });
+    expect(caught).toHaveProperty('message', expect.stringContaining('$.right:'));
+    expect((caught as Error).message).not.toContain('$.right.value');
+    expect(caught).toHaveProperty('cause');
+  });
+
   test('rolls back a caught invalid slot before capturing the following valid producer', () => {
     const text = `
 const A = Signal('virtual', 'signal-A');
