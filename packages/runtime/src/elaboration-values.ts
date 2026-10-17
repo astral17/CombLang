@@ -6,8 +6,13 @@ import type {
 } from '@comblang/compiler/direct-plan-schema';
 import type { EntityNativeSingleCondition } from '@comblang/compiler/entity';
 import type { EntityValue } from './entity-registry.js';
-import type { ConstantConfigurationSection, SignalId } from '@comblang/factorio';
+import type {
+  ConstantConfiguration,
+  ConstantConfigurationSection,
+  SignalId,
+} from '@comblang/factorio';
 import type { SourceSpan } from '@comblang/shared';
+import type { ConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-template.js';
 
 export type RuntimeNetworkCapability = 'owned' | 'readonly' | 'ref' | 'move';
 
@@ -151,6 +156,16 @@ type CompleteDeciderDescriptor = Extract<
   CompleteCombinatorDescriptor,
   { readonly kind: 'decider' }
 >;
+type CompleteExactConstantDescriptor = Extract<
+  CompleteCombinatorDescriptor,
+  { readonly kind: 'constant'; readonly configuration: ConstantConfiguration }
+>;
+
+/** Internal recorder state before an exact parameterized Constant is installed. */
+type PendingConstantDescriptor = Omit<CompleteExactConstantDescriptor, 'configuration'> & {
+  readonly configuration?: never;
+  readonly pendingConfiguration: ConstantConfigurationTemplate;
+};
 
 export type {
   DeciderOutputOrigin,
@@ -159,6 +174,7 @@ export type {
 
 export type CombinatorDescriptor =
   | Exclude<CompleteCombinatorDescriptor, { readonly kind: 'decider' }>
+  | PendingConstantDescriptor
   | (Omit<CompleteDeciderDescriptor, 'output'> & {
       readonly output?: CompleteDeciderDescriptor['output'];
       readonly outputOrigins?: readonly DeciderOutputOrigin[];

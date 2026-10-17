@@ -1,4 +1,4 @@
-import { sameSignal, type SignalId } from '@comblang/factorio';
+import { sameSignal, type ConstantConfiguration, type SignalId } from '@comblang/factorio';
 import type { DirectPlanProducer, PlanAttachment } from '@comblang/compiler/direct-plan-schema';
 import type { SourceSpan } from '@comblang/shared';
 
@@ -161,11 +161,37 @@ export class CombinatorRegistry {
     if (descriptor.kind !== state.descriptor.kind) {
       throw new Error('A physical combinator cannot change its native kind.');
     }
+    const currentPending = isPendingConstantDescriptor(state.descriptor)
+      ? state.descriptor
+      : undefined;
+    const nextPending = isPendingConstantDescriptor(descriptor) ? descriptor : undefined;
+    if ((currentPending === undefined) !== (nextPending === undefined)) {
+      throw new Error('A pending Constant can only become concrete through installation.');
+    }
+    if (
+      currentPending !== undefined &&
+      nextPending !== undefined &&
+      nextPending.pendingConfiguration !== currentPending.pendingConfiguration
+    ) {
+      throw new Error('A pending Constant cannot replace its prepared configuration template.');
+    }
     const rebound =
       state.outputBinding === undefined
         ? descriptor
         : bindCombinatorOutputSignal(descriptor, state.outputBinding.signal, source);
     state.descriptor = rebound;
+  }
+
+  installPendingConstant(value: CombinatorValue, configuration: ConstantConfiguration): void {
+    const state = this.stateFor(value);
+    if (state.descriptor.kind !== 'constant') {
+      throw new Error('Only a pending Constant can receive a Constant configuration.');
+    }
+    if (!isPendingConstantDescriptor(state.descriptor)) {
+      throw new Error('The Constant configuration was already installed.');
+    }
+    const { pendingConfiguration: _pendingConfiguration, ...descriptor } = state.descriptor;
+    state.descriptor = { ...descriptor, configuration };
   }
 
   bindOutput(value: CombinatorValue, signal: SignalId, source: SourceSpan): void {
@@ -220,6 +246,13 @@ export class CombinatorRegistry {
   }
 
   toPlan(state: CombinatorRuntimeState): DirectPlanProducer {
+    if (isPendingConstantDescriptor(state.descriptor)) {
+      throw new ElaborationExecutionError(
+        'Pending Constant configuration must be installed before plan serialization.',
+        state.descriptor.source,
+        'RT2027',
+      );
+    }
     const descriptor =
       state.descriptor.kind === 'decider'
         ? (({ outputOrigins: _outputOrigins, elseOutputOrigins: _elseOutputOrigins, ...rest }) =>
@@ -236,4 +269,10 @@ export class CombinatorRegistry {
       destinations: Object.freeze(destinations),
     } as DirectPlanProducer;
   }
+}
+
+function isPendingConstantDescriptor(
+  descriptor: CombinatorDescriptor,
+): descriptor is Extract<CombinatorDescriptor, { readonly pendingConfiguration: unknown }> {
+  return descriptor.kind === 'constant' && 'pendingConfiguration' in descriptor;
 }

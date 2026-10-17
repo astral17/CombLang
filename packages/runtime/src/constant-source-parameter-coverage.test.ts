@@ -146,6 +146,73 @@ output += Constant({ sections: [{ filters: [{ signal: channel, value: amount + 1
     );
   });
 
+  test('installs parameterized Constant state before plan output without leaking its template', () => {
+    const execution = execute(`
+const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5);
+const before = Constant({ sections: [{ filters: [{ signal: A, value: 1 }] }] });
+const beforeOutput = new Network(); beforeOutput += before;
+const exact = Constant({ sections: [{ filters: [{ signal: A, value: amount }] }] }).at(4, 5);
+const primary = new Network(); primary += exact;
+const secondary = new Network(); secondary += exact;
+const arithmetic = Arithmetic({ left: primary[A], operation: 'add', right: amount, output: A });
+const arithmeticOutput = new Network(); arithmeticOutput += arithmetic;
+const after = Constant({ sections: [{ filters: [{ signal: A, value: 7 }] }] });
+const afterOutput = new Network(); afterOutput += after;`);
+
+    expect(execution.constantTemplates).toHaveLength(1);
+    expect(execution.plan.producers.map(({ kind }) => kind)).toEqual([
+      'constant',
+      'constant',
+      'arithmetic',
+      'constant',
+    ]);
+    expect(execution.plan.entities).toHaveLength(4);
+    expect(execution.plan.producers[1]).toMatchObject({
+      kind: 'constant',
+      configuration: {
+        sections: [{ filters: [{ signal: signal('virtual', 'signal-A'), value: 5 }] }],
+      },
+      debugCaptureIds: ['producer:1'],
+      destinations: [{ network: '$combinator:2:primary' }, { network: '$combinator:2:secondary' }],
+    });
+    expect(execution.plan.producers[2]).toMatchObject({
+      kind: 'arithmetic',
+      left: { kind: 'signal', network: 'primary' },
+    });
+    expect(execution.plan.entities[1]).toMatchObject({
+      configuration: {
+        mode: 'constant',
+        value: { sections: [{ filters: [{ signal: signal('virtual', 'signal-A'), value: 5 }] }] },
+      },
+      placement: { x: 4, y: 5 },
+    });
+    expect(execution.plan.producers[1]).not.toHaveProperty('pendingConfiguration');
+    expect(execution.plan.entities[1]).not.toHaveProperty('pendingConfiguration');
+    expect(
+      JSON.stringify({ producers: execution.plan.producers, entities: execution.plan.entities }),
+    ).not.toMatch(/pendingConfiguration|constantTemplates|Amount/);
+  });
+
+  test('keeps invalid numeric-expression failure inside the constructor transaction', () => {
+    const execution = execute(`
+const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 2);
+try { Constant({ sections: [{ filters: [{ signal: A, value: amount / 0 }] }] }); } catch (error) { const caught = true; }
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: A, value: amount }] }] });`);
+
+    expect(execution.plan.producers).toHaveLength(1);
+    expect(execution.plan.entities).toHaveLength(1);
+    expect(execution.constantTemplates).toHaveLength(1);
+    expect(execution.constantTemplates[0]!.captureId).toBe('producer:1');
+    expect(execution.plan.producers[0]).toMatchObject({
+      kind: 'constant',
+      configuration: { sections: [{ filters: [{ value: 2 }] }] },
+      debugCaptureIds: ['producer:1'],
+    });
+  });
+
   test('captures registered numeric expressions in direct filter counts and multipliers', () => {
     const text = `const A = Signal('virtual', 'signal-A');
 const amount = Param.number('Amount', 5);
