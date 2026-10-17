@@ -1,10 +1,13 @@
 import { signal } from '@comblang/factorio';
-import { sourceFileId, sourceSpan } from '@comblang/shared';
+import { sourceFileId, sourceSpan, type NetworkId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
 import { createBlueprintParameterSession } from '../../compiler/src/blueprint-parameters.js';
 import { bindConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-binding.js';
 import { createConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-template.js';
+import { bindSelectorConfigurationTemplate } from '../../compiler/src/selector-configuration-binding.js';
+import { createSelectorConfigurationTemplate } from '../../compiler/src/selector-configuration-template.js';
+import type { SelectorProducerConfig } from '../../compiler/src/ir.js';
 import { CombinatorRegistry } from './combinator-registry.js';
 import type { CombinatorDescriptor, CombinatorValue, NetworkValue } from './elaboration-values.js';
 
@@ -163,5 +166,282 @@ describe('pending Constant registry state', () => {
     expect(() => registry.installPendingConstant(pending, configuration)).toThrowError(
       /already installed/i,
     );
+  });
+});
+
+describe('pending Selector registry state', () => {
+  test('retains pending operations, topology, lanes, metadata, and captures through installation and restore', () => {
+    const session = createBlueprintParameterSession();
+    const numberIndex = session.number('number index', { source });
+    const signalIndex = session.signal('signal index', { source });
+    const countOutput = session.signal('count output', { source });
+    const pairInput = {
+      refKind: 'pair',
+      networks: ['red-input' as NetworkId, 'green-input' as NetworkId],
+    } as const;
+    const singleInput = { refKind: 'single', network: 'count-input' as NetworkId } as const;
+    const numberTemplate = createSelectorConfigurationTemplate(session, {
+      operation: 'select',
+      input: pairInput,
+      selectMax: false,
+      index: numberIndex,
+    });
+    const signalTemplate = createSelectorConfigurationTemplate(session, {
+      operation: 'select',
+      input: singleInput,
+      selectMax: true,
+      index: signalIndex,
+    });
+    const countTemplate = createSelectorConfigurationTemplate(session, {
+      operation: 'count',
+      input: pairInput,
+      output: countOutput,
+    });
+    if (
+      numberTemplate.operation !== 'select' ||
+      signalTemplate.operation !== 'select' ||
+      countTemplate.operation !== 'count'
+    ) {
+      throw new Error('Expected operation-specific Selector templates.');
+    }
+    const registry = new CombinatorRegistry();
+    const selectors = [
+      {
+        producer: value(),
+        descriptor: {
+          kind: 'selector',
+          operation: 'select',
+          input: pairInput,
+          selectMax: false,
+          pendingConfiguration: numberTemplate,
+          source,
+          instancePath: ['root'],
+        } satisfies CombinatorDescriptor,
+        template: numberTemplate,
+        primary: network('$selector:number:primary'),
+        secondary: network('$selector:number:secondary'),
+      },
+      {
+        producer: value(),
+        descriptor: {
+          kind: 'selector',
+          operation: 'select',
+          input: singleInput,
+          selectMax: true,
+          pendingConfiguration: signalTemplate,
+          source,
+          instancePath: ['root'],
+        } satisfies CombinatorDescriptor,
+        template: signalTemplate,
+        primary: network('$selector:signal:primary'),
+      },
+      {
+        producer: value(),
+        descriptor: {
+          kind: 'selector',
+          operation: 'count',
+          input: pairInput,
+          pendingConfiguration: countTemplate,
+          source,
+          instancePath: ['root'],
+        } satisfies CombinatorDescriptor,
+        template: countTemplate,
+        primary: network('$selector:count:primary'),
+      },
+    ] as const;
+
+    const captures: string[] = [];
+    for (const selector of selectors) {
+      const state = registry.register(selector.producer, selector.descriptor, selector.primary, {
+        network: selector.primary.name,
+        source,
+        instancePath: ['root'],
+      });
+      registry.bindName(selector.producer, selector.primary.name);
+      if ('secondary' in selector) {
+        registry.addSecondary(selector.producer, selector.secondary, {
+          network: selector.secondary.name,
+          source,
+          instancePath: ['root', 'secondary'],
+        });
+      }
+      registry.markOutputUsed(selector.producer);
+      captures.push(registry.capture(selector.producer).captureId);
+      expect(state.descriptor).toMatchObject({
+        kind: 'selector',
+        pendingConfiguration: selector.template,
+        bindingName: selector.primary.name,
+      });
+      expect(state.descriptor).not.toHaveProperty('index');
+      expect(state.descriptor).not.toHaveProperty('output');
+      expect(() => registry.toPlan(state)).toThrowError(
+        expect.objectContaining({
+          code: 'RT2027',
+          span: source,
+          message: expect.stringContaining('installed'),
+        }),
+      );
+    }
+
+    const pendingSnapshot = registry.snapshot();
+    const pendingDescriptors = selectors.map(
+      ({ producer }) => registry.stateFor(producer).descriptor,
+    );
+    const firstPending = pendingDescriptors[0]!;
+    if (
+      firstPending.kind !== 'selector' ||
+      firstPending.operation !== 'select' ||
+      !('pendingConfiguration' in firstPending)
+    ) {
+      throw new Error('Expected the first Selector to remain pending.');
+    }
+    const replacementTemplate = createSelectorConfigurationTemplate(session, {
+      operation: 'select',
+      input: pairInput,
+      selectMax: false,
+      index: numberIndex,
+    });
+    if (replacementTemplate.operation !== 'select') {
+      throw new Error('Expected a select replacement template.');
+    }
+    expect(() =>
+      registry.update(selectors[0].producer, {
+        ...firstPending,
+        pendingConfiguration: replacementTemplate,
+      }),
+    ).toThrowError(/cannot replace its prepared configuration template/i);
+    expect(() =>
+      registry.update(selectors[0].producer, {
+        kind: 'selector',
+        operation: 'select',
+        input: singleInput,
+        selectMax: false,
+        pendingConfiguration: firstPending.pendingConfiguration,
+        source,
+        instancePath: ['root'],
+      }),
+    ).toThrowError(/operation or registered input topology/i);
+    expect(() =>
+      registry.update(selectors[0].producer, {
+        kind: 'selector',
+        operation: 'select',
+        input: pairInput,
+        selectMax: false,
+        index: 11,
+        source,
+        instancePath: ['root'],
+      }),
+    ).toThrowError(/pending combinator can only become concrete/i);
+
+    const numberConfiguration = bindSelectorConfigurationTemplate(numberTemplate, [
+      { parameter: numberIndex, value: 8 },
+    ]);
+    const signalConfiguration = bindSelectorConfigurationTemplate(signalTemplate, [
+      { parameter: signalIndex, value: signal('virtual', 'signal-index') },
+    ]);
+    const countConfiguration = bindSelectorConfigurationTemplate(countTemplate, [
+      { parameter: countOutput, value: signal('virtual', 'signal-count') },
+    ]);
+    if (
+      numberConfiguration.operation !== 'select' ||
+      signalConfiguration.operation !== 'select' ||
+      countConfiguration.operation !== 'count'
+    ) {
+      throw new Error('Expected operation-specific concrete Selector configurations.');
+    }
+
+    const wrongOperation: SelectorProducerConfig = {
+      operation: 'count',
+      input: pairInput,
+      output: signal('virtual', 'wrong-operation'),
+    };
+    const wrongTopology: SelectorProducerConfig = {
+      ...numberConfiguration,
+      input: { refKind: 'single', network: 'other-input' as NetworkId },
+    };
+    const wrongMode: SelectorProducerConfig = {
+      ...numberConfiguration,
+      selectMax: true,
+    };
+    const arithmetic = value();
+    registry.register(
+      arithmetic,
+      {
+        kind: 'arithmetic',
+        left: { kind: 'constant', value: 1 },
+        operation: 'add',
+        right: { kind: 'constant', value: 2 },
+        output: { kind: 'signal', signal: signal('virtual', 'signal-output') },
+        source,
+        instancePath: ['root'],
+      },
+      network('$arithmetic:primary'),
+      { network: '$arithmetic:primary', source, instancePath: ['root'] },
+    );
+    expect(() => registry.installPendingSelector(arithmetic, numberConfiguration)).toThrowError(
+      /only a pending Selector/i,
+    );
+    expect(() =>
+      registry.installPendingSelector(selectors[0].producer, wrongOperation),
+    ).toThrowError(/operation or input topology/i);
+    expect(() =>
+      registry.installPendingSelector(selectors[0].producer, wrongTopology),
+    ).toThrowError(/operation or input topology/i);
+    expect(() => registry.installPendingSelector(selectors[0].producer, wrongMode)).toThrowError(
+      /select mode/i,
+    );
+    expect(registry.stateFor(selectors[0].producer).descriptor).toBe(pendingDescriptors[0]);
+
+    registry.installPendingSelector(selectors[0].producer, numberConfiguration);
+    registry.installPendingSelector(selectors[1].producer, signalConfiguration);
+    registry.installPendingSelector(selectors[2].producer, countConfiguration);
+    const concreteSnapshot = registry.snapshot();
+    const expected = [
+      { operation: 'select', input: pairInput, selectMax: false, index: 8 },
+      {
+        operation: 'select',
+        input: singleInput,
+        selectMax: true,
+        index: signal('virtual', 'signal-index'),
+      },
+      { operation: 'count', input: pairInput, output: signal('virtual', 'signal-count') },
+    ];
+    for (let index = 0; index < selectors.length; index += 1) {
+      const selector = selectors[index]!;
+      const plan = registry.toPlan(registry.stateFor(selector.producer));
+      expect(plan).toMatchObject({
+        ...expected[index],
+        bindingName: selector.primary.name,
+        debugCaptureIds: [captures[index]],
+      });
+      expect(plan.destinations.map(({ network }) => network)).toEqual(
+        'secondary' in selector
+          ? [selector.primary.name, selector.secondary.name]
+          : [selector.primary.name],
+      );
+      expect(plan).not.toHaveProperty('pendingConfiguration');
+      expect(registry.stateFor(selector.producer).outputUsed).toBe(true);
+    }
+    expect(registry.secondary(selectors[0].producer)?.name).toBe('$selector:number:secondary');
+    expect(() =>
+      registry.installPendingSelector(selectors[0].producer, numberConfiguration),
+    ).toThrowError(/already installed/i);
+
+    registry.restore(pendingSnapshot);
+    for (let index = 0; index < selectors.length; index += 1) {
+      const state = registry.stateFor(selectors[index]!.producer);
+      expect(state.descriptor).toBe(pendingDescriptors[index]);
+      expect(state.debugCaptureIds).toEqual([captures[index]]);
+      expect(state.outputUsed).toBe(true);
+      expect(() => registry.toPlan(state)).toThrowError(
+        expect.objectContaining({ code: 'RT2027' }),
+      );
+    }
+    registry.restore(concreteSnapshot);
+    expect(registry.toPlan(registry.stateFor(selectors[0].producer))).toMatchObject({
+      operation: 'select',
+      index: 8,
+      debugCaptureIds: [captures[0]],
+    });
   });
 });

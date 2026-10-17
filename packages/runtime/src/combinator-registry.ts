@@ -1,5 +1,10 @@
 import { sameSignal, type ConstantConfiguration, type SignalId } from '@comblang/factorio';
-import type { DirectPlanProducer, PlanAttachment } from '@comblang/compiler/direct-plan-schema';
+import type {
+  DirectPlanProducer,
+  PlanAttachment,
+  PlanNetworkRef,
+} from '@comblang/compiler/direct-plan-schema';
+import type { SelectorProducerConfig } from '../../compiler/src/ir.js';
 import type { SourceSpan } from '@comblang/shared';
 
 import { ElaborationExecutionError } from './elaboration-errors.js';
@@ -161,19 +166,42 @@ export class CombinatorRegistry {
     if (descriptor.kind !== state.descriptor.kind) {
       throw new Error('A physical combinator cannot change its native kind.');
     }
-    const currentPending = isPendingConstantDescriptor(state.descriptor)
+    const currentPending = isPendingCombinatorDescriptor(state.descriptor)
       ? state.descriptor
       : undefined;
-    const nextPending = isPendingConstantDescriptor(descriptor) ? descriptor : undefined;
+    const nextPending = isPendingCombinatorDescriptor(descriptor) ? descriptor : undefined;
     if ((currentPending === undefined) !== (nextPending === undefined)) {
-      throw new Error('A pending Constant can only become concrete through installation.');
+      throw new Error('A pending combinator can only become concrete through installation.');
     }
-    if (
-      currentPending !== undefined &&
-      nextPending !== undefined &&
-      nextPending.pendingConfiguration !== currentPending.pendingConfiguration
-    ) {
-      throw new Error('A pending Constant cannot replace its prepared configuration template.');
+    if (currentPending !== undefined && nextPending !== undefined) {
+      if (
+        currentPending.kind !== nextPending.kind ||
+        nextPending.pendingConfiguration !== currentPending.pendingConfiguration
+      ) {
+        throw new Error('A pending combinator cannot replace its prepared configuration template.');
+      }
+      if (
+        currentPending.kind === 'selector' &&
+        (hasConcreteSelectorConfiguration(currentPending) ||
+          hasConcreteSelectorConfiguration(nextPending))
+      ) {
+        throw new Error(
+          'A pending Selector cannot contain a concrete index or output before installation.',
+        );
+      }
+      if (
+        currentPending.kind === 'selector' &&
+        (nextPending.kind !== 'selector' ||
+          nextPending.operation !== currentPending.operation ||
+          !sameNetworkRef(nextPending.input, currentPending.input) ||
+          (currentPending.operation === 'select' &&
+            (nextPending.operation !== 'select' ||
+              nextPending.selectMax !== currentPending.selectMax)))
+      ) {
+        throw new Error(
+          'A pending Selector cannot change its operation or registered input topology.',
+        );
+      }
     }
     const rebound =
       state.outputBinding === undefined
@@ -187,11 +215,62 @@ export class CombinatorRegistry {
     if (state.descriptor.kind !== 'constant') {
       throw new Error('Only a pending Constant can receive a Constant configuration.');
     }
-    if (!isPendingConstantDescriptor(state.descriptor)) {
+    if (!isPendingCombinatorDescriptor(state.descriptor)) {
       throw new Error('The Constant configuration was already installed.');
     }
-    const { pendingConfiguration: _pendingConfiguration, ...descriptor } = state.descriptor;
+    const {
+      pendingConfiguration: _pendingConfiguration,
+      configuration: _configuration,
+      ...descriptor
+    } = state.descriptor;
     state.descriptor = { ...descriptor, configuration };
+  }
+
+  installPendingSelector(value: CombinatorValue, configuration: SelectorProducerConfig): void {
+    const state = this.stateFor(value);
+    if (state.descriptor.kind !== 'selector') {
+      throw new Error('Only a pending Selector can receive a Selector configuration.');
+    }
+    if (!isPendingCombinatorDescriptor(state.descriptor)) {
+      throw new Error('The Selector configuration was already installed.');
+    }
+    const pending = state.descriptor;
+    if (hasConcreteSelectorConfiguration(pending)) {
+      throw new Error(
+        'A pending Selector cannot contain a concrete index or output before installation.',
+      );
+    }
+    const template = pending.pendingConfiguration;
+    if (
+      pending.operation !== configuration.operation ||
+      template.operation !== pending.operation ||
+      !sameNetworkRef(pending.input, configuration.input) ||
+      !sameNetworkRef(template.input, pending.input)
+    ) {
+      throw new Error(
+        'The Selector configuration does not match its pending operation or input topology.',
+      );
+    }
+
+    if (pending.operation === 'select') {
+      if (
+        configuration.operation !== 'select' ||
+        template.operation !== 'select' ||
+        configuration.selectMax !== pending.selectMax ||
+        template.selectMax !== pending.selectMax
+      ) {
+        throw new Error('The Selector configuration does not match its pending select mode.');
+      }
+      const { pendingConfiguration: _pendingConfiguration, index: _index, ...descriptor } = pending;
+      state.descriptor = { ...descriptor, index: configuration.index };
+      return;
+    }
+
+    if (configuration.operation !== 'count' || template.operation !== 'count') {
+      throw new Error('The Selector configuration does not match its pending count operation.');
+    }
+    const { pendingConfiguration: _pendingConfiguration, output: _output, ...descriptor } = pending;
+    state.descriptor = { ...descriptor, output: configuration.output };
   }
 
   bindOutput(value: CombinatorValue, signal: SignalId, source: SourceSpan): void {
@@ -246,9 +325,9 @@ export class CombinatorRegistry {
   }
 
   toPlan(state: CombinatorRuntimeState): DirectPlanProducer {
-    if (isPendingConstantDescriptor(state.descriptor)) {
+    if (isPendingCombinatorDescriptor(state.descriptor)) {
       throw new ElaborationExecutionError(
-        'Pending Constant configuration must be installed before plan serialization.',
+        'Pending combinator configuration must be installed before plan serialization.',
         state.descriptor.source,
         'RT2027',
       );
@@ -271,8 +350,28 @@ export class CombinatorRegistry {
   }
 }
 
-function isPendingConstantDescriptor(
+function isPendingCombinatorDescriptor(
   descriptor: CombinatorDescriptor,
 ): descriptor is Extract<CombinatorDescriptor, { readonly pendingConfiguration: unknown }> {
-  return descriptor.kind === 'constant' && 'pendingConfiguration' in descriptor;
+  return (
+    (descriptor.kind === 'constant' || descriptor.kind === 'selector') &&
+    'pendingConfiguration' in descriptor
+  );
+}
+
+function hasConcreteSelectorConfiguration(descriptor: CombinatorDescriptor): boolean {
+  return (
+    descriptor.kind === 'selector' &&
+    'pendingConfiguration' in descriptor &&
+    (Object.hasOwn(descriptor, 'index') || Object.hasOwn(descriptor, 'output'))
+  );
+}
+
+function sameNetworkRef(left: PlanNetworkRef, right: PlanNetworkRef): boolean {
+  if (left.refKind !== right.refKind) return false;
+  return left.refKind === 'single'
+    ? right.refKind === 'single' && left.network === right.network
+    : right.refKind === 'pair' &&
+        left.networks[0] === right.networks[0] &&
+        left.networks[1] === right.networks[1];
 }

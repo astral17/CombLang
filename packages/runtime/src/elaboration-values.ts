@@ -13,6 +13,7 @@ import type {
 } from '@comblang/factorio';
 import type { SourceSpan } from '@comblang/shared';
 import type { ConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-template.js';
+import type { SelectorConfigurationTemplate } from '../../compiler/src/selector-configuration-template.js';
 
 export type RuntimeNetworkCapability = 'owned' | 'readonly' | 'ref' | 'move';
 
@@ -160,6 +161,26 @@ type CompleteExactConstantDescriptor = Extract<
   CompleteCombinatorDescriptor,
   { readonly kind: 'constant'; readonly configuration: ConstantConfiguration }
 >;
+type CompleteSelectorDescriptor = Extract<
+  CompleteCombinatorDescriptor,
+  { readonly kind: 'selector' }
+>;
+type CompleteSelectSelectorDescriptor = Extract<
+  CompleteSelectorDescriptor,
+  { readonly operation: 'select' }
+>;
+type CompleteCountSelectorDescriptor = Extract<
+  CompleteSelectorDescriptor,
+  { readonly operation: 'count' }
+>;
+type SelectSelectorConfigurationTemplate = Extract<
+  SelectorConfigurationTemplate,
+  { readonly operation: 'select' }
+>;
+type CountSelectorConfigurationTemplate = Extract<
+  SelectorConfigurationTemplate,
+  { readonly operation: 'count' }
+>;
 
 /** Internal recorder state before an exact parameterized Constant is installed. */
 type PendingConstantDescriptor = Omit<CompleteExactConstantDescriptor, 'configuration'> & {
@@ -167,14 +188,31 @@ type PendingConstantDescriptor = Omit<CompleteExactConstantDescriptor, 'configur
   readonly pendingConfiguration: ConstantConfigurationTemplate;
 };
 
+type PendingSelectSelectorDescriptor = Omit<CompleteSelectSelectorDescriptor, 'index'> & {
+  readonly index?: never;
+  readonly pendingConfiguration: SelectSelectorConfigurationTemplate;
+};
+
+type PendingCountSelectorDescriptor = Omit<CompleteCountSelectorDescriptor, 'output'> & {
+  readonly output?: never;
+  readonly pendingConfiguration: CountSelectorConfigurationTemplate;
+};
+
+type PendingSelectorDescriptor = PendingSelectSelectorDescriptor | PendingCountSelectorDescriptor;
+
 export type {
   DeciderOutputOrigin,
   DeciderOutputSyntaxIntent,
 } from '@comblang/compiler/direct-plan-schema';
 
 export type CombinatorDescriptor =
-  | Exclude<CompleteCombinatorDescriptor, { readonly kind: 'decider' }>
+  | Exclude<
+      CompleteCombinatorDescriptor,
+      { readonly kind: 'decider' } | { readonly kind: 'selector' }
+    >
+  | CompleteSelectorDescriptor
   | PendingConstantDescriptor
+  | PendingSelectorDescriptor
   | (Omit<CompleteDeciderDescriptor, 'output'> & {
       readonly output?: CompleteDeciderDescriptor['output'];
       readonly outputOrigins?: readonly DeciderOutputOrigin[];

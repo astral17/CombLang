@@ -2480,21 +2480,31 @@ globalThis.${globalKey} = () => Param.number('Late', 6);`;
   });
 
   test('captures the three exact Selector parameter slots and binds paired NCIR atomically', () => {
-    const text = `const numberIndex = Param.number('Index', 2);
+    let sourceExecutions = 0;
+    const text = `const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const numberIndex = Param.number('Index', 2);
 const signalIndex = Param.signal('Selected signal', Signal('virtual', 'signal-B'));
 const countOutput = Param.signal('Count output', Signal('virtual', 'signal-C'));
 const input = new Network();
 const secondary = new Network();
 const output = new Network();
+const fanout = new Network();
 const byNumber = Selector({ input, operation: 'select', index: numberIndex }).at(2, 3);
 const bySignal = Selector({ input: pair(input, secondary), operation: 'select', selectMax: false, index: signalIndex });
 const counted = Selector({ input, operation: 'count', output: countOutput });
-output += byNumber;
+byNumber.to(output, fanout);
 output += bySignal;
-output += counted;`;
+output += counted;
+const consumerOutput = new Network();
+consumerOutput += Arithmetic({ left: output[A], operation: 'add', right: 1, output: B });`;
     const compilation = compileSourceProgram(
       { path: 'source-selector-parameters.factorio.ts', text },
       parameterHost(),
+      [],
+      (stage) => {
+        if (stage === 'execute') sourceExecutions += 1;
+      },
     );
 
     expect(compilation.pipelineDiagnostics).toEqual([]);
@@ -2508,7 +2518,7 @@ output += counted;`;
       },
       { operation: 'count', output: { type: 'virtual', name: 'signal-C' } },
     ]);
-    expect(compilation.resolvedCircuit?.ir.entities).toHaveLength(3);
+    expect(compilation.resolvedCircuit?.ir.entities).toHaveLength(4);
     expect(
       listSourceCompilationParameters(compilation).map(({ kind, label, defaultValue }) => ({
         kind,
@@ -2531,7 +2541,7 @@ output += counted;`;
 
     const declarations = listSourceCompilationParameters(compilation);
     const before = compilation.execution?.circuit.ir;
-    const bound = bindSourceCompilationParameters(compilation, [
+    const overrides = [
       { parameter: declarations[0]!.parameter, value: 7 },
       {
         parameter: declarations[1]!.parameter,
@@ -2541,7 +2551,11 @@ output += counted;`;
         parameter: declarations[2]!.parameter,
         value: { type: 'virtual', name: 'signal-E' },
       },
-    ]);
+    ];
+    const bound = bindSourceCompilationParameters(compilation, overrides);
+    const defaults = bindSourceCompilationCircuit(compilation);
+    const overridden = bindSourceCompilationCircuit(compilation, overrides);
+    const reset = bindSourceCompilationCircuit(compilation, []);
 
     const boundSelectors = bound.producers.filter(({ kind }) => kind === 'selector');
     expect(boundSelectors.map(({ config }) => config)).toMatchObject([
@@ -2564,6 +2578,24 @@ output += counted;`;
       before?.entities.map(({ placement }) => placement),
     );
     expect(bound.producers.map(({ id }) => id)).toEqual(before?.producers.map(({ id }) => id));
+    const selectorConfigurations = (pair: ReturnType<typeof bindSourceCompilationCircuit>) =>
+      pair.plan.producers.filter(({ kind }) => kind === 'selector');
+    expect(reset.plan).toEqual(defaults.plan);
+    expect(selectorConfigurations(defaults)).toMatchObject([
+      { operation: 'select', index: 2 },
+      { operation: 'select', index: { type: 'virtual', name: 'signal-B' } },
+      { operation: 'count', output: { type: 'virtual', name: 'signal-C' } },
+    ]);
+    expect(selectorConfigurations(overridden)).toMatchObject([
+      { operation: 'select', index: 7 },
+      { operation: 'select', index: { type: 'virtual', name: 'signal-D' } },
+      { operation: 'count', output: { type: 'virtual', name: 'signal-E' } },
+    ]);
+    expect(
+      overridden.plan.producers.map(({ kind, debugCaptureIds }) => ({ kind, debugCaptureIds })),
+    ).toEqual(
+      defaults.plan.producers.map(({ kind, debugCaptureIds }) => ({ kind, debugCaptureIds })),
+    );
     expect(compilation.execution?.circuit.ir).toEqual(before);
     const artifact = sourceCompilationArtifact(compilation);
     expect(artifact).not.toHaveProperty('selectorTemplates');
@@ -2584,6 +2616,34 @@ output += counted;`;
       ]),
     ).toThrow();
     expect(compilation.execution?.circuit.ir).toEqual(before);
+    expect(sourceExecutions).toBe(1);
+  });
+
+  test('keeps invalid Selector index validation catchable before a later parameterized Selector', () => {
+    let sourceExecutions = 0;
+    const text = `const index = Param.number('Valid index', 2);
+const input = new Network();
+try { Selector({ input, operation: 'select', index: 1.5 }); } catch {}
+const red = new Network<R>();
+const green = new Network<G>();
+const output = new Network();
+output += Selector({ input: pair(red, green), operation: 'select', index });`;
+    const compilation = compileSourceProgram(
+      { path: 'selector-call-boundary-catch.factorio.ts', text },
+      parameterHost(),
+      [],
+      (stage) => {
+        if (stage === 'execute') sourceExecutions += 1;
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.plan?.producers.filter(({ kind }) => kind === 'selector')).toMatchObject([
+      { operation: 'select', selectMax: true, index: 2, debugCaptureIds: [expect.any(String)] },
+    ]);
+    expect(compilation.plan?.entities).toHaveLength(1);
+    expect(compilation.execution?.circuit.ir.producers).toHaveLength(1);
+    expect(sourceExecutions).toBe(1);
   });
 
   test('captures repeated numeric Selector expressions and rebinds concrete indices without rerunning source', () => {
@@ -3341,7 +3401,14 @@ output += selector;`;
   });
 
   test('binds Selector parameters alongside Arithmetic, Constant, and Decider captures', () => {
-    const text = `${source}\nconst selector = Selector({ input, operation: 'select', index: amount });\noutput += selector;`;
+    const text = `${source}
+const selector = Selector({ input, operation: 'select', index: amount });
+const literalSelector = Selector({ input, operation: 'select', index: 4 });
+const selectorInput = new Network();
+selectorInput += selector;
+selectorInput += literalSelector;
+const consumer = Arithmetic({ left: selectorInput[A], operation: 'add', right: amount, output: B });
+output += consumer;`;
     const compilation = compileSourceProgram(
       { path: 'mixed-source-configuration-parameters.factorio.ts', text },
       parameterHost(),
@@ -3352,6 +3419,8 @@ output += selector;`;
       'constant',
       'decider',
       'selector',
+      'selector',
+      'arithmetic',
     ]);
 
     const declarations = listSourceCompilationParameters(compilation);

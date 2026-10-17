@@ -127,7 +127,11 @@ import {
   resolveEntityReplayProfile,
   type TrustedEntityReplayContext,
 } from '@comblang/compiler/entity-replay-context';
-import type { EntityPlacement, LogicalNetworkRef } from '@comblang/compiler/ir';
+import type {
+  EntityPlacement,
+  LogicalNetworkRef,
+  SelectorProducerConfig,
+} from '@comblang/compiler/ir';
 import type { ArithmeticOperation } from '@comblang/compiler/ir';
 import {
   BlueprintEntitySignalConversionError,
@@ -352,7 +356,7 @@ interface TopologySnapshot {
   readonly entityOperationOrdinal: number;
   readonly entityInvocations: ReadonlyMap<EntityValue['id'], SourceSpan>;
   readonly linkedProducersLength: number;
-  readonly pendingConstantInstallationsLength: number;
+  readonly pendingCombinatorInstallationsLength: number;
 }
 
 interface EntityFacetAuthority {
@@ -382,6 +386,11 @@ interface LinkedPendingConstantAssociation {
   readonly entity: EntityValue;
 }
 
+interface LinkedPendingSelectorAssociation {
+  readonly kind: 'pending-selector';
+  readonly entity: EntityValue;
+}
+
 interface LinkedArithmeticAssociation {
   readonly kind: 'arithmetic';
   readonly entity: EntityValue;
@@ -403,9 +412,24 @@ interface LinkedSelectorAssociation {
 type LinkedProducerAssociation =
   | LinkedConstantAssociation
   | LinkedPendingConstantAssociation
+  | LinkedPendingSelectorAssociation
   | LinkedArithmeticAssociation
   | LinkedDeciderAssociation
   | LinkedSelectorAssociation;
+
+type PendingCombinatorInstallation =
+  | {
+      readonly kind: 'constant';
+      readonly producer: CombinatorValue;
+      readonly entity: EntityValue;
+      readonly configuration: ConstantConfiguration;
+    }
+  | {
+      readonly kind: 'selector';
+      readonly producer: CombinatorValue;
+      readonly entity?: EntityValue;
+      readonly configuration: SelectorProducerConfig;
+    };
 
 export interface ElaborationExecutionOptions {
   readonly dslCallBudget?: number;
@@ -521,11 +545,7 @@ class ElaborationRecorder {
     readonly producer: CombinatorValue;
     readonly association: LinkedProducerAssociation;
   }[] = [];
-  readonly #pendingConstantInstallations: {
-    readonly producer: CombinatorValue;
-    readonly entity: EntityValue;
-    readonly configuration: ConstantConfiguration;
-  }[] = [];
+  readonly #pendingCombinatorInstallations: PendingCombinatorInstallation[] = [];
   #entityRevision = 0;
   #entityOperationOrdinal = 0;
   readonly #entityInvocations = new Map<EntityValue['id'], SourceSpan>();
@@ -1183,22 +1203,54 @@ class ElaborationRecorder {
           }
           throw error;
         }
-        const producer = this.#createCombinator(
-          {
+        const pendingTemplate =
+          prepared.hasParameterSlots &&
+          'template' in prepared &&
+          this.#parameterCapture !== undefined
+            ? prepared.template
+            : undefined;
+        let selectorDescriptor: CombinatorDescriptor;
+        if (pendingTemplate === undefined) {
+          selectorDescriptor = {
             kind: 'selector',
             ...descriptorConfiguration,
             source: this.#span(rawSpan),
             instancePath: this.#path(),
-          },
+          };
+        } else if (descriptorConfiguration.operation === 'select') {
+          if (pendingTemplate.operation !== 'select') {
+            throw new Error('Prepared Selector template changed its operation before capture.');
+          }
+          selectorDescriptor = {
+            kind: 'selector',
+            operation: 'select',
+            input: descriptorConfiguration.input,
+            selectMax: descriptorConfiguration.selectMax,
+            pendingConfiguration: pendingTemplate,
+            source: this.#span(rawSpan),
+            instancePath: this.#path(),
+          };
+        } else {
+          if (pendingTemplate.operation !== 'count') {
+            throw new Error('Prepared Selector template changed its operation before capture.');
+          }
+          selectorDescriptor = {
+            kind: 'selector',
+            operation: 'count',
+            input: descriptorConfiguration.input,
+            pendingConfiguration: pendingTemplate,
+            source: this.#span(rawSpan),
+            instancePath: this.#path(),
+          };
+        }
+        const producer = this.#createCombinator(
+          selectorDescriptor,
           rawSpan,
+          pendingTemplate === undefined ? undefined : descriptorConfiguration,
         );
-        if (
-          prepared.hasParameterSlots &&
-          'template' in prepared &&
-          this.#parameterCapture !== undefined
-        ) {
+        if (pendingTemplate !== undefined) {
           const { captureId } = this.#combinators.capture(producer);
-          this.#captureSelectorTemplate(producer, captureId, prepared.template);
+          this.#captureSelectorTemplate(producer, captureId, pendingTemplate);
         }
         return producer;
       }),
@@ -2487,7 +2539,7 @@ class ElaborationRecorder {
         ({ association }) => association.kind === 'decider',
       );
       this.#finalizeUnusedCombinators();
-      this.#installPendingConstantConfigurations();
+      this.#installPendingCombinatorConfigurations();
       this.#validateFinalDeciderModes();
       const declarations = new Map(this.#networks.map((network) => [network.name, network]));
       const common = {
@@ -2567,8 +2619,13 @@ class ElaborationRecorder {
           ({ association }) => association.entity.id === entity.id,
         );
         if (linked === undefined) return entity;
-        if (linked.association.kind === 'pending-constant') {
-          throw new Error('A pending Constant Entity was not installed before plan construction.');
+        if (
+          linked.association.kind === 'pending-constant' ||
+          linked.association.kind === 'pending-selector'
+        ) {
+          throw new Error(
+            'A pending combinator Entity was not installed before plan construction.',
+          );
         }
         return linked.association.kind === 'constant'
           ? Object.freeze({
@@ -2580,7 +2637,7 @@ class ElaborationRecorder {
             })
           : Object.freeze({ ...entity, configuration: linked.association.configuration });
       });
-      this.#assertNoPendingConstantArtifacts(common.producers, canonicalEntities);
+      this.#assertNoPendingCombinatorArtifacts(common.producers, canonicalEntities);
       const entityCommon = () => ({
         ...common,
         debugInstances: Object.freeze([
@@ -3101,46 +3158,93 @@ class ElaborationRecorder {
     );
   }
 
-  #installPendingConstantConfigurations(): void {
-    for (const pending of this.#pendingConstantInstallations) {
+  #installPendingCombinatorConfigurations(): void {
+    for (const pending of this.#pendingCombinatorInstallations) {
       const current = this.#linkedProducerByIdentity.get(pending.producer.identity);
-      if (current?.kind !== 'pending-constant' || current.entity !== pending.entity) {
-        throw new Error('Pending Constant installation lost its linked Entity association.');
-      }
       const index = this.#linkedProducers.findIndex(
         ({ producer }) => producer.identity === pending.producer.identity,
       );
-      if (index < 0) {
-        throw new Error('Pending Constant installation lost its registration order entry.');
+
+      if (pending.kind === 'constant') {
+        if (current?.kind !== 'pending-constant' || current.entity !== pending.entity) {
+          throw new Error('Pending Constant installation lost its linked Entity association.');
+        }
+        if (index < 0) {
+          throw new Error('Pending Constant installation lost its registration order entry.');
+        }
+        this.#combinators.installPendingConstant(pending.producer, pending.configuration);
+        const association: LinkedConstantAssociation = {
+          kind: 'constant',
+          entity: pending.entity,
+          configuration: pending.configuration,
+        };
+        this.#linkedProducerByIdentity.set(pending.producer.identity, association);
+        this.#linkedProducers[index] = { producer: pending.producer, association };
+        continue;
       }
 
-      this.#combinators.installPendingConstant(pending.producer, pending.configuration);
-      const association: LinkedConstantAssociation = {
-        kind: 'constant',
-        entity: pending.entity,
-        configuration: pending.configuration,
-      };
-      this.#linkedProducerByIdentity.set(pending.producer.identity, association);
-      this.#linkedProducers[index] = { producer: pending.producer, association };
+      if (pending.entity === undefined) {
+        if (current !== undefined || index >= 0) {
+          throw new Error(
+            'Pending Selector installation found an unexpected linked Entity association.',
+          );
+        }
+      } else {
+        if (current?.kind !== 'pending-selector' || current.entity !== pending.entity) {
+          throw new Error('Pending Selector installation lost its linked Entity association.');
+        }
+        if (index < 0) {
+          throw new Error('Pending Selector installation lost its registration order entry.');
+        }
+      }
+
+      this.#combinators.installPendingSelector(pending.producer, pending.configuration);
+      if (pending.entity !== undefined) {
+        const configuration: EntitySelectorConfiguration =
+          pending.configuration.operation === 'select'
+            ? {
+                mode: 'selector',
+                operation: 'select',
+                input: pending.configuration.input,
+                selectMax: pending.configuration.selectMax,
+                index: pending.configuration.index,
+              }
+            : {
+                mode: 'selector',
+                operation: 'count',
+                input: pending.configuration.input,
+                output: pending.configuration.output,
+              };
+        const association: LinkedSelectorAssociation = {
+          kind: 'selector',
+          entity: pending.entity,
+          configuration,
+        };
+        this.#linkedProducerByIdentity.set(pending.producer.identity, association);
+        this.#linkedProducers[index] = { producer: pending.producer, association };
+      }
     }
-    this.#pendingConstantInstallations.length = 0;
+    this.#pendingCombinatorInstallations.length = 0;
   }
 
-  #assertNoPendingConstantArtifacts(
+  #assertNoPendingCombinatorArtifacts(
     producers: readonly DirectPlanProducer[],
     entities: readonly { readonly configuration?: unknown }[],
   ): void {
     const hasPendingConfiguration = (value: unknown): boolean =>
       typeof value === 'object' && value !== null && Object.hasOwn(value, 'pendingConfiguration');
     const pendingInRuntime =
-      this.#pendingConstantInstallations.length > 0 ||
-      this.#linkedProducers.some(({ association }) => association.kind === 'pending-constant') ||
+      this.#pendingCombinatorInstallations.length > 0 ||
+      this.#linkedProducers.some(
+        ({ association }) =>
+          association.kind === 'pending-constant' || association.kind === 'pending-selector',
+      ) ||
       this.#combinators.states().some(({ descriptor }) => hasPendingConfiguration(descriptor));
     const pendingInArtifacts =
       producers.some(hasPendingConfiguration) ||
       entities.some(({ configuration }) => hasPendingConfiguration(configuration));
     if (pendingInRuntime || pendingInArtifacts) {
-      throw new Error('A pending Constant template or cache escaped into plan artifacts.');
+      throw new Error('A pending combinator template or cache escaped into plan artifacts.');
     }
   }
 
@@ -3345,7 +3449,11 @@ class ElaborationRecorder {
     return network;
   }
 
-  #createCombinator(descriptor: CombinatorDescriptor, rawSpan: RawSpan): CombinatorValue {
+  #createCombinator(
+    descriptor: CombinatorDescriptor,
+    rawSpan: RawSpan,
+    pendingSelectorConfiguration?: SelectorProducerConfig,
+  ): CombinatorValue {
     // A provider-backed arithmetic producer is the ergonomic spelling of the
     // exact Arithmetic constructor. Resolve its trusted base before creating
     // any topology so malformed or ambiguous authority cannot fall through to
@@ -3409,6 +3517,7 @@ class ElaborationRecorder {
     ) {
       this.#linkDeciderCombinator(value, descriptor, rawSpan, deciderProfile);
     }
+    let linkedSelectorEntity: EntityValue | undefined;
     if (selectorProfile !== undefined && descriptor.kind === 'selector') {
       const entity = this.#allocateEntity(
         selectorProfile.ref,
@@ -3416,32 +3525,50 @@ class ElaborationRecorder {
         descriptor.placement,
         rawSpan,
       );
+      linkedSelectorEntity = entity;
       if (descriptor.placement !== undefined) {
         const { placement: _placement, ...withoutPlacement } = descriptor;
         this.#combinators.update(value, withoutPlacement);
       }
-      const configuration: EntitySelectorConfiguration =
-        descriptor.operation === 'select'
-          ? {
-              mode: 'selector',
-              operation: 'select',
-              input: descriptor.input,
-              selectMax: descriptor.selectMax,
-              index: descriptor.index,
-            }
+      const association: LinkedProducerAssociation =
+        'pendingConfiguration' in descriptor
+          ? { kind: 'pending-selector', entity }
           : {
-              mode: 'selector',
-              operation: 'count',
-              input: descriptor.input,
-              output: descriptor.output,
+              kind: 'selector',
+              entity,
+              configuration:
+                descriptor.operation === 'select'
+                  ? {
+                      mode: 'selector',
+                      operation: 'select',
+                      input: descriptor.input,
+                      selectMax: descriptor.selectMax,
+                      index: descriptor.index,
+                    }
+                  : {
+                      mode: 'selector',
+                      operation: 'count',
+                      input: descriptor.input,
+                      output: descriptor.output,
+                    },
             };
-      const association = {
-        kind: 'selector' as const,
-        entity,
-        configuration,
-      } satisfies LinkedSelectorAssociation;
       this.#linkedProducerByIdentity.set(value.identity, association);
       this.#linkedProducers.push({ producer: value, association });
+    }
+    if (descriptor.kind === 'selector' && 'pendingConfiguration' in descriptor) {
+      if (pendingSelectorConfiguration === undefined) {
+        throw new Error(
+          'Pending Selector construction did not retain its already-bound configuration.',
+        );
+      }
+      this.#pendingCombinatorInstallations.push({
+        kind: 'selector',
+        producer: value,
+        ...(linkedSelectorEntity === undefined ? {} : { entity: linkedSelectorEntity }),
+        configuration: pendingSelectorConfiguration,
+      });
+    } else if (pendingSelectorConfiguration !== undefined) {
+      throw new Error('A concrete Selector cannot retain a pending configuration cache.');
     }
     return value;
   }
@@ -3935,7 +4062,7 @@ class ElaborationRecorder {
       entityOperationOrdinal: this.#entityOperationOrdinal,
       entityInvocations: new Map(this.#entityInvocations),
       linkedProducersLength: this.#linkedProducers.length,
-      pendingConstantInstallationsLength: this.#pendingConstantInstallations.length,
+      pendingCombinatorInstallationsLength: this.#pendingCombinatorInstallations.length,
     };
   }
 
@@ -3997,7 +4124,7 @@ class ElaborationRecorder {
       const removed = this.#linkedProducers.pop();
       if (removed !== undefined) this.#linkedProducerByIdentity.delete(removed.producer.identity);
     }
-    this.#pendingConstantInstallations.length = snapshot.pendingConstantInstallationsLength;
+    this.#pendingCombinatorInstallations.length = snapshot.pendingCombinatorInstallationsLength;
   }
 
   #withTopologyTransaction<T>(rawSpan: RawSpan, operation: () => T): T {
@@ -5137,7 +5264,12 @@ class ElaborationRecorder {
       this.#linkedProducerByIdentity.set(producer.identity, association);
       this.#linkedProducers.push({ producer, association });
       if (pendingConfiguration !== undefined) {
-        this.#pendingConstantInstallations.push({ producer, entity, configuration });
+        this.#pendingCombinatorInstallations.push({
+          kind: 'constant',
+          producer,
+          entity,
+          configuration,
+        });
       }
     }
     return producer;
