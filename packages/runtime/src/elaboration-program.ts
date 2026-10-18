@@ -142,7 +142,10 @@ import {
   BlueprintParameterCapture,
   type CapturedBlueprintParameter,
 } from './blueprint-parameter-capture.js';
-import type { ArithmeticConfigurationTemplate } from '../../compiler/src/arithmetic-configuration-template.js';
+import {
+  createArithmeticConfigurationTemplate,
+  type ArithmeticConfigurationTemplate,
+} from '../../compiler/src/arithmetic-configuration-template.js';
 import {
   ArithmeticConfigurationSourceError,
   bindPreparedArithmeticConfigurationSource,
@@ -205,6 +208,10 @@ interface CapturedArithmeticConfigurationTemplate {
   readonly captureId: string;
   readonly template: ArithmeticConfigurationTemplate;
   readonly source: SourceSpan;
+}
+
+interface PendingArithmeticConfigurationTemplateCapture extends CapturedArithmeticConfigurationTemplate {
+  readonly producer: CombinatorValue;
 }
 
 interface CapturedConstantConfigurationTemplate {
@@ -519,7 +526,7 @@ class ElaborationRecorder {
   readonly #diagnostics: Diagnostic[] = [];
   readonly #implicitBorrowWarnings = new Set<string>();
   readonly #combinators = new CombinatorRegistry();
-  readonly #arithmeticTemplates: CapturedArithmeticConfigurationTemplate[] = [];
+  readonly #arithmeticTemplates: PendingArithmeticConfigurationTemplateCapture[] = [];
   readonly #constantTemplates: CapturedConstantConfigurationTemplate[] = [];
   readonly #pendingDeciderTemplateCaptures: PendingDeciderTemplateCapture[] = [];
   readonly #selectorTemplates: CapturedSelectorConfigurationTemplate[] = [];
@@ -2724,7 +2731,38 @@ class ElaborationRecorder {
   }
 
   arithmeticTemplates(): readonly CapturedArithmeticConfigurationTemplate[] {
-    return Object.freeze([...this.#arithmeticTemplates]);
+    const parameterCapture = this.#parameterCapture;
+    if (parameterCapture === undefined) return Object.freeze([]);
+    return Object.freeze(
+      this.#arithmeticTemplates.map(({ producer, captureId, template, source }) => {
+        const outputBinding = this.#combinators.stateFor(producer).outputBinding;
+        const effectiveTemplate =
+          outputBinding === undefined
+            ? template
+            : createArithmeticConfigurationTemplate(parameterCapture.session, {
+                left: template.left,
+                operation: template.operation,
+                right: template.right,
+                output: {
+                  kind: 'signal',
+                  signal: Signal(
+                    outputBinding.signal.type,
+                    outputBinding.signal.name,
+                    outputBinding.signal.quality,
+                  ),
+                },
+              });
+        return Object.freeze({ captureId, template: effectiveTemplate, source });
+      }),
+    );
+  }
+
+  arithmeticOutputBindingCaptureIds(): readonly string[] {
+    return Object.freeze(
+      this.#arithmeticTemplates
+        .filter(({ producer }) => this.#combinators.stateFor(producer).outputBinding !== undefined)
+        .map(({ captureId }) => captureId),
+    );
   }
 
   constantTemplates(): readonly CapturedConstantConfigurationTemplate[] {
@@ -3206,7 +3244,12 @@ class ElaborationRecorder {
       throw new Error('Arithmetic parameter slots were associated with a non-Arithmetic producer.');
     }
     this.#arithmeticTemplates.push(
-      Object.freeze({ captureId, template, source: Object.freeze({ ...descriptor.source }) }),
+      Object.freeze({
+        producer: value,
+        captureId,
+        template,
+        source: Object.freeze({ ...descriptor.source }),
+      }),
     );
   }
 
@@ -6675,6 +6718,7 @@ function executeElaborationProgramInternal(
 ): {
   readonly plan: DirectElaborationPlan;
   readonly arithmeticTemplates: readonly CapturedArithmeticConfigurationTemplate[];
+  readonly boundArithmeticOutputCaptureIds: readonly string[];
   readonly constantTemplates: readonly CapturedConstantConfigurationTemplate[];
   readonly deciderTemplates: readonly CapturedDeciderConfigurationTemplate[];
   readonly selectorTemplates: readonly CapturedSelectorConfigurationTemplate[];
@@ -6713,6 +6757,7 @@ function executeElaborationProgramInternal(
   return Object.freeze({
     plan,
     arithmeticTemplates: recorder.arithmeticTemplates(),
+    boundArithmeticOutputCaptureIds: recorder.arithmeticOutputBindingCaptureIds(),
     constantTemplates: recorder.constantTemplates(),
     deciderTemplates: recorder.deciderTemplates(),
     selectorTemplates: recorder.selectorTemplates(),
@@ -6733,6 +6778,7 @@ export interface ExecutedElaborationWithBlueprintParameters {
   readonly session: BlueprintParameterSession;
   readonly parameters: readonly CapturedBlueprintParameter[];
   readonly arithmeticTemplates: readonly CapturedArithmeticConfigurationTemplate[];
+  readonly boundArithmeticOutputCaptureIds: readonly string[];
   readonly constantTemplates: readonly CapturedConstantConfigurationTemplate[];
   readonly deciderTemplates: readonly CapturedDeciderConfigurationTemplate[];
   readonly selectorTemplates: readonly CapturedSelectorConfigurationTemplate[];

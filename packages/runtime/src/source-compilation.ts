@@ -1388,6 +1388,17 @@ export function exportSourceCompilationNativeBlueprint(
   const relations = new Map(
     replacement.captureRelations.map((relation) => [relation.captureId, relation]),
   );
+  const boundArithmeticOutputProducerIndexes = new Set<number>();
+  for (const captureId of state.source.boundArithmeticOutputCaptureIds) {
+    const relation = relations.get(captureId);
+    if (relation === undefined || relation.kind !== 'arithmetic') {
+      reject(
+        '$.arithmeticTemplates',
+        'bound Arithmetic output capture has no authenticated producer relation.',
+      );
+    }
+    boundArithmeticOutputProducerIndexes.add(relation.producerIndex);
+  }
   const entities = new Map(projected.entities.map((entity) => [entity.entityNumber, entity]));
   const defaults = new Map(
     declarations.map((declaration) => [declaration.parameter, declaration.defaultValue]),
@@ -1762,6 +1773,9 @@ export function exportSourceCompilationNativeBlueprint(
       let arithmeticChanged = false;
       const nextArithmetic: Record<string, unknown> = { ...arithmetic };
       for (const field of ['first_signal', 'second_signal', 'output_signal'] as const) {
+        if (field === 'output_signal' && boundArithmeticOutputProducerIndexes.has(producerIndex)) {
+          continue;
+        }
         const signalField = readRecord(arithmetic[field]);
         const name = signalField?.name;
         const type = signalField?.type ?? 'item';

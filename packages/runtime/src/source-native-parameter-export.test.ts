@@ -307,6 +307,49 @@ output += Arithmetic({ left: 2, operation: 'add', right: ${mixed ? 'amount' : '5
     },
   );
 
+  test('does not project a shadowed Arithmetic output parameter equal to its default', () => {
+    const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const output = new Network();
+const channel = Param.signal('Result', A);
+to(output)[A] += Arithmetic({ left: 1, operation: 'add', right: 2, output: channel });`);
+    const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+
+    expect(exportFailure(compilation)).toMatchObject({
+      code: 'CP1002',
+      path: '$.parameters[0]',
+      message: expect.stringContaining('unused declarations'),
+    });
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
+  });
+
+  test('projects an Arithmetic output parameter only at its unshadowed producer', () => {
+    const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const channel = Param.signal('Result', A);
+const shadowedOutput = new Network();
+const liveOutput = new Network();
+to(shadowedOutput)[A] += Arithmetic({ left: 1, operation: 'add', right: 2, output: channel });
+liveOutput += Arithmetic({ left: 3, operation: 'add', right: 4, output: channel });`);
+    const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+
+    expect(native.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Result',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    const outputs = emitNativeBlueprintJson(native).blueprint.entities.map((entity) => {
+      const behavior = entity.control_behavior as {
+        arithmetic_conditions: { output_signal: Record<string, unknown> };
+      };
+      return behavior.arithmetic_conditions.output_signal;
+    });
+    expect(outputs).toEqual([{ type: 'virtual', name: 'signal-A' }, { name: 'parameter-0' }]);
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
+  });
+
   test.each([
     { defaultValue: "Signal('item', 'iron-plate')" },
     { defaultValue: "Signal('item', 'iron-plate', 'normal')", quality: 'normal' },
