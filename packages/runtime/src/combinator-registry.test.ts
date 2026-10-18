@@ -1,5 +1,6 @@
 import { signal } from '@comblang/factorio';
 import { sourceFileId, sourceSpan, type NetworkId } from '@comblang/shared';
+import type { PlanDeciderCondition } from '@comblang/compiler/direct-plan-schema';
 import { describe, expect, test } from 'vitest';
 
 import { bindArithmeticConfigurationTemplate } from '../../compiler/src/arithmetic-configuration-binding.js';
@@ -9,9 +10,15 @@ import { bindConstantConfigurationTemplate } from '../../compiler/src/constant-c
 import { createConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-template.js';
 import { bindSelectorConfigurationTemplate } from '../../compiler/src/selector-configuration-binding.js';
 import { createSelectorConfigurationTemplate } from '../../compiler/src/selector-configuration-template.js';
+import { createDeciderConfigurationTemplate } from '../../compiler/src/decider-configuration-template.js';
 import type { ArithmeticProducerConfig, SelectorProducerConfig } from '../../compiler/src/ir.js';
 import { CombinatorRegistry } from './combinator-registry.js';
-import type { CombinatorDescriptor, CombinatorValue, NetworkValue } from './elaboration-values.js';
+import type {
+  CombinatorDescriptor,
+  CombinatorValue,
+  NetworkValue,
+  PendingDeciderCondition,
+} from './elaboration-values.js';
 
 const source = sourceSpan(sourceFileId('combinator-registry.test.ts'), 2, 18);
 
@@ -614,6 +621,348 @@ describe('pending Selector registry state', () => {
       operation: 'select',
       index: 8,
       debugCaptureIds: [captures[0]],
+    });
+  });
+});
+
+describe('pending Decider registry state', () => {
+  test('installs only a matching concrete condition while preserving the latest outputs and identity', () => {
+    const session = createBlueprintParameterSession();
+    const amount = session.number('amount', { source });
+    const input = 'input' as NetworkId;
+    const pair = ['left-input' as NetworkId, 'right-input' as NetworkId] as const;
+    const A = signal('virtual', 'signal-A');
+    const B = signal('virtual', 'signal-B');
+    const template = createDeciderConfigurationTemplate(session, {
+      condition: {
+        kind: 'and',
+        conditions: [
+          {
+            kind: 'compare',
+            left: { kind: 'signal', signal: A, refKind: 'single', network: input },
+            comparator: '>',
+            right: { kind: 'constant', value: amount },
+          },
+          {
+            kind: 'or',
+            conditions: [
+              {
+                kind: 'compare',
+                left: { kind: 'wildcard', value: 'each', refKind: 'pair', networks: pair },
+                comparator: '<=',
+                right: { kind: 'constant', value: 2 },
+              },
+              {
+                kind: 'compare',
+                left: { kind: 'signal', signal: B, refKind: 'single', network: input },
+                comparator: '!=',
+                right: { kind: 'signal', signal: A, refKind: 'single', network: input },
+              },
+            ],
+          },
+        ],
+      },
+      outputs: [],
+    });
+    const pendingCondition: Extract<CombinatorDescriptor, { kind: 'decider' }>['condition'] = {
+      kind: 'and',
+      conditions: [
+        {
+          kind: 'compare-signal',
+          signal: A,
+          comparator: '>',
+          constant: { kind: 'constant' },
+          refKind: 'single',
+          network: input,
+        },
+        {
+          kind: 'or',
+          conditions: [
+            {
+              kind: 'compare-each',
+              comparator: '<=',
+              constant: { kind: 'constant' },
+              refKind: 'pair',
+              networks: pair,
+            },
+            {
+              kind: 'compare-signals',
+              left: { refKind: 'single', network: input, signal: B },
+              comparator: '!=',
+              right: { refKind: 'single', network: input, signal: A },
+            },
+          ],
+        },
+      ],
+    };
+    const producer = value();
+    const primary = network('$decider:primary');
+    const secondary = network('$decider:secondary');
+    const attachment = { network: primary.name, source, instancePath: ['root'] };
+    const secondaryAttachment = {
+      network: secondary.name,
+      source,
+      instancePath: ['root', 'secondary'],
+    };
+    const initialOutput = { kind: 'each', refKind: 'single', network: 'output' } as const;
+    const descriptor: CombinatorDescriptor = {
+      kind: 'decider',
+      condition: pendingCondition,
+      output: initialOutput,
+      outputs: [initialOutput],
+      source,
+      instancePath: ['root'],
+      pendingConfiguration: template,
+      placement: { x: 4, y: 5 },
+    };
+    const registry = new CombinatorRegistry();
+    const state = registry.register(producer, descriptor, primary, attachment);
+    const primaryLane = state.outputPort.primary;
+    registry.addSecondary(producer, secondary, secondaryAttachment);
+    registry.bindName(producer, 'parameterized-decider');
+    registry.markOutputUsed(producer);
+    const capture = registry.capture(producer);
+    const pendingSnapshot = registry.snapshot();
+    const originalPending = state.descriptor;
+
+    expect(() => registry.toPlan(state)).toThrowError(
+      expect.objectContaining({ code: 'RT2027', span: source }),
+    );
+    const pendingDescriptor = state.descriptor;
+    if (pendingDescriptor.kind !== 'decider' || !('pendingConfiguration' in pendingDescriptor)) {
+      throw new Error('Expected a pending Decider descriptor.');
+    }
+    expect(JSON.stringify(pendingDescriptor.condition)).not.toContain('value');
+    expect(pendingDescriptor.condition).toMatchObject({
+      kind: 'and',
+      conditions: [
+        { kind: 'compare-signal', constant: { kind: 'constant' } },
+        {
+          kind: 'or',
+          conditions: [
+            { kind: 'compare-each', constant: { kind: 'constant' } },
+            { kind: 'compare-signals' },
+          ],
+        },
+      ],
+    });
+    const replacementTemplate = createDeciderConfigurationTemplate(session, {
+      condition: {
+        kind: 'compare',
+        left: { kind: 'signal', signal: A, refKind: 'single', network: input },
+        comparator: '>',
+        right: { kind: 'constant', value: amount },
+      },
+      outputs: [],
+    });
+    expect(() =>
+      registry.update(producer, {
+        ...pendingDescriptor,
+        pendingConfiguration: replacementTemplate,
+      }),
+    ).toThrowError(/cannot replace its prepared configuration template/i);
+
+    const changedCondition: PendingDeciderCondition = {
+      kind: 'and',
+      conditions: [
+        {
+          kind: 'compare-signal',
+          signal: A,
+          comparator: '<',
+          constant: { kind: 'constant' },
+          refKind: 'single',
+          network: input,
+        },
+        {
+          kind: 'or',
+          conditions: [
+            {
+              kind: 'compare-each',
+              comparator: '<=',
+              constant: { kind: 'constant' },
+              refKind: 'pair',
+              networks: pair,
+            },
+            {
+              kind: 'compare-signals',
+              left: { refKind: 'single', network: input, signal: B },
+              comparator: '!=',
+              right: { refKind: 'single', network: input, signal: A },
+            },
+          ],
+        },
+      ],
+    };
+    expect(() =>
+      registry.update(producer, { ...pendingDescriptor, condition: changedCondition }),
+    ).toThrowError(/cannot change its condition topology/i);
+
+    const latestOutput = { kind: 'signal-constant', signal: B, value: 3 } as const;
+    registry.update(producer, {
+      ...pendingDescriptor,
+      output: latestOutput,
+      outputs: [latestOutput],
+      elseOutputs: [{ kind: 'signal-constant', signal: A, value: 8 }],
+      outputOrigins: [
+        { branch: 'normal', ordinal: 0, source, instancePath: ['root'], syntaxIntent: 'exact' },
+      ],
+      elseOutputOrigins: [
+        { branch: 'else', ordinal: 0, source, instancePath: ['root'], syntaxIntent: 'exact' },
+      ],
+    });
+
+    const concrete: PlanDeciderCondition = {
+      kind: 'and',
+      conditions: [
+        {
+          kind: 'compare-signal',
+          signal: A,
+          comparator: '>',
+          constant: 5,
+          refKind: 'single',
+          network: input,
+        },
+        {
+          kind: 'or',
+          conditions: [
+            {
+              kind: 'compare-each',
+              comparator: '<=',
+              constant: 2,
+              refKind: 'pair',
+              networks: pair,
+            },
+            {
+              kind: 'compare-signals',
+              left: { refKind: 'single', network: input, signal: B },
+              comparator: '!=',
+              right: { refKind: 'single', network: input, signal: A },
+            },
+          ],
+        },
+      ],
+    };
+    const wrongCondition: PlanDeciderCondition = {
+      ...concrete,
+      conditions: [
+        {
+          kind: 'compare-signal',
+          signal: A,
+          comparator: '>',
+          constant: 5,
+          refKind: 'single',
+          network: 'other-input',
+        },
+        concrete.conditions[1]!,
+      ],
+    };
+    expect(() => registry.installPendingDecider(producer, wrongCondition)).toThrowError(
+      /does not match its pending/i,
+    );
+    const otherProducer = value();
+    registry.register(
+      otherProducer,
+      { kind: 'constant', outputs: [], source, instancePath: ['root'] },
+      network('$constant:wrong-family'),
+      { network: '$constant:wrong-family', source, instancePath: ['root'] },
+    );
+    expect(() => registry.installPendingDecider(otherProducer, concrete)).toThrowError(
+      /only a pending Decider/i,
+    );
+    expect(state.descriptor).not.toBe(originalPending);
+    expect(state.descriptor).toHaveProperty('pendingConfiguration', template);
+
+    registry.installPendingDecider(producer, concrete);
+    expect(state.outputPort.primary).toBe(primaryLane);
+    expect(state.outputUsed).toBe(true);
+    expect(registry.secondary(producer)).toBe(secondary);
+    expect(state.debugCaptureIds).toEqual([capture.captureId]);
+    expect(state.descriptor).toMatchObject({
+      kind: 'decider',
+      condition: concrete,
+      output: latestOutput,
+      outputs: [latestOutput],
+      elseOutputs: [{ kind: 'signal-constant', signal: A, value: 8 }],
+      bindingName: 'parameterized-decider',
+      placement: { x: 4, y: 5 },
+      outputOrigins: [{ branch: 'normal', ordinal: 0 }],
+      elseOutputOrigins: [{ branch: 'else', ordinal: 0 }],
+    });
+    expect(state.descriptor).not.toHaveProperty('pendingConfiguration');
+    expect(registry.toPlan(state)).toMatchObject({
+      kind: 'decider',
+      condition: concrete,
+      outputs: [latestOutput],
+      elseOutputs: [{ kind: 'signal-constant', signal: A, value: 8 }],
+      bindingName: 'parameterized-decider',
+      debugCaptureIds: [capture.captureId],
+      destinations: [attachment, secondaryAttachment],
+    });
+    expect(() => registry.installPendingDecider(producer, concrete)).toThrowError(
+      /already installed/i,
+    );
+
+    registry.restore(pendingSnapshot);
+    expect(registry.stateFor(producer).descriptor).toBe(originalPending);
+    expect(() => registry.toPlan(registry.stateFor(producer))).toThrowError(
+      expect.objectContaining({ code: 'RT2027' }),
+    );
+  });
+
+  test('preserves destination binding while installing a parameterized condition', () => {
+    const session = createBlueprintParameterSession();
+    const amount = session.number('amount', { source });
+    const A = signal('virtual', 'signal-A');
+    const inputName = 'input' as NetworkId;
+    const conditionTemplate = createDeciderConfigurationTemplate(session, {
+      condition: {
+        kind: 'compare',
+        left: { kind: 'signal', signal: A, refKind: 'single', network: inputName },
+        comparator: '>',
+        right: { kind: 'constant', value: amount },
+      },
+      outputs: [],
+    });
+    const pendingCondition: PendingDeciderCondition = {
+      kind: 'compare-signal',
+      signal: A,
+      comparator: '>',
+      constant: { kind: 'constant' },
+      refKind: 'single',
+      network: inputName,
+    };
+    const output = { kind: 'each', refKind: 'single', network: 'output' } as const;
+    const producer = value();
+    const primary = network('$decider:bound');
+    const registry = new CombinatorRegistry();
+    const state = registry.register(
+      producer,
+      {
+        kind: 'decider',
+        condition: pendingCondition,
+        output,
+        outputs: [output],
+        pendingConfiguration: conditionTemplate,
+        source,
+        instancePath: ['root'],
+      },
+      primary,
+      { network: primary.name, source, instancePath: ['root'] },
+    );
+    const bound = signal('virtual', 'signal-output');
+    registry.bindOutput(producer, bound, source);
+    registry.installPendingDecider(producer, {
+      kind: 'compare-signal',
+      signal: A,
+      comparator: '>',
+      constant: 5,
+      refKind: 'single',
+      network: inputName,
+    });
+    expect(state.descriptor).toMatchObject({
+      condition: { kind: 'compare-signal', constant: 5 },
+      output: { kind: 'signal', signal: bound },
+      outputs: [{ kind: 'signal', signal: bound }],
     });
   });
 });

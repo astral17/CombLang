@@ -14,6 +14,7 @@ import type {
   CombinatorDescriptor,
   NetworkOwnershipState,
   PendingArithmeticOperand,
+  PendingDeciderCondition,
 } from './elaboration-values.js';
 
 function networkNames(
@@ -30,7 +31,7 @@ function combinatorInputNames(combinator: CombinatorDescriptor): readonly string
   const addOperand = (value: PlanArithmeticOperand | PendingArithmeticOperand) => {
     if (value.kind !== 'constant') addRef(value);
   };
-  const addCondition = (condition: PlanDeciderCondition): void => {
+  const addCondition = (condition: PlanDeciderCondition | PendingDeciderCondition): void => {
     if (condition.kind === 'and' || condition.kind === 'or') {
       for (const child of condition.conditions) addCondition(child);
     } else if (

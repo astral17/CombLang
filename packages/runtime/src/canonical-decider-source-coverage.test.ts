@@ -292,6 +292,223 @@ const exact = Decider({ condition: (input[A] > amount) && (input[B] <= 2 || inpu
     });
   });
 
+  test('materializes IF and mutable when Deciders once with their final branch rows and placement', () => {
+    const source = `const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const input = new Network();
+const direct = IF(input[A] > amount, input[A]);
+const gate = when(input[B] <= amount).at(1, 2);
+gate.then(input[A]);
+gate.at(3, 4, 8);
+const lateThen = gate.then;
+lateThen(2 * A);
+const lateElse = gate.else;
+lateElse(input[B]);
+const directOutput = new Network();
+const directOutputMirror = new Network();
+const gateOutput = new Network();
+directOutput += direct;
+directOutputMirror += direct;
+gateOutput += gate;`;
+    const environment = exactEnvironment();
+    const captured = exactParameterizedExecution(source, { environment });
+    expect(captured.plan.producers).toHaveLength(2);
+    expect(captured.plan.entities).toHaveLength(2);
+    expect(captured.plan.producers.map(({ debugCaptureIds }) => debugCaptureIds)).toEqual([
+      ['producer:1'],
+      ['producer:2'],
+    ]);
+    const directProducer = captured.plan.producers[0];
+    const gateProducer = captured.plan.producers[1];
+    expect(directProducer).toMatchObject({
+      kind: 'decider',
+      condition: { kind: 'compare-signal', comparator: '>', constant: 5 },
+      outputs: [{ kind: 'signal', network: 'input' }],
+      destinations: [{ network: '$combinator:1:primary' }, { network: '$combinator:1:secondary' }],
+    });
+    expect(gateProducer).toMatchObject({
+      kind: 'decider',
+      condition: { kind: 'compare-signal', comparator: '<=', constant: 5 },
+      outputs: [
+        { kind: 'signal', network: 'input' },
+        { kind: 'signal-constant', value: 2 },
+      ],
+      elseOutputs: [{ kind: 'signal', network: 'input' }],
+      outputOrigins: [{ ordinal: 0 }, { ordinal: 1 }],
+      elseOutputOrigins: [{ ordinal: 0 }],
+    });
+    expect(captured.plan.entities.map(({ configuration }) => configuration)).toEqual([
+      expect.objectContaining({
+        mode: 'decider',
+        condition: directProducer?.kind === 'decider' ? directProducer.condition : undefined,
+        outputs: directProducer?.kind === 'decider' ? directProducer.outputs : undefined,
+      }),
+      expect.objectContaining({
+        mode: 'decider',
+        condition: gateProducer?.kind === 'decider' ? gateProducer.condition : undefined,
+        outputs: gateProducer?.kind === 'decider' ? gateProducer.outputs : undefined,
+        elseOutputs: gateProducer?.kind === 'decider' ? gateProducer.elseOutputs : undefined,
+      }),
+    ]);
+    expect(captured.plan.entities[1]?.placement).toEqual({ x: 3, y: 4, direction: 8 });
+    expect(captured.deciderTemplates.map(({ captureId }) => captureId)).toEqual([
+      'producer:1',
+      'producer:2',
+    ]);
+    expect(JSON.stringify(captured.plan)).not.toContain('pendingConfiguration');
+
+    const lowered = tryElaborateDirectPlan(captured.plan, environment.context);
+    expect(lowered.diagnostics).toEqual([]);
+    const execution = lowered.execution!;
+    const original = execution.circuit.ir;
+    const defaults = bindCapturedSourceConfigurationTemplates(captured, execution);
+    const overridden = bindCapturedSourceConfigurationTemplates(captured, execution, [
+      { parameter: captured.parameters[0]!.handle, value: 9 },
+    ]);
+    const repeatedDefaults = bindCapturedSourceConfigurationTemplates(captured, execution);
+    expect(defaults).toEqual(original);
+    expect(repeatedDefaults).toEqual(defaults);
+    expect(overridden.producers.filter(({ kind }) => kind === 'decider')).toHaveLength(2);
+    expect(
+      overridden.producers
+        .filter((producer) => producer.kind === 'decider')
+        .every(
+          (producer) =>
+            producer.kind === 'decider' &&
+            producer.config.condition.kind === 'compare' &&
+            producer.config.condition.right.kind === 'constant' &&
+            producer.config.condition.right.value === 9,
+        ),
+    ).toBe(true);
+    expect(overridden.entities.map(({ id }) => id)).toEqual(original.entities.map(({ id }) => id));
+  });
+
+  test('keeps a pending when retryable after a caught output-binding failure', () => {
+    const source = `const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const input = new Network();
+const gate = when(input[A] > amount);
+const output = new Network();
+output[B] += gate;
+try { gate.then(input[A]); throw new Error('conflicting append succeeded'); }
+catch (error) { if (error.code !== 'RT2023') throw error; }
+gate.then(input[B]);`;
+    const captured = exactParameterizedExecution(source);
+    expect(captured.plan.producers).toHaveLength(1);
+    expect(captured.plan.entities).toHaveLength(1);
+    expect(captured.plan.producers[0]).toMatchObject({
+      kind: 'decider',
+      debugCaptureIds: ['producer:1'],
+      outputs: [{ kind: 'signal', signal: { type: 'virtual', name: 'signal-B' } }],
+      entityId: captured.plan.entities[0]?.id,
+    });
+    expect(captured.deciderTemplates.map(({ captureId }) => captureId)).toEqual(['producer:1']);
+    expect(JSON.stringify(captured.plan)).not.toContain('pendingConfiguration');
+  });
+
+  test('rolls back a failed late branch append without replacing linked rows or captures', () => {
+    const source = `const A = Signal('virtual', 'signal-A');
+const input = new Network<R>();
+const incompatible = new Network<R>();
+const gate = when(input[A] > amount);
+gate.then(input[A]);
+try { gate.then(incompatible[A]); throw new Error('conflicting append succeeded'); }
+catch (error) { if (error.code !== 'RT2010') throw error; }
+const output = new Network();
+output += gate;`;
+    const captured = exactParameterizedExecution(source);
+    expect(captured.plan.producers).toHaveLength(1);
+    expect(captured.plan.entities).toHaveLength(1);
+    expect(captured.plan.producers[0]).toMatchObject({
+      kind: 'decider',
+      debugCaptureIds: ['producer:1'],
+      outputs: [{ kind: 'signal', network: 'input' }],
+      entityId: captured.plan.entities[0]?.id,
+    });
+    expect(captured.plan.producers[0]).not.toHaveProperty('elseOutputs');
+    expect(captured.deciderTemplates.map(({ captureId }) => captureId)).toEqual(['producer:1']);
+  });
+
+  test('materializes parameterized else-only when outputs', () => {
+    const source = `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const gate = when(input[A] > amount).else(input[A]);
+const output = new Network();
+output += gate;`;
+    const captured = exactParameterizedExecution(source);
+    expect(captured.plan.producers).toHaveLength(1);
+    expect(captured.plan.entities).toHaveLength(1);
+    expect(captured.plan.producers[0]).toMatchObject({
+      kind: 'decider',
+      condition: { kind: 'compare-signal', constant: 5 },
+      outputs: [],
+      elseOutputs: [{ kind: 'signal', network: 'input' }],
+      entityId: captured.plan.entities[0]?.id,
+    });
+    expect(captured.plan.entities[0]?.configuration).toMatchObject({
+      mode: 'decider',
+      outputs: [],
+      elseOutputs: [{ kind: 'signal', refKind: 'single', network: 'input' }],
+    });
+  });
+
+  test('keeps a downstream Arithmetic consumer attached to the installed Decider output', () => {
+    const source = `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const gate = IF(input[A] > amount, input[A]);
+const consumer = Arithmetic({ left: gate[A], operation: 'add', right: 1, output: A });
+const output = new Network();
+output += consumer;`;
+    const environment = exactEnvironment(true);
+    const captured = exactParameterizedExecution(source, { environment });
+    expect(captured.plan.producers).toHaveLength(2);
+    expect(captured.plan.producers[0]).toMatchObject({
+      kind: 'decider',
+      condition: { kind: 'compare-signal', constant: 5 },
+    });
+    expect(captured.plan.producers[1]).toMatchObject({
+      kind: 'arithmetic',
+      left: { kind: 'signal', refKind: 'single', network: '$combinator:1:primary' },
+    });
+    expect(captured.plan.entities).toHaveLength(2);
+    const lowered = tryElaborateDirectPlan(captured.plan, environment.context);
+    expect(lowered.diagnostics).toEqual([]);
+    expect(lowered.execution?.circuit.ir.producers.map(({ kind }) => kind)).toEqual([
+      'decider',
+      'arithmetic',
+    ]);
+    const rebound = bindCapturedSourceConfigurationTemplates(captured, lowered.execution!, [
+      { parameter: captured.parameters[0]!.handle, value: 7 },
+    ]);
+    expect(rebound.producers[0]).toMatchObject({
+      kind: 'decider',
+      config: { condition: { kind: 'compare', right: { kind: 'constant', value: 7 } } },
+    });
+    expect(rebound.producers[1]?.id).toBe(lowered.execution?.circuit.ir.producers[1]?.id);
+  });
+
+  test('registers pending Decider condition input colors before installation', () => {
+    const source = `const A = Signal('virtual', 'signal-A');
+const first = new Network<R>();
+const second = new Network<R>();
+Decider({ condition: (first[A] > amount) && (second[A] > 0), outputs: [first[A]] });`;
+    expect(() => exactParameterizedExecution(source)).toThrowError(
+      expect.objectContaining({
+        code: 'RT2010',
+        message: expect.stringContaining('both wire colors'),
+      }),
+    );
+  });
+
+  test('retains the incomplete parameterized when diagnostic', () => {
+    const source = `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const unfinished = when(input[A] > amount);`;
+    expect(() => exactParameterizedExecution(source)).toThrowError(
+      expect.objectContaining({ code: 'RT2022', message: expect.stringContaining('output') }),
+    );
+  });
+
   test('rejects negated parameterized conditions across Decider constructor forms', () => {
     const prefixes = [
       `const exact = IF(!(input[A] > amount), input[A]);`,

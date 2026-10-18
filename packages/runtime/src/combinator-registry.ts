@@ -1,12 +1,14 @@
 import { sameSignal, type ConstantConfiguration, type SignalId } from '@comblang/factorio';
 import type {
   DirectPlanProducer,
+  PlanDeciderCondition,
   PlanArithmeticOperand,
   PlanAttachment,
   PlanNetworkRef,
 } from '@comblang/compiler/direct-plan-schema';
 import type { LogicalArithmeticOutput, SelectorProducerConfig } from '../../compiler/src/ir.js';
 import type { ArithmeticTemplateOperand } from '../../compiler/src/arithmetic-configuration-template.js';
+import type { DeciderTemplateCondition } from '../../compiler/src/decider-configuration-template.js';
 import type { SourceSpan } from '@comblang/shared';
 
 import { ElaborationExecutionError } from './elaboration-errors.js';
@@ -16,6 +18,7 @@ import type {
   CombinatorValue,
   NetworkValue,
   PendingArithmeticOperand,
+  PendingDeciderCondition,
 } from './elaboration-values.js';
 
 type ArithmeticInstallationConfiguration = Pick<
@@ -223,6 +226,13 @@ export class CombinatorRegistry {
         }
       }
       if (
+        currentPending.kind === 'decider' &&
+        (nextPending.kind !== 'decider' ||
+          !samePendingDeciderTopology(currentPending.condition, nextPending.condition))
+      ) {
+        throw new Error('A pending Decider cannot change its condition topology.');
+      }
+      if (
         currentPending.kind === 'selector' &&
         (nextPending.kind !== 'selector' ||
           nextPending.operation !== currentPending.operation ||
@@ -363,6 +373,36 @@ export class CombinatorRegistry {
     };
   }
 
+  installPendingDecider(value: CombinatorValue, condition: PlanDeciderCondition): void {
+    const state = this.stateFor(value);
+    if (state.descriptor.kind !== 'decider') {
+      throw new Error('Only a pending Decider can receive a Decider condition.');
+    }
+    if (!isPendingCombinatorDescriptor(state.descriptor)) {
+      throw new Error('The Decider condition was already installed.');
+    }
+    if (state.descriptor.kind !== 'decider') {
+      throw new Error('Only a pending Decider can receive a Decider condition.');
+    }
+    const pending = state.descriptor;
+    if (
+      pending.pendingConfiguration.outputs.length !== 0 ||
+      pending.pendingConfiguration.elseOutputs !== undefined ||
+      !matchesPendingDeciderCondition(pending.condition, condition) ||
+      !matchesPendingDeciderTemplate(pending.condition, pending.pendingConfiguration.condition)
+    ) {
+      throw new Error(
+        'The Decider condition does not match its pending comparator, group, or input topology.',
+      );
+    }
+    const {
+      pendingConfiguration: _pendingConfiguration,
+      condition: _condition,
+      ...descriptor
+    } = pending;
+    state.descriptor = { ...descriptor, condition };
+  }
+
   bindOutput(value: CombinatorValue, signal: SignalId, source: SourceSpan): void {
     const state = this.stateFor(value);
     const binding = state.outputBinding;
@@ -446,7 +486,8 @@ function isPendingCombinatorDescriptor(
   return (
     (descriptor.kind === 'constant' ||
       descriptor.kind === 'selector' ||
-      descriptor.kind === 'arithmetic') &&
+      descriptor.kind === 'arithmetic' ||
+      descriptor.kind === 'decider') &&
     'pendingConfiguration' in descriptor
   );
 }
@@ -504,4 +545,194 @@ function sameNetworkRef(left: PlanNetworkRef, right: PlanNetworkRef): boolean {
     : right.refKind === 'pair' &&
         left.networks[0] === right.networks[0] &&
         left.networks[1] === right.networks[1];
+}
+
+function hasPendingConstantMarker(value: unknown): boolean {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === 1 &&
+    (value as { readonly kind?: unknown }).kind === 'constant'
+  );
+}
+
+function isSignalId(value: unknown): value is SignalId {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'type' in value &&
+    typeof value.type === 'string' &&
+    'name' in value &&
+    typeof value.name === 'string'
+  );
+}
+
+function sameTemplateSignal(value: unknown, expected: SignalId): boolean {
+  return isSignalId(value) && sameSignal(value, expected);
+}
+
+function samePendingDeciderTopology(
+  left: PendingDeciderCondition,
+  right: PendingDeciderCondition,
+): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === 'and' || left.kind === 'or') {
+    return (
+      right.kind === left.kind &&
+      left.conditions.length === right.conditions.length &&
+      left.conditions.every((condition, index) =>
+        samePendingDeciderTopology(condition, right.conditions[index]!),
+      )
+    );
+  }
+  if (right.kind === 'and' || right.kind === 'or') return false;
+  if (
+    left.kind === 'compare-each' ||
+    left.kind === 'compare-signal' ||
+    left.kind === 'compare-wildcard'
+  ) {
+    return (
+      right.kind === left.kind &&
+      left.comparator === right.comparator &&
+      sameNetworkRef(left, right) &&
+      hasPendingConstantMarker(left.constant) &&
+      hasPendingConstantMarker(right.constant) &&
+      (left.kind !== 'compare-signal' ||
+        (right.kind === 'compare-signal' && sameSignal(left.signal, right.signal))) &&
+      (left.kind !== 'compare-wildcard' ||
+        (right.kind === 'compare-wildcard' && left.wildcard === right.wildcard))
+    );
+  }
+  if (left.kind === 'compare-signals') {
+    return (
+      right.kind === 'compare-signals' &&
+      left.comparator === right.comparator &&
+      sameNetworkRef(left.left, right.left) &&
+      sameNetworkRef(left.right, right.right) &&
+      sameSignal(left.left.signal, right.left.signal) &&
+      sameSignal(left.right.signal, right.right.signal)
+    );
+  }
+  return (
+    right.kind === 'compare-wildcard-signal' &&
+    left.comparator === right.comparator &&
+    sameNetworkRef(left.left, right.left) &&
+    sameNetworkRef(left.right, right.right) &&
+    left.left.wildcard === right.left.wildcard &&
+    sameSignal(left.right.signal, right.right.signal)
+  );
+}
+
+function matchesPendingDeciderCondition(
+  pending: PendingDeciderCondition,
+  concrete: PlanDeciderCondition,
+): boolean {
+  if (pending.kind !== concrete.kind) return false;
+  if (pending.kind === 'and' || pending.kind === 'or') {
+    return (
+      (concrete.kind === 'and' || concrete.kind === 'or') &&
+      pending.conditions.length === concrete.conditions.length &&
+      pending.conditions.every((condition, index) =>
+        matchesPendingDeciderCondition(condition, concrete.conditions[index]!),
+      )
+    );
+  }
+  if (concrete.kind === 'and' || concrete.kind === 'or') return false;
+  if (
+    pending.kind === 'compare-each' ||
+    pending.kind === 'compare-signal' ||
+    pending.kind === 'compare-wildcard'
+  ) {
+    return (
+      concrete.kind === pending.kind &&
+      pending.comparator === concrete.comparator &&
+      sameNetworkRef(pending, concrete) &&
+      hasPendingConstantMarker(pending.constant) &&
+      typeof concrete.constant === 'number' &&
+      (pending.kind !== 'compare-signal' ||
+        (concrete.kind === 'compare-signal' && sameSignal(pending.signal, concrete.signal))) &&
+      (pending.kind !== 'compare-wildcard' ||
+        (concrete.kind === 'compare-wildcard' && pending.wildcard === concrete.wildcard))
+    );
+  }
+  if (pending.kind === 'compare-signals') {
+    return (
+      concrete.kind === 'compare-signals' &&
+      pending.comparator === concrete.comparator &&
+      sameNetworkRef(pending.left, concrete.left) &&
+      sameNetworkRef(pending.right, concrete.right) &&
+      sameSignal(pending.left.signal, concrete.left.signal) &&
+      sameSignal(pending.right.signal, concrete.right.signal)
+    );
+  }
+  return (
+    concrete.kind === 'compare-wildcard-signal' &&
+    pending.comparator === concrete.comparator &&
+    sameNetworkRef(pending.left, concrete.left) &&
+    sameNetworkRef(pending.right, concrete.right) &&
+    pending.left.wildcard === concrete.left.wildcard &&
+    sameSignal(pending.right.signal, concrete.right.signal)
+  );
+}
+
+function matchesPendingDeciderTemplate(
+  pending: PendingDeciderCondition,
+  template: DeciderTemplateCondition,
+): boolean {
+  if (
+    pending.kind !== template.kind &&
+    !(template.kind === 'compare' && pending.kind.startsWith('compare-'))
+  ) {
+    return false;
+  }
+  if (pending.kind === 'and' || pending.kind === 'or') {
+    return (
+      template.kind === pending.kind &&
+      pending.conditions.length === template.conditions.length &&
+      pending.conditions.every((condition, index) =>
+        matchesPendingDeciderTemplate(condition, template.conditions[index]!),
+      )
+    );
+  }
+  if (template.kind !== 'compare') return false;
+  if (
+    pending.kind === 'compare-each' ||
+    pending.kind === 'compare-signal' ||
+    pending.kind === 'compare-wildcard'
+  ) {
+    const leftMatches =
+      pending.kind === 'compare-each'
+        ? template.left.kind === 'wildcard' && template.left.value === 'each'
+        : pending.kind === 'compare-signal'
+          ? template.left.kind === 'signal' &&
+            sameTemplateSignal(template.left.signal, pending.signal)
+          : template.left.kind === 'wildcard' && template.left.value === pending.wildcard;
+    return (
+      leftMatches &&
+      sameNetworkRef(pending, template.left) &&
+      template.comparator === pending.comparator &&
+      template.right.kind === 'constant'
+    );
+  }
+  if (pending.kind === 'compare-signals') {
+    return (
+      template.left.kind === 'signal' &&
+      template.right.kind === 'signal' &&
+      sameTemplateSignal(template.left.signal, pending.left.signal) &&
+      sameTemplateSignal(template.right.signal, pending.right.signal) &&
+      sameNetworkRef(pending.left, template.left) &&
+      sameNetworkRef(pending.right, template.right) &&
+      template.comparator === pending.comparator
+    );
+  }
+  return (
+    template.left.kind === 'wildcard' &&
+    template.right.kind === 'signal' &&
+    template.left.value === pending.left.wildcard &&
+    sameTemplateSignal(template.right.signal, pending.right.signal) &&
+    sameNetworkRef(pending.left, template.left) &&
+    sameNetworkRef(pending.right, template.right) &&
+    template.comparator === pending.comparator
+  );
 }

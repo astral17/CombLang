@@ -16,6 +16,7 @@ import type { SourceSpan } from '@comblang/shared';
 import type { ConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-template.js';
 import type { ArithmeticConfigurationTemplate } from '../../compiler/src/arithmetic-configuration-template.js';
 import type { SelectorConfigurationTemplate } from '../../compiler/src/selector-configuration-template.js';
+import type { DeciderConfigurationTemplate } from '../../compiler/src/decider-configuration-template.js';
 
 export type RuntimeNetworkCapability = 'owned' | 'readonly' | 'ref' | 'move';
 
@@ -217,6 +218,46 @@ type PendingCountSelectorDescriptor = Omit<CompleteCountSelectorDescriptor, 'out
 
 type PendingSelectorDescriptor = PendingSelectSelectorDescriptor | PendingCountSelectorDescriptor;
 
+/** Numeric RHS slots are represented without placeholder values until installation. */
+export type PendingDeciderCondition =
+  | ({
+      readonly kind: 'compare-each';
+      readonly comparator: Extract<PlanDeciderCondition, { kind: 'compare-each' }>['comparator'];
+      readonly constant: { readonly kind: 'constant' };
+    } & PlanNetworkRef)
+  | ({
+      readonly kind: 'compare-signal';
+      readonly signal: Extract<PlanDeciderCondition, { kind: 'compare-signal' }>['signal'];
+      readonly comparator: Extract<PlanDeciderCondition, { kind: 'compare-signal' }>['comparator'];
+      readonly constant: { readonly kind: 'constant' };
+    } & PlanNetworkRef)
+  | ({
+      readonly kind: 'compare-wildcard';
+      readonly wildcard: Extract<PlanDeciderCondition, { kind: 'compare-wildcard' }>['wildcard'];
+      readonly comparator: Extract<
+        PlanDeciderCondition,
+        { kind: 'compare-wildcard' }
+      >['comparator'];
+      readonly constant: { readonly kind: 'constant' };
+    } & PlanNetworkRef)
+  | Extract<PlanDeciderCondition, { kind: 'compare-signals' | 'compare-wildcard-signal' }>
+  | {
+      readonly kind: 'and';
+      readonly conditions: readonly PendingDeciderCondition[];
+    }
+  | {
+      readonly kind: 'or';
+      readonly conditions: readonly PendingDeciderCondition[];
+    };
+
+type PendingDeciderDescriptor = Omit<CompleteDeciderDescriptor, 'condition' | 'output'> & {
+  readonly condition: PendingDeciderCondition;
+  readonly output?: CompleteDeciderDescriptor['output'];
+  readonly outputOrigins?: readonly DeciderOutputOrigin[];
+  readonly elseOutputOrigins?: readonly DeciderOutputOrigin[];
+  readonly pendingConfiguration: DeciderConfigurationTemplate;
+};
+
 export type {
   DeciderOutputOrigin,
   DeciderOutputSyntaxIntent,
@@ -231,6 +272,7 @@ export type CombinatorDescriptor =
   | PendingArithmeticDescriptor
   | PendingConstantDescriptor
   | PendingSelectorDescriptor
+  | PendingDeciderDescriptor
   | (Omit<CompleteDeciderDescriptor, 'output'> & {
       readonly output?: CompleteDeciderDescriptor['output'];
       readonly outputOrigins?: readonly DeciderOutputOrigin[];

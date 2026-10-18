@@ -87,6 +87,7 @@ import {
   type PairSelectedValue,
   type PairValue,
   type PendingArithmeticOperand,
+  type PendingDeciderCondition,
   type RuntimeObjectKind,
   type RuntimeObjectValue,
   type SelectedRuntimeState,
@@ -254,6 +255,20 @@ type PendingCombinatorConfiguration =
   | { readonly kind: 'arithmetic'; readonly configuration: ExactArithmeticConfiguration }
   | { readonly kind: 'selector'; readonly configuration: SelectorProducerConfig };
 
+function pendingDeciderCondition(condition: PlanDeciderCondition): PendingDeciderCondition {
+  if (condition.kind === 'and' || condition.kind === 'or') {
+    return { kind: condition.kind, conditions: condition.conditions.map(pendingDeciderCondition) };
+  }
+  if (
+    condition.kind === 'compare-each' ||
+    condition.kind === 'compare-signal' ||
+    condition.kind === 'compare-wildcard'
+  ) {
+    return { ...condition, constant: { kind: 'constant' } };
+  }
+  return condition;
+}
+
 function pendingArithmeticOperand(value: PlanArithmeticOperand): PendingArithmeticOperand {
   if (value.kind === 'constant') return { kind: 'constant' };
   const reference =
@@ -380,6 +395,7 @@ interface TopologySnapshot {
   readonly entityInvocations: ReadonlyMap<EntityValue['id'], SourceSpan>;
   readonly linkedProducersLength: number;
   readonly pendingCombinatorInstallationsLength: number;
+  readonly pendingDeciderConditions: ReadonlyMap<object, PlanDeciderCondition>;
 }
 
 interface EntityFacetAuthority {
@@ -419,6 +435,11 @@ interface LinkedPendingArithmeticAssociation {
   readonly entity: EntityValue;
 }
 
+interface LinkedPendingDeciderAssociation {
+  readonly kind: 'pending-decider';
+  readonly entity: EntityValue;
+}
+
 interface LinkedArithmeticAssociation {
   readonly kind: 'arithmetic';
   readonly entity: EntityValue;
@@ -442,6 +463,7 @@ type LinkedProducerAssociation =
   | LinkedPendingConstantAssociation
   | LinkedPendingArithmeticAssociation
   | LinkedPendingSelectorAssociation
+  | LinkedPendingDeciderAssociation
   | LinkedArithmeticAssociation
   | LinkedDeciderAssociation
   | LinkedSelectorAssociation;
@@ -464,6 +486,12 @@ type PendingCombinatorInstallation =
       readonly producer: CombinatorValue;
       readonly entity?: EntityValue;
       readonly configuration: SelectorProducerConfig;
+    }
+  | {
+      readonly kind: 'decider';
+      readonly producer: CombinatorValue;
+      readonly entity: EntityValue;
+      readonly condition: PlanDeciderCondition;
     };
 
 export interface ElaborationExecutionOptions {
@@ -581,6 +609,7 @@ class ElaborationRecorder {
     readonly association: LinkedProducerAssociation;
   }[] = [];
   readonly #pendingCombinatorInstallations: PendingCombinatorInstallation[] = [];
+  readonly #pendingDeciderConditions = new Map<object, PlanDeciderCondition>();
   #entityRevision = 0;
   #entityOperationOrdinal = 0;
   readonly #entityInvocations = new Map<EntityValue['id'], SourceSpan>();
@@ -2594,7 +2623,8 @@ class ElaborationRecorder {
     }
     try {
       const hasLinkedDecider = this.#linkedProducers.some(
-        ({ association }) => association.kind === 'decider',
+        ({ association }) =>
+          association.kind === 'decider' || association.kind === 'pending-decider',
       );
       this.#finalizeUnusedCombinators();
       this.#installPendingCombinatorConfigurations();
@@ -2680,7 +2710,8 @@ class ElaborationRecorder {
         if (
           linked.association.kind === 'pending-constant' ||
           linked.association.kind === 'pending-arithmetic' ||
-          linked.association.kind === 'pending-selector'
+          linked.association.kind === 'pending-selector' ||
+          linked.association.kind === 'pending-decider'
         ) {
           throw new Error(
             'A pending combinator Entity was not installed before plan construction.',
@@ -2775,7 +2806,7 @@ class ElaborationRecorder {
     return Object.freeze(
       this.#pendingDeciderTemplateCaptures.map(({ producer, captureId }) => {
         const descriptor = this.#combinators.stateFor(producer).descriptor;
-        if (descriptor.kind !== 'decider') {
+        if (descriptor.kind !== 'decider' || 'pendingConfiguration' in descriptor) {
           throw new Error('A captured Decider template lost its producer descriptor.');
         }
         const condition = this.#deciderConditionTemplate(descriptor.condition);
@@ -3311,6 +3342,36 @@ class ElaborationRecorder {
         continue;
       }
 
+      if (pending.kind === 'decider') {
+        if (current?.kind !== 'pending-decider' || current.entity !== pending.entity) {
+          throw new Error('Pending Decider installation lost its linked Entity association.');
+        }
+        if (index < 0) {
+          throw new Error('Pending Decider installation lost its registration order entry.');
+        }
+        this.#combinators.installPendingDecider(pending.producer, pending.condition);
+        const installed = this.#combinators.stateFor(pending.producer).descriptor;
+        if (installed.kind !== 'decider' || 'pendingConfiguration' in installed) {
+          throw new Error('Pending Decider installation did not produce a concrete descriptor.');
+        }
+        const outputs =
+          installed.outputs ?? (installed.output === undefined ? [] : [installed.output]);
+        const configuration: EntityDeciderConfiguration = {
+          mode: 'decider',
+          condition: installed.condition,
+          outputs,
+          ...(installed.elseOutputs === undefined ? {} : { elseOutputs: installed.elseOutputs }),
+        };
+        const association: LinkedDeciderAssociation = {
+          kind: 'decider',
+          entity: pending.entity,
+          configuration,
+        };
+        this.#linkedProducerByIdentity.set(pending.producer.identity, association);
+        this.#linkedProducers[index] = { producer: pending.producer, association };
+        continue;
+      }
+
       if (pending.entity === undefined) {
         if (current !== undefined || index >= 0) {
           throw new Error(
@@ -3367,8 +3428,10 @@ class ElaborationRecorder {
         ({ association }) =>
           association.kind === 'pending-constant' ||
           association.kind === 'pending-arithmetic' ||
-          association.kind === 'pending-selector',
+          association.kind === 'pending-selector' ||
+          association.kind === 'pending-decider',
       ) ||
+      this.#pendingDeciderConditions.size > 0 ||
       this.#combinators.states().some(({ descriptor }) => hasPendingConfiguration(descriptor));
     const pendingInArtifacts =
       producers.some(hasPendingConfiguration) ||
@@ -3405,6 +3468,9 @@ class ElaborationRecorder {
   #validateFinalDeciderModes(): void {
     for (const state of this.#combinators.states()) {
       if (state.descriptor.kind !== 'decider') continue;
+      if ('pendingConfiguration' in state.descriptor) {
+        throw new Error('A pending Decider reached final mode validation.');
+      }
       const descriptor = state.descriptor;
       const usesEach = conditionUsesEach(descriptor.condition);
       const branches = [
@@ -3584,6 +3650,9 @@ class ElaborationRecorder {
     rawSpan: RawSpan,
     pendingConfiguration?: PendingCombinatorConfiguration,
   ): CombinatorValue {
+    if (descriptor.kind === 'decider' && 'pendingConfiguration' in descriptor) {
+      throw new Error('Pending Decider descriptors can only be created by the recorder.');
+    }
     // A provider-backed arithmetic producer is the ergonomic spelling of the
     // exact Arithmetic constructor. Resolve its trusted base before creating
     // any topology so malformed or ambiguous authority cannot fall through to
@@ -3601,6 +3670,32 @@ class ElaborationRecorder {
       descriptor.kind === 'selector'
         ? this.#resolveCanonicalProfile('Selector', rawSpan)
         : undefined;
+    let registeredDescriptor: CombinatorDescriptor = descriptor;
+    let pendingDeciderConditionValue: PlanDeciderCondition | undefined;
+    if (descriptor.kind === 'decider' && this.#conditionHasNumberParameter(descriptor.condition)) {
+      const conditionTemplate = this.#deciderConditionTemplate(descriptor.condition);
+      if (!conditionTemplate.hasNumberParameter) {
+        throw new Error('Parameterized Decider condition lost its captured numeric root.');
+      }
+      const session = this.#parameterCapture?.session;
+      if (session === undefined) {
+        throw new ElaborationExecutionError(
+          'Parameterized Decider construction requires an owning parameter session.',
+          this.#span(rawSpan),
+          'RT2027',
+        );
+      }
+      const pendingConfiguration = createDeciderConfigurationTemplate(session, {
+        condition: conditionTemplate.value,
+        outputs: [],
+      });
+      pendingDeciderConditionValue = descriptor.condition;
+      registeredDescriptor = {
+        ...descriptor,
+        condition: pendingDeciderCondition(descriptor.condition),
+        pendingConfiguration,
+      };
+    }
     if (
       descriptor.kind === 'selector' &&
       (this.#entityContext !== undefined || this.#entityPrototypeResolver !== undefined) &&
@@ -3615,13 +3710,16 @@ class ElaborationRecorder {
     const ordinal = ++this.#combinatorOrdinal;
     const primary = this.#network(`$combinator:${ordinal}:primary`, rawSpan);
     const value = this.#runtimeValue<CombinatorValue>({ kind: 'combinator', identity: {} });
-    this.#combinators.register(value, descriptor, primary, {
+    this.#combinators.register(value, registeredDescriptor, primary, {
       network: primary.name,
       source: this.#span(rawSpan),
       instancePath: this.#path(),
     });
+    if (pendingDeciderConditionValue !== undefined) {
+      this.#pendingDeciderConditions.set(value.identity, pendingDeciderConditionValue);
+    }
     this.#combinatorByOutput.set(this.#networkState(primary).ownership, value);
-    this.#colors.registerCombinatorInputs(value.identity, descriptor);
+    this.#colors.registerCombinatorInputs(value.identity, registeredDescriptor);
     let linkedArithmeticEntity: EntityValue | undefined;
     if (arithmeticProfile !== undefined && descriptor.kind === 'arithmetic') {
       const entity = this.#allocateEntity(arithmeticProfile.ref, undefined, undefined, rawSpan);
@@ -3650,10 +3748,11 @@ class ElaborationRecorder {
       this.#linkedProducers.push({ producer: value, association });
     }
     if (
-      descriptor.kind === 'decider' &&
-      ((descriptor.outputs?.length ?? 0) > 0 || (descriptor.elseOutputs?.length ?? 0) > 0)
+      registeredDescriptor.kind === 'decider' &&
+      ((registeredDescriptor.outputs?.length ?? 0) > 0 ||
+        (registeredDescriptor.elseOutputs?.length ?? 0) > 0)
     ) {
-      this.#linkDeciderCombinator(value, descriptor, rawSpan, deciderProfile);
+      this.#linkDeciderCombinator(value, registeredDescriptor, rawSpan, deciderProfile);
     }
     let linkedSelectorEntity: EntityValue | undefined;
     if (selectorProfile !== undefined && descriptor.kind === 'selector') {
@@ -3736,7 +3835,10 @@ class ElaborationRecorder {
     const outputs =
       descriptor.outputs ?? (descriptor.output === undefined ? [] : [descriptor.output]);
     if (outputs.length === 0 && (descriptor.elseOutputs?.length ?? 0) === 0) return;
-    const hasNumberParameter = this.#conditionHasNumberParameter(descriptor.condition);
+    const hasNumberParameter =
+      'pendingConfiguration' in descriptor
+        ? true
+        : this.#conditionHasNumberParameter(descriptor.condition);
     if (profile === undefined) {
       if (hasNumberParameter) {
         throw new ElaborationExecutionError(
@@ -3747,14 +3849,41 @@ class ElaborationRecorder {
       }
       return;
     }
-    const configuration: EntityDeciderConfiguration = {
-      mode: 'decider',
-      condition: descriptor.condition,
-      outputs,
-      ...(descriptor.elseOutputs === undefined ? {} : { elseOutputs: descriptor.elseOutputs }),
-    };
     const existing = this.#linkedProducerByIdentity.get(producer.identity);
+    if ('pendingConfiguration' in descriptor) {
+      if (existing !== undefined) return;
+      const condition = this.#pendingDeciderConditions.get(producer.identity);
+      if (condition === undefined) {
+        throw new Error('Pending Decider lost its validated concrete condition before linking.');
+      }
+      const entity = this.#allocateEntity(profile.ref, undefined, descriptor.placement, rawSpan);
+      if (descriptor.placement !== undefined) {
+        const { placement: _placement, ...withoutPlacement } = descriptor;
+        this.#combinators.update(producer, withoutPlacement);
+      }
+      const association: LinkedPendingDeciderAssociation = { kind: 'pending-decider', entity };
+      this.#pendingDeciderConditions.delete(producer.identity);
+      this.#linkedProducerByIdentity.set(producer.identity, association);
+      this.#linkedProducers.push({ producer, association });
+      this.#pendingCombinatorInstallations.push({
+        kind: 'decider',
+        producer,
+        entity,
+        condition,
+      });
+      if (this.#parameterCapture !== undefined) {
+        const { captureId } = this.#combinators.capture(producer);
+        this.#pendingDeciderTemplateCaptures.push({ producer, captureId });
+      }
+      return;
+    }
     if (existing?.kind === 'decider') {
+      const configuration: EntityDeciderConfiguration = {
+        mode: 'decider',
+        condition: descriptor.condition,
+        outputs,
+        ...(descriptor.elseOutputs === undefined ? {} : { elseOutputs: descriptor.elseOutputs }),
+      };
       const association = { ...existing, configuration } satisfies LinkedDeciderAssociation;
       const entry = this.#linkedProducers.findIndex(
         ({ producer: candidate }) => candidate.identity === producer.identity,
@@ -3769,6 +3898,12 @@ class ElaborationRecorder {
       const { placement: _placement, ...withoutPlacement } = descriptor;
       this.#combinators.update(producer, withoutPlacement);
     }
+    const configuration: EntityDeciderConfiguration = {
+      mode: 'decider',
+      condition: descriptor.condition,
+      outputs,
+      ...(descriptor.elseOutputs === undefined ? {} : { elseOutputs: descriptor.elseOutputs }),
+    };
     const association = {
       kind: 'decider' as const,
       entity,
@@ -4216,6 +4351,7 @@ class ElaborationRecorder {
       entityInvocations: new Map(this.#entityInvocations),
       linkedProducersLength: this.#linkedProducers.length,
       pendingCombinatorInstallationsLength: this.#pendingCombinatorInstallations.length,
+      pendingDeciderConditions: new Map(this.#pendingDeciderConditions),
     };
   }
 
@@ -4278,6 +4414,10 @@ class ElaborationRecorder {
       if (removed !== undefined) this.#linkedProducerByIdentity.delete(removed.producer.identity);
     }
     this.#pendingCombinatorInstallations.length = snapshot.pendingCombinatorInstallationsLength;
+    this.#pendingDeciderConditions.clear();
+    for (const [identity, condition] of snapshot.pendingDeciderConditions) {
+      this.#pendingDeciderConditions.set(identity, condition);
+    }
   }
 
   #withTopologyTransaction<T>(rawSpan: RawSpan, operation: () => T): T {
