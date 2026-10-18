@@ -3409,9 +3409,14 @@ selectorInput += selector;
 selectorInput += literalSelector;
 const consumer = Arithmetic({ left: selectorInput[A], operation: 'add', right: amount, output: B });
 output += consumer;`;
+    let sourceExecutions = 0;
     const compilation = compileSourceProgram(
       { path: 'mixed-source-configuration-parameters.factorio.ts', text },
       parameterHost(),
+      [],
+      (stage) => {
+        if (stage === 'execute') sourceExecutions += 1;
+      },
     );
     expect(compilation.pipelineDiagnostics).toEqual([]);
     expect(compilation.plan?.producers.map(({ kind }) => kind)).toEqual([
@@ -3425,6 +3430,11 @@ output += consumer;`;
 
     const declarations = listSourceCompilationParameters(compilation);
     const original = compilation.execution?.circuit.ir;
+    const originalCaptureIds = compilation.plan?.producers.map(
+      ({ debugCaptureIds }) => debugCaptureIds,
+    );
+    const defaults = bindSourceCompilationParameters(compilation, []);
+    expect(defaults).toEqual(original);
     const bound = bindSourceCompilationParameters(compilation, [
       { parameter: declarations[0]!.parameter, value: 9 },
       {
@@ -3436,14 +3446,164 @@ output += consumer;`;
       kind: 'selector',
       config: { operation: 'select', index: 9 },
     });
+    expect(
+      bound.producers.filter(({ kind }) => kind === 'arithmetic').map(({ config }) => config),
+    ).toMatchObject([
+      {
+        right: { kind: 'constant', value: 9 },
+        output: { kind: 'signal', signal: signal('virtual', 'signal-B') },
+      },
+      {
+        right: { kind: 'constant', value: 9 },
+        output: { kind: 'signal', signal: signal('virtual', 'signal-B') },
+      },
+    ]);
     expect(bound.networks).toEqual(original?.networks);
     expect(bound.entities.map(({ id }) => id)).toEqual(original?.entities.map(({ id }) => id));
     expect(bound.producers.map(({ id }) => id)).toEqual(original?.producers.map(({ id }) => id));
+    expect(compilation.plan?.producers.map(({ debugCaptureIds }) => debugCaptureIds)).toEqual(
+      originalCaptureIds,
+    );
     expect(compilation.execution?.circuit.ir).toEqual(original);
+    expect(bindSourceCompilationParameters(compilation, [])).toEqual(defaults);
+    const rebound = bindSourceCompilationParameters(compilation, [
+      { parameter: declarations[0]!.parameter, value: 11 },
+      {
+        parameter: declarations[1]!.parameter,
+        value: { type: 'virtual', name: 'signal-D' },
+      },
+    ]);
+    expect(
+      rebound.producers.filter(({ kind }) => kind === 'arithmetic').map(({ config }) => config),
+    ).toMatchObject([
+      { right: { kind: 'constant', value: 11 } },
+      { right: { kind: 'constant', value: 11 } },
+    ]);
+    expect(rebound.producers.map(({ id }) => id)).toEqual(original?.producers.map(({ id }) => id));
+    expect(compilation.plan?.producers.map(({ debugCaptureIds }) => debugCaptureIds)).toEqual(
+      originalCaptureIds,
+    );
     const artifact = sourceCompilationArtifact(compilation);
     expect(artifact).not.toHaveProperty('selectorTemplates');
     expect(JSON.stringify(bound)).not.toContain('Amount');
     expect(JSON.stringify(bound)).not.toContain('Selected signal');
+    expect(sourceExecutions).toBe(1);
+  });
+
+  test('keeps pending Arithmetic topology, placement, and linked output after .to binding', () => {
+    let sourceExecutions = 0;
+    const text = `const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const initialOutput = Param.signal('Initial output', A);
+const amount = Param.number('Amount', 5);
+const red = new Network<R>();
+const green = new Network<G>();
+const destination = new Network();
+const arithmetic = Arithmetic({
+  left: Each(pair(red, green)), operation: 'add', right: (amount + 1) * 2, output: initialOutput,
+}).at(4, 5);
+arithmetic.to(destination, B);`;
+    const compilation = compileSourceProgram(
+      { path: 'pending-arithmetic-output-binding.factorio.ts', text },
+      parameterHost(),
+      [],
+      (stage) => {
+        if (stage === 'execute') sourceExecutions += 1;
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.plan?.producers).toMatchObject([
+      {
+        kind: 'arithmetic',
+        left: { kind: 'each', refKind: 'pair', networks: ['red', 'green'] },
+        operation: 'add',
+        right: { kind: 'constant', value: 12 },
+        output: { kind: 'signal', signal: signal('virtual', 'signal-B') },
+        debugCaptureIds: [expect.any(String)],
+      },
+    ]);
+    expect(compilation.plan?.entities).toMatchObject([
+      {
+        placement: { x: 4, y: 5 },
+        configuration: {
+          mode: 'arithmetic',
+          left: { kind: 'each', refKind: 'pair', networks: ['red', 'green'] },
+          right: { kind: 'constant', value: 12 },
+          output: { kind: 'signal', signal: signal('virtual', 'signal-B') },
+        },
+      },
+    ]);
+    expect(compilation.execution?.circuit.ir.entities).toMatchObject([
+      {
+        configuration: {
+          mode: 'arithmetic',
+          output: { kind: 'signal', signal: signal('virtual', 'signal-B') },
+        },
+      },
+    ]);
+    expect(JSON.stringify(compilation.plan)).not.toContain('pendingConfiguration');
+    expect(
+      listSourceCompilationParameters(compilation).map(({ kind, label }) => ({ kind, label })),
+    ).toEqual([
+      { kind: 'signal', label: 'Initial output' },
+      { kind: 'number', label: 'Amount' },
+    ]);
+    expect(sourceExecutions).toBe(1);
+  });
+
+  test('catches invalid Arithmetic construction before a later pending producer', () => {
+    let sourceExecutions = 0;
+    const text = `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Amount', 5);
+const input = new Network();
+try { Arithmetic({ left: 1.5, operation: 'add', right: 2, output: A }); } catch {}
+const output = new Network();
+output += Arithmetic({ left: Each(input), operation: 'add', right: amount, output: A });`;
+    const compilation = compileSourceProgram(
+      { path: 'pending-arithmetic-catch-boundary.factorio.ts', text },
+      parameterHost(),
+      [],
+      (stage) => {
+        if (stage === 'execute') sourceExecutions += 1;
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.plan?.producers).toMatchObject([
+      {
+        kind: 'arithmetic',
+        left: { kind: 'each', refKind: 'single', network: 'input' },
+        right: { kind: 'constant', value: 5 },
+        debugCaptureIds: [expect.any(String)],
+      },
+    ]);
+    expect(compilation.plan?.entities).toHaveLength(1);
+    expect(compilation.execution?.circuit.ir.producers).toHaveLength(1);
+    expect(sourceExecutions).toBe(1);
+  });
+
+  test('checks pending Arithmetic input topology before final installation', () => {
+    const text = `const channel = Param.signal('Channel', Signal('virtual', 'signal-C'));
+const first = new Network();
+const second = new Network();
+const third = new Network();
+Arithmetic({
+  left: Each(pair(first, second)), operation: 'add', right: Each(third), output: channel,
+});`;
+    const compilation = compileSourceProgram(
+      { path: 'pending-arithmetic-input-topology.factorio.ts', text },
+      parameterHost(),
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'RT2009',
+        message: expect.stringContaining('needs 3 logical networks on two wires'),
+      }),
+    ]);
+    expect(compilation.plan).toBeUndefined();
+    expect(compilation.resolvedCircuit).toBeUndefined();
   });
 
   test('rejects source parameter property and reflection escapes while retaining host metadata', () => {

@@ -86,6 +86,7 @@ import {
   type NativeConditionValue,
   type PairSelectedValue,
   type PairValue,
+  type PendingArithmeticOperand,
   type RuntimeObjectKind,
   type RuntimeObjectValue,
   type SelectedRuntimeState,
@@ -242,6 +243,21 @@ type ExactArithmeticConfiguration = Omit<
   | 'placement'
 >;
 
+type PendingCombinatorConfiguration =
+  | { readonly kind: 'arithmetic'; readonly configuration: ExactArithmeticConfiguration }
+  | { readonly kind: 'selector'; readonly configuration: SelectorProducerConfig };
+
+function pendingArithmeticOperand(value: PlanArithmeticOperand): PendingArithmeticOperand {
+  if (value.kind === 'constant') return { kind: 'constant' };
+  const reference =
+    value.refKind === 'single'
+      ? { refKind: 'single' as const, network: value.network }
+      : { refKind: 'pair' as const, networks: value.networks };
+  return value.kind === 'signal'
+    ? { kind: 'signal', signal: value.signal, ...reference }
+    : { kind: 'each', ...reference };
+}
+
 interface BoundArithmeticConfigurationSource {
   readonly configuration: ExactArithmeticConfiguration;
   readonly prepared: PreparedArithmeticConfigurationSource;
@@ -391,6 +407,11 @@ interface LinkedPendingSelectorAssociation {
   readonly entity: EntityValue;
 }
 
+interface LinkedPendingArithmeticAssociation {
+  readonly kind: 'pending-arithmetic';
+  readonly entity: EntityValue;
+}
+
 interface LinkedArithmeticAssociation {
   readonly kind: 'arithmetic';
   readonly entity: EntityValue;
@@ -412,6 +433,7 @@ interface LinkedSelectorAssociation {
 type LinkedProducerAssociation =
   | LinkedConstantAssociation
   | LinkedPendingConstantAssociation
+  | LinkedPendingArithmeticAssociation
   | LinkedPendingSelectorAssociation
   | LinkedArithmeticAssociation
   | LinkedDeciderAssociation
@@ -423,6 +445,12 @@ type PendingCombinatorInstallation =
       readonly producer: CombinatorValue;
       readonly entity: EntityValue;
       readonly configuration: ConstantConfiguration;
+    }
+  | {
+      readonly kind: 'arithmetic';
+      readonly producer: CombinatorValue;
+      readonly entity: EntityValue;
+      readonly configuration: ExactArithmeticConfiguration;
     }
   | {
       readonly kind: 'selector';
@@ -1037,15 +1065,36 @@ class ElaborationRecorder {
             'RT2027',
           );
         }
-        const producer = this.#createCombinator(
-          {
+        let descriptor: CombinatorDescriptor;
+        let pendingConfiguration: PendingCombinatorConfiguration | undefined;
+        if (normalized.prepared.hasParameterSlots && 'template' in normalized.prepared) {
+          const template = normalized.prepared.template;
+          if (template.operation !== normalized.configuration.operation) {
+            throw new Error('Prepared Arithmetic template changed its operation before capture.');
+          }
+          descriptor = {
+            kind: 'arithmetic',
+            left: pendingArithmeticOperand(normalized.configuration.left),
+            operation: normalized.configuration.operation,
+            right: pendingArithmeticOperand(normalized.configuration.right),
+            output: normalized.configuration.output,
+            pendingConfiguration: template,
+            source: this.#span(rawSpan),
+            instancePath: this.#path(),
+          };
+          pendingConfiguration = {
+            kind: 'arithmetic',
+            configuration: normalized.configuration,
+          };
+        } else {
+          descriptor = {
             kind: 'arithmetic',
             ...normalized.configuration,
             source: this.#span(rawSpan),
             instancePath: this.#path(),
-          },
-          rawSpan,
-        );
+          };
+        }
+        const producer = this.#createCombinator(descriptor, rawSpan, pendingConfiguration);
         if (normalized.prepared.hasParameterSlots && 'template' in normalized.prepared) {
           const { captureId } = this.#combinators.capture(producer);
           this.#captureArithmeticTemplate(producer, captureId, normalized.prepared.template);
@@ -1246,7 +1295,9 @@ class ElaborationRecorder {
         const producer = this.#createCombinator(
           selectorDescriptor,
           rawSpan,
-          pendingTemplate === undefined ? undefined : descriptorConfiguration,
+          pendingTemplate === undefined
+            ? undefined
+            : { kind: 'selector', configuration: descriptorConfiguration },
         );
         if (pendingTemplate !== undefined) {
           const { captureId } = this.#combinators.capture(producer);
@@ -2621,6 +2672,7 @@ class ElaborationRecorder {
         if (linked === undefined) return entity;
         if (
           linked.association.kind === 'pending-constant' ||
+          linked.association.kind === 'pending-arithmetic' ||
           linked.association.kind === 'pending-selector'
         ) {
           throw new Error(
@@ -3183,6 +3235,39 @@ class ElaborationRecorder {
         continue;
       }
 
+      if (pending.kind === 'arithmetic') {
+        if (current?.kind !== 'pending-arithmetic' || current.entity !== pending.entity) {
+          throw new Error('Pending Arithmetic installation lost its linked Entity association.');
+        }
+        if (index < 0) {
+          throw new Error('Pending Arithmetic installation lost its registration order entry.');
+        }
+
+        this.#combinators.installPendingArithmetic(pending.producer, pending.configuration);
+        const installed = this.#combinators.stateFor(pending.producer).descriptor;
+        if (installed.kind !== 'arithmetic' || 'pendingConfiguration' in installed) {
+          throw new Error('Pending Arithmetic installation did not produce a concrete descriptor.');
+        }
+        const configuration: EntityArithmeticConfiguration = {
+          mode: 'arithmetic',
+          left: this.#canonicalArithmeticOperand(installed.left),
+          operation: installed.operation,
+          right: this.#canonicalArithmeticOperand(installed.right),
+          output:
+            installed.output.kind === 'signal'
+              ? { kind: 'signal', signal: this.#signalSnapshot(installed.output.signal) }
+              : installed.output,
+        };
+        const association: LinkedArithmeticAssociation = {
+          kind: 'arithmetic',
+          entity: pending.entity,
+          configuration,
+        };
+        this.#linkedProducerByIdentity.set(pending.producer.identity, association);
+        this.#linkedProducers[index] = { producer: pending.producer, association };
+        continue;
+      }
+
       if (pending.entity === undefined) {
         if (current !== undefined || index >= 0) {
           throw new Error(
@@ -3237,7 +3322,9 @@ class ElaborationRecorder {
       this.#pendingCombinatorInstallations.length > 0 ||
       this.#linkedProducers.some(
         ({ association }) =>
-          association.kind === 'pending-constant' || association.kind === 'pending-selector',
+          association.kind === 'pending-constant' ||
+          association.kind === 'pending-arithmetic' ||
+          association.kind === 'pending-selector',
       ) ||
       this.#combinators.states().some(({ descriptor }) => hasPendingConfiguration(descriptor));
     const pendingInArtifacts =
@@ -3452,7 +3539,7 @@ class ElaborationRecorder {
   #createCombinator(
     descriptor: CombinatorDescriptor,
     rawSpan: RawSpan,
-    pendingSelectorConfiguration?: SelectorProducerConfig,
+    pendingConfiguration?: PendingCombinatorConfiguration,
   ): CombinatorValue {
     // A provider-backed arithmetic producer is the ergonomic spelling of the
     // exact Arithmetic constructor. Resolve its trusted base before creating
@@ -3492,22 +3579,30 @@ class ElaborationRecorder {
     });
     this.#combinatorByOutput.set(this.#networkState(primary).ownership, value);
     this.#colors.registerCombinatorInputs(value.identity, descriptor);
+    let linkedArithmeticEntity: EntityValue | undefined;
     if (arithmeticProfile !== undefined && descriptor.kind === 'arithmetic') {
       const entity = this.#allocateEntity(arithmeticProfile.ref, undefined, undefined, rawSpan);
-      const association = {
-        kind: 'arithmetic' as const,
-        entity,
-        configuration: {
-          mode: 'arithmetic' as const,
-          left: this.#canonicalArithmeticOperand(descriptor.left),
-          operation: descriptor.operation,
-          right: this.#canonicalArithmeticOperand(descriptor.right),
-          output:
-            descriptor.output.kind === 'signal'
-              ? { kind: 'signal' as const, signal: this.#signalSnapshot(descriptor.output.signal) }
-              : descriptor.output,
-        },
-      } satisfies LinkedArithmeticAssociation;
+      linkedArithmeticEntity = entity;
+      const association: LinkedProducerAssociation =
+        'pendingConfiguration' in descriptor
+          ? { kind: 'pending-arithmetic', entity }
+          : {
+              kind: 'arithmetic',
+              entity,
+              configuration: {
+                mode: 'arithmetic',
+                left: this.#canonicalArithmeticOperand(descriptor.left),
+                operation: descriptor.operation,
+                right: this.#canonicalArithmeticOperand(descriptor.right),
+                output:
+                  descriptor.output.kind === 'signal'
+                    ? {
+                        kind: 'signal',
+                        signal: this.#signalSnapshot(descriptor.output.signal),
+                      }
+                    : descriptor.output,
+              },
+            };
       this.#linkedProducerByIdentity.set(value.identity, association);
       this.#linkedProducers.push({ producer: value, association });
     }
@@ -3556,7 +3651,7 @@ class ElaborationRecorder {
       this.#linkedProducers.push({ producer: value, association });
     }
     if (descriptor.kind === 'selector' && 'pendingConfiguration' in descriptor) {
-      if (pendingSelectorConfiguration === undefined) {
+      if (pendingConfiguration?.kind !== 'selector') {
         throw new Error(
           'Pending Selector construction did not retain its already-bound configuration.',
         );
@@ -3565,10 +3660,25 @@ class ElaborationRecorder {
         kind: 'selector',
         producer: value,
         ...(linkedSelectorEntity === undefined ? {} : { entity: linkedSelectorEntity }),
-        configuration: pendingSelectorConfiguration,
+        configuration: pendingConfiguration.configuration,
       });
-    } else if (pendingSelectorConfiguration !== undefined) {
+    } else if (pendingConfiguration?.kind === 'selector') {
       throw new Error('A concrete Selector cannot retain a pending configuration cache.');
+    }
+    if (descriptor.kind === 'arithmetic' && 'pendingConfiguration' in descriptor) {
+      if (pendingConfiguration?.kind !== 'arithmetic' || linkedArithmeticEntity === undefined) {
+        throw new Error(
+          'Pending Arithmetic construction did not retain its bound configuration and Entity.',
+        );
+      }
+      this.#pendingCombinatorInstallations.push({
+        kind: 'arithmetic',
+        producer: value,
+        entity: linkedArithmeticEntity,
+        configuration: pendingConfiguration.configuration,
+      });
+    } else if (pendingConfiguration?.kind === 'arithmetic') {
+      throw new Error('A concrete Arithmetic cannot retain a pending configuration cache.');
     }
     return value;
   }

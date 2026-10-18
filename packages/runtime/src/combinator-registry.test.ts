@@ -2,12 +2,14 @@ import { signal } from '@comblang/factorio';
 import { sourceFileId, sourceSpan, type NetworkId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
 
+import { bindArithmeticConfigurationTemplate } from '../../compiler/src/arithmetic-configuration-binding.js';
+import { createArithmeticConfigurationTemplate } from '../../compiler/src/arithmetic-configuration-template.js';
 import { createBlueprintParameterSession } from '../../compiler/src/blueprint-parameters.js';
 import { bindConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-binding.js';
 import { createConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-template.js';
 import { bindSelectorConfigurationTemplate } from '../../compiler/src/selector-configuration-binding.js';
 import { createSelectorConfigurationTemplate } from '../../compiler/src/selector-configuration-template.js';
-import type { SelectorProducerConfig } from '../../compiler/src/ir.js';
+import type { ArithmeticProducerConfig, SelectorProducerConfig } from '../../compiler/src/ir.js';
 import { CombinatorRegistry } from './combinator-registry.js';
 import type { CombinatorDescriptor, CombinatorValue, NetworkValue } from './elaboration-values.js';
 
@@ -166,6 +168,176 @@ describe('pending Constant registry state', () => {
     expect(() => registry.installPendingConstant(pending, configuration)).toThrowError(
       /already installed/i,
     );
+  });
+});
+
+describe('pending Arithmetic registry state', () => {
+  test('retains topology and output binding around explicit installation and restore', () => {
+    const session = createBlueprintParameterSession();
+    const amount = session.number('amount', { source });
+    const input = {
+      refKind: 'pair' as const,
+      networks: ['red-input', 'green-input'] as const,
+    };
+    const initialOutput = signal('virtual', 'initial-output');
+    const reboundOutput = signal('virtual', 'rebound-output');
+    const template = createArithmeticConfigurationTemplate(session, {
+      left: { kind: 'constant', value: amount },
+      operation: 'add',
+      right: { kind: 'each', ...input },
+      output: { kind: 'signal', signal: initialOutput },
+    });
+    const configuration = bindArithmeticConfigurationTemplate(template, [
+      { parameter: amount, value: 7 },
+    ]);
+    const producer = value();
+    const primary = network('$arithmetic:primary');
+    const secondary = network('$arithmetic:secondary');
+    const primaryAttachment = { network: primary.name, source, instancePath: ['root'] };
+    const secondaryAttachment = {
+      network: secondary.name,
+      source,
+      instancePath: ['root', 'secondary'],
+    };
+    const descriptor: CombinatorDescriptor = {
+      kind: 'arithmetic',
+      left: { kind: 'constant' },
+      operation: 'add',
+      right: { kind: 'each', ...input },
+      output: configuration.output,
+      pendingConfiguration: template,
+      source,
+      instancePath: ['root'],
+      placement: { x: 4, y: 5 },
+    };
+    const registry = new CombinatorRegistry();
+    const state = registry.register(producer, descriptor, primary, primaryAttachment);
+    const primaryLane = state.outputPort.primary;
+    registry.addSecondary(producer, secondary, secondaryAttachment);
+    registry.bindName(producer, 'parameterized-arithmetic');
+    registry.markOutputUsed(producer);
+    const capture = registry.capture(producer);
+
+    expect(state.descriptor).toMatchObject({
+      kind: 'arithmetic',
+      left: { kind: 'constant' },
+      right: { kind: 'each', refKind: 'pair', networks: input.networks },
+      operation: 'add',
+      pendingConfiguration: template,
+    });
+    if (state.descriptor.kind !== 'arithmetic' || !('pendingConfiguration' in state.descriptor)) {
+      throw new Error('Expected a pending Arithmetic descriptor.');
+    }
+    expect(state.descriptor.left).not.toHaveProperty('value');
+    expect(() => registry.toPlan(state)).toThrowError(
+      expect.objectContaining({ code: 'RT2027', span: source }),
+    );
+
+    const pendingDescriptor = state.descriptor;
+    const replacementTemplate = createArithmeticConfigurationTemplate(session, {
+      left: { kind: 'constant', value: amount },
+      operation: 'add',
+      right: { kind: 'each', ...input },
+      output: { kind: 'signal', signal: initialOutput },
+    });
+    expect(() =>
+      registry.update(producer, {
+        ...pendingDescriptor,
+        pendingConfiguration: replacementTemplate,
+      } as CombinatorDescriptor),
+    ).toThrowError(/cannot replace its prepared configuration template/i);
+    expect(() =>
+      registry.update(producer, {
+        ...pendingDescriptor,
+        operation: 'subtract',
+      } as CombinatorDescriptor),
+    ).toThrowError(/cannot change its operation or operand topology/i);
+    expect(() =>
+      registry.update(producer, {
+        ...pendingDescriptor,
+        right: { kind: 'each', refKind: 'single', network: 'other-input' },
+      } as CombinatorDescriptor),
+    ).toThrowError(/cannot change its operation or operand topology/i);
+    expect(() =>
+      registry.update(producer, {
+        ...pendingDescriptor,
+        left: { kind: 'constant', value: 0 },
+      } as unknown as CombinatorDescriptor),
+    ).toThrowError(/cannot contain concrete Arithmetic operands/i);
+
+    const wrongOperation: ArithmeticProducerConfig = {
+      ...configuration,
+      operation: 'subtract',
+    };
+    const wrongTopology: ArithmeticProducerConfig = {
+      ...configuration,
+      right: { kind: 'each', refKind: 'single', network: 'other-input' as NetworkId },
+    };
+    const concreteConstant = value();
+    registry.register(
+      concreteConstant,
+      {
+        kind: 'constant',
+        outputs: [],
+        source,
+        instancePath: ['root'],
+      },
+      network('$constant:primary'),
+      { network: '$constant:primary', source, instancePath: ['root'] },
+    );
+    expect(() => registry.installPendingArithmetic(concreteConstant, configuration)).toThrowError(
+      /only a pending Arithmetic/i,
+    );
+    expect(() => registry.installPendingArithmetic(producer, wrongOperation)).toThrowError(
+      /operation or operand topology/i,
+    );
+    expect(() => registry.installPendingArithmetic(producer, wrongTopology)).toThrowError(
+      /operation or operand topology/i,
+    );
+    expect(state.descriptor).toBe(pendingDescriptor);
+
+    registry.bindOutput(producer, reboundOutput, source);
+    const boundPendingDescriptor = state.descriptor;
+    const pendingSnapshot = registry.snapshot();
+    registry.installPendingArithmetic(producer, configuration);
+
+    expect(state.outputPort.primary).toBe(primaryLane);
+    expect(state.outputUsed).toBe(true);
+    expect(state.descriptor).toMatchObject({
+      kind: 'arithmetic',
+      left: { kind: 'constant', value: 7 },
+      right: { kind: 'each', refKind: 'pair', networks: input.networks },
+      operation: 'add',
+      output: { kind: 'signal', signal: reboundOutput },
+      bindingName: 'parameterized-arithmetic',
+      placement: { x: 4, y: 5 },
+    });
+    expect(state.descriptor).not.toHaveProperty('pendingConfiguration');
+    expect(state.debugCaptureIds).toEqual([capture.captureId]);
+    const concreteSnapshot = registry.snapshot();
+    const concreteDescriptor = state.descriptor;
+    expect(registry.toPlan(state)).toMatchObject({
+      ...state.descriptor,
+      debugCaptureIds: [capture.captureId],
+      destinations: [primaryAttachment, secondaryAttachment],
+    });
+    expect(() => registry.installPendingArithmetic(producer, configuration)).toThrowError(
+      /already installed/i,
+    );
+
+    registry.restore(pendingSnapshot);
+    expect(registry.stateFor(producer).descriptor).toBe(boundPendingDescriptor);
+    expect(registry.stateFor(producer).outputBinding?.signal).toEqual(reboundOutput);
+    expect(() => registry.toPlan(registry.stateFor(producer))).toThrowError(
+      expect.objectContaining({ code: 'RT2027' }),
+    );
+    registry.restore(concreteSnapshot);
+    expect(registry.stateFor(producer).descriptor).toBe(concreteDescriptor);
+    expect(registry.toPlan(registry.stateFor(producer))).toMatchObject({
+      kind: 'arithmetic',
+      output: { kind: 'signal', signal: reboundOutput },
+      debugCaptureIds: [capture.captureId],
+    });
   });
 });
 

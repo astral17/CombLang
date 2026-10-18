@@ -10,7 +10,11 @@ import type {
 import type { SourceSpan } from '@comblang/shared';
 
 import { ElaborationExecutionError } from './elaboration-errors.js';
-import type { CombinatorDescriptor, NetworkOwnershipState } from './elaboration-values.js';
+import type {
+  CombinatorDescriptor,
+  NetworkOwnershipState,
+  PendingArithmeticOperand,
+} from './elaboration-values.js';
 
 function networkNames(
   value:
@@ -23,7 +27,7 @@ function networkNames(
 function combinatorInputNames(combinator: CombinatorDescriptor): readonly string[] {
   const names: string[] = [];
   const addRef = (value: Parameters<typeof networkNames>[0]) => names.push(...networkNames(value));
-  const addOperand = (value: PlanArithmeticOperand) => {
+  const addOperand = (value: PlanArithmeticOperand | PendingArithmeticOperand) => {
     if (value.kind !== 'constant') addRef(value);
   };
   const addCondition = (condition: PlanDeciderCondition): void => {

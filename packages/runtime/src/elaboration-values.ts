@@ -3,6 +3,7 @@ import type {
   DeciderOutputSyntaxIntent,
   DirectPlanProducer,
   PlanDeciderCondition,
+  PlanNetworkRef,
 } from '@comblang/compiler/direct-plan-schema';
 import type { EntityNativeSingleCondition } from '@comblang/compiler/entity';
 import type { EntityValue } from './entity-registry.js';
@@ -13,6 +14,7 @@ import type {
 } from '@comblang/factorio';
 import type { SourceSpan } from '@comblang/shared';
 import type { ConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-template.js';
+import type { ArithmeticConfigurationTemplate } from '../../compiler/src/arithmetic-configuration-template.js';
 import type { SelectorConfigurationTemplate } from '../../compiler/src/selector-configuration-template.js';
 
 export type RuntimeNetworkCapability = 'owned' | 'readonly' | 'ref' | 'move';
@@ -161,6 +163,10 @@ type CompleteExactConstantDescriptor = Extract<
   CompleteCombinatorDescriptor,
   { readonly kind: 'constant'; readonly configuration: ConstantConfiguration }
 >;
+type CompleteArithmeticDescriptor = Extract<
+  CompleteCombinatorDescriptor,
+  { readonly kind: 'arithmetic' }
+>;
 type CompleteSelectorDescriptor = Extract<
   CompleteCombinatorDescriptor,
   { readonly kind: 'selector' }
@@ -188,6 +194,17 @@ type PendingConstantDescriptor = Omit<CompleteExactConstantDescriptor, 'configur
   readonly pendingConfiguration: ConstantConfigurationTemplate;
 };
 
+export type PendingArithmeticOperand =
+  | { readonly kind: 'constant' }
+  | ({ readonly kind: 'signal'; readonly signal: SignalId } & PlanNetworkRef)
+  | ({ readonly kind: 'each' } & PlanNetworkRef);
+
+type PendingArithmeticDescriptor = Omit<CompleteArithmeticDescriptor, 'left' | 'right'> & {
+  readonly left: PendingArithmeticOperand;
+  readonly right: PendingArithmeticOperand;
+  readonly pendingConfiguration: ArithmeticConfigurationTemplate;
+};
+
 type PendingSelectSelectorDescriptor = Omit<CompleteSelectSelectorDescriptor, 'index'> & {
   readonly index?: never;
   readonly pendingConfiguration: SelectSelectorConfigurationTemplate;
@@ -211,6 +228,7 @@ export type CombinatorDescriptor =
       { readonly kind: 'decider' } | { readonly kind: 'selector' }
     >
   | CompleteSelectorDescriptor
+  | PendingArithmeticDescriptor
   | PendingConstantDescriptor
   | PendingSelectorDescriptor
   | (Omit<CompleteDeciderDescriptor, 'output'> & {

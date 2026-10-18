@@ -1,15 +1,27 @@
 import { sameSignal, type ConstantConfiguration, type SignalId } from '@comblang/factorio';
 import type {
   DirectPlanProducer,
+  PlanArithmeticOperand,
   PlanAttachment,
   PlanNetworkRef,
 } from '@comblang/compiler/direct-plan-schema';
-import type { SelectorProducerConfig } from '../../compiler/src/ir.js';
+import type { LogicalArithmeticOutput, SelectorProducerConfig } from '../../compiler/src/ir.js';
+import type { ArithmeticTemplateOperand } from '../../compiler/src/arithmetic-configuration-template.js';
 import type { SourceSpan } from '@comblang/shared';
 
 import { ElaborationExecutionError } from './elaboration-errors.js';
 import { bindCombinatorOutputSignal } from './combinator-output-policy.js';
-import type { CombinatorDescriptor, CombinatorValue, NetworkValue } from './elaboration-values.js';
+import type {
+  CombinatorDescriptor,
+  CombinatorValue,
+  NetworkValue,
+  PendingArithmeticOperand,
+} from './elaboration-values.js';
+
+type ArithmeticInstallationConfiguration = Pick<
+  Extract<DirectPlanProducer, { readonly kind: 'arithmetic' }>,
+  'left' | 'operation' | 'right' | 'output'
+>;
 
 export interface OutputLaneState {
   network: NetworkValue;
@@ -189,6 +201,27 @@ export class CombinatorRegistry {
           'A pending Selector cannot contain a concrete index or output before installation.',
         );
       }
+      if (currentPending.kind === 'arithmetic') {
+        if (
+          nextPending.kind !== 'arithmetic' ||
+          hasConcreteArithmeticOperands(currentPending) ||
+          hasConcreteArithmeticOperands(nextPending)
+        ) {
+          throw new Error('A pending Arithmetic cannot contain concrete Arithmetic operands.');
+        }
+        if (
+          currentPending.operation !== nextPending.operation ||
+          !sameArithmeticOperandTopology(currentPending.left, nextPending.left) ||
+          !sameArithmeticOperandTopology(currentPending.right, nextPending.right)
+        ) {
+          throw new Error('A pending Arithmetic cannot change its operation or operand topology.');
+        }
+        if (!sameArithmeticOutput(currentPending.output, nextPending.output)) {
+          throw new Error(
+            'A pending Arithmetic output can change only through its output binding.',
+          );
+        }
+      }
       if (
         currentPending.kind === 'selector' &&
         (nextPending.kind !== 'selector' ||
@@ -273,6 +306,63 @@ export class CombinatorRegistry {
     state.descriptor = { ...descriptor, output: configuration.output };
   }
 
+  installPendingArithmetic(
+    value: CombinatorValue,
+    configuration: ArithmeticInstallationConfiguration,
+  ): void {
+    const state = this.stateFor(value);
+    if (state.descriptor.kind !== 'arithmetic') {
+      throw new Error('Only a pending Arithmetic can receive an Arithmetic configuration.');
+    }
+    if (!isPendingCombinatorDescriptor(state.descriptor)) {
+      throw new Error('The Arithmetic configuration was already installed.');
+    }
+    const pending = state.descriptor;
+    if (hasConcreteArithmeticOperands(pending)) {
+      throw new Error('A pending Arithmetic cannot contain concrete Arithmetic operands.');
+    }
+
+    const template = pending.pendingConfiguration;
+    if (
+      pending.operation !== configuration.operation ||
+      template.operation !== pending.operation ||
+      !sameArithmeticOperandTopology(pending.left, configuration.left) ||
+      !sameArithmeticOperandTopology(pending.right, configuration.right) ||
+      !sameTemplateArithmeticOperand(template.left, configuration.left) ||
+      !sameTemplateArithmeticOperand(template.right, configuration.right) ||
+      template.output.kind !== configuration.output.kind
+    ) {
+      throw new Error(
+        'The Arithmetic configuration does not match its pending operation or operand topology.',
+      );
+    }
+    if (state.outputBinding === undefined) {
+      if (!sameArithmeticOutput(pending.output, configuration.output)) {
+        throw new Error(
+          'The Arithmetic configuration does not match its pending output selection.',
+        );
+      }
+    } else if (
+      pending.output.kind !== 'signal' ||
+      !sameSignal(pending.output.signal, state.outputBinding.signal)
+    ) {
+      throw new Error('The pending Arithmetic output no longer matches its output binding.');
+    }
+
+    const {
+      pendingConfiguration: _pendingConfiguration,
+      left: _left,
+      right: _right,
+      ...descriptor
+    } = pending;
+    state.descriptor = {
+      ...descriptor,
+      left: configuration.left,
+      right: configuration.right,
+      output: pending.output,
+    };
+  }
+
   bindOutput(value: CombinatorValue, signal: SignalId, source: SourceSpan): void {
     const state = this.stateFor(value);
     const binding = state.outputBinding;
@@ -354,7 +444,9 @@ function isPendingCombinatorDescriptor(
   descriptor: CombinatorDescriptor,
 ): descriptor is Extract<CombinatorDescriptor, { readonly pendingConfiguration: unknown }> {
   return (
-    (descriptor.kind === 'constant' || descriptor.kind === 'selector') &&
+    (descriptor.kind === 'constant' ||
+      descriptor.kind === 'selector' ||
+      descriptor.kind === 'arithmetic') &&
     'pendingConfiguration' in descriptor
   );
 }
@@ -365,6 +457,44 @@ function hasConcreteSelectorConfiguration(descriptor: CombinatorDescriptor): boo
     'pendingConfiguration' in descriptor &&
     (Object.hasOwn(descriptor, 'index') || Object.hasOwn(descriptor, 'output'))
   );
+}
+
+function hasConcreteArithmeticOperands(descriptor: CombinatorDescriptor): boolean {
+  return (
+    descriptor.kind === 'arithmetic' &&
+    'pendingConfiguration' in descriptor &&
+    ((descriptor.left.kind === 'constant' && Object.hasOwn(descriptor.left, 'value')) ||
+      (descriptor.right.kind === 'constant' && Object.hasOwn(descriptor.right, 'value')))
+  );
+}
+
+function sameArithmeticOperandTopology(
+  left: PendingArithmeticOperand,
+  right: PendingArithmeticOperand | PlanArithmeticOperand,
+): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === 'constant' && right.kind === 'constant') return true;
+  if (left.kind === 'signal' && right.kind === 'signal') {
+    return sameNetworkRef(left, right) && sameSignal(left.signal, right.signal);
+  }
+  return left.kind === 'each' && right.kind === 'each' && sameNetworkRef(left, right);
+}
+
+function sameTemplateArithmeticOperand(
+  left: ArithmeticTemplateOperand,
+  right: PlanArithmeticOperand,
+): boolean {
+  if (left.kind !== right.kind) return false;
+  if (left.kind === 'constant' && right.kind === 'constant') return true;
+  return left.kind !== 'constant' && right.kind !== 'constant' && sameNetworkRef(left, right);
+}
+
+function sameArithmeticOutput(
+  left: LogicalArithmeticOutput,
+  right: LogicalArithmeticOutput,
+): boolean {
+  if (left.kind !== right.kind) return false;
+  return left.kind === 'each' || (right.kind === 'signal' && sameSignal(left.signal, right.signal));
 }
 
 function sameNetworkRef(left: PlanNetworkRef, right: PlanNetworkRef): boolean {
