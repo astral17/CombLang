@@ -180,7 +180,7 @@ describe('Worker-local owning blueprint projection', () => {
 const output = new Network();
 output += Constant({ sections: [{ filters: [
   { signal: channel, value: 5 },
-  { signal: Signal('virtual', 'signal-A'), value: 13 },
+  { signal: Signal('virtual', 'signal-C'), value: 13 },
   { signal: Signal('item', 'iron-plate'), value: 7 },
 ] }] });`,
     };
@@ -209,7 +209,7 @@ output += Constant({ sections: [{ filters: [
             {
               filters: [
                 { name: 'parameter-0', count: 5 },
-                { name: 'parameter-0', count: 13 },
+                { type: 'virtual', name: 'signal-C', count: 13 },
                 { name: 'iron-plate', count: 7 },
               ],
             },
@@ -232,7 +232,7 @@ output += Constant({ sections: [{ filters: [
             {
               filters: [
                 { type: 'virtual', name: 'signal-A', count: 5 },
-                { type: 'virtual', name: 'signal-A', count: 13 },
+                { type: 'virtual', name: 'signal-C', count: 13 },
                 { name: 'iron-plate', count: 7 },
               ],
             },

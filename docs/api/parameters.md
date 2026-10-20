@@ -282,6 +282,16 @@ affects matching concrete Signal literals in eligible Constant, Arithmetic,
 Selector and Decider fields; nominal independence in local binding does not
 establish independence in Factorio placement.
 
+Before returning a native parameter template, the exporter checks the final
+serialized Constant filters after all placeholder replacement. An identical
+type/name/exact-quality/comparator identity repeated within one section is
+refused with source-associated `CP1002`, even if counts differ or only one row
+was marked. This includes collisions between a parameter row and an ordinary
+concrete row. It does not sum counts or choose a surviving row. Equal final
+identities in separate sections or devices do not trigger this guard; that is
+an export boundary, not a claim that Factorio combines their values after
+placement.
+
 ### Bounded typed native numeric formulas
 
 A registered local numeric expression in an exact Arithmetic constant operand,
@@ -517,16 +527,33 @@ output += Constant({
     {
       filters: [
         { signal: channel, value: 5 },
-        { signal: Signal('virtual', 'signal-A'), value: 13 },
+        { signal: Signal('virtual', 'signal-C'), value: 13 },
         { signal: material, value: 7 },
-        { signal: Signal('iron-plate'), value: 17 },
+        { signal: Signal('copper-plate'), value: 17 },
         { signal: coolant, value: 11 },
-        { signal: Signal('fluid', 'water'), value: 19 },
+        { signal: Signal('fluid', 'crude-oil'), value: 19 },
       ],
     },
   ],
 });
 ```
+
+If repeated contributions are needed in a parameter template, separate the
+same final identity into different sections to pass this guard:
+
+```javascript
+const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const output = new Network();
+output += Constant({
+  sections: [
+    { filters: [{ signal: channel, value: 5 }] },
+    { filters: [{ signal: channel, value: 13 }] },
+  ],
+});
+```
+
+This only avoids a same-section identity collision; it does not promise how
+Factorio combines the rows after the parameter is selected.
 
 Mixed Constant/Arithmetic example:
 
@@ -539,7 +566,7 @@ output += Constant({
     {
       filters: [
         { signal: channel, value: 5 },
-        { signal: Signal('virtual', 'signal-A'), value: 13 },
+        { signal: Signal('virtual', 'signal-C'), value: 13 },
       ],
     },
   ],
@@ -606,6 +633,11 @@ ambiguous and rejects with a located error. Names from all matching eligible
 Constant, Arithmetic, Selector and linked Decider Signal fields reserve the
 shared `parameter-0` through `parameter-9` pool.
 
+When replacement would make two rows in one section identical, native template
+export refuses before emitting JSON even though each concrete occurrence is
+eligible for replacement on its own. Replacements across separate sections or
+devices remain representable; no native aggregation rule is inferred.
+
 This slice accepts direct Constant filter Signal slots, exact Arithmetic
 output slots, Selector select-index Signal slots and Selector count-output
 slots, in circuits whose producers are linked Constant, Arithmetic, Selector
@@ -618,16 +650,16 @@ Non-normal qualities, virtual wildcards, source defaults named `parameter-N`,
 placeholder-pool exhaustion, unused declarations, other unlinked producer
 families, symbolic Decider outputs and Signal handles in any other native slot
 reject atomically with located `CP1002`. No general native replacement, formula
-evaluation, or broader native acceptance is implied. For one user-reported placement of this generated
-virtual/normal Constant template in Factorio 2.1.21 (mods unspecified), both
-matching Constant rows became virtual signal-B with counts 5 and 13; iron-plate
-and water, the red wire, relative layout and directions were preserved. This
-evidence covers only the Constant example, not Arithmetic output, Selector
-Signal substitution, or Decider field replacement.
-The placed export contains no parameter metadata. This bounded report is not an
-independently run game gate. Item/fluid placement and selection, Arithmetic or
-Selector Signal placement, parameterized save/reopen, other qualities or native
-roles, and browser/mobile behavior remain unverified.
+evaluation, or broader native acceptance is implied. A prior user-reported
+Factorio 2.1.21 placement example (mods unspecified) showed matching Constant
+rows with counts 5 and 13 after replacement. In a separate Factorio 2.1.23
+import/re-export checkpoint, identical same-section placeholder rows instead
+retained only the last row. The latter evidence motivated this conservative
+export refusal; the differing observations do not establish behavior for all
+versions, qualities or mods. The older placed export contained no parameter
+metadata and was not an independently run game gate. Item/fluid placement and
+selection, Arithmetic or Selector Signal placement, parameterized save/reopen,
+other qualities or native roles, and browser/mobile behavior remain unverified.
 
 Complete metadata example; requires trusted canonical Constant authority:
 

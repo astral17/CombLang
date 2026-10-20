@@ -1467,6 +1467,46 @@ output += Constant({ sections: [{ filters: [{ signal: A, value: 2 }] }] });`,
     ).toBeDefined();
   });
 
+  test('serializes located CP1002 when Constant parameter substitution collides', async () => {
+    const runtime = parameterRuntime();
+    const response = await runtime.handle(
+      parseRequest(54, {
+        file: {
+          path: 'worker-constant-placeholder-collision.factorio.ts',
+          text: `const original = Signal('virtual', 'signal-A');
+const channel = Param.signal('Channel', original);
+const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: channel, value: amount },
+  { signal: original, value: 13 }
+] }] });`,
+        },
+        parameterBinding: true,
+        blueprintExport: { parameters: true },
+      }),
+    );
+
+    expect(response.result.pipelineDiagnostics).toEqual([]);
+    expect(response.result.blueprintExport).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          code: 'CP1002',
+          span: expect.objectContaining({ fileId: expect.any(String) }),
+          message: expect.stringMatching(/duplicate native Constant filter/i),
+        },
+      ],
+    });
+    expect(response.parameterBinding).toMatchObject({ ok: true, token: expect.any(String) });
+    if (response.parameterBinding?.ok !== true || response.parameterBinding.token === undefined) {
+      throw new Error('Expected a retained Worker parameter session after export refusal.');
+    }
+    expect(
+      runtime.bindParameters(response.parameterBinding.token, response.revision).plan,
+    ).toBeDefined();
+  });
+
   test('exports an Arithmetic formula-only parameter through the Worker', async () => {
     const runtime = parameterRuntime();
     const response = await runtime.handle(
@@ -1642,12 +1682,16 @@ const plate = Param.signal('Plate', Signal('iron-plate'));
 const amount = Param.number('Amount', 5, { variable: 'x' });
 const water = Param.signal('Water', Signal('fluid', 'water', 'normal'));
 const output = new Network();
-output += Constant({ sections: [{ filters: [
-  { signal: plate, value: amount * 2 },
-  { signal: Signal('iron-plate'), value: 3 },
-  { signal: water, value: 4 },
-  { signal: Signal('fluid', 'water'), value: 5 },
-] }] });`,
+output += Constant({ sections: [
+  { filters: [
+    { signal: plate, value: amount * 2 },
+    { signal: water, value: 4 },
+  ] },
+  { filters: [
+    { signal: Signal('iron-plate'), value: 3 },
+    { signal: Signal('fluid', 'water'), value: 5 },
+  ] },
+] });`,
             },
             parameterBinding: true,
             blueprintExport: { parameters: true },
@@ -1685,8 +1729,12 @@ output += Constant({ sections: [{ filters: [
             {
               filters: [
                 { name: 'parameter-0', count: 10 },
-                { name: 'parameter-0', count: 3 },
                 { name: 'parameter-1', count: 4 },
+              ],
+            },
+            {
+              filters: [
+                { name: 'parameter-0', count: 3 },
                 { name: 'parameter-1', count: 5 },
               ],
             },
@@ -1736,16 +1784,16 @@ output += Constant({ sections: [{ filters: [
       expect(rows(defaults)).toEqual([
         [
           { type: undefined, name: 'iron-plate', count: 10 },
-          { type: undefined, name: 'iron-plate', count: 3 },
           { type: 'fluid', name: 'water', count: 4 },
+          { type: undefined, name: 'iron-plate', count: 3 },
           { type: 'fluid', name: 'water', count: 5 },
         ],
       ]);
       expect(rows(overridden)).toEqual([
         [
           { type: undefined, name: 'copper-plate', count: 18 },
-          { type: undefined, name: 'iron-plate', count: 3 },
           { type: 'fluid', name: 'crude-oil', count: 4 },
+          { type: undefined, name: 'iron-plate', count: 3 },
           { type: 'fluid', name: 'water', count: 5 },
         ],
       ]);

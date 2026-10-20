@@ -206,8 +206,8 @@ export function decodeBlueprintConstantControlBehavior(
 
   const isOnPath = `${resolved.path}.is_on`;
   const isOnValue = value.get('is_on');
-  if (isOnValue === undefined) return blocked('Required is_on field is missing.', isOnPath);
-  if (typeof isOnValue !== 'boolean') return blocked('Expected a boolean.', isOnPath);
+  const isOn = isOnValue === undefined ? true : isOnValue;
+  if (typeof isOn !== 'boolean') return blocked('Expected a boolean.', isOnPath);
 
   const sectionsPath = `${resolved.path}.sections`;
   const sectionsValue = value.get('sections');
@@ -271,15 +271,12 @@ export function decodeBlueprintConstantControlBehavior(
 
     const activePath = `${sectionPath}.active`;
     const activeValue = sectionValue.get('active');
-    if (activeValue === undefined) return blocked('Required active field is missing.', activePath);
-    if (typeof activeValue !== 'boolean') return blocked('Expected a boolean.', activePath);
+    const active = activeValue === undefined ? true : activeValue;
+    if (typeof active !== 'boolean') return blocked('Expected a boolean.', activePath);
 
     const multiplierPath = `${sectionPath}.multiplier`;
     const multiplierValue = sectionValue.get('multiplier');
-    if (multiplierValue === undefined) {
-      return blocked('Required multiplier field is missing.', multiplierPath);
-    }
-    const multiplier = finiteDouble(multiplierValue);
+    const multiplier = multiplierValue === undefined ? 1 : finiteDouble(multiplierValue);
     if (multiplier === undefined) return blocked('Expected a finite double.', multiplierPath);
 
     const groupValue = sectionValue.get('group');
@@ -390,7 +387,7 @@ export function decodeBlueprintConstantControlBehavior(
 
     sections.push(
       Object.freeze({
-        active: activeValue,
+        active,
         ...(groupValue === undefined ? {} : { group: groupValue }),
         multiplier,
         filters: Object.freeze(filters),
@@ -400,7 +397,7 @@ export function decodeBlueprintConstantControlBehavior(
 
   return complete(
     canonicalizeConstantConfiguration(
-      { isOn: isOnValue, sections },
+      { isOn, sections },
       constantConfigurationLimits,
       resolved.path,
     ),

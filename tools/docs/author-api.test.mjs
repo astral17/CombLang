@@ -487,11 +487,18 @@ expectSignal(network('output'), Signal('virtual', 'signal-B')).toBe(111);`,
     ]);
     expect(native.entities[0].native.control_behavior.sections.sections[0].filters).toEqual([
       { index: 1, name: 'parameter-0', quality: 'normal', comparator: '=', count: 5 },
-      { index: 2, name: 'parameter-0', quality: 'normal', comparator: '=', count: 13 },
+      {
+        index: 2,
+        name: 'signal-C',
+        type: 'virtual',
+        quality: 'normal',
+        comparator: '=',
+        count: 13,
+      },
       { index: 3, name: 'parameter-1', quality: 'normal', comparator: '=', count: 7 },
-      { index: 4, name: 'parameter-1', quality: 'normal', comparator: '=', count: 17 },
+      { index: 4, name: 'copper-plate', quality: 'normal', comparator: '=', count: 17 },
       { index: 5, name: 'parameter-2', quality: 'normal', comparator: '=', count: 11 },
-      { index: 6, name: 'parameter-2', quality: 'normal', comparator: '=', count: 19 },
+      { index: 6, name: 'crude-oil', type: 'fluid', quality: 'normal', comparator: '=', count: 19 },
     ]);
     const session = createSourceParameterBindingSession(compilation);
     const bound = session.bind([{ id: 0, value: { type: 'virtual', name: 'signal-B' } }]);
@@ -503,11 +510,11 @@ expectSignal(network('output'), Signal('virtual', 'signal-B')).toBe(111);`,
       ),
     ).toEqual([
       { type: 'virtual', name: 'signal-B', count: 5 },
-      { type: 'virtual', name: 'signal-A', count: 13 },
+      { type: 'virtual', name: 'signal-C', count: 13 },
       { name: 'iron-plate', count: 7 },
-      { name: 'iron-plate', count: 17 },
+      { name: 'copper-plate', count: 17 },
       { type: 'fluid', name: 'water', count: 11 },
-      { type: 'fluid', name: 'water', count: 19 },
+      { type: 'fluid', name: 'crude-oil', count: 19 },
     ]);
     expect(
       runResolvedDirectPlanTests(
@@ -515,7 +522,7 @@ expectSignal(network('output'), Signal('virtual', 'signal-B')).toBe(111);`,
         bound.resolvedCircuit,
         `test('nominal documented Signal', ({ network, tick, expectSignal }) => {
   tick();
-  expectSignal(network('output'), Signal('virtual', 'signal-A')).toBe(13);
+  expectSignal(network('output'), Signal('virtual', 'signal-C')).toBe(13);
   expectSignal(network('output'), Signal('virtual', 'signal-B')).toBe(5);
 });`,
       ),

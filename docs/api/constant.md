@@ -39,6 +39,15 @@ implemented model sums duplicate counts. A JavaScript Map/object still obeys
 its normal key overwrite rules before CC receives it. Arbitrary iterables are
 not accepted in place of these row containers.
 
+That sum is the local model's behavior, not a promise about native import.
+Native parameter-template export refuses with located `CP1002` if the final
+filters in one Constant section contain an identical native identity after
+Signal placeholder replacement (type, name, exact quality selector and
+comparator). The check includes ordinary rows as well as marked parameter rows;
+different counts do not make the identities distinct. Use distinct Signals or
+separate sections/devices to avoid the refusal. This does not claim that
+Factorio combines repeated Signals across sections after parameter placement.
+
 Complete profile-free source demonstrating every row form:
 
 ```ts
@@ -165,6 +174,12 @@ filter quality instead denotes any quality: export writes explicit `quality: 'no
 for ordinary unqualified constant rows. This source API does not expose a separate
 any-quality constant-filter syntax; do not omit quality in hand-edited native JSON
 and assume it has the same semantics.
+
+Native source import defaults only absent `is_on`, section `active` and
+`multiplier` fields to `true`, `true` and `1`. Explicit false, zero and finite
+fractions are preserved; present null or wrongly typed values are refused.
+Section and filter indices remain contiguous and 1-based, and Constant filters
+still require an explicit quality.
 
 Supported Constants emit their fixed counts at T1 from an initially empty model;
 they do not consume inputs. The result supports [Combinator](combinator.md)

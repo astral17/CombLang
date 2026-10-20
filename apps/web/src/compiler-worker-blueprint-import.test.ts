@@ -169,6 +169,51 @@ function builtinBlueprintDocument() {
   });
 }
 
+// Reduced from the native 2.1.23 math case to two concrete contiguous rows;
+// parameter/presentation metadata is removed to isolate Constant import.
+function nativeConstantDefaultsDocument() {
+  return JSON.stringify({
+    blueprint: {
+      entities: [
+        {
+          entity_number: 73,
+          name: 'constant-combinator',
+          position: { x: 0.5, y: 0.5 },
+          direction: 4,
+          control_behavior: {
+            sections: {
+              sections: [
+                {
+                  index: 1,
+                  filters: [
+                    {
+                      index: 1,
+                      name: 'signal-A',
+                      type: 'virtual',
+                      quality: 'normal',
+                      comparator: '=',
+                      count: 16,
+                    },
+                    {
+                      index: 2,
+                      name: 'signal-B',
+                      type: 'virtual',
+                      quality: 'normal',
+                      comparator: '=',
+                      count: 2,
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      ],
+      wires: [],
+    },
+  });
+}
+
 function builtinDeciderBlueprintDocument(
   options: { readonly implicitCopyInput?: boolean; readonly omittedDefaults?: boolean } = {},
 ) {
@@ -353,6 +398,52 @@ function formattedRequest(
 }
 
 describe('compiler Worker blueprint import endpoint', () => {
+  test('imports native-derived Constant defaults from JSON and exchange', async () => {
+    const compile = vi.spyOn(sourceCompilation, 'compileSourceProgram');
+    const worker = runtime();
+    const documentText = nativeConstantDefaultsDocument();
+    const exchange = await blueprintExchangeCodec.encodeBlueprintExchange(
+      parseLosslessJson(documentText),
+    );
+    const json = await worker.handleImport({
+      ...request(1080),
+      document: { text: documentText, format: 'json' },
+      sourcePath: 'native-constant.factorio.ts',
+    });
+
+    expect(json.result.state).toBe('verified');
+    if (json.result.state !== 'verified') {
+      throw new Error('Expected verified native-derived Constant JSON import.');
+    }
+    expect(json.result).toMatchObject({
+      verification: { state: 'verified', entityCount: 1 },
+      correspondence: { entities: [{ entityNumber: 73, family: 'constant' }] },
+      source: {
+        text: expect.stringContaining('Constant({isOn:true,sections:[{active:true,multiplier:1'),
+      },
+    });
+    expect(json.result.source.text).toContain('Signal("virtual","signal-A","normal")');
+    expect(json.result.source.text).toContain('value:16');
+    expect(json.result.source.text).toContain('Signal("virtual","signal-B","normal")');
+    expect(json.result.source.text).toContain('value:2');
+    expect(json.result.source.text).toContain('.at(0.5,0.5,4);');
+
+    const encoded = await worker.handleImport({
+      ...request(1081),
+      document: { text: exchange, format: 'exchange' },
+      sourcePath: 'native-constant.factorio.ts',
+      prototypeProfile: { identity: json.prototypeEnvironment!.identity },
+    });
+    expect(encoded.result.state).toBe('verified');
+    if (encoded.result.state !== 'verified') {
+      throw new Error('Expected verified native-derived Constant exchange import.');
+    }
+    expect(encoded.result.source).toEqual(json.result.source);
+    expect(encoded.result.correspondence).toEqual(json.result.correspondence);
+    expect(encoded.result.verification).toEqual(json.result.verification);
+    expect(compile).toHaveBeenCalledTimes(2);
+  });
+
   test('uses default provisioning with the builtin asset and reuses its identity reference', async () => {
     const [source, assetManifest] = await Promise.all([
       readFile(

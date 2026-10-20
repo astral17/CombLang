@@ -1110,10 +1110,10 @@ const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
 const output = new Network();
 output += Constant({ sections: [{ filters: [
   { signal: channel, value: amount },
-  { signal: channel, value: amount },
   { signal: Signal('item', 'iron-plate'), value: 7 },
   { signal: Signal('fluid', 'water'), value: 11 },
 ] }] });
+output += Constant({ sections: [{ filters: [{ signal: channel, value: amount }] }] });
 output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-A'), value: 13 }] }] });
 output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-A'), value: 17 }] }] });`);
       const artifact = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
@@ -1141,10 +1141,10 @@ output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-
       ).toEqual([
         [
           { type: 'virtual', name: 'signal-B', count: 5 },
-          { type: 'virtual', name: 'signal-B', count: 5 },
           { type: undefined, name: 'iron-plate', count: 7 },
           { type: 'fluid', name: 'water', count: 11 },
         ],
+        [{ type: 'virtual', name: 'signal-B', count: 5 }],
         [{ type: 'virtual', name: 'signal-A', count: 13 }],
         [{ type: 'virtual', name: 'signal-A', count: 17 }],
       ]);
@@ -1158,10 +1158,10 @@ output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-
       ).toEqual([
         [
           { type: 'virtual', name: 'signal-A', count: 5 },
-          { type: 'virtual', name: 'signal-A', count: 5 },
           { type: undefined, name: 'iron-plate', count: 7 },
           { type: 'fluid', name: 'water', count: 11 },
         ],
+        [{ type: 'virtual', name: 'signal-A', count: 5 }],
         [{ type: 'virtual', name: 'signal-A', count: 13 }],
         [{ type: 'virtual', name: 'signal-A', count: 17 }],
       ]);
@@ -1194,10 +1194,10 @@ output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-
       ).toEqual([
         [
           { type: undefined, name: 'parameter-0', count: 5 },
-          { type: undefined, name: 'parameter-0', count: 5 },
           { type: undefined, name: 'iron-plate', count: 7 },
           { type: 'fluid', name: 'water', count: 11 },
         ],
+        [{ type: undefined, name: 'parameter-0', count: 5 }],
         [{ type: undefined, name: 'parameter-0', count: 13 }],
         [{ type: undefined, name: 'parameter-0', count: 17 }],
       ]);
@@ -1205,7 +1205,7 @@ output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-
       expect(native.wires).toEqual(
         buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).wires,
       );
-      expect(native.entities).toHaveLength(3);
+      expect(native.entities).toHaveLength(4);
     } finally {
       if (existed) globals[key] = previous;
       else delete globals[key];
@@ -1221,12 +1221,14 @@ const output = new Network();
 output += Constant({ isOn: false, sections: [
   { active: false, multiplier: 1.5, group: 'Mixed', filters: [
     { signal: plate, value: amount * 2 },
-    { signal: Signal('item', 'iron-plate', 'normal'), value: 2 },
     { signal: water, value: 3 },
-    { signal: Signal('fluid', 'water'), value: 4 },
     { signal: channel, value: 5 },
-    { signal: Signal('virtual', 'signal-A', 'normal'), value: 6 },
     { signal: Signal('item', 'iron-gear-wheel', 'rare'), value: 7 },
+  ] },
+  { active: false, multiplier: 1, group: 'Concrete matches', filters: [
+    { signal: Signal('item', 'iron-plate', 'normal'), value: 2 },
+    { signal: Signal('fluid', 'water'), value: 4 },
+    { signal: Signal('virtual', 'signal-A', 'normal'), value: 6 },
   ] },
   { active: true, multiplier: -2, filters: [
     { signal: plate, value: 8 },
@@ -1332,12 +1334,12 @@ output += Constant({ sections: [{ filters: [
     expect(defaultRows).toEqual([
       [
         { type: undefined, name: 'iron-plate', count: 18 },
-        { type: undefined, name: 'iron-plate', count: 2 },
         { type: 'fluid', name: 'water', count: 3 },
-        { type: 'fluid', name: 'water', count: 4 },
         { type: 'virtual', name: 'signal-A', count: 5 },
-        { type: 'virtual', name: 'signal-A', count: 6 },
         { type: undefined, name: 'iron-gear-wheel', count: 7 },
+        { type: undefined, name: 'iron-plate', count: 2 },
+        { type: 'fluid', name: 'water', count: 4 },
+        { type: 'virtual', name: 'signal-A', count: 6 },
         { type: undefined, name: 'iron-plate', count: 8 },
         { type: 'fluid', name: 'water', count: 10 },
       ],
@@ -1349,12 +1351,12 @@ output += Constant({ sections: [{ filters: [
     expect(localRows).toEqual([
       [
         { type: undefined, name: 'copper-plate', count: 18 },
-        { type: undefined, name: 'iron-plate', count: 2 },
         { type: 'fluid', name: 'crude-oil', count: 3 },
-        { type: 'fluid', name: 'water', count: 4 },
         { type: 'virtual', name: 'signal-B', count: 5 },
-        { type: 'virtual', name: 'signal-A', count: 6 },
         { type: undefined, name: 'iron-gear-wheel', count: 7 },
+        { type: undefined, name: 'iron-plate', count: 2 },
+        { type: 'fluid', name: 'water', count: 4 },
+        { type: 'virtual', name: 'signal-A', count: 6 },
         { type: undefined, name: 'copper-plate', count: 8 },
         { type: 'fluid', name: 'crude-oil', count: 10 },
       ],
@@ -4229,5 +4231,111 @@ for (let i = 0; i < 3; i += 1) {
     expect(JSON.stringify(generateBlueprintJson(compilation.resolvedCircuit!.ir, options))).toBe(
       '{"blueprint":{"item":"blueprint","label":"Source parameter export","version":562949953421312,"icons":[{"signal":{"type":"item","name":"blueprint"},"index":1}],"entities":[{"entity_number":1,"name":"constant-combinator","control_behavior":{"is_on":true,"sections":{"sections":[{"index":1,"active":true,"multiplier":1,"filters":[{"index":1,"type":"virtual","name":"signal-A","quality":"normal","comparator":"=","count":5}]}]}},"position":{"x":0.5,"y":0.5},"direction":4}],"wires":[]}}',
     );
+  });
+});
+
+describe('native Constant placeholder collision guard', () => {
+  function expectCollision(source: string, nativeFilterPath: string): void {
+    const compilation = compile(source);
+    const before = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+    const first = exportFailure(compilation);
+    expect(first).toMatchObject({
+      code: 'CP1002',
+      path: nativeFilterPath,
+      span: expect.objectContaining({ fileId: compilation.fileId }),
+    });
+    expect(first.message).toMatch(/duplicate native Constant filter/i);
+    expect(first.message).toMatch(/separate sections|different Signals/i);
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(before);
+    expect(exportFailure(compilation)).toMatchObject({
+      code: 'CP1002',
+      path: nativeFilterPath,
+      span: expect.objectContaining({ fileId: compilation.fileId }),
+    });
+  }
+
+  test('rejects a marked row colliding with a concrete row after global substitution', () => {
+    expectCollision(
+      `const original = Signal('iron-plate');
+const channel = Param.signal('Channel', original);
+const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: channel, value: amount },
+  { signal: original, value: 13 }
+] }] });`,
+      '$.blueprint.entities[0].control_behavior.sections.sections[0].filters[1]',
+    );
+  });
+
+  test('rejects repeated marked rows even when their counts differ', () => {
+    expectCollision(
+      `const original = Signal('virtual', 'signal-A');
+const channel = Param.signal('Channel', original);
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: channel, value: 5 },
+  { signal: channel, value: 13 }
+] }] });`,
+      '$.blueprint.entities[0].control_behavior.sections.sections[0].filters[1]',
+    );
+  });
+
+  test('finds collisions in another Constant device reached by global substitution', () => {
+    expectCollision(
+      `const original = Signal('virtual', 'signal-A');
+const channel = Param.signal('Channel', original);
+const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: amount }] }] });
+output += Constant({ sections: [{ filters: [
+  { signal: original, value: 7 },
+  { signal: original, value: 19 }
+] }] });`,
+      '$.blueprint.entities[1].control_behavior.sections.sections[0].filters[1]',
+    );
+  });
+
+  test('allows equal final filters across sections and Constant devices', () => {
+    const compilation = compile(`const original = Signal('virtual', 'signal-A');
+const channel = Param.signal('Channel', original);
+const output = new Network();
+output += Constant({ sections: [
+  { filters: [{ signal: channel, value: 5 }] },
+  { filters: [{ signal: channel, value: 13 }] }
+] });
+output += Constant({ sections: [{ filters: [{ signal: channel, value: 7 }] }] });`);
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    expect(native.entities).toHaveLength(2);
+    const json = emitNativeBlueprintJson(native);
+    expect(json.blueprint.entities.map(({ control_behavior }) => control_behavior)).toMatchObject([
+      {
+        sections: {
+          sections: [
+            { filters: [{ name: 'parameter-0', count: 5 }] },
+            { filters: [{ name: 'parameter-0', count: 13 }] },
+          ],
+        },
+      },
+      { sections: { sections: [{ filters: [{ name: 'parameter-0', count: 7 }] }] } },
+    ]);
+  });
+
+  test('allows distinct final Signal identities within one section', () => {
+    const compilation = compile(`const first = Param.signal('First', Signal('virtual', 'signal-A'));
+const second = Param.signal('Second', Signal('virtual', 'signal-B'));
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: first, value: 5 },
+  { signal: second, value: 13 }
+] }] });`);
+    const json = emitNativeBlueprintJson(
+      sourceApi.exportSourceCompilationNativeBlueprint(compilation, options),
+    );
+    expect(json.blueprint.entities[0]?.control_behavior).toMatchObject({
+      sections: {
+        sections: [{ filters: [{ name: 'parameter-0' }, { name: 'parameter-1' }] }],
+      },
+    });
   });
 });

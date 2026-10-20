@@ -200,6 +200,55 @@ describe('inverse Constant control_behavior conversion', () => {
     expect(result.configuration?.sections.map(({ filters }) => filters)).toEqual([[], [], []]);
   });
 
+  test('defaults each absent Constant field independently and in combination', () => {
+    const cases: readonly [string, unknown][] = [
+      [
+        '{"sections":{"sections":[{"index":1,"active":false,"multiplier":0,"filters":[]}]}}',
+        { isOn: true, sections: [{ active: false, multiplier: 0, filters: [] }] },
+      ],
+      [
+        '{"is_on":false,"sections":{"sections":[{"index":1,"multiplier":0.25,"filters":[]}]}}',
+        { isOn: false, sections: [{ active: true, multiplier: 0.25, filters: [] }] },
+      ],
+      [
+        '{"is_on":false,"sections":{"sections":[{"index":1,"active":false,"filters":[]}]}}',
+        { isOn: false, sections: [{ active: false, multiplier: 1, filters: [] }] },
+      ],
+      [
+        '{"sections":{"sections":[{"index":1,"filters":[]}]}}',
+        { isOn: true, sections: [{ active: true, multiplier: 1, filters: [] }] },
+      ],
+    ];
+    for (const [source, configuration] of cases) {
+      const result = decode(source);
+      expect(result.state).toBe('complete');
+      expect(result.configuration).toEqual(configuration);
+    }
+  });
+
+  test('rejects present null or wrongly typed defaultable fields at their paths', () => {
+    const cases: readonly [string, string][] = [
+      ['{"is_on":null,"sections":{"sections":[]}}', '$.is_on'],
+      [
+        '{"sections":{"sections":[{"index":1,"active":null,"filters":[]}]}}',
+        '$.sections.sections[0].active',
+      ],
+      [
+        '{"sections":{"sections":[{"index":1,"active":true,"multiplier":null,"filters":[]}]}}',
+        '$.sections.sections[0].multiplier',
+      ],
+      [
+        '{"sections":{"sections":[{"index":1,"active":"true","filters":[]}]}}',
+        '$.sections.sections[0].active',
+      ],
+      [
+        '{"sections":{"sections":[{"index":1,"active":true,"multiplier":"1","filters":[]}]}}',
+        '$.sections.sections[0].multiplier',
+      ],
+    ];
+    for (const [source, path] of cases) expectBlocked(source, path);
+  });
+
   test('requires explicit quality and accepts omitted item type plus valid explicit types', () => {
     expectBlocked(
       JSON.stringify(behavior([section(1, [filter({ quality: undefined })])])),
@@ -260,23 +309,16 @@ describe('inverse Constant control_behavior conversion', () => {
   });
 
   test('blocks missing required fields and sparse or duplicate indices at native paths', () => {
-    const missingIsOn = clone(behavior());
-    delete missingIsOn.is_on;
     const missingSectionIndex = clone(behavior([section(1, [], { index: undefined })]));
-    const missingActive = clone(behavior([section(1, [], { active: undefined })]));
-    const missingMultiplier = clone(behavior([section(1, [], { multiplier: undefined })]));
     const missingFilters = clone(behavior([section(1, [], { filters: undefined })]));
     const missingFilterIndex = clone(behavior([section(1, [filter({ index: undefined })])]));
     const missingFilterName = clone(behavior([section(1, [filter({ name: undefined })])]));
     const missingComparator = clone(behavior([section(1, [filter({ comparator: undefined })])]));
     const missingCount = clone(behavior([section(1, [filter({ count: undefined })])]));
     const cases: readonly [unknown, string][] = [
-      [missingIsOn, '$.is_on'],
       [{ is_on: true }, '$.sections'],
       [{ is_on: true, sections: {} }, '$.sections.sections'],
       [missingSectionIndex, '$.sections.sections[0].index'],
-      [missingActive, '$.sections.sections[0].active'],
-      [missingMultiplier, '$.sections.sections[0].multiplier'],
       [missingFilters, '$.sections.sections[0].filters'],
       [missingFilterIndex, '$.sections.sections[0].filters[0].index'],
       [missingFilterName, '$.sections.sections[0].filters[0].name'],

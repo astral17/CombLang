@@ -122,6 +122,52 @@ function constantDocument(name = 'constant-combinator') {
   });
 }
 
+// Derived from a Factorio 2.1.23 re-export of a generated numeric-parameter probe.
+// Keep two contiguous Constant rows and omitted default flags/multiplier; remove
+// parameter/presentation metadata and relocate the device to isolate concrete import.
+function nativeOmittedConstantDefaultsDocument() {
+  return JSON.stringify({
+    blueprint: {
+      entities: [
+        {
+          entity_number: 73,
+          name: 'constant-combinator',
+          position: { x: 2.5, y: -1.5 },
+          direction: 4,
+          control_behavior: {
+            sections: {
+              sections: [
+                {
+                  index: 1,
+                  filters: [
+                    {
+                      index: 1,
+                      name: 'signal-A',
+                      type: 'virtual',
+                      quality: 'normal',
+                      comparator: '=',
+                      count: 16,
+                    },
+                    {
+                      index: 2,
+                      name: 'signal-B',
+                      type: 'virtual',
+                      quality: 'normal',
+                      comparator: '=',
+                      count: 2,
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        },
+      ],
+      wires: [],
+    },
+  });
+}
+
 function selectorDocument() {
   return JSON.stringify({
     blueprint: {
@@ -381,6 +427,49 @@ const host = await canonicalHost();
 afterEach(() => vi.restoreAllMocks());
 
 describe('host-neutral canonical blueprint source import', () => {
+  test('imports native Constant defaults omitted by Factorio and verifies the original device', () => {
+    const compile = vi.spyOn(sourceCompilation, 'compileSourceProgram');
+    const sourceText = nativeOmittedConstantDefaultsDocument();
+    const result = importCanonicalBlueprintSource(
+      sourceText,
+      { path: 'native/constant-defaults.factorio.ts' },
+      host.environment,
+    );
+
+    expect(result.state).toBe('verified');
+    if (result.state !== 'verified') throw new Error('Expected verified native Constant source.');
+    expect(compile).toHaveBeenCalledOnce();
+    expect(compile.mock.calls[0]?.[0]).toEqual(result.source);
+    expect(result.source.text).toContain('Constant({isOn:true,sections:[{active:true,multiplier:1');
+    expect(result.source.text).toContain('Signal("virtual","signal-A","normal")');
+    expect(result.source.text).toContain('value:16');
+    expect(result.source.text).toContain('Signal("virtual","signal-B","normal")');
+    expect(result.source.text).toContain('value:2');
+    expect(result.source.text).toContain('.at(2.5,-1.5,4);');
+    expect(result.verification).toEqual({ state: 'verified', entityCount: 1, networkCount: 2 });
+    expect(result.correspondence.entities).toMatchObject([
+      { entityNumber: 73, family: 'constant' },
+    ]);
+    expect(JSON.stringify(result)).not.toContain('trustedEntityReplayContext');
+
+    const invalid = importCanonicalBlueprintSource(
+      sourceText.replace('"index":1,"filters":', '"index":1,"active":null,"filters":'),
+      { path: 'native/constant-invalid-active.factorio.ts' },
+      host.environment,
+    );
+    expect(invalid).toMatchObject({
+      state: 'blocked',
+      diagnostics: [
+        {
+          category: 'unsupported-constant-configuration',
+          path: '$.blueprint.entities[0].control_behavior.sections.sections[0].active',
+        },
+      ],
+    });
+    expect(invalid).not.toHaveProperty('source');
+    expect(compile).toHaveBeenCalledOnce();
+  });
+
   test('assembles, compiles exactly once, and verifies the exact source snapshot', () => {
     const text = blueprintDocument({ metadata: true });
     const compile = vi.spyOn(sourceCompilation, 'compileSourceProgram');

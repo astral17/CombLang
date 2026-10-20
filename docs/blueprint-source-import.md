@@ -94,7 +94,7 @@ blueprint format can be reconstructed.
 
 | Family                          | Imported form and important limits                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [Constant](api/constant.md)     | Native `constant-combinator` / trusted key `entity:constant-combinator`. Explicit `is_on` and ordered `sections.sections`; section and filter indices must be contiguous and 1-based. Section active/group/multiplier and ordered filters are retained. Each filter needs a concrete Signal quality; an omitted Signal `type` is accepted as `item`.                                                                                                                                                                                                          |
+| [Constant](api/constant.md)     | Native `constant-combinator` / trusted key `entity:constant-combinator`. Ordered `sections.sections`; section and filter indices must be contiguous and 1-based. Absent `is_on`, section `active` and `multiplier` default to `true`, `true` and `1`; present values and section group are retained. Each filter needs a concrete Signal quality; an omitted Signal `type` is accepted as `item`.                                                                                                                                                             |
 | [Arithmetic](api/arithmetic.md) | Native `arithmetic-combinator` / trusted key `entity:arithmetic-combinator`. Explicit `arithmetic_conditions`, a supported operation/operand pair/output, and explicit red/green masks for Signal operands. Constant operands have no mask; unknown fields and unrepresented configuration are refused.                                                                                                                                                                                                                                                       |
 | [Decider](api/decider.md)       | Native `decider-combinator` / trusted key `entity:decider-combinator`. Explicit ordered condition groups, true-output rows, and supported else-output rows. Omitted native condition/input masks default to both colors; omitted comparator, grouping connector, right-hand constant, copy-count mode, and output masks use their documented Factorio defaults. Constant operands/outputs cannot carry masks. An empty explicit else branch or a configuration with no output rows is refused. A constant-count wildcard output is supported only for `Each`. |
 | [Selector](api/selector.md)     | Native `selector-combinator` / trusted key `entity:selector-combinator`. Only explicit `operation: "select"` and `operation: "count"`. Select requires explicit `select_max` and exactly one of `index_constant` or `index_signal`; Count requires `count_signal`. Newer operations and unknown/cross-operation fields are refused.                                                                                                                                                                                                                           |
@@ -116,7 +116,10 @@ notices do not mean that metadata appears in source.
 
 Signal `type` can be omitted for item Signals and defaults to `item`; this is
 not, by itself, an import error. Explicit concrete qualities are retained where
-the family accepts them. Constant filters require an explicit quality.
+the family accepts them. Constant filters require an explicit quality; an
+omitted quality can represent any quality and is not inferred to mean `normal`.
+Constant section and filter indices must remain contiguous and 1-based; sparse
+indices are refused rather than silently renumbered.
 For Deciders, omitted first/second Signal-network masks default each color to
 `true`; absent comparator defaults to `<`, absent `compare_type` to `or`, and
 absence of both `second_signal` and `constant` means constant `0`. An omitted
@@ -130,6 +133,15 @@ above: do not infer support from a field merely being present in a Factorio sche
 Some negative-zero values cannot round-trip through native JSON
 serialization—for example Constant multipliers, Decider constants, and numeric
 Selector indices—and are refused rather than normalized to zero.
+
+The local Factorio 2.1.21 runtime API describes Constant `enabled` and section
+`active`/`multiplier` fields. Separately, the returned Factorio 2.1.23
+import/re-export checkpoint omitted the true Constant enabled flag, true section
+active flags and unit multipliers. The importer therefore supplies `true` for
+absent `is_on`/`active` and `1` for an absent multiplier only; explicit false,
+zero and finite fractional values are kept. Present null or wrongly typed values
+remain refusals. This is a tested native export normalization for that
+checkpoint, not a promise about every Factorio version or mod configuration.
 
 Books, upgrade planners, and deconstruction planners may be handled as opaque
 documents by the exchange codec, but they are not source-import roots. The

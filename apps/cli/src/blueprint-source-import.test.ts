@@ -510,6 +510,117 @@ describe('blueprint source import CLI', () => {
     expect(compile).toHaveBeenCalledTimes(2);
   });
 
+  test('imports native-derived Constant defaults from JSON and exchange', async () => {
+    const host = await canonicalHost();
+    // Reduced from the native 2.1.23 math case: keep two ordered concrete
+    // filters and omitted true/true/1 defaults; strip parameter/presentation data.
+    const sourceText = JSON.stringify({
+      blueprint: {
+        entities: [
+          {
+            entity_number: 73,
+            name: 'constant-combinator',
+            position: { x: 0.5, y: 0.5 },
+            direction: 4,
+            control_behavior: {
+              sections: {
+                sections: [
+                  {
+                    index: 1,
+                    filters: [
+                      {
+                        index: 1,
+                        name: 'signal-A',
+                        type: 'virtual',
+                        quality: 'normal',
+                        comparator: '=',
+                        count: 16,
+                      },
+                      {
+                        index: 2,
+                        name: 'signal-B',
+                        type: 'virtual',
+                        quality: 'normal',
+                        comparator: '=',
+                        count: 2,
+                      },
+                    ],
+                  },
+                ],
+              },
+            },
+          },
+        ],
+        wires: [],
+      },
+    });
+    const jsonInput = await temporaryFile('native-constant-defaults.json', sourceText);
+    const exchangeInput = await exchangeFile('native-constant-defaults.exchange', sourceText);
+    const jsonOutput = join(dirname(jsonInput), 'native-constant-json.factorio.ts');
+    const exchangeOutput = join(dirname(exchangeInput), 'native-constant-exchange.factorio.ts');
+    const compile = vi.spyOn(sourceApi, 'compileSourceProgram');
+    const { log, error } = capture();
+
+    const reports = [];
+    for (const [input, output] of [
+      [jsonInput, jsonOutput],
+      [exchangeInput, exchangeOutput],
+    ] as const) {
+      log.mockClear();
+      expect(
+        await run(['blueprint', 'import', '--json', '--output', output, input], host.environment),
+      ).toBe(0);
+      const report = reportAt(log);
+      reports.push(report);
+      expect(error).not.toHaveBeenCalled();
+      expect(report).toMatchObject({
+        ok: true,
+        output: resolve(output),
+        source: {
+          path: resolve(output),
+          text: expect.stringContaining('Constant({isOn:true,sections:[{active:true,multiplier:1'),
+        },
+        verification: { state: 'verified', entityCount: 1 },
+        correspondence: { entities: [{ entityNumber: 73, family: 'constant' }] },
+      });
+      expect(report.source.text).toContain('Signal("virtual","signal-A","normal")');
+      expect(report.source.text).toContain('value:16');
+      expect(report.source.text).toContain('Signal("virtual","signal-B","normal")');
+      expect(report.source.text).toContain('value:2');
+      expect(report.source.text).toContain('.at(0.5,0.5,4);');
+      expect(await readFile(output, 'utf8')).toBe(report.source.text);
+    }
+
+    expect(compile).toHaveBeenCalledTimes(2);
+    expect(reports[1]?.source.text).toBe(reports[0]?.source.text);
+    expect(
+      reports[1]?.correspondence.entities.map(
+        ({
+          entityNumber,
+          family,
+          name,
+        }: {
+          entityNumber: number;
+          family: string;
+          name: string;
+        }) => ({ entityNumber, family, name }),
+      ),
+    ).toEqual(
+      reports[0]?.correspondence.entities.map(
+        ({
+          entityNumber,
+          family,
+          name,
+        }: {
+          entityNumber: number;
+          family: string;
+          name: string;
+        }) => ({ entityNumber, family, name }),
+      ),
+    );
+    expect(reports[1]?.verification).toEqual(reports[0]?.verification);
+  });
+
   test('imports verified Selector JSON and exchange exclusively and refuses a newer field', async () => {
     const host = await canonicalHost();
     const sourceText = selectorDocument();

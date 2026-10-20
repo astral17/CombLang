@@ -1044,6 +1044,39 @@ output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'signal-
     expect(JSON.parse(String(log.mock.calls[0]?.[0])).blueprint).not.toHaveProperty('parameters');
   });
 
+  test('refuses same-section Constant rows that collide after parameter substitution', async () => {
+    const { environment } = await parameterHost();
+    const path = await sourceFile(`const original = Signal('virtual', 'signal-A');
+const channel = Param.signal('Channel', original);
+const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: channel, value: amount },
+  { signal: original, value: 13 }
+] }] });`);
+    const outputPath = join(dirname(path), 'unsafe-constant-parameters.json');
+    const { log, error } = capture();
+
+    expect(
+      await run(
+        ['blueprint', 'export', '--parameters', '--json', '--output', outputPath, path],
+        environment,
+      ),
+    ).toBe(2);
+    const report = JSON.parse(String(log.mock.calls.at(-1)?.[0]));
+    expect(report).toMatchObject({
+      ok: false,
+      error: {
+        code: 'CP1002',
+        path: '$.blueprint.entities[0].control_behavior.sections.sections[0].filters[1]',
+        span: { start: expect.any(Number), end: expect.any(Number) },
+      },
+    });
+    expect(report.error.message).toMatch(/duplicate native Constant filter/i);
+    expect(error.mock.calls).toEqual([]);
+    await expect(stat(outputPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   test('exports native Constant Signal parameters through the existing opt-in CLI route', async () => {
     const { environment } = await parameterHost();
     const key = '__comblang_cli_native_signal_runs';
@@ -1061,11 +1094,11 @@ const input = new Network();
 const A = Signal('virtual', 'signal-A');
 output += Constant({ sections: [{ filters: [
   { signal: channel, value: amount * 2 },
-  { signal: Signal('virtual', 'signal-A'), value: 13 },
+  { signal: Signal('virtual', 'signal-C'), value: 13 },
   { signal: plate, value: 7 },
-  { signal: Signal('iron-plate'), value: 8 },
+  { signal: Signal('copper-plate'), value: 8 },
   { signal: water, value: 11 },
-  { signal: Signal('fluid', 'water'), value: 12 },
+  { signal: Signal('fluid', 'crude-oil'), value: 12 },
 ] }] });
 output += Decider({ condition: input[A] > 0, outputs: [input[A]], elseOutputs: [2 * A] });`);
       const nativePath = join(dirname(path), 'constant-signal-parameters.json');
@@ -1076,8 +1109,8 @@ output += Decider({ condition: input[A] > 0, outputs: [input[A]], elseOutputs: [
         JSON.stringify([
           { id: 0, value: { type: 'virtual', name: 'signal-B' } },
           { id: 1, value: 9 },
-          { id: 2, value: { type: 'item', name: 'copper-plate' } },
-          { id: 3, value: { type: 'fluid', name: 'crude-oil' } },
+          { id: 2, value: { type: 'item', name: 'steel-plate' } },
+          { id: 3, value: { type: 'fluid', name: 'petroleum-gas' } },
         ]),
       );
       const { log, error } = capture();
@@ -1113,11 +1146,25 @@ output += Decider({ condition: input[A] > 0, outputs: [input[A]], elseOutputs: [
       ]);
       expect(native.blueprint.entities[0].control_behavior.sections.sections[0].filters).toEqual([
         { index: 1, name: 'parameter-0', quality: 'normal', comparator: '=', count: 10 },
-        { index: 2, name: 'parameter-0', quality: 'normal', comparator: '=', count: 13 },
+        {
+          index: 2,
+          type: 'virtual',
+          name: 'signal-C',
+          quality: 'normal',
+          comparator: '=',
+          count: 13,
+        },
         { index: 3, name: 'parameter-1', quality: 'normal', comparator: '=', count: 7 },
-        { index: 4, name: 'parameter-1', quality: 'normal', comparator: '=', count: 8 },
+        { index: 4, name: 'copper-plate', quality: 'normal', comparator: '=', count: 8 },
         { index: 5, name: 'parameter-2', quality: 'normal', comparator: '=', count: 11 },
-        { index: 6, name: 'parameter-2', quality: 'normal', comparator: '=', count: 12 },
+        {
+          index: 6,
+          type: 'fluid',
+          name: 'crude-oil',
+          quality: 'normal',
+          comparator: '=',
+          count: 12,
+        },
       ]);
       expect(native.blueprint.entities[1].control_behavior.decider_conditions).toMatchObject({
         conditions: [{ first_signal: { name: 'parameter-0' }, constant: 0 }],
@@ -1143,13 +1190,13 @@ output += Decider({ condition: input[A] > 0, outputs: [input[A]], elseOutputs: [
         {
           index: 2,
           type: 'virtual',
-          name: 'signal-A',
+          name: 'signal-C',
           quality: 'normal',
           comparator: '=',
           count: 13,
         },
         { index: 3, name: 'iron-plate', quality: 'normal', comparator: '=', count: 7 },
-        { index: 4, name: 'iron-plate', quality: 'normal', comparator: '=', count: 8 },
+        { index: 4, name: 'copper-plate', quality: 'normal', comparator: '=', count: 8 },
         {
           index: 5,
           type: 'fluid',
@@ -1161,7 +1208,7 @@ output += Decider({ condition: input[A] > 0, outputs: [input[A]], elseOutputs: [
         {
           index: 6,
           type: 'fluid',
-          name: 'water',
+          name: 'crude-oil',
           quality: 'normal',
           comparator: '=',
           count: 12,
@@ -1212,22 +1259,29 @@ output += Decider({ condition: input[A] > 0, outputs: [input[A]], elseOutputs: [
         {
           index: 2,
           type: 'virtual',
-          name: 'signal-A',
+          name: 'signal-C',
           quality: 'normal',
           comparator: '=',
           count: 13,
         },
-        { index: 3, name: 'copper-plate', quality: 'normal', comparator: '=', count: 7 },
-        { index: 4, name: 'iron-plate', quality: 'normal', comparator: '=', count: 8 },
+        { index: 3, name: 'steel-plate', quality: 'normal', comparator: '=', count: 7 },
+        { index: 4, name: 'copper-plate', quality: 'normal', comparator: '=', count: 8 },
         {
           index: 5,
           type: 'fluid',
-          name: 'crude-oil',
+          name: 'petroleum-gas',
           quality: 'normal',
           comparator: '=',
           count: 11,
         },
-        { index: 6, type: 'fluid', name: 'water', quality: 'normal', comparator: '=', count: 12 },
+        {
+          index: 6,
+          type: 'fluid',
+          name: 'crude-oil',
+          quality: 'normal',
+          comparator: '=',
+          count: 12,
+        },
       ]);
       expect(bound.blueprint.entities[1].control_behavior.decider_conditions).toMatchObject({
         conditions: [{ first_signal: { name: 'signal-A' }, constant: 0 }],

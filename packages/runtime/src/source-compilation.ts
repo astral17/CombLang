@@ -2061,6 +2061,70 @@ export function exportSourceCompilationNativeBlueprint(
               : Object.freeze({ ...entity, native: nativeFields });
           }),
         );
+  const constantSourceByProducerIndex = new Map<number, SourceSpan>();
+  for (const capture of state.source.constantTemplates) {
+    const relation = relations.get(capture.captureId);
+    if (relation?.kind === 'constant') {
+      constantSourceByProducerIndex.set(relation.producerIndex, capture.source);
+    }
+  }
+  const parameterSourceByPlaceholder = new Map<string, SourceSpan>();
+  for (const [parameter, info] of signalInfoByParameter) {
+    const placeholder = allocatedSignalNames.get(parameter);
+    if (placeholder !== undefined)
+      parameterSourceByPlaceholder.set(placeholder, info.declaration.source);
+  }
+  const projectedByNumber = new Map(
+    projectedEntities.map((entity) => [entity.entityNumber, entity]),
+  );
+  const serializedFieldIdentity = (
+    record: Record<string, unknown>,
+    key: string,
+  ): readonly unknown[] => (record[key] === undefined ? ['absent'] : ['present', record[key]]);
+  for (const [producerIndex, producer] of replacement.circuit.producers.entries()) {
+    if (producer.kind !== 'constant') continue;
+    const entityNumber = producerIndex + 1;
+    const entity = projectedByNumber.get(entityNumber);
+    const behavior = readRecord(entity?.native.control_behavior);
+    const sections = readRecord(behavior?.sections)?.sections;
+    if (!Array.isArray(sections)) continue;
+    for (const [sectionIndex, sectionValue] of sections.entries()) {
+      const section = readRecord(sectionValue);
+      const filters = section?.filters;
+      if (!Array.isArray(filters)) continue;
+      const seen = new Map<string, number>();
+      for (const [filterIndex, filterValue] of filters.entries()) {
+        const filter = readRecord(filterValue);
+        const name = filter?.name;
+        const type = filter?.type;
+        if (
+          filter === undefined ||
+          typeof name !== 'string' ||
+          (type !== undefined && typeof type !== 'string')
+        ) {
+          continue;
+        }
+        const identity = JSON.stringify([
+          type ?? 'item',
+          name,
+          serializedFieldIdentity(filter, 'quality'),
+          serializedFieldIdentity(filter, 'comparator'),
+        ]);
+        const previousIndex = seen.get(identity);
+        if (previousIndex !== undefined) {
+          const path = `$.blueprint.entities[${entityNumber - 1}].control_behavior.sections.sections[${sectionIndex}].filters[${filterIndex}]`;
+          reject(
+            path,
+            `duplicate native Constant filter identity at entity ${entityNumber}, section ${sectionIndex + 1} (filters ${previousIndex + 1} and ${filterIndex + 1}) would be collapsed by Factorio; use distinct Signals or put intended contributions in separate sections or devices.`,
+            constantSourceByProducerIndex.get(producerIndex) ??
+              producer.provenance.source ??
+              parameterSourceByPlaceholder.get(name),
+          );
+        }
+        seen.set(identity, filterIndex);
+      }
+    }
+  }
   const native = Object.freeze({
     ...projected,
     entities: projectedEntities,
