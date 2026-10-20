@@ -179,6 +179,14 @@ function validateDeclarations(
   return Object.freeze(declarations);
 }
 
+/** Authenticates and canonicalizes a captured declaration list without resolving defaults. */
+export function inspectSourceResolvedNumberDefaultDeclarations(
+  session: BlueprintParameterSession,
+  declarationsValue: readonly CapturedBlueprintParameter[],
+): readonly CapturedBlueprintParameter[] {
+  return validateDeclarations(session, declarationsValue);
+}
+
 function validateChoices(
   session: BlueprintParameterSession,
   declarations: readonly ValidatedDeclaration[],
@@ -349,7 +357,7 @@ export function createSourceResolvedNumberDefaultContext(
   declarationsValue: readonly CapturedBlueprintParameter[],
   choicesValue: unknown,
 ): SourceResolvedNumberDefaultContext {
-  const declarations = validateDeclarations(session, declarationsValue);
+  const declarations = inspectSourceResolvedNumberDefaultDeclarations(session, declarationsValue);
   const chosenDefaults = validateChoices(session, declarations, choicesValue);
   const declarationByHandle = new Map(
     declarations.map((declaration) => [declaration.handle, declaration] as const),

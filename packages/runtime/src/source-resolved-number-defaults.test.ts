@@ -22,7 +22,10 @@ import {
   type BlueprintSignalParameterHandle,
 } from '../../compiler/src/blueprint-parameters.js';
 import type { CapturedBlueprintParameter } from './blueprint-parameter-capture.js';
-import { createSourceResolvedNumberDefaultContext } from './source-resolved-number-defaults.js';
+import {
+  createSourceResolvedNumberDefaultContext,
+  inspectSourceResolvedNumberDefaultDeclarations,
+} from './source-resolved-number-defaults.js';
 
 const source = {
   fileId: sourceFileId('source-resolved-number-defaults.test.ts'),
@@ -117,6 +120,48 @@ function familyTemplates(
 }
 
 describe('execution-local resolved numeric default context', () => {
+  test('exposes the same authenticated immutable declaration pairs used by the context', () => {
+    const fixture = ownerFixture();
+    const inspected = inspectSourceResolvedNumberDefaultDeclarations(
+      fixture.session,
+      fixture.captured,
+    );
+
+    expect(inspected.map(({ handle, registration }) => [handle, registration])).toEqual(
+      fixture.captured.map(({ handle, registration }) => [handle, registration]),
+    );
+    expect(Object.isFrozen(inspected)).toBe(true);
+    expect(inspected.every(Object.isFrozen)).toBe(true);
+    expect(inspected[0]?.handle).toBe(fixture.amount);
+    expect(inspected[0]?.registration).toBe(
+      inspectBlueprintParameterHandle(fixture.amount, '$.amount'),
+    );
+
+    const invalid = [
+      [{ ...fixture.captured[0]!, registration: { ...fixture.captured[0]!.registration } }],
+      [fixture.captured[0]!, fixture.captured[0]!],
+    ];
+    for (const declarationsValue of invalid) {
+      let inspectorError: unknown;
+      let contextError: unknown;
+      try {
+        inspectSourceResolvedNumberDefaultDeclarations(fixture.session, declarationsValue);
+      } catch (error) {
+        inspectorError = error;
+      }
+      try {
+        createSourceResolvedNumberDefaultContext(fixture.session, declarationsValue, []);
+      } catch (error) {
+        contextError = error;
+      }
+      expect(inspectorError).toMatchObject({
+        code: (contextError as BlueprintParameterError).code,
+        path: (contextError as BlueprintParameterError).path,
+      });
+      expect(contextError).toBeInstanceOf(BlueprintParameterError);
+    }
+  });
+
   test('validates an exact, immutable chosen-default set without changing registrations', () => {
     const fixture = ownerFixture();
     const originalAmountRegistration = inspectBlueprintParameterHandle(fixture.amount, '$.amount');
