@@ -412,14 +412,60 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
       ts.isPropertyAccessExpression(expression.expression) &&
       expression.expression.name.text === 'as'
     ) {
-      diagnostics.push({
-        code: 'CL1043',
-        severity: 'error',
-        message:
-          '.as(...) is not part of the Combinator API; bind an arithmetic output through destination[SIGNAL] or combinator.to(destination, SIGNAL).',
-        span: spanForNode(file, expression),
-      });
-      return undefined;
+      const receiver = expression.expression.expression;
+      let unwrappedReceiver: ts.Expression = receiver;
+      while (ts.isParenthesizedExpression(unwrappedReceiver)) {
+        unwrappedReceiver = unwrappedReceiver.expression;
+      }
+      if (
+        !ts.isBinaryExpression(unwrappedReceiver) ||
+        arithmeticOperation(unwrappedReceiver.operatorToken.kind) === undefined
+      ) {
+        diagnostics.push({
+          code: 'CL1043',
+          severity: 'error',
+          message: '.as(SIGNAL) is available only on a definite Arithmetic expression.',
+          span: spanForNode(file, expression),
+        });
+        return undefined;
+      }
+      if (expression.arguments.length !== 1 || ts.isSpreadElement(expression.arguments[0]!)) {
+        diagnostics.push({
+          code: 'CL1031',
+          severity: 'error',
+          message: '.as(SIGNAL) requires exactly one output Signal.',
+          span: spanForNode(file, expression),
+        });
+        return undefined;
+      }
+      const signalArgument = expression.arguments[0]!;
+      const signal = ts.isIdentifier(signalArgument) ? signals.get(signalArgument.text) : undefined;
+      if (signal === undefined) {
+        diagnostics.push({
+          code: 'CL1019',
+          severity: 'error',
+          message: '.as(SIGNAL) requires a declared output Signal identifier.',
+          span: spanForNode(file, signalArgument),
+        });
+        return undefined;
+      }
+      if (requestedOutputSignal !== undefined && !sameSignal(requestedOutputSignal, signal)) {
+        diagnostics.push({
+          code: 'CL1023',
+          severity: 'error',
+          message: 'The .as(SIGNAL) binding conflicts with the destination output Signal.',
+          span: spanForNode(file, expression),
+        });
+        return undefined;
+      }
+      return lowerExpression(
+        unwrappedReceiver,
+        template,
+        argumentNetworks,
+        context,
+        destination,
+        signal,
+      );
     }
     if (ts.isIdentifier(expression) && argumentNetworks.has(expression.text)) {
       return { kind: 'network', network: argumentNetworks.get(expression.text)! };

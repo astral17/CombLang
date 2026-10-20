@@ -374,7 +374,7 @@ function validateOuterCoverage(
     }
 
     const directionValue = node.get('direction');
-    const exactDirection = exactFiniteNumber(directionValue);
+    const exactDirection = directionValue === undefined ? 0 : exactFiniteNumber(directionValue);
     if (
       exactDirection === undefined ||
       !Number.isInteger(exactDirection) ||
@@ -385,7 +385,7 @@ function validateOuterCoverage(
         sourceDiagnostic(
           'unsupported-source-placement',
           `${path}.direction`,
-          'An explicit exactly representable integer direction from 0 through 15 is required.',
+          'Direction must be an exactly representable integer from 0 through 15 when present.',
           entityNumber,
         ),
       );

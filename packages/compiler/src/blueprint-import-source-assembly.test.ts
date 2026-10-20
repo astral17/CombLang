@@ -183,7 +183,7 @@ describe('canonical blueprint full-source assembly', () => {
     expect(entityUnknown.correspondence).toBeUndefined();
   });
 
-  test('retains headers as notices and requires exact coordinates and explicit direction', () => {
+  test('retains headers as notices and defaults only an omitted native direction to north', () => {
     const raw =
       '{"blueprint":{"item":"blueprint","version":1,"label":"document only","icons":[],"description":"not emitted","entities":[{"entity_number":71,"name":"constant-combinator","position":{"x":-0,"y":2},"direction":0,"control_behavior":{"is_on":true,"sections":{"sections":[{"index":1,"active":true,"multiplier":1,"filters":[]}]}}}],"wires":[]}}';
     const { analysis, selections } = prepareSource(raw);
@@ -206,13 +206,10 @@ describe('canonical blueprint full-source assembly', () => {
       entities: [constantEntity(9, { omitDirection: true })],
       wires: [],
     });
-    expect(missingDirection.state).toBe('blocked');
-    expect(missingDirection.diagnostics).toContainEqual(
-      expect.objectContaining({
-        category: 'unsupported-source-placement',
-        path: '$.blueprint.entities[0].direction',
-      }),
-    );
+    expect(missingDirection.state).toBe('complete');
+    if (missingDirection.state !== 'complete')
+      throw new Error('Expected native direction default.');
+    expect(missingDirection.source.text).toContain('import_entity_1.at(9,0,0);');
 
     const inexact = generate({
       entities: [constantEntity(9, { position: { x: 0.1, y: 0 } })],
@@ -236,6 +233,17 @@ describe('canonical blueprint full-source assembly', () => {
         }),
       );
     }
+    const explicitNull = generate({
+      entities: [constantEntity(9, { omitDirection: true, extra: { direction: null } })],
+      wires: [],
+    });
+    expect(explicitNull.state).toBe('blocked');
+    expect(explicitNull.diagnostics).toContainEqual(
+      expect.objectContaining({
+        category: 'unsupported-source-placement',
+        path: '$.blueprint.entities[0].direction',
+      }),
+    );
   });
 
   test('uses stable declarations, literal constructors, row order, and empty-source behavior', () => {
@@ -520,14 +528,16 @@ describe('canonical blueprint full-source assembly', () => {
       readonly behavior: unknown;
       readonly suffix: string;
       readonly source?: string;
+      readonly category?: string;
     }[] = [
       {
-        label: 'unmasked copy output',
+        label: 'explicitly null copy-output mask',
         behavior: {
           ...base,
-          outputs: [{ signal: { name: 'signal-A' }, copy_count_from_input: true }],
+          outputs: [{ signal: { name: 'signal-A' }, copy_count_from_input: true, networks: null }],
         },
-        suffix: '.outputs[0]',
+        suffix: '.outputs[0].networks',
+        category: 'unsupported-decider-configuration',
       },
       {
         label: 'masked constant output',
@@ -641,7 +651,7 @@ describe('canonical blueprint full-source assembly', () => {
       expect(result.correspondence, item.label).toBeUndefined();
       expect(result.diagnostics, item.label).toContainEqual(
         expect.objectContaining({
-          category: 'unsupported-source-configuration',
+          category: item.category ?? 'unsupported-source-configuration',
           path: `$.blueprint.entities[0].control_behavior.decider_conditions${item.suffix}`,
         }),
       );

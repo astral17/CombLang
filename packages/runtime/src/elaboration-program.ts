@@ -681,7 +681,7 @@ class ElaborationRecorder {
           to: (...values) => this.api.attachTo(receiver, ...values, rawSpan),
           take: (...values) => this.api.take(receiver, ...values, rawSpan),
           at: (...values) => this.api.place(receiver, ...values, rawSpan),
-          as: (...values) => this.api.bindOutput(receiver, values[0] as SignalId, rawSpan),
+          as: (...values) => this.api.bindOutput(receiver, values, rawSpan),
           then: (...values) => this.api.appendDecider(receiver, 'then', values, rawSpan),
           else: (...values) => this.api.appendDecider(receiver, 'else', values, rawSpan),
         };
@@ -2268,14 +2268,40 @@ class ElaborationRecorder {
       }
       return (value as Record<PropertyKey, unknown>)[key as PropertyKey];
     },
-    bindOutput: (producer: unknown, signal: SignalId, rawSpan: RawSpan): unknown => {
+    bindOutput: (producer: unknown, values: readonly unknown[], rawSpan: RawSpan): unknown => {
       if (!isRawSpan(rawSpan)) throw new Error('.as(...) is missing provenance.');
       if (this.#isNetwork(producer) || this.#isCombinator(producer)) {
-        throw new ElaborationExecutionError(
-          '.as(...) is not part of the Combinator API; bind an arithmetic output through destination[SIGNAL] or combinator.to(destination, SIGNAL).',
-          this.#span(rawSpan),
-          'RT2021',
-        );
+        const source = this.#span(rawSpan);
+        this.#recordDslCall();
+        if (values.length !== 1) {
+          throw new ElaborationExecutionError(
+            '.as(SIGNAL) requires exactly one output Signal.',
+            source,
+            'RT2027',
+          );
+        }
+        if (
+          !this.#isCombinator(producer) ||
+          this.#combinators.stateFor(producer).descriptor.kind !== 'arithmetic'
+        ) {
+          throw new ElaborationExecutionError(
+            '.as(SIGNAL) is available only on a physical Arithmetic combinator.',
+            source,
+            'RT2021',
+          );
+        }
+        const signal = values[0];
+        if (!this.#isSignal(signal)) {
+          throw new ElaborationExecutionError(
+            '.as(SIGNAL) requires a current-source concrete Signal handle.',
+            source,
+            'RT2027',
+          );
+        }
+        return this.#withTopologyTransaction(rawSpan, () => {
+          this.#combinators.bindOutput(producer, signal, source);
+          return producer;
+        });
       }
       if (
         (typeof producer !== 'object' && typeof producer !== 'function') ||
@@ -2284,7 +2310,7 @@ class ElaborationRecorder {
       ) {
         throw new Error('.as(...) requires an ordinary .as method; DSL values do not support it.');
       }
-      return (producer as { as: (value: unknown) => unknown }).as(signal);
+      return (producer as { as: (...args: readonly unknown[]) => unknown }).as(...values);
     },
     place: (...args: unknown[]): unknown => {
       const rawSpan = args.at(-1);
@@ -2717,15 +2743,39 @@ class ElaborationRecorder {
             'A pending combinator Entity was not installed before plan construction.',
           );
         }
-        return linked.association.kind === 'constant'
-          ? Object.freeze({
-              ...entity,
-              configuration: {
-                mode: 'constant' as const,
-                value: linked.association.configuration,
-              } satisfies EntityConstantConfiguration,
-            })
-          : Object.freeze({ ...entity, configuration: linked.association.configuration });
+        if (linked.association.kind === 'constant') {
+          return Object.freeze({
+            ...entity,
+            configuration: {
+              mode: 'constant' as const,
+              value: linked.association.configuration,
+            } satisfies EntityConstantConfiguration,
+          });
+        }
+        if (linked.association.kind === 'arithmetic') {
+          const descriptor = this.#combinators.stateFor(linked.producer).descriptor;
+          if (descriptor.kind !== 'arithmetic') {
+            throw new Error('A linked Arithmetic Entity lost its producer descriptor.');
+          }
+          const output =
+            descriptor.output.kind === 'signal'
+              ? {
+                  kind: 'signal' as const,
+                  signal: this.#signalSnapshot(descriptor.output.signal),
+                }
+              : descriptor.output;
+          return Object.freeze({
+            ...entity,
+            configuration: {
+              ...linked.association.configuration,
+              output,
+            } satisfies EntityArithmeticConfiguration,
+          });
+        }
+        return Object.freeze({
+          ...entity,
+          configuration: linked.association.configuration,
+        });
       });
       this.#assertNoPendingCombinatorArtifacts(common.producers, canonicalEntities);
       const entityCommon = () => ({

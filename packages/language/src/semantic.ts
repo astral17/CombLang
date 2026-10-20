@@ -593,6 +593,19 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
     node: ts.Expression,
   ): 'arithmetic' | 'decider' | 'constant' | 'selector' | undefined => {
     if (ts.isParenthesizedExpression(node)) return producerKindOfExpression(node.expression);
+    if (ts.isIdentifier(node)) {
+      switch (lookupProducerSlot(node.text)?.direct) {
+        case 'ArithmeticCombinator':
+          return 'arithmetic';
+        case 'DeciderCombinator':
+          return 'decider';
+        case 'ConstantCombinator':
+          return 'constant';
+        case 'SelectorCombinator':
+          return 'selector';
+      }
+      return undefined;
+    }
     if (ts.isBinaryExpression(node) && operatorText(node.operatorToken.kind) !== undefined) {
       return 'arithmetic';
     }
@@ -1449,11 +1462,19 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       if (
         method === 'as' &&
         node.arguments.length === 1 &&
-        (isProducerExpression(receiver) || isNetworkExpression(receiver))
+        (() => {
+          const kind = producerKindOfExpression(receiver);
+          if (kind !== undefined) return kind !== 'arithmetic';
+          const directType = ts.isIdentifier(receiver)
+            ? lookupProducerSlot(receiver.text)?.direct
+            : undefined;
+          if (directType !== undefined) return !producerTypeAcceptsKind(directType, 'arithmetic');
+          return isNetworkExpression(receiver);
+        })()
       ) {
         report(
           'CL1043',
-          '.as(...) is not part of the Combinator API; bind an arithmetic output through destination[SIGNAL] or combinator.to(destination, SIGNAL).',
+          '.as(SIGNAL) is available only on a definite Arithmetic producer; bind other producer outputs at the destination.',
           node,
         );
       }

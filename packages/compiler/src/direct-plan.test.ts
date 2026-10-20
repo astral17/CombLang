@@ -933,19 +933,38 @@ const output: Network = Scale(input);`,
     ]);
   });
 
-  test('rejects .as(Signal) instead of exposing a second output-binding syntax', () => {
-    for (const expression of ['(input + 1).as(A)', 'IF(input > 0, input).as(A)']) {
-      const file = parseFile({
-        path: 'unsupported-as.factorio.ts',
-        text: `const A = Signal("virtual", "signal-A");
-const input = new Network<R>();
-const output: Network = ${expression};`,
-      });
+  test('lowers .as output selection on Arithmetic operator chains only', () => {
+    const arithmetic = parseFile({
+      path: 'arithmetic-as-direct-plan.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const C = Signal("virtual", "signal-C");
+const a = new Network<R>();
+const b = new Network<R>();
+const d = new Network<R>();
+const out = new Network<R>();
+out += (a + b).as(C) * 2 + d;`,
+    });
+    const lowered = compileDirectPlan(arithmetic);
+    expect(lowered.diagnostics).toEqual([]);
+    expect(lowered.plan?.producers).toMatchObject([
+      {
+        kind: 'arithmetic',
+        operation: 'add',
+        output: { kind: 'signal', signal: { name: 'signal-C' } },
+      },
+      { kind: 'arithmetic', operation: 'multiply' },
+      { kind: 'arithmetic', operation: 'add' },
+    ]);
 
-      expect(compileDirectPlan(file).diagnostics).toContainEqual(
-        expect.objectContaining({ code: 'CL1043', severity: 'error' }),
-      );
-    }
+    const decider = parseFile({
+      path: 'unsupported-decider-as.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const input = new Network<R>();
+const output: Network = IF(input > 0, input).as(A);`,
+    });
+    expect(compileDirectPlan(decider).diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'CL1043', severity: 'error' }),
+    );
   });
 
   test('keeps compound IF predicates inside one decider descriptor', () => {

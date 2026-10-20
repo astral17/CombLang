@@ -222,6 +222,16 @@ function sourceFor(entities: readonly BlueprintSourceEntityCorrespondence[], ent
 }
 
 describe('ordinary runtime compilation of assembled blueprints through round-trip verification', () => {
+  test('assembles and verifies an omitted native direction as explicit north in source', () => {
+    const document = JSON.parse(sourceDocument) as {
+      blueprint: { entities: Array<Record<string, unknown>> };
+    };
+    delete document.blueprint.entities[0]!.direction;
+    const fixture = compileFixture(JSON.stringify(document));
+    expect(fixture.assembled.source.text).toContain('import_entity_1.at(0,4,0);');
+    expect(verify(fixture)).toMatchObject({ state: 'verified' });
+  });
+
   test('accepts fractional multipliers but reports negative-zero normalization by native JSON', () => {
     const fractional = compileFixture(sourceDocument.replace('"multiplier":0', '"multiplier":0.5'));
     const fractionalResult = verify(fractional);

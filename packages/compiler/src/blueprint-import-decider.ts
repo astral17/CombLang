@@ -361,17 +361,20 @@ function selectedNetworks(
   budget: StringByteBudget,
   signal: AbortSignal | undefined,
 ): LogicalNetworkRef | BlueprintDeciderImportResult {
-  if (!isObjectNode(value)) return blocked('Expected an input network mask object.', path);
-  const unknown = unknownField(value, ['red', 'green'], path, signal);
-  if (unknown !== undefined) return blocked(unknown.message, unknown.path);
+  if (value !== undefined && !isObjectNode(value)) {
+    return blocked('Expected an input network mask object.', path);
+  }
+  const mask = value;
+  if (mask !== undefined) {
+    const unknown = unknownField(mask, ['red', 'green'], path, signal);
+    if (unknown !== undefined) return blocked(unknown.message, unknown.path);
+  }
 
   const redPath = `${path}.red`;
   const greenPath = `${path}.green`;
-  const redValue = value.get('red');
-  const greenValue = value.get('green');
-  if (redValue === undefined) return blocked('Required red selection is missing.', redPath);
+  const redValue = mask === undefined || !has(mask, 'red') ? true : mask.get('red');
+  const greenValue = mask === undefined || !has(mask, 'green') ? true : mask.get('green');
   if (typeof redValue !== 'boolean') return blocked('Expected a boolean.', redPath);
-  if (greenValue === undefined) return blocked('Required green selection is missing.', greenPath);
   if (typeof greenValue !== 'boolean') return blocked('Expected a boolean.', greenPath);
   if (!redValue && !greenValue) return blocked('At least one input color must be selected.', path);
   if (redValue && hostNetworks.red === undefined) {
@@ -440,7 +443,10 @@ function rightOperand(
     );
   }
   if (!constantPresent && !signalPresent) {
-    return blocked('A comparison right operand is required.', constantPath);
+    if (networksPresent) {
+      return blocked('A constant right operand cannot have an input network mask.', networksPath);
+    }
+    return Object.freeze({ kind: 'constant', value: 0 });
   }
   if (constantPresent) {
     if (networksPresent) {
@@ -450,9 +456,6 @@ function rightOperand(
     if (value === undefined)
       return blocked('Expected an exact signed int32 constant.', constantPath);
     return Object.freeze({ kind: 'constant', value });
-  }
-  if (!networksPresent) {
-    return blocked('A right signal requires an explicit network mask.', networksPath);
   }
   const decoded = decodedSignal(row.get('second_signal'), signalPath, budget, signal, false);
   if ('state' in decoded) return decoded;
@@ -478,9 +481,8 @@ function comparison(
   signal: AbortSignal | undefined,
 ): Extract<LogicalDeciderCondition, { kind: 'compare' }> | BlueprintDeciderImportResult {
   const comparatorPath = `${path}.comparator`;
-  const comparatorValue = row.get('comparator');
-  if (comparatorValue === undefined)
-    return blocked('Required comparator is missing.', comparatorPath);
+  const comparatorValue =
+    row.get('comparator') ?? (has(row, 'comparator') ? row.get('comparator') : '<');
   if (
     typeof comparatorValue !== 'string' ||
     !Object.hasOwn(comparatorFromNative, comparatorValue)
@@ -534,13 +536,13 @@ function outputEntry(
   if ('state' in decodedSignalValue) return decodedSignalValue;
 
   const copyPath = `${path}.copy_count_from_input`;
-  const copyValue = value.get('copy_count_from_input');
-  if (copyValue === undefined)
-    return blocked('Required copy_count_from_input flag is missing.', copyPath);
+  const copyValue =
+    value.get('copy_count_from_input') ??
+    (has(value, 'copy_count_from_input') ? value.get('copy_count_from_input') : true);
   if (typeof copyValue !== 'boolean') return blocked('Expected a boolean.', copyPath);
 
   let input: LogicalNetworkRef | undefined;
-  if (has(value, 'networks')) {
+  if (copyValue || has(value, 'networks')) {
     const reference = selectedNetworks(
       value.get('networks'),
       `${path}.networks`,
@@ -564,9 +566,7 @@ function outputEntry(
       ...(input === undefined ? {} : { input }),
     });
   }
-  if (!constantPresent)
-    return blocked('A constant output requires an explicit constant.', constantPath);
-  const constant = exactInt32(value.get('constant'));
+  const constant = constantPresent ? exactInt32(value.get('constant')) : 1;
   if (constant === undefined)
     return blocked('Expected an exact signed int32 constant.', constantPath);
   return Object.freeze({
@@ -589,9 +589,9 @@ function serializedByteLength(configuration: DeciderProducerConfig): number {
 }
 
 /**
- * Decodes only the explicit Decider control_behavior shape emitted by the current native
- * configuration exporter. This is structural configuration recovery, not game-default
- * inference, topology validation, semantic Decider evaluation, or native Factorio validation.
+ * Decodes the supported Decider control_behavior shape and normalizes documented native
+ * defaults only when their fields are absent. This is structural configuration recovery,
+ * not topology validation, semantic Decider evaluation, or native Factorio validation.
  */
 export function decodeBlueprintDeciderControlBehavior(
   value: LosslessJsonValue | undefined,
@@ -677,12 +677,11 @@ export function decodeBlueprintDeciderControlBehavior(
     if (rowUnknown !== undefined) return blocked(rowUnknown.message, rowUnknown.path);
 
     const compareTypePath = `${rowPath}.compare_type`;
-    const compareType = rowValue.get('compare_type');
+    const compareType =
+      rowValue.get('compare_type') ??
+      (has(rowValue, 'compare_type') ? rowValue.get('compare_type') : 'or');
     if (compareType !== 'and' && compareType !== 'or') {
       return blocked('Expected an explicit and/or comparison connector.', compareTypePath);
-    }
-    if (index === 0 && compareType !== 'and') {
-      return blocked('The first Decider condition row must use and.', compareTypePath);
     }
     if (compareType === 'or' && index > 0) groups.push([]);
     checkAborted(resolved.signal);

@@ -508,7 +508,7 @@ function expectedPlacement(
   if (!(entity.position instanceof LosslessJsonObject)) return undefined;
   const x = finiteNumber(entity.position.get('x'));
   const y = finiteNumber(entity.position.get('y'));
-  const direction = finiteNumber(entity.direction);
+  const direction = entity.direction === undefined ? 0 : finiteNumber(entity.direction);
   if (
     x === undefined ||
     y === undefined ||

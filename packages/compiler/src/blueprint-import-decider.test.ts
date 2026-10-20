@@ -131,7 +131,13 @@ describe('inverse Decider control_behavior conversion', () => {
           comparator: '>',
           right: { kind: 'constant', value: 0 },
         },
-        outputs: [{ mode: 'copy', signal: { kind: 'signal', signal: Signal('signal-output') } }],
+        outputs: [
+          {
+            mode: 'copy',
+            signal: { kind: 'signal', signal: Signal('signal-output') },
+            input: { refKind: 'pair', networks: [red, green] },
+          },
+        ],
       },
       diagnostics: [],
     });
@@ -270,23 +276,15 @@ describe('inverse Decider control_behavior conversion', () => {
     });
   });
 
-  test('requires exact comparison fields, concrete right signals and explicit masks', () => {
+  test('rejects malformed comparison fields and unsupported right signals', () => {
     const cases: readonly [unknown, string][] = [
       [row({ first_signal: undefined }), '.decider_conditions.conditions[0].first_signal'],
       [
-        row({ first_signal_networks: undefined }),
+        row({ first_signal_networks: null }),
         '.decider_conditions.conditions[0].first_signal_networks',
       ],
-      [row({ comparator: undefined }), '.decider_conditions.conditions[0].comparator'],
-      [row({ constant: undefined }), '.decider_conditions.conditions[0].constant'],
-      [
-        row({
-          second_signal: { name: 'signal-B' },
-          second_signal_networks: undefined,
-          constant: undefined,
-        }),
-        '.decider_conditions.conditions[0].second_signal_networks',
-      ],
+      [row({ comparator: null }), '.decider_conditions.conditions[0].comparator'],
+      [row({ constant: null }), '.decider_conditions.conditions[0].constant'],
       [
         row({
           second_signal: { type: 'virtual', name: 'signal-each' },
@@ -311,7 +309,7 @@ describe('inverse Decider control_behavior conversion', () => {
         row({ first_signal: { type: 'item', name: 'signal-A', quality: 'bad\u0000quality' } }),
         '.decider_conditions.conditions[0].first_signal.quality',
       ],
-      [row({ compare_type: undefined }), '.decider_conditions.conditions[0].compare_type'],
+      [row({ compare_type: null }), '.decider_conditions.conditions[0].compare_type'],
       [row({ compare_type: 'xor' }), '.decider_conditions.conditions[0].compare_type'],
       [row({ comparator: '>= ' }), '.decider_conditions.conditions[0].comparator'],
     ];
@@ -320,20 +318,132 @@ describe('inverse Decider control_behavior conversion', () => {
     expectBlocked(
       behavior([
         row({
-          second_signal: { name: 'signal-B' },
+          second_signal: { type: 'virtual' },
           second_signal_networks: { red: true, green: false },
+          constant: undefined,
         }),
       ]),
-      '.decider_conditions.conditions[0].second_signal',
+      '.decider_conditions.conditions[0].second_signal.name',
     );
     expectBlocked(
-      behavior([row({ constant: undefined, second_signal: { name: 'signal-B' } })]),
+      behavior([
+        row({
+          constant: undefined,
+          second_signal: { name: 'signal-B' },
+          second_signal_networks: null,
+        }),
+      ]),
       '.decider_conditions.conditions[0].second_signal_networks',
     );
     expectBlocked(
       behavior([row({ constant: 0, second_signal_networks: { red: true, green: false } })]),
       '.decider_conditions.conditions[0].second_signal_networks',
     );
+  });
+
+  test('normalizes only omitted native Decider defaults across masks and branches', () => {
+    const result = decode(
+      behavior(
+        [
+          row({
+            first_signal_networks: undefined,
+            comparator: undefined,
+            constant: undefined,
+            compare_type: 'and',
+          }),
+          row({
+            first_signal: { type: 'virtual', name: 'signal-B' },
+            first_signal_networks: { red: false },
+            comparator: '=',
+            constant: 2,
+            compare_type: undefined,
+          }),
+          row({
+            first_signal: { type: 'virtual', name: 'signal-C' },
+            first_signal_networks: { red: true, green: true },
+            comparator: '≠',
+            second_signal: { type: 'virtual', name: 'signal-D' },
+            second_signal_networks: { green: false },
+            constant: undefined,
+            compare_type: 'and',
+          }),
+        ],
+        [
+          { signal: { type: 'virtual', name: 'signal-copy' } },
+          {
+            signal: { type: 'virtual', name: 'signal-constant' },
+            copy_count_from_input: false,
+          },
+        ],
+        {
+          else_outputs: [
+            {
+              signal: { type: 'virtual', name: 'signal-else' },
+              copy_count_from_input: false,
+            },
+          ],
+        },
+      ),
+    );
+
+    expect(result.state, JSON.stringify(result.diagnostics)).toBe('complete');
+    if (result.state !== 'complete') return;
+    expect(result.configuration.condition).toMatchObject({
+      kind: 'or',
+      conditions: [
+        {
+          kind: 'compare',
+          left: { refKind: 'pair', networks: [red, green] },
+          comparator: '<',
+          right: { kind: 'constant', value: 0 },
+        },
+        {
+          kind: 'and',
+          conditions: [
+            {
+              kind: 'compare',
+              left: { refKind: 'single', network: green },
+              comparator: '=',
+              right: { kind: 'constant', value: 2 },
+            },
+            {
+              kind: 'compare',
+              left: { refKind: 'pair', networks: [red, green] },
+              comparator: '!=',
+              right: { refKind: 'single', network: red },
+            },
+          ],
+        },
+      ],
+    });
+    expect(result.configuration.outputs).toEqual([
+      {
+        mode: 'copy',
+        signal: { kind: 'signal', signal: Signal('virtual', 'signal-copy') },
+        input: { refKind: 'pair', networks: [red, green] },
+      },
+      {
+        mode: 'constant',
+        signal: { kind: 'signal', signal: Signal('virtual', 'signal-constant') },
+        value: 1,
+      },
+    ]);
+    expect(result.configuration.elseOutputs).toEqual([
+      {
+        mode: 'constant',
+        signal: { kind: 'signal', signal: Signal('virtual', 'signal-else') },
+        value: 1,
+      },
+    ]);
+
+    for (const malformed of [
+      behavior([row({ comparator: null })]),
+      behavior([row({ compare_type: null })]),
+      behavior([row({ first_signal_networks: { red: null } })]),
+      behavior([row()], [{ signal: { name: 'A' }, copy_count_from_input: null }]),
+    ]) {
+      expect(decode(malformed).state).toBe('blocked');
+    }
   });
 
   test('maps only selected host lanes and rejects missing, empty or conflicting masks', () => {
@@ -353,7 +463,11 @@ describe('inverse Decider control_behavior conversion', () => {
         networks,
         '.decider_conditions.conditions[0].first_signal_networks',
       ],
-      [{ red: true }, networks, '.decider_conditions.conditions[0].first_signal_networks.green'],
+      [
+        { red: true, green: null },
+        networks,
+        '.decider_conditions.conditions[0].first_signal_networks.green',
+      ],
       [
         { red: true, green: 0 },
         networks,
@@ -410,18 +524,14 @@ describe('inverse Decider control_behavior conversion', () => {
       ],
     });
 
-    for (const invalid of [
-      [row({ compare_type: 'or' })],
-      [row({ compare_type: undefined })],
-      [row({ compare_type: 'OR' })],
-      [],
-    ]) {
-      const path =
-        invalid.length === 0
-          ? '.decider_conditions.conditions'
-          : '.decider_conditions.conditions[0].compare_type';
-      expectBlocked(behavior(invalid), path);
+    for (const validFirst of [[row({ compare_type: 'or' })], [row({ compare_type: undefined })]]) {
+      expect(decode(behavior(validFirst)).state).toBe('complete');
     }
+    expectBlocked(
+      behavior([row({ compare_type: 'OR' })]),
+      '.decider_conditions.conditions[0].compare_type',
+    );
+    expectBlocked(behavior([]), '.decider_conditions.conditions');
   });
 
   test('decodes ordered copy and constant outputs, optional masks and else branch presence', () => {
@@ -477,7 +587,11 @@ describe('inverse Decider control_behavior conversion', () => {
           value: -4,
           input: { refKind: 'single', network: green },
         },
-        { mode: 'copy', signal: { kind: 'signal', signal: Signal('signal-output') } },
+        {
+          mode: 'copy',
+          signal: { kind: 'signal', signal: Signal('signal-output') },
+          input: { refKind: 'pair', networks: [red, green] },
+        },
       ],
       elseOutputs: [
         { mode: 'constant', signal: { kind: 'wildcard', value: 'everything' }, value: 0 },
@@ -505,7 +619,7 @@ describe('inverse Decider control_behavior conversion', () => {
   test('enforces exact copy/constant fields, signal domains and signed-int32 numeric literals', () => {
     const invalidOutputs: readonly [unknown, string][] = [
       [
-        copyOutput({ copy_count_from_input: undefined }),
+        copyOutput({ copy_count_from_input: null }),
         '.decider_conditions.outputs[0].copy_count_from_input',
       ],
       [
@@ -514,7 +628,7 @@ describe('inverse Decider control_behavior conversion', () => {
       ],
       [copyOutput({ constant: 0 }), '.decider_conditions.outputs[0].constant'],
       [
-        { signal: { name: 'A' }, copy_count_from_input: false },
+        { signal: { name: 'A' }, copy_count_from_input: false, constant: null },
         '.decider_conditions.outputs[0].constant',
       ],
       [
@@ -529,7 +643,7 @@ describe('inverse Decider control_behavior conversion', () => {
     for (const [output, path] of invalidOutputs) expectBlocked(behavior([row()], [output]), path);
     expectBlocked(
       behavior([row()], [copyOutput()], {
-        else_outputs: [copyOutput({ copy_count_from_input: undefined })],
+        else_outputs: [copyOutput({ copy_count_from_input: null })],
       }),
       '.decider_conditions.else_outputs[0].copy_count_from_input',
     );

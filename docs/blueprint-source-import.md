@@ -92,19 +92,21 @@ only fields represented by the current CombLang source constructors. The links
 describe the source APIs; they do not imply that every field of the native
 blueprint format can be reconstructed.
 
-| Family                          | Imported form and important limits                                                                                                                                                                                                                                                                                                                                                                                           |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| [Constant](api/constant.md)     | Native `constant-combinator` / trusted key `entity:constant-combinator`. Explicit `is_on` and ordered `sections.sections`; section and filter indices must be contiguous and 1-based. Section active/group/multiplier and ordered filters are retained. Each filter needs a concrete Signal quality; an omitted Signal `type` is accepted as `item`.                                                                         |
-| [Arithmetic](api/arithmetic.md) | Native `arithmetic-combinator` / trusted key `entity:arithmetic-combinator`. Explicit `arithmetic_conditions`, a supported operation/operand pair/output, and explicit red/green masks for Signal operands. Constant operands have no mask; unknown fields and unrepresented configuration are refused.                                                                                                                      |
-| [Decider](api/decider.md)       | Native `decider-combinator` / trusted key `entity:decider-combinator`. Explicit ordered condition groups, true-output rows, and supported else-output rows. Signal input masks and copied-count output masks must be explicit; constant operands/outputs cannot carry masks. An empty explicit else branch or a configuration with no output rows is refused. A constant-count wildcard output is supported only for `Each`. |
-| [Selector](api/selector.md)     | Native `selector-combinator` / trusted key `entity:selector-combinator`. Only explicit `operation: "select"` and `operation: "count"`. Select requires explicit `select_max` and exactly one of `index_constant` or `index_signal`; Count requires `count_signal`. Newer operations and unknown/cross-operation fields are refused.                                                                                          |
+| Family                          | Imported form and important limits                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Constant](api/constant.md)     | Native `constant-combinator` / trusted key `entity:constant-combinator`. Explicit `is_on` and ordered `sections.sections`; section and filter indices must be contiguous and 1-based. Section active/group/multiplier and ordered filters are retained. Each filter needs a concrete Signal quality; an omitted Signal `type` is accepted as `item`.                                                                                                                                                                                                          |
+| [Arithmetic](api/arithmetic.md) | Native `arithmetic-combinator` / trusted key `entity:arithmetic-combinator`. Explicit `arithmetic_conditions`, a supported operation/operand pair/output, and explicit red/green masks for Signal operands. Constant operands have no mask; unknown fields and unrepresented configuration are refused.                                                                                                                                                                                                                                                       |
+| [Decider](api/decider.md)       | Native `decider-combinator` / trusted key `entity:decider-combinator`. Explicit ordered condition groups, true-output rows, and supported else-output rows. Omitted native condition/input masks default to both colors; omitted comparator, grouping connector, right-hand constant, copy-count mode, and output masks use their documented Factorio defaults. Constant operands/outputs cannot carry masks. An empty explicit else branch or a configuration with no output rows is refused. A constant-count wildcard output is supported only for `Each`. |
+| [Selector](api/selector.md)     | Native `selector-combinator` / trusted key `entity:selector-combinator`. Only explicit `operation: "select"` and `operation: "count"`. Select requires explicit `select_max` and exactly one of `index_constant` or `index_signal`; Count requires `count_signal`. Newer operations and unknown/cross-operation fields are refused.                                                                                                                                                                                                                           |
 
 Arithmetic recognizes only the explicit native operators `+`, `-`, `*`, `/`,
 `%`, `^`, `<<`, `>>`, `AND`, `OR`, and `XOR`.
 
-Every entity needs an explicit exactly representable x/y position and direction
-integer from 0 through 15. Placement objects with extra coordinates are outside
-the subset. Wires must use the supported top-level four-value tuples
+Every entity needs an explicit exactly representable x/y position. An omitted
+native `direction` defaults to north (`0`), and generated source writes that
+value explicitly as `.at(x,y,0)`; a present direction must be an exactly
+representable integer from 0 through 15. Placement objects with extra coordinates
+are outside the subset. Wires must use the supported top-level four-value tuples
 `[entity_number, connector, entity_number, connector]`, with endpoints that the
 selected canonical profile can resolve. Legacy per-entity connections,
 object-shaped wire data, unknown outer fields, partial entity inventories, and
@@ -115,9 +117,17 @@ notices do not mean that metadata appears in source.
 Signal `type` can be omitted for item Signals and defaults to `item`; this is
 not, by itself, an import error. Explicit concrete qualities are retained where
 the family accepts them. Constant filters require an explicit quality.
-Wildcards, family-specific masks, and defaults remain subject to the exact
-decoder rules above: do not infer support from a field merely being present in a
-Factorio schema. Some negative-zero values cannot round-trip through native JSON
+For Deciders, omitted first/second Signal-network masks default each color to
+`true`; absent comparator defaults to `<`, absent `compare_type` to `or`, and
+absence of both `second_signal` and `constant` means constant `0`. An omitted
+output `copy_count_from_input` defaults to `true`; copied output networks default
+to both colors. When copying is false, an omitted output constant defaults to `1`.
+Defaults apply only to absent fields: explicitly present null, wrong types, invalid
+enums/ranges, unknown keys, and unsupported shapes are still refused. These
+import defaults are independent of the source API's `.at(...)` default direction.
+Wildcards and family-specific masks remain subject to the exact decoder rules
+above: do not infer support from a field merely being present in a Factorio schema.
+Some negative-zero values cannot round-trip through native JSON
 serialization—for example Constant multipliers, Decider constants, and numeric
 Selector indices—and are refused rather than normalized to zero.
 

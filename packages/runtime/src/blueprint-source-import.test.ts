@@ -674,7 +674,7 @@ describe('host-neutral canonical blueprint source import', () => {
     expect(compile).not.toHaveBeenCalled();
   });
 
-  test('refuses an implicit Decider copy-input mask before source compilation', () => {
+  test('imports an omitted Decider copy-input mask using the native both-color default', () => {
     const compile = vi.spyOn(sourceCompilation, 'compileSourceProgram');
     const result = importCanonicalBlueprintSource(
       deciderDocument({ implicitCopyInput: true }),
@@ -683,17 +683,12 @@ describe('host-neutral canonical blueprint source import', () => {
     );
 
     expect(result).toMatchObject({
-      state: 'blocked',
-      diagnostics: [
-        expect.objectContaining({
-          category: 'unsupported-source-configuration',
-          path: '$.blueprint.entities[0].control_behavior.decider_conditions.outputs[0]',
-        }),
-      ],
+      state: 'verified',
+      verification: { state: 'verified', entityCount: 1 },
     });
-    expect(result).not.toHaveProperty('source');
-    expect(result).not.toHaveProperty('correspondence');
-    expect(compile).not.toHaveBeenCalled();
+    expect(result).toHaveProperty('source');
+    expect(result).toHaveProperty('correspondence');
+    expect(compile).toHaveBeenCalledOnce();
   });
 
   test('requires trusted authority for empty blueprints and accepts an authorized empty import', () => {

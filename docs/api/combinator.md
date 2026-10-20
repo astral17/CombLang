@@ -20,6 +20,11 @@ Exact constructors and their provider requirements are described in the
 [language reference](../language-reference.md). A generic Entity with a matching
 prototype name does not automatically acquire computation or this output API.
 
+Only a physical `ArithmeticCombinator` has the `.as(SIGNAL)` output-binding
+method. It binds the existing device and returns the same handle; it is not a
+second spelling for destination-side binding on Decider, Constant, Selector,
+Entity, Network, or pair values. See [Arithmetic](arithmetic.md).
+
 Exact `Constant({ sections: [...] })` accepts a direct current-session number
 parameter in a section's `multiplier`, with a required finite-double default.
 Host-local binding updates the same Constant Producer and linked Entity, including

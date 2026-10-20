@@ -136,7 +136,7 @@ Call provenance is associated with the executed function identity, not its textu
 | `CL1040` | definite function escape of a borrowed Network                            | return a producer or an independently owned Network                                     |
 | `CL1041` | retired bare `Network` parameter error                                    | direct Network parameters now use an implicit read-only borrow                          |
 | `CL1042` | definite misuse of immutable `pair(a, b)` input view                      | use pair only for reads; use `to`/`.to` for output fan-out                              |
-| `CL1043` | unsupported `.as(...)` on a definite DSL Combinator or Network            | bind the output Signal at the destination                                               |
+| `CL1043` | unsupported `.as(...)` on a definite non-Arithmetic producer or Network   | use `.as(SIGNAL)` only on a physical ArithmeticCombinator or bind at the destination    |
 | `CL1044` | combinator-handle declaration, assignment, argument, or return mismatches | use a compatible combinator of the annotated physical kind                              |
 | `CL1045` | user binding shadows a reserved free DSL identifier                       | rename the variable, parameter, function, class, or enum                                |
 | `CL1046` | one returned Network is destructured as combinator fan-out                | return an explicit container or retain a Combinator return type                         |
@@ -189,7 +189,7 @@ available. This is an export failure, not an error in source execution; see
 | `RT2018` | color-qualified borrow conflicts with an existing color                                                     |
 | `RT2019` | ownership was dropped or returned without a valid transfer                                                  |
 | `RT2020` | pair input is repeated, malformed, or used as ownership/output                                              |
-| `RT2021` | executed DSL value used the unsupported `.as(...)` method                                                   |
+| `RT2021` | executed non-Arithmetic DSL value used `.as(...)`                                                           |
 | `RT2022` | an executed Combinator/Network return, builder, or destructuring boundary received a wrong value or kind    |
 | `RT2023` | destination Signal conflicts with the physical producer output                                              |
 | `RT2024` | circuit Condition was used as a JavaScript control-flow test                                                |

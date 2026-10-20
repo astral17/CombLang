@@ -2419,6 +2419,193 @@ const folded = input + (2 * 3);`,
     ]);
   });
 
+  test('binds an intermediate Arithmetic output without replacing its physical handle', () => {
+    const result = compileSourceProgram({
+      path: 'arithmetic-as-chain.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const C = Signal('virtual', 'signal-C');
+const a = new Network();
+const b = new Network();
+const d = new Network();
+a += CC(3 * A);
+b += CC(4 * A);
+d += CC(5 * C);
+const out = new Network();
+const stage = (a + b).as(C).at(7, 9, 8);
+const same = stage.as(C);
+if (!Object.is(same, stage)) throw new Error('Arithmetic.as must preserve the handle');
+out += same * 2 + d;`,
+    });
+    expect(result.pipelineDiagnostics).toEqual([]);
+    const plan = result.plan!;
+
+    expect(plan.producers).toMatchObject([
+      { kind: 'constant', outputs: [{ signal: { name: 'signal-A' }, value: 3 }] },
+      { kind: 'constant', outputs: [{ signal: { name: 'signal-A' }, value: 4 }] },
+      { kind: 'constant', outputs: [{ signal: { name: 'signal-C' }, value: 5 }] },
+      {
+        kind: 'arithmetic',
+        operation: 'add',
+        output: { kind: 'signal', signal: { type: 'virtual', name: 'signal-C' } },
+        placement: { x: 7, y: 9, direction: 8 },
+      },
+      { kind: 'arithmetic', operation: 'multiply' },
+      { kind: 'arithmetic', operation: 'add' },
+    ]);
+    const execution = result.execution!;
+    expect(execution.circuit.ir.producers).toHaveLength(6);
+    expect(generateBlueprintJson(execution.circuit.ir).blueprint.entities).toHaveLength(6);
+    expect(
+      runExecutedDirectPlanTests(
+        execution,
+        `test('Arithmetic.as operator chain', ({ network, tick, expectSignal }) => {
+          tick(5);
+          expectSignal(network('out'), Signal('virtual', 'signal-C')).toBe(19);
+        });`,
+      ),
+    ).toMatchObject({ passed: 1, failed: 0 });
+  });
+
+  test('refuses .as on non-Arithmetic DSL values and validates executed arguments', () => {
+    const cases = [
+      ['Decider', `IF(input > 0, input).as(A);`, 'RT2021'],
+      ['Constant', `CC(1 * A).as(A);`, 'RT2021'],
+      [
+        'generic runtime Decider',
+        `const value: any = IF(input > 0, input); value.as(A);`,
+        'RT2021',
+      ],
+      ['zero arguments', `(input + 1).as();`, 'RT2027'],
+      ['multiple arguments', `(input + 1).as(A, B);`, 'RT2027'],
+      ['empty spread', `const args: Signal[] = []; (input + 1).as(...args);`, 'RT2027'],
+      [
+        'non-authentic Signal object',
+        `(input + 1).as({ type: 'virtual', name: 'signal-A' } as any);`,
+        'RT2027',
+      ],
+    ] as const;
+
+    for (const [label, statement, code] of cases) {
+      const parsed = parseFile({
+        path: `arithmetic-as-refusal-${label.replaceAll(' ', '-')}.factorio.ts`,
+        text: `const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const input = new Network();
+${statement}`,
+      });
+      expect(() => executeElaborationProgram(transformElaborationModule(parsed)), label).toThrow(
+        expect.objectContaining({ code }),
+      );
+    }
+  });
+
+  test('rejects a Signal handle branded by a different execution session', () => {
+    const key = '__comblang_foreign_arithmetic_output_signal__';
+    const globalValues = globalThis as unknown as Record<string, unknown>;
+    try {
+      const foreign = parseFile({
+        path: 'arithmetic-as-foreign-signal-source.factorio.ts',
+        text: `(globalThis as any)[${JSON.stringify(key)}] = Signal('virtual', 'signal-A');`,
+      });
+      executeElaborationProgram(transformElaborationModule(foreign));
+
+      const receiver = parseFile({
+        path: 'arithmetic-as-foreign-signal-receiver.factorio.ts',
+        text: `const input = new Network();
+(input + 1).as((globalThis as any)[${JSON.stringify(key)}]);`,
+      });
+      expect(() => executeElaborationProgram(transformElaborationModule(receiver))).toThrow(
+        expect.objectContaining({ code: 'RT2027' }),
+      );
+    } finally {
+      delete globalValues[key];
+    }
+  });
+
+  test('keeps Arithmetic identity through helpers and runtime-only container receivers', () => {
+    const result = compileSourceProgram({
+      path: 'arithmetic-as-dynamic-receivers.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+function Make(a: Readonly<Network>, b: Readonly<Network>): ArithmeticCombinator {
+  return a + b;
+}
+const input = new Network();
+const other = new Network();
+const fromHelper = Make(input, other);
+fromHelper.as(A);`,
+    });
+
+    expect(result.pipelineDiagnostics.filter(({ severity }) => severity === 'error')).toEqual([]);
+    expect(result.plan?.producers).toMatchObject([
+      { kind: 'arithmetic', output: { kind: 'signal', signal: { name: 'signal-A' } } },
+    ]);
+
+    const dynamic = parseFile({
+      path: 'arithmetic-as-container-receiver.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const input = new Network();
+const list: any[] = [input + 1, input + 2];
+const held: any = list[0];
+held.as(A);
+const untyped = list[1];
+untyped.as(B);`,
+    });
+    const execution = executeElaborationProgram(transformElaborationModule(dynamic));
+    expect(execution.producers).toMatchObject([
+      { kind: 'arithmetic', output: { kind: 'signal', signal: { name: 'signal-A' } } },
+      { kind: 'arithmetic', output: { kind: 'signal', signal: { name: 'signal-B' } } },
+    ]);
+  });
+
+  test('preserves both output lanes and conflicts with a later destination binding', () => {
+    const result = compileSourceProgram({
+      path: 'arithmetic-as-two-lanes.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const C = Signal('virtual', 'signal-C');
+const a = new Network();
+const b = new Network();
+a += CC(3 * A);
+b += CC(4 * A);
+const first = new Network();
+const second = new Network();
+const stage = (a + b).as(C);
+stage.to(first, second);`,
+    });
+    expect(result.pipelineDiagnostics.filter(({ severity }) => severity === 'error')).toEqual([]);
+    expect(result.plan?.networkTransfers).toHaveLength(4);
+    expect(
+      runExecutedDirectPlanTests(
+        result.execution!,
+        `test('Arithmetic.as retains two lanes', ({ network, tick, expectSignal }) => {
+          tick(3);
+          const C = Signal('virtual', 'signal-C');
+          expectSignal(network('first'), C).toBe(7);
+          expectSignal(network('second'), C).toBe(7);
+        });`,
+      ),
+    ).toMatchObject({ passed: 1, failed: 0 });
+
+    const conflict = parseFile({
+      path: 'arithmetic-as-conflict.factorio.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const input = new Network();
+const output = new Network();
+const stage = (input + 1).as(A);
+stage.to(output[B]);`,
+    });
+    try {
+      executeElaborationProgram(transformElaborationModule(conflict));
+      expect.fail('Expected the later destination output Signal to conflict.');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'RT2023', related: expect.any(Array) });
+      expect((error as ElaborationExecutionError).related).toContainEqual(
+        expect.objectContaining({ message: 'Combinator output Signal was first bound here.' }),
+      );
+    }
+  });
+
   test('preserves ordinary JavaScript arithmetic and comparison semantics', () => {
     const parsed = parseFile({
       path: 'ordinary-operators.factorio.ts',
@@ -2444,11 +2631,13 @@ const input = CC((count + loose + strict) * A);`,
   test('preserves ordinary JavaScript .as and .to methods through runtime dispatch', () => {
     const parsed = parseFile({
       path: 'ordinary-fluent-methods.ts',
-      text: `const formatter = { as(value: string) { return value + "!"; } };
+      text: `const order: string[] = [];
+const formatter = { as(value: string, suffix: string) { order.push("method"); return value + suffix; } };
 const target = { to(value: number) { return value + 1; } };
-const formatted = formatter.as("ok");
+function next(value: string) { order.push(value); return value; }
+const formatted = formatter.as(next("ok"), next("!"));
 const incremented = target.to(4);
-if (formatted !== "ok!" || incremented !== 5) {
+if (formatted !== "ok!" || incremented !== 5 || order.join(",") !== "ok,!,method") {
   throw new Error("ordinary fluent dispatch failed");
 }`,
     });
@@ -3287,7 +3476,7 @@ const output: Network = ${call};`,
       const failure = error as ElaborationExecutionError;
       expect(failure.code).toBe('RT2021');
       expect(parsed.text.slice(failure.span.start, failure.span.end)).toBe(call);
-      expect(failure.message).toContain('.as(...) is not part of the Combinator API');
+      expect(failure.message).toContain('.as(SIGNAL) is available only on a physical Arithmetic');
     }
   });
 
@@ -5940,8 +6129,9 @@ const second = Constant(selectPrototype());`,
     const parsed = parseFile({
       path: 'exact-arithmetic-v5.factorio.ts',
       text: `const A = Signal('virtual', 'signal-A');
+const C = Signal('virtual', 'signal-C');
 const input = new Network();
-const comb: ArithmeticCombinator = Arithmetic({ left: input[A], operation: 'multiply', right: 2, output: A });
+const comb: ArithmeticCombinator = Arithmetic({ left: input[A], operation: 'multiply', right: 2, output: A }).as(C);
 const output = new Network();
 output += comb;`,
     });
@@ -5958,7 +6148,7 @@ output += comb;`,
         operation: 'multiply',
         left: { kind: 'signal', network: 'input' },
         right: { kind: 'constant', value: 2 },
-        output: { kind: 'signal', signal: { name: 'signal-A' } },
+        output: { kind: 'signal', signal: { name: 'signal-C' } },
       },
     ]);
     expect(plan.entities).toHaveLength(1);

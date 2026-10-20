@@ -131,23 +131,35 @@ const delayed = Delay(input);`,
     expect(validateDslSemantics(parsed)).toEqual([]);
   });
 
-  test('rejects .as on DSL combinators and Network-narrowed values', () => {
-    const call = 'IF(input > 0, input).as(A)';
+  test('accepts .as on definite Arithmetic and rejects definite Decider or Network values', () => {
     const parsed = parseFile({
-      path: 'function-return-as.ts',
+      path: 'arithmetic-as-semantics.ts',
       text: `const A = Signal('virtual', 'signal-A');
-function Gate(input: Readonly<Network>): Network {
-  return IF(input > 0, input);
-}
 const input = new Network();
-const output: Network = ${call};
-Gate(input).as(A);`,
+const decider = IF(input > 0, input);
+const output = (input + 1).as(A);
+decider.as(A);
+input.as(A);`,
     });
     const diagnostics = validateDslSemantics(parsed);
 
-    expect(diagnostics.filter(({ code }) => code === 'CL1043')).toHaveLength(2);
-    const diagnostic = diagnostics.find(({ code }) => code === 'CL1043')!;
-    expect(parsed.text.slice(diagnostic.span!.start, diagnostic.span!.end)).toBe(call);
+    const rejected = diagnostics.filter(({ code }) => code === 'CL1043');
+    expect(rejected.map(({ span }) => parsed.text.slice(span!.start, span!.end))).toEqual([
+      'decider.as(A)',
+      'input.as(A)',
+    ]);
+  });
+
+  test('defers unknown or generic .as receivers to runtime family validation', () => {
+    const parsed = parseFile({
+      path: 'generic-as-semantics.ts',
+      text: `const A = Signal('virtual', 'signal-A');
+function Bind(value: any) { return value.as(A); }
+const input = new Network();
+Bind(input);`,
+    });
+
+    expect(validateDslSemantics(parsed).filter(({ code }) => code === 'CL1043')).toEqual([]);
   });
 
   test('does not destructure one Network returned by a function into several outputs', () => {

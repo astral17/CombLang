@@ -169,7 +169,10 @@ function builtinBlueprintDocument() {
   });
 }
 
-function builtinDeciderBlueprintDocument(options: { readonly implicitCopyInput?: boolean } = {}) {
+function builtinDeciderBlueprintDocument(
+  options: { readonly implicitCopyInput?: boolean; readonly omittedDefaults?: boolean } = {},
+) {
+  const omittedDefaults = options.omittedDefaults === true;
   return JSON.stringify({
     blueprint: {
       entities: [
@@ -177,25 +180,31 @@ function builtinDeciderBlueprintDocument(options: { readonly implicitCopyInput?:
           entity_number: 42,
           name: 'decider-combinator',
           position: { x: 0, y: 0 },
-          direction: 0,
+          ...(omittedDefaults ? {} : { direction: 0 }),
           control_behavior: {
             decider_conditions: {
-              conditions: [
-                {
-                  first_signal: { type: 'virtual', name: 'signal-A' },
-                  first_signal_networks: { red: true, green: false },
-                  comparator: '>',
-                  constant: 0,
-                  compare_type: 'and',
-                },
-              ],
-              outputs: [
-                {
-                  signal: { type: 'virtual', name: 'signal-B' },
-                  copy_count_from_input: true,
-                  ...(options.implicitCopyInput ? {} : { networks: { red: true, green: false } }),
-                },
-              ],
+              conditions: omittedDefaults
+                ? [{ first_signal: { type: 'virtual', name: 'signal-A' } }]
+                : [
+                    {
+                      first_signal: { type: 'virtual', name: 'signal-A' },
+                      first_signal_networks: { red: true, green: false },
+                      comparator: '>',
+                      constant: 0,
+                      compare_type: 'and',
+                    },
+                  ],
+              outputs: omittedDefaults
+                ? [{ signal: { type: 'virtual', name: 'signal-B' } }]
+                : [
+                    {
+                      signal: { type: 'virtual', name: 'signal-B' },
+                      copy_count_from_input: true,
+                      ...(options.implicitCopyInput
+                        ? {}
+                        : { networks: { red: true, green: false } }),
+                    },
+                  ],
             },
           },
         },
@@ -449,35 +458,33 @@ describe('compiler Worker blueprint import endpoint', () => {
     expect(encoded.result.correspondence).toEqual(json.result.correspondence);
     expect(encoded.prototypeEnvironment?.identity).toBe(json.prototypeEnvironment?.identity);
 
-    const refusal = await worker.handleImport({
+    const omittedDefaults = await worker.handleImport({
       kind: 'import-blueprint',
       revision: 1092,
       document: {
-        text: builtinDeciderBlueprintDocument({ implicitCopyInput: true }),
+        text: builtinDeciderBlueprintDocument({ omittedDefaults: true }),
         format: 'json',
       },
-      sourcePath: 'decider-refused.factorio.ts',
+      sourcePath: 'decider-defaults.factorio.ts',
       prototypeProfile: { kind: 'builtin', identity: json.prototypeEnvironment!.identity },
     });
-    expect(structuredClone(refusal)).toEqual(refusal);
-    expect(refusal.result).toMatchObject({
-      state: 'blocked',
-      diagnostics: [
-        expect.objectContaining({
-          category: 'unsupported-source-configuration',
-          path: '$.blueprint.entities[0].control_behavior.decider_conditions.outputs[0]',
-        }),
-      ],
+    expect(structuredClone(omittedDefaults)).toEqual(omittedDefaults);
+    expect(omittedDefaults.result).toMatchObject({
+      state: 'verified',
+      verification: { state: 'verified', entityCount: 1 },
+      source: { text: expect.stringContaining('import_entity_1.at(0,0,0);') },
     });
-    expect(refusal.result).not.toHaveProperty('source');
-    expect(refusal.result).not.toHaveProperty('correspondence');
-    expect(refusal.result).not.toHaveProperty('diagnosticContext');
-    expect(JSON.stringify(refusal)).not.toContain('trustedEntityReplayContext');
+    expect(omittedDefaults.result).not.toHaveProperty('diagnosticContext');
+    expect(JSON.stringify(omittedDefaults)).not.toContain('trustedEntityReplayContext');
 
     expect(load).toHaveBeenCalledOnce();
-    expect(compile).toHaveBeenCalledTimes(2);
+    expect(compile).toHaveBeenCalledTimes(3);
     expect(compile.mock.calls[0]?.[0]).toEqual(json.result.source);
     expect(compile.mock.calls[1]?.[0]).toEqual(encoded.result.source);
+    if (omittedDefaults.result.state !== 'verified') {
+      throw new Error('Expected omitted-default Decider import to verify.');
+    }
+    expect(compile.mock.calls[2]?.[0]).toEqual(omittedDefaults.result.source);
   });
 
   test('imports Selector JSON and exchange through ordinary builtin provisioning', async () => {

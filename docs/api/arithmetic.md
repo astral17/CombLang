@@ -62,7 +62,15 @@ behavior.
 For an operator expression, output defaults to the first concrete input Signal
 from left to right, or Each when there is none. Bind a compatible output explicitly
 at its destination with `output[B] += expression` or `expression.to(output, B)`.
-Exact `output` chooses that configuration directly. There is no `.as(...)` method.
+Exact `Arithmetic` chooses that configuration directly. A physical
+`ArithmeticCombinator` also supports `.as(SIGNAL)` to bind its existing output;
+for example, `(a + b).as(C) * 2 + d` binds the intermediate stage.
+
+`.as(...)` requires exactly one Signal and returns the same Arithmetic handle. It
+changes neither hardware nor tick count; aliases and helpers that retain the
+physical Arithmetic type can use it too. A conflicting prior output binding is
+rejected. It is not available on Decider, Constant, Selector, Entity, Network, or
+pair values, and annotating a value as `Network` does not recover a physical handle.
 
 ## Hardware and methods
 

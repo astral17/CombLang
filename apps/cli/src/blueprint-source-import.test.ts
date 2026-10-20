@@ -115,7 +115,10 @@ function blueprintDocument(
   });
 }
 
-function deciderDocument(options: { readonly implicitCopyInput?: boolean } = {}) {
+function deciderDocument(
+  options: { readonly implicitCopyInput?: boolean; readonly omittedDefaults?: boolean } = {},
+) {
+  const omittedDefaults = options.omittedDefaults === true;
   return JSON.stringify({
     blueprint: {
       entities: [
@@ -123,25 +126,31 @@ function deciderDocument(options: { readonly implicitCopyInput?: boolean } = {})
           entity_number: 42,
           name: 'decider-combinator',
           position: { x: 0, y: 0 },
-          direction: 0,
+          ...(omittedDefaults ? {} : { direction: 0 }),
           control_behavior: {
             decider_conditions: {
-              conditions: [
-                {
-                  first_signal: { type: 'virtual', name: 'signal-A' },
-                  first_signal_networks: { red: true, green: false },
-                  comparator: '>',
-                  constant: 0,
-                  compare_type: 'and',
-                },
-              ],
-              outputs: [
-                {
-                  signal: { type: 'virtual', name: 'signal-B' },
-                  copy_count_from_input: true,
-                  ...(options.implicitCopyInput ? {} : { networks: { red: true, green: false } }),
-                },
-              ],
+              conditions: omittedDefaults
+                ? [{ first_signal: { type: 'virtual', name: 'signal-A' } }]
+                : [
+                    {
+                      first_signal: { type: 'virtual', name: 'signal-A' },
+                      first_signal_networks: { red: true, green: false },
+                      comparator: '>',
+                      constant: 0,
+                      compare_type: 'and',
+                    },
+                  ],
+              outputs: omittedDefaults
+                ? [{ signal: { type: 'virtual', name: 'signal-B' } }]
+                : [
+                    {
+                      signal: { type: 'virtual', name: 'signal-B' },
+                      copy_count_from_input: true,
+                      ...(options.implicitCopyInput
+                        ? {}
+                        : { networks: { red: true, green: false } }),
+                    },
+                  ],
             },
           },
         },
@@ -568,31 +577,26 @@ describe('blueprint source import CLI', () => {
     await expect(stat(refusalOutput)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  test('refuses an implicit Decider copy-input mask without creating output', async () => {
+  test('imports omitted native Decider and placement defaults through the CLI', async () => {
     const host = await canonicalHost();
     const input = await temporaryFile(
-      'decider-implicit-mask.json',
-      deciderDocument({
-        implicitCopyInput: true,
-      }),
+      'decider-omitted-defaults.json',
+      deciderDocument({ omittedDefaults: true }),
     );
-    const output = join(dirname(input), 'refused-decider.factorio.ts');
+    const output = join(dirname(input), 'imported-decider.factorio.ts');
     const compile = vi.spyOn(sourceApi, 'compileSourceProgram');
     const { log } = capture();
 
     expect(
       await run(['blueprint', 'import', '--json', '--output', output, input], host.environment),
-    ).toBe(2);
+    ).toBe(0);
     expect(reportAt(log)).toMatchObject({
-      ok: false,
-      error: {
-        code: 'CLIBP1006',
-        path: '$.blueprint.entities[0].control_behavior.decider_conditions.outputs[0]',
-      },
-      diagnostics: [expect.objectContaining({ category: 'unsupported-source-configuration' })],
+      ok: true,
+      source: { text: expect.stringContaining('import_entity_1.at(0,0,0);') },
+      verification: { state: 'verified', entityCount: 1 },
     });
-    expect(compile).not.toHaveBeenCalled();
-    await expect(stat(output)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(compile).toHaveBeenCalledOnce();
+    expect(await readFile(output, 'utf8')).toBe(reportAt(log).source.text);
   });
 
   test('accepts only the exchange file terminal-newline exception and preserves JSON whitespace', async () => {

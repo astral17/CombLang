@@ -446,10 +446,14 @@ The transformed module dispatches operators from their executed values. When nei
 
 Without an explicit destination signal, arithmetic uses the first concrete input signal from left to right when one exists, otherwise native `Each` output.
 
-Output Signal binding belongs to the attachment: use `out[SIGNAL] += expression`,
-`to(out)[SIGNAL] += expression`, or `expression.to(out, SIGNAL)`. Combinator
-`.as(...)` is deliberately not a second spelling and reports `CL1043` (or
-`RT2021` when only the executed receiver proves it is a DSL value).
+Output Signal binding normally belongs to the attachment: use `out[SIGNAL] += expression`,
+`to(out)[SIGNAL] += expression`, or `expression.to(out, SIGNAL)`. A physical
+`ArithmeticCombinator` additionally supports `.as(SIGNAL)` to bind its existing
+output and return the same handle, including in an intermediate expression such
+as `(a + b).as(C) * 2 + d`. It creates no hardware or tick. `.as` is not available
+on other physical families, `Network`, `Entity`, or pair values; known invalid
+families report `CL1043`, and a runtime-only invalid receiver reports `RT2021`.
+Unknown generic receivers are checked at runtime rather than rejected statically.
 
 ## Decider combinators
 

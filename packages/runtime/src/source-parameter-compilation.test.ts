@@ -3490,9 +3490,11 @@ output += consumer;`;
     expect(sourceExecutions).toBe(1);
   });
 
-  test('keeps pending Arithmetic topology, placement, and linked output after .to binding', () => {
-    let sourceExecutions = 0;
-    const text = `const A = Signal('virtual', 'signal-A');
+  test.each(['to', 'as'] as const)(
+    'keeps pending Arithmetic topology, placement, and linked output after .%s binding',
+    (binding) => {
+      let sourceExecutions = 0;
+      const text = `const A = Signal('virtual', 'signal-A');
 const B = Signal('virtual', 'signal-B');
 const initialOutput = Param.signal('Initial output', A);
 const amount = Param.number('Amount', 5);
@@ -3504,185 +3506,186 @@ const unshadowedDestination = new Network();
 const arithmetic = Arithmetic({
   left: Each(pair(red, green)), operation: 'add', right: (amount + 1) * 2, output: initialOutput,
 }).at(4, 5);
-arithmetic.to(destination, B);
+${binding === 'as' ? 'arithmetic.as(B); arithmetic.to(destination);' : 'arithmetic.to(destination, B);'}
 to(equalDestination)[A] += Arithmetic({
   left: 1, operation: 'add', right: amount, output: initialOutput,
 });
 unshadowedDestination += Arithmetic({
   left: 1, operation: 'add', right: 2, output: initialOutput,
 });`;
-    const compilation = compileSourceProgram(
-      { path: 'pending-arithmetic-output-binding.factorio.ts', text },
-      parameterHost(),
-      [],
-      (stage) => {
-        if (stage === 'execute') sourceExecutions += 1;
-      },
-    );
+      const compilation = compileSourceProgram(
+        { path: `pending-arithmetic-${binding}-output-binding.factorio.ts`, text },
+        parameterHost(),
+        [],
+        (stage) => {
+          if (stage === 'execute') sourceExecutions += 1;
+        },
+      );
 
-    expect(compilation.pipelineDiagnostics).toEqual([]);
-    expect(compilation.plan?.producers).toMatchObject([
-      {
-        kind: 'arithmetic',
-        left: { kind: 'each', refKind: 'pair', networks: ['red', 'green'] },
-        operation: 'add',
-        right: { kind: 'constant', value: 12 },
-        output: { kind: 'signal', signal: signal('virtual', 'signal-B') },
-        debugCaptureIds: [expect.any(String)],
-      },
-      {
-        kind: 'arithmetic',
-        right: { kind: 'constant', value: 5 },
-        output: { kind: 'signal', signal: signal('virtual', 'signal-A') },
-      },
-      {
-        kind: 'arithmetic',
-        right: { kind: 'constant', value: 2 },
-        output: { kind: 'signal', signal: signal('virtual', 'signal-A') },
-      },
-    ]);
-    expect(compilation.plan?.entities).toMatchObject([
-      {
-        placement: { x: 4, y: 5 },
-        configuration: {
-          mode: 'arithmetic',
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      expect(compilation.plan?.producers).toMatchObject([
+        {
+          kind: 'arithmetic',
           left: { kind: 'each', refKind: 'pair', networks: ['red', 'green'] },
+          operation: 'add',
           right: { kind: 'constant', value: 12 },
           output: { kind: 'signal', signal: signal('virtual', 'signal-B') },
+          debugCaptureIds: [expect.any(String)],
         },
-      },
-      {
-        configuration: {
-          mode: 'arithmetic',
+        {
+          kind: 'arithmetic',
           right: { kind: 'constant', value: 5 },
           output: { kind: 'signal', signal: signal('virtual', 'signal-A') },
         },
-      },
-      {
-        configuration: {
-          mode: 'arithmetic',
+        {
+          kind: 'arithmetic',
           right: { kind: 'constant', value: 2 },
           output: { kind: 'signal', signal: signal('virtual', 'signal-A') },
         },
-      },
-    ]);
-    expect(compilation.execution?.circuit.ir.entities).toMatchObject([
-      {
-        configuration: {
-          mode: 'arithmetic',
+      ]);
+      expect(compilation.plan?.entities).toMatchObject([
+        {
+          placement: { x: 4, y: 5 },
+          configuration: {
+            mode: 'arithmetic',
+            left: { kind: 'each', refKind: 'pair', networks: ['red', 'green'] },
+            right: { kind: 'constant', value: 12 },
+            output: { kind: 'signal', signal: signal('virtual', 'signal-B') },
+          },
+        },
+        {
+          configuration: {
+            mode: 'arithmetic',
+            right: { kind: 'constant', value: 5 },
+            output: { kind: 'signal', signal: signal('virtual', 'signal-A') },
+          },
+        },
+        {
+          configuration: {
+            mode: 'arithmetic',
+            right: { kind: 'constant', value: 2 },
+            output: { kind: 'signal', signal: signal('virtual', 'signal-A') },
+          },
+        },
+      ]);
+      expect(compilation.execution?.circuit.ir.entities).toMatchObject([
+        {
+          configuration: {
+            mode: 'arithmetic',
+            output: { kind: 'signal', signal: signal('virtual', 'signal-B') },
+          },
+        },
+        {
+          configuration: {
+            mode: 'arithmetic',
+            output: { kind: 'signal', signal: signal('virtual', 'signal-A') },
+          },
+        },
+        {
+          configuration: {
+            mode: 'arithmetic',
+            output: { kind: 'signal', signal: signal('virtual', 'signal-A') },
+          },
+        },
+      ]);
+      expect(JSON.stringify(compilation.plan)).not.toContain('pendingConfiguration');
+      expect(
+        listSourceCompilationParameters(compilation).map(({ kind, label }) => ({ kind, label })),
+      ).toEqual([
+        { kind: 'signal', label: 'Initial output' },
+        { kind: 'number', label: 'Amount' },
+      ]);
+      const parameters = listSourceCompilationParameters(compilation);
+      const originalArtifact = structuredClone(sourceCompilationArtifact(compilation));
+      const originalCaptureIds = compilation.plan?.producers.map(
+        ({ debugCaptureIds }) => debugCaptureIds,
+      );
+      const rebound = bindSourceCompilationParameters(compilation, [
+        {
+          parameter: parameters[0]!.parameter,
+          value: signal('virtual', 'signal-C'),
+        },
+        { parameter: parameters[1]!.parameter, value: 9 },
+      ]);
+      expect(
+        rebound.producers.filter(({ kind }) => kind === 'arithmetic').map(({ config }) => config),
+      ).toMatchObject([
+        {
+          right: { kind: 'constant', value: 20 },
           output: { kind: 'signal', signal: signal('virtual', 'signal-B') },
         },
-      },
-      {
-        configuration: {
-          mode: 'arithmetic',
+        {
+          right: { kind: 'constant', value: 9 },
           output: { kind: 'signal', signal: signal('virtual', 'signal-A') },
         },
-      },
-      {
-        configuration: {
+        {
+          right: { kind: 'constant', value: 2 },
+          output: { kind: 'signal', signal: signal('virtual', 'signal-C') },
+        },
+      ]);
+      expect(rebound.entities.map(({ configuration }) => configuration)).toMatchObject([
+        {
           mode: 'arithmetic',
+          right: { kind: 'constant', value: 20 },
+          output: { kind: 'signal', signal: signal('virtual', 'signal-B') },
+        },
+        {
+          mode: 'arithmetic',
+          right: { kind: 'constant', value: 9 },
           output: { kind: 'signal', signal: signal('virtual', 'signal-A') },
         },
-      },
-    ]);
-    expect(JSON.stringify(compilation.plan)).not.toContain('pendingConfiguration');
-    expect(
-      listSourceCompilationParameters(compilation).map(({ kind, label }) => ({ kind, label })),
-    ).toEqual([
-      { kind: 'signal', label: 'Initial output' },
-      { kind: 'number', label: 'Amount' },
-    ]);
-    const parameters = listSourceCompilationParameters(compilation);
-    const originalArtifact = structuredClone(sourceCompilationArtifact(compilation));
-    const originalCaptureIds = compilation.plan?.producers.map(
-      ({ debugCaptureIds }) => debugCaptureIds,
-    );
-    const rebound = bindSourceCompilationParameters(compilation, [
-      {
-        parameter: parameters[0]!.parameter,
-        value: signal('virtual', 'signal-C'),
-      },
-      { parameter: parameters[1]!.parameter, value: 9 },
-    ]);
-    expect(
-      rebound.producers.filter(({ kind }) => kind === 'arithmetic').map(({ config }) => config),
-    ).toMatchObject([
-      {
-        right: { kind: 'constant', value: 20 },
-        output: { kind: 'signal', signal: signal('virtual', 'signal-B') },
-      },
-      {
-        right: { kind: 'constant', value: 9 },
-        output: { kind: 'signal', signal: signal('virtual', 'signal-A') },
-      },
-      {
-        right: { kind: 'constant', value: 2 },
-        output: { kind: 'signal', signal: signal('virtual', 'signal-C') },
-      },
-    ]);
-    expect(rebound.entities.map(({ configuration }) => configuration)).toMatchObject([
-      {
-        mode: 'arithmetic',
-        right: { kind: 'constant', value: 20 },
-        output: { kind: 'signal', signal: signal('virtual', 'signal-B') },
-      },
-      {
-        mode: 'arithmetic',
-        right: { kind: 'constant', value: 9 },
-        output: { kind: 'signal', signal: signal('virtual', 'signal-A') },
-      },
-      {
-        mode: 'arithmetic',
-        right: { kind: 'constant', value: 2 },
-        output: { kind: 'signal', signal: signal('virtual', 'signal-C') },
-      },
-    ]);
-    const reset = bindSourceCompilationParameters(compilation, []);
-    expect(
-      reset.producers.filter(({ kind }) => kind === 'arithmetic').map(({ config }) => config),
-    ).toMatchObject([
-      {
-        right: { kind: 'constant', value: 12 },
-        output: { kind: 'signal', signal: signal('virtual', 'signal-B') },
-      },
-      {
-        right: { kind: 'constant', value: 5 },
-        output: { kind: 'signal', signal: signal('virtual', 'signal-A') },
-      },
-      {
-        right: { kind: 'constant', value: 2 },
-        output: { kind: 'signal', signal: signal('virtual', 'signal-A') },
-      },
-    ]);
-    const reboundAgain = bindSourceCompilationParameters(compilation, [
-      { parameter: parameters[0]!.parameter, value: signal('virtual', 'signal-D') },
-      { parameter: parameters[1]!.parameter, value: 7 },
-    ]);
-    expect(
-      reboundAgain.producers
-        .filter(({ kind }) => kind === 'arithmetic')
-        .map(({ config }) => config),
-    ).toMatchObject([
-      {
-        right: { kind: 'constant', value: 16 },
-        output: { kind: 'signal', signal: signal('virtual', 'signal-B') },
-      },
-      {
-        right: { kind: 'constant', value: 7 },
-        output: { kind: 'signal', signal: signal('virtual', 'signal-A') },
-      },
-      {
-        right: { kind: 'constant', value: 2 },
-        output: { kind: 'signal', signal: signal('virtual', 'signal-D') },
-      },
-    ]);
-    expect(compilation.plan?.producers.map(({ debugCaptureIds }) => debugCaptureIds)).toEqual(
-      originalCaptureIds,
-    );
-    expect(sourceCompilationArtifact(compilation)).toEqual(originalArtifact);
-    expect(sourceExecutions).toBe(1);
-  });
+        {
+          mode: 'arithmetic',
+          right: { kind: 'constant', value: 2 },
+          output: { kind: 'signal', signal: signal('virtual', 'signal-C') },
+        },
+      ]);
+      const reset = bindSourceCompilationParameters(compilation, []);
+      expect(
+        reset.producers.filter(({ kind }) => kind === 'arithmetic').map(({ config }) => config),
+      ).toMatchObject([
+        {
+          right: { kind: 'constant', value: 12 },
+          output: { kind: 'signal', signal: signal('virtual', 'signal-B') },
+        },
+        {
+          right: { kind: 'constant', value: 5 },
+          output: { kind: 'signal', signal: signal('virtual', 'signal-A') },
+        },
+        {
+          right: { kind: 'constant', value: 2 },
+          output: { kind: 'signal', signal: signal('virtual', 'signal-A') },
+        },
+      ]);
+      const reboundAgain = bindSourceCompilationParameters(compilation, [
+        { parameter: parameters[0]!.parameter, value: signal('virtual', 'signal-D') },
+        { parameter: parameters[1]!.parameter, value: 7 },
+      ]);
+      expect(
+        reboundAgain.producers
+          .filter(({ kind }) => kind === 'arithmetic')
+          .map(({ config }) => config),
+      ).toMatchObject([
+        {
+          right: { kind: 'constant', value: 16 },
+          output: { kind: 'signal', signal: signal('virtual', 'signal-B') },
+        },
+        {
+          right: { kind: 'constant', value: 7 },
+          output: { kind: 'signal', signal: signal('virtual', 'signal-A') },
+        },
+        {
+          right: { kind: 'constant', value: 2 },
+          output: { kind: 'signal', signal: signal('virtual', 'signal-D') },
+        },
+      ]);
+      expect(compilation.plan?.producers.map(({ debugCaptureIds }) => debugCaptureIds)).toEqual(
+        originalCaptureIds,
+      );
+      expect(sourceCompilationArtifact(compilation)).toEqual(originalArtifact);
+      expect(sourceExecutions).toBe(1);
+    },
+  );
 
   test('catches invalid Arithmetic construction before a later pending producer', () => {
     let sourceExecutions = 0;

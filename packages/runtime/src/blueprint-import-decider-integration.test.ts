@@ -682,7 +682,7 @@ describe('compiler-side canonical Decider import integration', () => {
     }
   });
 
-  test('refuses source-unrepresentable Decider output without returning partial artifacts', () => {
+  test('refuses an explicitly malformed Decider output mask without partial artifacts', () => {
     const raw = JSON.parse(inputDocument) as {
       blueprint: { entities: Record<string, unknown>[]; wires: unknown[] };
     };
@@ -690,7 +690,7 @@ describe('compiler-side canonical Decider import integration', () => {
     target.control_behavior = {
       decider_conditions: {
         conditions: deciderBehavior().decider_conditions.conditions,
-        outputs: [{ signal: { name: 'signal-A' }, copy_count_from_input: true }],
+        outputs: [{ signal: { name: 'signal-A' }, copy_count_from_input: true, networks: null }],
       },
     };
     const analysis = analyzeBlueprintImport(
@@ -711,8 +711,8 @@ describe('compiler-side canonical Decider import integration', () => {
     expect(result.correspondence).toBeUndefined();
     expect(result.diagnostics).toContainEqual(
       expect.objectContaining({
-        category: 'unsupported-source-configuration',
-        path: '$.blueprint.entities[2].control_behavior.decider_conditions.outputs[0]',
+        category: 'unsupported-decider-configuration',
+        path: '$.blueprint.entities[2].control_behavior.decider_conditions.outputs[0].networks',
       }),
     );
   });
