@@ -1,4 +1,9 @@
-import type { PrototypeDatabaseV1, RecipeIngredient, RecipePrototypeKey } from './schema.js';
+import type {
+  PrototypeDatabaseV1,
+  RecipeIngredient,
+  RecipePrototype,
+  RecipePrototypeKey,
+} from './schema.js';
 
 export type RecipeIngredientSelection =
   | {
@@ -27,12 +32,25 @@ export function selectRecipeIngredient(
   if (!database.capabilities.recipes) {
     return Object.freeze({ ok: false, reason: 'recipes-unavailable' });
   }
+  const recipe = database.recipes.find(({ key }) => key === recipeKey);
+  return selectRecipeIngredientFromRecipe(recipe, index);
+}
+
+/** Shared normalized-order selector for a recipe obtained through a host provider. */
+export function selectRecipeIngredientFromRecipe(
+  recipe: RecipePrototype | undefined,
+  index: number,
+): RecipeIngredientSelection {
   if (!Number.isSafeInteger(index) || index < 0) {
     return Object.freeze({ ok: false, reason: 'invalid-index' });
   }
-  const recipe = database.recipes.find(({ key }) => key === recipeKey);
   if (!recipe) return Object.freeze({ ok: false, reason: 'unknown-recipe' });
   const ingredient = recipe.ingredients[index];
   if (!ingredient) return Object.freeze({ ok: false, reason: 'ingredient-out-of-range' });
-  return Object.freeze({ ok: true, recipe: recipeKey, index: index === 0 ? 0 : index, ingredient });
+  return Object.freeze({
+    ok: true,
+    recipe: recipe.key,
+    index: index === 0 ? 0 : index,
+    ingredient,
+  });
 }
