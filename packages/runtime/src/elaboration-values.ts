@@ -75,10 +75,13 @@ export interface SignalValue {
   readonly value: number;
 }
 
+export type ParameterDeciderOutputSelection =
+  { readonly kind: 'signal'; readonly signal: SignalId } | { readonly kind: 'each' };
+
 /** Internal Decider constant output whose value is resolved at the host binding boundary. */
 export interface ParameterSignalValue {
   readonly kind: 'parameter-signal-value';
-  readonly signal: SignalId;
+  readonly selection: ParameterDeciderOutputSelection;
   readonly parameter: BlueprintNumberParameterHandle;
 }
 
@@ -285,7 +288,7 @@ type PendingDeciderDescriptor = Omit<
 
 export type PendingDeciderOutput = {
   readonly kind: 'parameter-signal-constant';
-  readonly signal: SignalId;
+  readonly selection: ParameterDeciderOutputSelection;
   readonly parameter: BlueprintNumberParameterHandle;
 };
 type RuntimeDeciderOutput = CompleteDeciderDescriptor['output'] | PendingDeciderOutput;

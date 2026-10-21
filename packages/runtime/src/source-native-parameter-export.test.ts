@@ -3933,6 +3933,35 @@ output += Constant({ sections: [{ multiplier: scale * 0.5, filters: [] }] });`,
     },
   );
 
+  test('keeps parameterized EACH Decider counts local and rejects native export with CP1002', () => {
+    const compilation = compile(`const amount = Param.number('Count', 5);
+const input = new Network();
+const output = new Network();
+output += Decider({ condition: input[EACH] > 0, outputs: [amount * EACH] });`);
+    const originalArtifact = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+    const parameter = sourceApi.listSourceCompilationParameters(compilation)[0]!.parameter;
+    const defaults = sourceApi.bindSourceCompilationCircuit(compilation);
+    const overridden = sourceApi.bindSourceCompilationCircuit(compilation, [
+      { parameter, value: 9 },
+    ]);
+    const reset = sourceApi.bindSourceCompilationCircuit(compilation, []);
+
+    expect(defaults.plan.producers[0]).toMatchObject({
+      kind: 'decider',
+      outputs: [{ kind: 'each-constant', value: 5 }],
+    });
+    expect(overridden.plan.producers[0]).toMatchObject({
+      kind: 'decider',
+      outputs: [{ kind: 'each-constant', value: 9 }],
+    });
+    expect(reset.plan).toEqual(defaults.plan);
+    expect(exportFailure(compilation)).toMatchObject({
+      code: 'CP1002',
+      span: expect.objectContaining({ fileId: compilation.fileId }),
+    });
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(originalArtifact);
+  });
+
   test('binds a derived Decider threshold locally but refuses native-template export', () => {
     const text = `${exactSource}
 const input = new Network();

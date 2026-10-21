@@ -91,6 +91,7 @@ import {
   type PendingArithmeticOperand,
   type PendingDeciderCondition,
   type PendingDeciderOutput,
+  type ParameterDeciderOutputSelection,
   type ParameterSignalValue,
   type RuntimeDeciderCondition,
   type RuntimeObjectKind,
@@ -2704,13 +2705,13 @@ class ElaborationRecorder {
         const rightParameter = findBlueprintParameterHandle(right);
         const parameterHandle = leftParameter ?? rightParameter;
         const parameterValue = leftParameter === undefined ? right : left;
-        const signal =
-          leftParameter !== undefined && this.#isSignal(right)
-            ? right
-            : rightParameter !== undefined && this.#isSignal(left)
-              ? left
+        const selection =
+          leftParameter !== undefined
+            ? this.#parameterDeciderOutputSelection(right)
+            : rightParameter !== undefined
+              ? this.#parameterDeciderOutputSelection(left)
               : undefined;
-        if (parameterHandle !== undefined && signal !== undefined) {
+        if (parameterHandle !== undefined && selection !== undefined) {
           try {
             const slot = lookupBlueprintParameterSlot(
               parameterValue,
@@ -2723,7 +2724,7 @@ class ElaborationRecorder {
             return this.#runtimeValue<ParameterSignalValue>(
               Object.freeze({
                 kind: 'parameter-signal-value',
-                signal: this.#signalSnapshot(signal),
+                selection,
                 parameter: slot.handle as BlueprintNumberParameterHandle,
               }),
             );
@@ -5398,6 +5399,16 @@ class ElaborationRecorder {
     return this.#runtimeValues.hasSignal(value);
   }
 
+  #parameterDeciderOutputSelection(value: unknown): ParameterDeciderOutputSelection | undefined {
+    if (this.#isSignal(value)) {
+      return Object.freeze({ kind: 'signal', signal: this.#signalSnapshot(value) });
+    }
+    if (this.#isWildcardToken(value) && value.value === 'each') {
+      return Object.freeze({ kind: 'each' });
+    }
+    return undefined;
+  }
+
   #numericExpressionOperand(value: unknown, path: string): unknown {
     if (typeof value === 'number') {
       if (!Number.isFinite(value)) throw new Error('Numeric expression literals must be finite.');
@@ -5922,7 +5933,10 @@ class ElaborationRecorder {
     if (output.kind === 'parameter-signal-constant') {
       return {
         mode: 'constant',
-        signal: { kind: 'signal', signal: this.#signalSnapshot(output.signal) },
+        signal:
+          output.selection.kind === 'signal'
+            ? { kind: 'signal', signal: this.#signalSnapshot(output.selection.signal) }
+            : { kind: 'wildcard', value: 'each' },
         value: output.parameter,
       };
     }
@@ -7398,7 +7412,7 @@ class ElaborationRecorder {
     if (this.#isParameterSignalValue(output)) {
       return {
         kind: 'parameter-signal-constant',
-        signal: output.signal,
+        selection: output.selection,
         parameter: output.parameter,
       };
     }

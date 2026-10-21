@@ -98,9 +98,12 @@ gate.else(1 * B);
 The default threshold is 5; binding Amount to 9 changes the condition while
 reusing the captured source execution. The final else row is retained even
 though it was appended after attaching `gate`. Direct number parameters keep
-their existing native export rules across exact, fluent and `IF` forms. Derived
-thresholds bind locally but native numeric-template export refuses them with
-located `CP1002`; no native formula support is implied.
+their existing native export rules across exact, fluent and `IF` forms. A
+registered derived threshold can also produce a native formula row in the
+bounded typed-formula mode documented in the [Param API](parameters.md), when
+it meets that mode's dependency and metadata requirements. This is structural
+template projection only: it does not establish Factorio formula evaluation or
+placement acceptance. Unsupported shapes remain a located `CP1002`.
 
 Decider constant output rows also accept a direct number parameter, for example
 `amount * A` or `amount * EACH`, in exact, fluent, and `IF` configurations.

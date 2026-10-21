@@ -3900,29 +3900,158 @@ deciderOutput += lateDecider;`,
     expect(sourceExecutions).toBe(1);
   });
 
-  test.each(['5', 'undefined'])(
-    'binds a number parameter with default %s in an EACH constant output',
-    (defaultValue) => {
+  test.each([
+    ['when with parameter first', 'output += when(input[EACH] > 0).then(amount * EACH);'],
+    ['when with EACH first', 'output += when(input[EACH] > 0).then(EACH * amount);'],
+    ['IF with parameter first', 'output += IF(input[EACH] > 0, amount * EACH);'],
+    [
+      'exact Decider with EACH first',
+      'output += Decider({ condition: input[EACH] > 0, outputs: [EACH * amount] });',
+    ],
+  ])('binds a number parameter in an EACH constant output: %s', (_form, outputSource) => {
+    for (const defaultValue of ['5', 'undefined']) {
+      let sourceExecutions = 0;
       const compilation = compileSourceProgram(
         {
           path: 'parameter-each-output.factorio.ts',
-          text: `const A = Signal('virtual', 'signal-A');
-const amount = Param.number('Count', ${defaultValue});
+          text: `const amount = Param.number('Count', ${defaultValue});
 const input = new Network();
 const output = new Network();
-output += when(input[EACH] > 0).then(amount * EACH);`,
+${outputSource}`,
         },
         parameterHost(),
+        [],
+        (stage) => {
+          if (stage === 'execute') sourceExecutions += 1;
+        },
       );
       expect(compilation.pipelineDiagnostics).toEqual([]);
-      const parameter = listSourceCompilationParameters(compilation)[0]!.parameter;
-      const bound = bindSourceCompilationCircuit(compilation, [{ parameter, value: 9 }]);
-      expect(bound.plan.producers[0]).toMatchObject({
+      const declaration = listSourceCompilationParameters(compilation)[0]!;
+      const parameter = declaration.parameter;
+      const originalDefault = declaration.defaultValue;
+      const original = bindSourceCompilationCircuit(compilation);
+      const overridden = bindSourceCompilationCircuit(compilation, [{ parameter, value: 9 }]);
+      const reset = bindSourceCompilationCircuit(compilation, []);
+      expect(original.plan.producers[0]).toMatchObject({
+        kind: 'decider',
+        outputs: [{ kind: 'each-constant', value: originalDefault }],
+      });
+      expect(overridden.plan.producers[0]).toMatchObject({
         kind: 'decider',
         outputs: [{ kind: 'each-constant', value: 9 }],
       });
-    },
-  );
+      expect(reset.plan).toEqual(original.plan);
+      const topology = (pair: typeof original) => ({
+        planEntities: pair.plan.entities.map(({ id, profile }) => ({
+          id,
+          profile: profile.profileId,
+        })),
+        planProducers: pair.plan.producers.map(({ entityId, kind }) => ({ entityId, kind })),
+        circuitEntities: pair.resolvedCircuit.ir.entities.map(({ id, placement }) => ({
+          id,
+          placement,
+        })),
+        circuitProducers: pair.resolvedCircuit.ir.producers.map(({ id, entityId }) => ({
+          id,
+          entityId,
+        })),
+        networks: pair.resolvedCircuit.ir.networks,
+        networkPairs: pair.plan.networkPairs,
+      });
+      expect(topology(overridden)).toEqual(topology(original));
+      expect(topology(reset)).toEqual(topology(original));
+      expect(sourceExecutions).toBe(1);
+    }
+  });
+
+  test.each([
+    ['ANY token', 'amount * ANY'],
+    ['ALL token', 'amount * ALL'],
+    ['Anything selection', 'amount * Anything(input)'],
+    ['Everything selection', 'amount * Everything(input)'],
+    ['derived numeric expression', '(amount + 1) * EACH'],
+    ['Signal parameter', 'channel * EACH'],
+  ])('does not accept %s as a parameterized EACH count output', (_kind, expression) => {
+    const text = `const amount = Param.number('Count', 5);
+const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const input = new Network();
+const output = new Network();
+output += when(input[Signal('virtual', 'signal-A')] > 0).then(${expression});`;
+    const compilation = compileSourceProgram(
+      { path: 'unsupported-parameterized-decider-count.factorio.ts', text },
+      parameterHost(),
+    );
+
+    expect(compilation.pipelineDiagnostics).toContainEqual(
+      expect.objectContaining({
+        code: 'RT2027',
+        severity: 'error',
+        span: expect.objectContaining({
+          fileId: compilation.fileId,
+          start: text.indexOf(expression),
+          end: text.indexOf(expression) + expression.length,
+        }),
+      }),
+    );
+  });
+
+  test('reserves a later EACH constant count before choosing an automatic Decider output count', () => {
+    let sourceExecutions = 0;
+    const compilation = compileSourceProgram(
+      {
+        path: 'automatic-parameter-each-output.factorio.ts',
+        text: `const amount = Param.number('Count');
+const input = new Network();
+const output = new Network();
+const parameterized = Decider({ condition: input[EACH] > amount, outputs: [amount * EACH] });
+output += parameterized;
+parameterized.then(EACH * amount).else(amount * EACH);
+const laterReservation = Decider({ condition: input[EACH] > 0, outputs: [1 * EACH] });
+output += laterReservation;`,
+      },
+      parameterHost(),
+      [],
+      (stage) => {
+        if (stage === 'execute') sourceExecutions += 1;
+      },
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const parameter = listSourceCompilationParameters(compilation)[0]!;
+    expect(parameter).toMatchObject({ kind: 'number', defaultValue: 2 });
+
+    const original = bindSourceCompilationCircuit(compilation);
+    const overridden = bindSourceCompilationCircuit(compilation, [
+      { parameter: parameter.parameter, value: 9 },
+    ]);
+    const reset = bindSourceCompilationCircuit(compilation, []);
+    expect(original.plan.producers).toMatchObject([
+      {
+        kind: 'decider',
+        condition: { kind: 'compare-each', constant: 2 },
+        outputs: [
+          { kind: 'each-constant', value: 2 },
+          { kind: 'each-constant', value: 2 },
+        ],
+        elseOutputs: [{ kind: 'each-constant', value: 2 }],
+      },
+      { kind: 'decider', outputs: [{ kind: 'each-constant', value: 1 }] },
+    ]);
+    expect(overridden.plan.producers).toMatchObject([
+      {
+        outputs: [
+          { kind: 'each-constant', value: 9 },
+          { kind: 'each-constant', value: 9 },
+        ],
+        elseOutputs: [{ kind: 'each-constant', value: 9 }],
+      },
+      { outputs: [{ kind: 'each-constant', value: 1 }] },
+    ]);
+    expect(reset.plan).toEqual(original.plan);
+    expect(overridden.plan.entities.map(({ id }) => id)).toEqual(
+      original.plan.entities.map(({ id }) => id),
+    );
+    expect(sourceExecutions).toBe(1);
+  });
 
   test('executes the documented automatic numeric default example with the same reset value', () => {
     const page = readFileSync(new URL('../../../docs/api/parameters.md', import.meta.url), 'utf8');

@@ -833,6 +833,123 @@ test('a later test starts from empty T0', ({ network, tick, expectSignal }) => {
     }
   });
 
+  test('binds parameterized EACH Decider outputs through Worker override and reset', async () => {
+    const globals = globalThis as Record<string, unknown>;
+    const previous = globals[localExpressionRunKey];
+    globals[localExpressionRunKey] = 0;
+    try {
+      const runtime = parameterRuntime();
+      const parsed = structuredClone(
+        await runtime.handle(
+          parseRequest(231, {
+            file: {
+              path: 'worker-decider-each-output.factorio.ts',
+              text: `globalThis.${localExpressionRunKey} = Number(globalThis.${localExpressionRunKey} ?? 0) + 1;
+const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const amount = Param.number('Count');
+const input = new Network();
+const output = new Network();
+input += CC(10 * A, 1 * B);
+const gate = when(input[EACH] > amount).then(amount * EACH);
+output += gate;
+gate.then(EACH * amount);
+gate.else(amount * EACH);`,
+            },
+            parameterBinding: true,
+            blueprintExport: { parameters: true },
+          }),
+        ),
+      );
+      expect(globals[localExpressionRunKey]).toBe(1);
+      expect(parsed.result.pipelineDiagnostics).toEqual([]);
+      expect(parsed.result.blueprintExport).toMatchObject({
+        ok: false,
+        diagnostics: [
+          {
+            code: 'CP1002',
+            severity: 'error',
+            span: {
+              fileId: expect.any(String),
+              start: expect.any(Number),
+              end: expect.any(Number),
+            },
+          },
+        ],
+      });
+      const binding = parsed.parameterBinding;
+      if (binding?.ok !== true || binding.token === undefined) {
+        throw new Error('Expected the retained Worker EACH-output binding session.');
+      }
+      expect(binding.parameters).toMatchObject([
+        { id: 0, kind: 'number', label: 'Count', defaultValue: 2 },
+      ]);
+
+      let revision = parsed.revision;
+      const bind = (value?: number) =>
+        structuredClone(
+          runtime.handleBinding({
+            kind: 'bind-parameters',
+            revision: ++revision,
+            sourceRevision: parsed.revision,
+            token: binding.token!,
+            overrides: value === undefined ? [] : [{ id: 0, value }],
+          }),
+        );
+      const pair = (response: CompilerWorkerBoundResponse) => {
+        if (!response.result.ok) throw new Error('Expected a valid Worker EACH-output binding.');
+        return response.result;
+      };
+      const defaults = pair(bind());
+      const overridden = pair(bind(9));
+      const reset = pair(bind());
+      const decider = (selected: typeof defaults) => {
+        const producer = selected.plan.producers.find(({ kind }) => kind === 'decider');
+        if (producer?.kind !== 'decider') throw new Error('Expected the bound Decider.');
+        return producer;
+      };
+      expect(decider(defaults)).toMatchObject({
+        condition: { kind: 'compare-each', constant: 2 },
+        outputs: [
+          { kind: 'each-constant', value: 2 },
+          { kind: 'each-constant', value: 2 },
+        ],
+        elseOutputs: [{ kind: 'each-constant', value: 2 }],
+      });
+      expect(decider(overridden)).toMatchObject({
+        condition: { kind: 'compare-each', constant: 9 },
+        outputs: [
+          { kind: 'each-constant', value: 9 },
+          { kind: 'each-constant', value: 9 },
+        ],
+        elseOutputs: [{ kind: 'each-constant', value: 9 }],
+      });
+      expect(reset.plan).toEqual(defaults.plan);
+      const topology = (selected: typeof defaults) => ({
+        entities: selected.plan.entities.map(({ id, profile }) => ({
+          id,
+          profile: profile.profileId,
+        })),
+        producers: selected.resolvedCircuit.ir.producers.map(({ id, entityId }) => ({
+          id,
+          entityId,
+        })),
+        circuitEntities: selected.resolvedCircuit.ir.entities.map(({ id, placement }) => ({
+          id,
+          placement,
+        })),
+        networks: selected.resolvedCircuit.ir.networks,
+        networkPairs: selected.plan.networkPairs,
+      });
+      expect(topology(overridden)).toEqual(topology(defaults));
+      expect(topology(reset)).toEqual(topology(defaults));
+      expect(globals[localExpressionRunKey]).toBe(1);
+    } finally {
+      if (previous === undefined) delete globals[localExpressionRunKey];
+      else globals[localExpressionRunKey] = previous;
+    }
+  });
+
   test('preserves Signal quality and retries invalid derived counts on retained Worker sessions', async () => {
     const globals = globalThis as Record<string, unknown>;
     const previous = globals[localExpressionRunKey];
