@@ -338,6 +338,116 @@ test('another fresh session', ({ network, tick, expectSignal }) => {
     expect(runCount()).toBe(1);
   });
 
+  test('automatic numeric defaults survive Worker listing, native export, preview, tests and Reset', async () => {
+    const key = '__worker_automatic_number_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const previous = globals[key];
+    globals[key] = 0;
+    try {
+      const file = {
+        path: 'worker-automatic-number.factorio.ts',
+        text: `globalThis.${key} = Number(globalThis.${key} ?? 0) + 1;
+const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const amount = Param.number('Count');
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: A, value: amount },
+  { signal: B, value: 2 },
+] }] });`,
+      };
+      const runtime = parameterRuntime();
+      const parsed = structuredClone(
+        await runtime.handle(
+          parseRequest(225, {
+            file,
+            parameterBinding: true,
+            blueprintExport: { parameters: true },
+          }),
+        ),
+      );
+      expect(globals[key]).toBe(1);
+      expect(parsed.result.pipelineDiagnostics).toEqual([]);
+      expect(parsed.parameterBinding).toMatchObject({
+        ok: true,
+        parameters: [{ id: 0, kind: 'number', label: 'Count', defaultValue: 3 }],
+      });
+      expect(parsed.result.blueprintExport).toMatchObject({ ok: true });
+      if (
+        parsed.parameterBinding?.ok !== true ||
+        parsed.parameterBinding.token === undefined ||
+        parsed.result.blueprintExport?.ok !== true ||
+        parsed.result.plan === undefined ||
+        parsed.result.resolvedCircuit === undefined
+      ) {
+        throw new Error('Expected automatic defaults in the Worker compilation and native export.');
+      }
+      const token = parsed.parameterBinding.token;
+      const blueprint = parsed.result.blueprintExport.document.blueprint;
+      expect(blueprint.parameters).toEqual([{ type: 'number', number: '3', name: 'Count' }]);
+      expect(blueprint.entities[0]!.control_behavior).toMatchObject({
+        sections: {
+          sections: [
+            {
+              filters: [
+                { name: 'signal-A', count: 3 },
+                { name: 'signal-B', count: 2 },
+              ],
+            },
+          ],
+        },
+      });
+
+      let revision = parsed.revision;
+      const bind = (value?: number): CompilerWorkerBoundResponse => {
+        const request: CompilerWorkerBindRequest = {
+          kind: 'bind-parameters',
+          revision: ++revision,
+          sourceRevision: parsed.revision,
+          token,
+          overrides: value === undefined ? [] : [{ id: 0, value }],
+        };
+        return structuredClone(runtime.handleBinding(structuredClone(request)));
+      };
+      const pairOf = (response: CompilerWorkerBoundResponse): BoundSourceCompilationCircuit => {
+        if (!response.result.ok) throw new Error('Expected a concrete automatic-default binding.');
+        return response.result;
+      };
+      const consume = (pair: BoundSourceCompilationCircuit, count: number) => {
+        const artifact = createSourceCircuitArtifact(pair.plan, pair.resolvedCircuit);
+        expect(artifact.blueprint.blueprint.entities[0]!.control_behavior).toMatchObject({
+          sections: { sections: [{ filters: [{ name: 'signal-A', count }, { count: 2 }] }] },
+        });
+        const preview = new SourceSimulationController(artifact);
+        preview.stepFrom(0);
+        expect(preview.signalValueAt(1, 'output', signal('virtual', 'signal-A'))).toBe(count);
+        expect(
+          runWebTests(
+            pair.plan,
+            `const A = Signal('virtual', 'signal-A');\ntest('effective automatic value', ({ network, tick, expectSignal }) => { expectSignal(network('output'), A).toBe(0); tick(1); expectSignal(network('output'), A).toBe(${count}); });`,
+            pair.resolvedCircuit,
+          ),
+        ).toMatchObject({ passed: 1, failed: 0 });
+      };
+
+      const defaults = pairOf(bind());
+      const overridden = pairOf(bind(9));
+      const reset = pairOf(bind());
+      consume(defaults, 3);
+      consume(overridden, 9);
+      consume(reset, 3);
+      expect(reset.plan).toEqual(defaults.plan);
+      expect(blueprint.parameters).toEqual([{ type: 'number', number: '3', name: 'Count' }]);
+      expect(globals[key]).toBe(1);
+      expect(JSON.stringify(parsed)).not.toMatch(
+        /parameterContext|configurationTemplate|sourceHandle/i,
+      );
+    } finally {
+      if (previous === undefined) delete globals[key];
+      else globals[key] = previous;
+    }
+  });
+
   test('keeps primary Constant Math-function and Arithmetic expressions local across Worker consumers and native rejection', async () => {
     const globals = globalThis as Record<string, unknown>;
     const previous = globals[localExpressionRunKey];

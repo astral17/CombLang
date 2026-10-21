@@ -1280,7 +1280,6 @@ output += arithmetic;`,
     );
 
     for (const invalid of [
-      `Param.number('missing default');`,
       `Param.number('too many', 1, 2);`,
       `Param.unknown('not supported', 1);`,
       `Param.number('invalid default', NaN);`,
@@ -3784,5 +3783,186 @@ ordinary.label;`,
     expect(listSourceCompilationParameters(hostCompilation)).toMatchObject([
       { kind: 'number', label: 'Amount', defaultValue: 5 },
     ]);
+  });
+
+  test('allocates an automatic NUMBER from all exact Constant numeric slots and keeps it on reset', () => {
+    let sourceExecutions = 0;
+    const compilation = compileSourceProgram(
+      {
+        path: 'automatic-number-constant.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const amount = Param.number('Count');
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: A, value: amount },
+  { signal: B, value: 2 },
+] }] });
+const input = new Network();
+const arithmeticOutput = new Network();
+arithmeticOutput += Arithmetic({ left: input[A], operation: 'add', right: amount, output: B });
+const selectorOutput = new Network();
+selectorOutput += Selector({ input, operation: 'select', index: amount });
+const deciderOutput = new Network();
+deciderOutput += Decider({ condition: input[A] > amount, outputs: [amount * A] });
+const lateDecider = Decider({ condition: input[A] > 0, outputs: [input[A]] });
+lateDecider.then(amount * A).else(amount * A);
+deciderOutput += lateDecider;`,
+      },
+      parameterHost(),
+      [],
+      (stage) => {
+        if (stage === 'execute') sourceExecutions += 1;
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const [declaration] = listSourceCompilationParameters(compilation);
+    expect(declaration).toMatchObject({ kind: 'number', label: 'Count', defaultValue: 3 });
+    expect(compilation.plan?.producers[0]).toMatchObject({
+      kind: 'constant',
+      configuration: {
+        sections: [
+          {
+            multiplier: 1,
+            filters: [
+              { signal: { type: 'virtual', name: 'signal-A' }, value: 3 },
+              { signal: { type: 'virtual', name: 'signal-B' }, value: 2 },
+            ],
+          },
+        ],
+      },
+    });
+    expect(compilation.plan?.producers.slice(1)).toMatchObject([
+      { kind: 'arithmetic', right: { kind: 'constant', value: 3 } },
+      { kind: 'selector', operation: 'select', index: 3 },
+      {
+        kind: 'decider',
+        condition: { kind: 'compare-signal', constant: 3 },
+        outputs: [
+          { kind: 'signal-constant', signal: { type: 'virtual', name: 'signal-A' }, value: 3 },
+        ],
+      },
+      {
+        kind: 'decider',
+        condition: { kind: 'compare-signal', constant: 0 },
+        outputs: [
+          { kind: 'signal', signal: { type: 'virtual', name: 'signal-A' } },
+          { kind: 'signal-constant', signal: { type: 'virtual', name: 'signal-A' }, value: 3 },
+        ],
+        elseOutputs: [
+          { kind: 'signal-constant', signal: { type: 'virtual', name: 'signal-A' }, value: 3 },
+        ],
+      },
+    ]);
+
+    const defaults = bindSourceCompilationCircuit(compilation);
+    const overridden = bindSourceCompilationCircuit(compilation, [
+      { parameter: declaration!.parameter, value: 9 },
+    ]);
+    const reset = bindSourceCompilationCircuit(compilation, []);
+    expect(defaults.plan.producers[0]).toMatchObject({
+      configuration: { sections: [{ filters: [{ value: 3 }, { value: 2 }] }] },
+    });
+    expect(defaults.plan.producers[3]).toMatchObject({
+      outputs: [
+        { kind: 'signal-constant', signal: { type: 'virtual', name: 'signal-A' }, value: 3 },
+      ],
+    });
+    expect(defaults.plan.producers[4]).toMatchObject({
+      outputs: [
+        { kind: 'signal', signal: { type: 'virtual', name: 'signal-A' } },
+        { kind: 'signal-constant', signal: { type: 'virtual', name: 'signal-A' }, value: 3 },
+      ],
+      elseOutputs: [
+        { kind: 'signal-constant', signal: { type: 'virtual', name: 'signal-A' }, value: 3 },
+      ],
+    });
+    expect(overridden.plan.producers[0]).toMatchObject({
+      configuration: { sections: [{ filters: [{ value: 9 }, { value: 2 }] }] },
+    });
+    expect(overridden.plan.producers[3]).toMatchObject({
+      outputs: [
+        { kind: 'signal-constant', signal: { type: 'virtual', name: 'signal-A' }, value: 9 },
+      ],
+    });
+    expect(overridden.plan.producers[4]).toMatchObject({
+      outputs: [
+        { kind: 'signal', signal: { type: 'virtual', name: 'signal-A' } },
+        { kind: 'signal-constant', signal: { type: 'virtual', name: 'signal-A' }, value: 9 },
+      ],
+      elseOutputs: [
+        { kind: 'signal-constant', signal: { type: 'virtual', name: 'signal-A' }, value: 9 },
+      ],
+    });
+    expect(reset.plan).toEqual(defaults.plan);
+    expect(compilation.execution?.circuit.ir).toEqual(defaults.resolvedCircuit.ir);
+    expect(sourceExecutions).toBe(1);
+  });
+
+  test.each(['5', 'undefined'])(
+    'binds a number parameter with default %s in an EACH constant output',
+    (defaultValue) => {
+      const compilation = compileSourceProgram(
+        {
+          path: 'parameter-each-output.factorio.ts',
+          text: `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Count', ${defaultValue});
+const input = new Network();
+const output = new Network();
+output += when(input[EACH] > 0).then(amount * EACH);`,
+        },
+        parameterHost(),
+      );
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      const parameter = listSourceCompilationParameters(compilation)[0]!.parameter;
+      const bound = bindSourceCompilationCircuit(compilation, [{ parameter, value: 9 }]);
+      expect(bound.plan.producers[0]).toMatchObject({
+        kind: 'decider',
+        outputs: [{ kind: 'each-constant', value: 9 }],
+      });
+    },
+  );
+
+  test('executes the documented automatic numeric default example with the same reset value', () => {
+    const page = readFileSync(new URL('../../../docs/api/parameters.md', import.meta.url), 'utf8');
+    const section = page.match(
+      /### Automatic numeric defaults([\s\S]*?)## Complete circuit example/,
+    )?.[1];
+    const example = section?.match(/```javascript\r?\n([\s\S]*?)```/)?.[1];
+    if (example === undefined)
+      throw new Error('Expected the documented automatic-default example.');
+    let sourceExecutions = 0;
+    const compilation = compileSourceProgram(
+      {
+        path: 'documented-automatic-number.factorio.ts',
+        text: example,
+      },
+      parameterHost(),
+      [],
+      (stage) => {
+        if (stage === 'execute') sourceExecutions += 1;
+      },
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(listSourceCompilationParameters(compilation)).toMatchObject([
+      { kind: 'number', label: 'Count', defaultValue: 3 },
+    ]);
+    const parameter = listSourceCompilationParameters(compilation)[0]!.parameter;
+    const defaults = bindSourceCompilationCircuit(compilation);
+    const overridden = bindSourceCompilationCircuit(compilation, [{ parameter, value: 9 }]);
+    const reset = bindSourceCompilationCircuit(compilation, []);
+    expect(defaults.plan.producers[0]).toMatchObject({
+      configuration: {
+        sections: [{ multiplier: 1, filters: [{ value: 3 }, { value: 2 }] }],
+      },
+    });
+    expect(overridden.plan.producers[0]).toMatchObject({
+      configuration: {
+        sections: [{ multiplier: 1, filters: [{ value: 9 }, { value: 2 }] }],
+      },
+    });
+    expect(reset.plan).toEqual(defaults.plan);
+    expect(sourceExecutions).toBe(1);
   });
 });

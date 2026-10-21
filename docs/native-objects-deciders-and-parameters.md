@@ -442,7 +442,7 @@ wires, and browser/mobile native placement remain unverified.
 
 ### Numeric metadata
 
-`Param.number(label, default, metadata?)` accepts an optional plain or
+`Param.number(label[, default[, metadata]])` accepts an optional plain or
 null-prototype data record containing only `variable?: string`, `formula?: string`
 and `dependent?: boolean`. This complete example uses both parameters in
 supported Constant count slots (with trusted exact-Constant host authority):

@@ -2,30 +2,33 @@
 
 [Documentation](../README.md) · [Signal](signal.md) · [Arithmetic](arithmetic.md) · [Constant](constant.md) · [Selector](selector.md)
 
-Declare an editable configuration value with a concrete default. A parameter is
-not a Network or a signal count that changes every tick: binding changes fields
-of already-created hardware, not its topology or the execution of source loops.
+Declare an editable configuration value. A number default may be explicit or
+deterministically selected from the supported numeric fields in the complete
+source compilation. A parameter is not a Network or a signal count that changes
+every tick: binding changes fields of already-created hardware, not its topology
+or the execution of source loops.
 
 ## Signatures
 
 Source globals, not importable TypeScript library declarations:
 
 ```text
-Param.number(label, defaultValue, metadata?) -> opaque number parameter
+Param.number(label[, defaultValue[, metadata]]) -> opaque number parameter
 Param.signal(label, defaultSignal) -> opaque Signal parameter
 ```
 
-| Argument              | Contract                                                                                                       |
-| --------------------- | -------------------------------------------------------------------------------------------------------------- |
-| `label`               | Required nonblank string. Preserved display text, not a unique key.                                            |
-| Number `defaultValue` | Required finite number. Each destination field applies its own numeric rules.                                  |
-| `defaultSignal`       | Required current-source `Signal(...)` handle, including optional quality; not a plain `{ type, name }` object. |
-| Number `metadata`     | Optional plain data record with `variable?: string`, `formula?: string`, `dependent?: boolean`.                |
+| Argument              | Contract                                                                                                                             |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `label`               | Required nonblank string. Preserved display text, not a unique key.                                                                  |
+| Number `defaultValue` | Optional finite number; omit it or pass `undefined` to request an automatic local default. Each field applies its own numeric rules. |
+| `defaultSignal`       | Required current-source `Signal(...)` handle, including optional quality; not a plain `{ type, name }` object.                       |
+| Number `metadata`     | Optional plain data record with `variable?: string`, `formula?: string`, `dependent?: boolean`.                                      |
 
-Both defaults are positional; there is no `{ default: ... }` wrapper or automatic
-default allocation. `Param.signal` accepts exactly two arguments and no metadata.
-Creating a declaration creates no combinator, wire or tick delay. Distinct
-declarations remain distinct even when their labels and defaults are equal.
+Defaults are positional; there is no `{ default: ... }` wrapper. Numeric
+metadata remains the third argument, so there is no second-position metadata
+overload. `Param.signal` accepts exactly two arguments and no metadata. Creating
+a declaration creates no combinator, wire or tick delay. Distinct declarations
+remain distinct even when their labels and defaults are equal.
 
 The returned source value is opaque. It has no readable `.defaultValue`,
 `.metadata`, `.id` or `.value` properties; declarations are listed through the
@@ -45,14 +48,15 @@ limited derived source expressions described below:
 | `Constant`                            | `sections[].filters[].signal`                                                       | Signal                                     |
 | `Constant`                            | `sections[].multiplier`                                                             | Number or local numeric expression         |
 | `Decider`, `when`, or `IF`            | Right-hand numeric comparison threshold in `condition`, including nested conditions | Number or local numeric expression         |
+| `Decider`, `when`, or `IF`            | Constant output row written as `number * Signal` or `number * EACH`                 | Direct number parameter or finite number   |
 | `Selector` with `operation: 'select'` | `index`                                                                             | Number, Signal or local numeric expression |
 | `Selector` with `operation: 'count'`  | `output`                                                                            | Signal                                     |
 
 For native typed-formula export, a registered expression in an exact Arithmetic
 constant `left`/`right` operand, Constant filter `value`, constant-right
-threshold of an exact Decider/`when`/`IF` condition, or numeric `index` of a
-Selector `select` can produce a formula row. Constant section multipliers remain
-local binding only. Native Signal placeholders are a separate bounded feature
+threshold of an exact Decider/`when`/`IF`, or numeric `index` of a Selector
+`select` can produce a formula row. Constant section multipliers and Decider
+constant output values remain local binding only. Native Signal placeholders are a separate bounded feature
 for Constant filter `signal`, exact Arithmetic `output`, Selector Signal
 `select.index`, and Selector `count.output` slots. In `select`, that Signal
 provides the numeric index from the input network; it does not name the selected
@@ -151,6 +155,52 @@ index count; it does not specify the selected output. A Signal parameter is not
 a scalar input selection for Arithmetic and cannot replace `input[A]`.
 `selectMax`, section `active`/`group`, operations, Network identities and generic
 Entity raw configuration are not parameterized by this API.
+
+### Automatic numeric defaults
+
+Omit the numeric default or pass `undefined` in the second position to request
+one. The compiler chooses a distinct nonzero signed-int32 value after executing
+the source once, reserving explicit values and supported numeric producer fields
+from exact Constant, Arithmetic, Decider and Selector configurations. The chosen
+value is the displayed default and the value restored by Reset; an override
+changes only slots that reference that parameter. This allocation adds no
+devices or ticks.
+
+Automatic allocation is accepted only when every live physical Entity in the
+source is accounted for by one of those supported exact producer families. An
+unsupported, generic or unlinked Entity causes a located `CP1002` rather than an
+unverified collision claim. Existing explicit-default-only source is not subject
+to this new whole-source gate. Derived expressions that depend on an automatic
+number still refuse with located `CP1002`; expressions whose parameters all
+have explicit defaults remain supported.
+
+This complete example chooses 3: the implicit Constant multiplier reserves 1,
+and the explicit second filter reserves 2.
+
+```javascript
+const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const amount = Param.number('Count');
+const output = new Network();
+output += Constant({
+  sections: [
+    {
+      filters: [
+        { signal: A, value: amount },
+        { signal: B, value: 2 },
+      ],
+    },
+  ],
+});
+```
+
+Listing and initial binding show Count = 3. Binding it to 9 changes only the
+first filter; Reset restores 3 without executing the source again.
+
+Direct Decider constant output rows (`amount * A` or `amount * EACH`) also
+participate in automatic numeric allocation and local binding. They do not add
+native formula-expression slots; unsupported native parameter projections are
+refused with a located `CP1002`.
 
 ## Complete circuit example
 

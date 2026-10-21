@@ -33,16 +33,15 @@ export class BlueprintParameterCapture {
     this.#assertOpen(source);
     this.#assertLabel(label, source);
     const canonicalMetadata = canonicalizeBlueprintNumberParameterMetadata(metadata, source);
-    if (typeof defaultValue !== 'number' || !Number.isFinite(defaultValue)) {
-      this.#fail(
-        '$.defaultValue',
-        'number declarations require a finite positional default.',
-        source,
-      );
+    if (
+      defaultValue !== undefined &&
+      (typeof defaultValue !== 'number' || !Number.isFinite(defaultValue))
+    ) {
+      this.#fail('$.defaultValue', 'number defaults must be finite when supplied.', source);
     }
     return this.#register(
       this.session.number(label, {
-        defaultValue,
+        ...(defaultValue === undefined ? {} : { defaultValue }),
         source,
         ...(canonicalMetadata === undefined ? {} : { metadata: canonicalMetadata }),
       }),

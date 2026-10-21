@@ -17,6 +17,7 @@ import type { ConstantConfigurationTemplate } from '../../compiler/src/constant-
 import type { ArithmeticConfigurationTemplate } from '../../compiler/src/arithmetic-configuration-template.js';
 import type { SelectorConfigurationTemplate } from '../../compiler/src/selector-configuration-template.js';
 import type { DeciderConfigurationTemplate } from '../../compiler/src/decider-configuration-template.js';
+import type { BlueprintNumberParameterHandle } from '../../compiler/src/blueprint-parameters.js';
 
 export type RuntimeNetworkCapability = 'owned' | 'readonly' | 'ref' | 'move';
 
@@ -72,6 +73,13 @@ export interface SignalValue {
   readonly kind: 'signal-value';
   readonly signal: SignalId;
   readonly value: number;
+}
+
+/** Internal Decider constant output whose value is resolved at the host binding boundary. */
+export interface ParameterSignalValue {
+  readonly kind: 'parameter-signal-value';
+  readonly signal: SignalId;
+  readonly parameter: BlueprintNumberParameterHandle;
 }
 
 /** Session-nominal Constant configuration fragment; it is not a Producer or Network. */
@@ -144,7 +152,7 @@ export interface DestinationValue {
 
 export interface ConditionValue {
   readonly kind: 'condition';
-  readonly condition: PlanDeciderCondition;
+  readonly condition: RuntimeDeciderCondition;
 }
 
 /** Session-nominal source configuration handle; deliberately not a circuit Condition. */
@@ -250,13 +258,37 @@ export type PendingDeciderCondition =
       readonly conditions: readonly PendingDeciderCondition[];
     };
 
-type PendingDeciderDescriptor = Omit<CompleteDeciderDescriptor, 'condition' | 'output'> & {
+export type RuntimeDeciderCondition =
+  | Exclude<PlanDeciderCondition, { readonly kind: 'and' | 'or' }>
+  | Exclude<PendingDeciderCondition, { readonly kind: 'and' | 'or' }>
+  | {
+      readonly kind: 'and';
+      readonly conditions: readonly RuntimeDeciderCondition[];
+    }
+  | {
+      readonly kind: 'or';
+      readonly conditions: readonly RuntimeDeciderCondition[];
+    };
+
+type PendingDeciderDescriptor = Omit<
+  CompleteDeciderDescriptor,
+  'condition' | 'output' | 'outputs' | 'elseOutputs'
+> & {
   readonly condition: PendingDeciderCondition;
-  readonly output?: CompleteDeciderDescriptor['output'];
+  readonly output?: RuntimeDeciderOutput;
+  readonly outputs?: readonly RuntimeDeciderOutput[];
+  readonly elseOutputs?: readonly RuntimeDeciderOutput[];
   readonly outputOrigins?: readonly DeciderOutputOrigin[];
   readonly elseOutputOrigins?: readonly DeciderOutputOrigin[];
   readonly pendingConfiguration: DeciderConfigurationTemplate;
 };
+
+export type PendingDeciderOutput = {
+  readonly kind: 'parameter-signal-constant';
+  readonly signal: SignalId;
+  readonly parameter: BlueprintNumberParameterHandle;
+};
+type RuntimeDeciderOutput = CompleteDeciderDescriptor['output'] | PendingDeciderOutput;
 
 export type {
   DeciderOutputOrigin,
@@ -273,8 +305,11 @@ export type CombinatorDescriptor =
   | PendingConstantDescriptor
   | PendingSelectorDescriptor
   | PendingDeciderDescriptor
-  | (Omit<CompleteDeciderDescriptor, 'output'> & {
-      readonly output?: CompleteDeciderDescriptor['output'];
+  | (Omit<CompleteDeciderDescriptor, 'condition' | 'output' | 'outputs' | 'elseOutputs'> & {
+      readonly condition: RuntimeDeciderCondition;
+      readonly output?: RuntimeDeciderOutput;
+      readonly outputs?: readonly RuntimeDeciderOutput[];
+      readonly elseOutputs?: readonly RuntimeDeciderOutput[];
       readonly outputOrigins?: readonly DeciderOutputOrigin[];
       readonly elseOutputOrigins?: readonly DeciderOutputOrigin[];
     });
@@ -296,6 +331,7 @@ export type DslValue =
   | SelectedValue
   | DestinationValue
   | SignalValue
+  | ParameterSignalValue
   | SectionValue
   | WildcardTokenValue
   | WildcardCountValue

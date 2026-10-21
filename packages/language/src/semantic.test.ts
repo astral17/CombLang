@@ -614,13 +614,13 @@ const prototypes = {};`,
   test('validates the closed source parameter declaration forms and their spans', () => {
     const valid = parseFile({
       path: 'source-parameter-declarations.ts',
-      text: `Param.number('Amount', 5); Param.signal('Channel', Signal('virtual', 'signal-A'));`,
+      text: `Param.number('Amount', 5); Param.number('Automatic'); Param.number('Automatic undefined', undefined); Param.signal('Channel', Signal('virtual', 'signal-A'));`,
     });
     expect(validateDslSemantics(valid)).toEqual([]);
 
     const invalid = parseFile({
       path: 'invalid-source-parameter-declarations.ts',
-      text: `Param.number('missing'); Param.unknown('bad', 1); const value = Param;`,
+      text: `Param.number('too many', 1, {}, 4); Param.unknown('bad', 1); const value = Param;`,
     });
     const diagnostics = validateDslSemantics(invalid).filter(({ code }) => code === 'CL1050');
     expect(diagnostics).toHaveLength(3);
@@ -628,19 +628,20 @@ const prototypes = {};`,
       diagnostics.map(({ span }) =>
         span === undefined ? undefined : invalid.text.slice(span.start, span.end),
       ),
-    ).toEqual([`Param.number('missing')`, `Param.unknown('bad', 1)`, 'Param']);
+    ).toEqual([`Param.number('too many', 1, {}, 4)`, `Param.unknown('bad', 1)`, 'Param']);
   });
 
   test('accepts dynamic numeric metadata but keeps the closed Param declaration syntax', () => {
     const valid = parseFile({
       path: 'numeric-metadata.ts',
       text: `const metadata = { formula: 'x' };
-Param.number('N', 1, metadata); Param.number('Empty', 2, {}); Param.number('Plain', 3);`,
+Param.number('N', 1, metadata); Param.number('Empty', 2, {}); Param.number('Plain', 3); Param.number('Automatic', undefined, metadata);`,
     });
     expect(validateDslSemantics(valid)).toEqual([]);
     for (const call of [
       "Param.number('N', 1, {}, 4)",
       'Param.number(...values)',
+      "Param.signal('Missing')",
       "Param.signal('S', Signal('signal-A'), {})",
       "Param.number?.('N', 1, {})",
       "const alias = Param.number; alias('N', 1, {})",

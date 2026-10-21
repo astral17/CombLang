@@ -102,6 +102,14 @@ their existing native export rules across exact, fluent and `IF` forms. Derived
 thresholds bind locally but native numeric-template export refuses them with
 located `CP1002`; no native formula support is implied.
 
+Decider constant output rows also accept a direct number parameter, for example
+`amount * A` or `amount * EACH`, in exact, fluent, and `IF` configurations.
+These values bind locally, including rows appended after attaching a fluent
+builder. An omitted numeric default uses the source-wide automatic allocator;
+its supported-family coverage rules are documented in the [Param API](parameters.md).
+Derived numeric expressions are not accepted in these output rows, and this
+local binding support does not add native formula-expression slots.
+
 ## Compact example
 
 Complete source, profile-free:

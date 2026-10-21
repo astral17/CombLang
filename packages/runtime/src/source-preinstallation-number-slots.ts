@@ -36,12 +36,13 @@ import {
   inspectDeciderConfigurationTemplate,
   type DeciderConfigurationTemplate,
   type DeciderTemplateCondition,
+  type DeciderTemplateOutput,
 } from '../../compiler/src/decider-configuration-template.js';
 import {
   inspectSelectorConfigurationTemplate,
   type SelectorConfigurationTemplate,
 } from '../../compiler/src/selector-configuration-template.js';
-import type { CombinatorDescriptor } from './elaboration-values.js';
+import type { CombinatorDescriptor, RuntimeDeciderCondition } from './elaboration-values.js';
 
 const INT32_MIN = -2_147_483_648;
 const INT32_MAX = 2_147_483_647;
@@ -409,6 +410,39 @@ function addPlanCondition(
   }
 }
 
+function isConcreteDeciderCondition(
+  condition: RuntimeDeciderCondition,
+): condition is PlanDeciderCondition {
+  if (condition.kind === 'and' || condition.kind === 'or') {
+    return condition.conditions.every(isConcreteDeciderCondition);
+  }
+  return !(
+    (condition.kind === 'compare-each' ||
+      condition.kind === 'compare-signal' ||
+      condition.kind === 'compare-wildcard') &&
+    typeof condition.constant !== 'number'
+  );
+}
+
+function pendingDeciderConstantPath(
+  condition: RuntimeDeciderCondition,
+  path: string,
+): string | undefined {
+  if (condition.kind === 'and' || condition.kind === 'or') {
+    for (const [index, child] of condition.conditions.entries()) {
+      const childPath = pendingDeciderConstantPath(child, `${path}.conditions[${index}]`);
+      if (childPath !== undefined) return childPath;
+    }
+    return undefined;
+  }
+  return (condition.kind === 'compare-each' ||
+    condition.kind === 'compare-signal' ||
+    condition.kind === 'compare-wildcard') &&
+    typeof condition.constant !== 'number'
+    ? `${path}.constant`
+    : undefined;
+}
+
 function addTemplateCondition(
   traversal: ProducerTraversal,
   condition: DeciderTemplateCondition,
@@ -433,6 +467,26 @@ function addTemplateCondition(
   forEachBounded(traversal, condition.conditions, `${path}.conditions`, (child, index) =>
     addTemplateCondition(traversal, child, `${path}.conditions[${index}]`, depth + 1),
   );
+}
+
+function addTemplateOutput(
+  traversal: ProducerTraversal,
+  output: DeciderTemplateOutput,
+  path: string,
+  depth: number,
+): void {
+  consume(traversal, path, depth);
+  if (output.mode === 'constant') {
+    pushSlot(
+      traversal,
+      'decider',
+      'output-value',
+      'int32',
+      `${path}.value`,
+      output.value,
+      depth + 1,
+    );
+  }
 }
 
 function addDeciderOutput(traversal: ProducerTraversal, output: DeciderOutput, path: string): void {
@@ -472,18 +526,30 @@ function addDeciderSlots(traversal: ProducerTraversal, producer: DeciderDescript
     const registration = inspectDeciderConfigurationTemplate(producer.pendingConfiguration, path);
     assertTemplateOwner(registration.session, traversal, path);
     const template = producer.pendingConfiguration;
-    if (template.outputs.length !== 0 || template.elseOutputs !== undefined) {
+    addTemplateCondition(traversal, template.condition, `${path}.condition`, 0);
+    forEachBounded(traversal, template.outputs, `${path}.outputs`, (output, index) =>
+      addTemplateOutput(traversal, output, `${path}.outputs[${index}]`, 1),
+    );
+    if (template.elseOutputs !== undefined) {
+      forEachBounded(traversal, template.elseOutputs, `${path}.elseOutputs`, (output, index) =>
+        addTemplateOutput(traversal, output, `${path}.elseOutputs[${index}]`, 1),
+      );
+    }
+    if (template.outputs.length === 0 && template.elseOutputs === undefined) {
+      addDeciderOutputRows(traversal, producer);
+    }
+  } else {
+    if (!isConcreteDeciderCondition(producer.condition)) {
       refuse(
-        path,
-        'pending Decider template must contain only the authentic condition.',
+        pendingDeciderConstantPath(producer.condition, `${traversal.producerPath}.condition`) ??
+          `${traversal.producerPath}.condition`,
+        'pending Decider condition is missing its authenticated template.',
         traversal.source,
       );
     }
-    addTemplateCondition(traversal, template.condition, `${path}.condition`, 0);
-  } else {
     addPlanCondition(traversal, producer.condition, `${traversal.producerPath}.condition`, 0);
+    addDeciderOutputRows(traversal, producer);
   }
-  addDeciderOutputRows(traversal, producer);
 }
 
 function isSignalId(value: unknown): value is SignalId {

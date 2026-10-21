@@ -253,6 +253,30 @@ export class CombinatorRegistry {
     state.descriptor = rebound;
   }
 
+  deferPendingDecider(
+    value: CombinatorValue,
+    descriptor: Extract<CombinatorDescriptor, { readonly kind: 'decider' }>,
+  ): void {
+    const state = this.stateFor(value);
+    if (state.descriptor.kind !== 'decider' || descriptor.kind !== 'decider') {
+      throw new Error('Only a Decider can be deferred for parameter resolution.');
+    }
+    if (isPendingCombinatorDescriptor(state.descriptor)) {
+      throw new Error('A pending Decider cannot be deferred a second time.');
+    }
+    if (!isPendingCombinatorDescriptor(descriptor)) {
+      throw new Error('Deferred Decider state must retain its configuration template.');
+    }
+    state.descriptor =
+      state.outputBinding === undefined
+        ? descriptor
+        : bindCombinatorOutputSignal(
+            descriptor,
+            state.outputBinding.signal,
+            state.outputBinding.source,
+          );
+  }
+
   installPendingConstant(value: CombinatorValue, configuration: ConstantConfiguration): void {
     const state = this.stateFor(value);
     if (state.descriptor.kind !== 'constant') {
@@ -373,7 +397,12 @@ export class CombinatorRegistry {
     };
   }
 
-  installPendingDecider(value: CombinatorValue, condition: PlanDeciderCondition): void {
+  installPendingDecider(
+    value: CombinatorValue,
+    condition: PlanDeciderCondition,
+    outputs?: readonly Extract<DirectPlanProducer, { readonly kind: 'decider' }>['output'][],
+    elseOutputs?: readonly Extract<DirectPlanProducer, { readonly kind: 'decider' }>['output'][],
+  ): void {
     const state = this.stateFor(value);
     if (state.descriptor.kind !== 'decider') {
       throw new Error('Only a pending Decider can receive a Decider condition.');
@@ -386,8 +415,6 @@ export class CombinatorRegistry {
     }
     const pending = state.descriptor;
     if (
-      pending.pendingConfiguration.outputs.length !== 0 ||
-      pending.pendingConfiguration.elseOutputs !== undefined ||
       !matchesPendingDeciderCondition(pending.condition, condition) ||
       !matchesPendingDeciderTemplate(pending.condition, pending.pendingConfiguration.condition)
     ) {
@@ -395,12 +422,39 @@ export class CombinatorRegistry {
         'The Decider condition does not match its pending comparator, group, or input topology.',
       );
     }
+    if (
+      outputs !== undefined &&
+      ((pending.outputs?.length ??
+        (pending.output === undefined || pending.elseOutputs !== undefined ? 0 : 1)) !==
+        outputs.length ||
+        (pending.elseOutputs?.length ?? 0) !== (elseOutputs?.length ?? 0))
+    ) {
+      throw new Error('Resolved Decider outputs do not match their pending template rows.');
+    }
     const {
       pendingConfiguration: _pendingConfiguration,
       condition: _condition,
+      output: _output,
+      outputs: _outputs,
+      elseOutputs: _elseOutputs,
       ...descriptor
     } = pending;
-    state.descriptor = { ...descriptor, condition };
+    const resolvedOutputs =
+      outputs ??
+      pending.outputs ??
+      (pending.output === undefined || pending.elseOutputs !== undefined ? [] : [pending.output]);
+    const resolvedElseOutputs = elseOutputs ?? pending.elseOutputs;
+    const output = resolvedOutputs[0] ?? resolvedElseOutputs?.[0] ?? pending.output;
+    if (output === undefined) {
+      throw new Error('A pending Decider must install at least one output row.');
+    }
+    state.descriptor = {
+      ...descriptor,
+      condition,
+      output,
+      outputs: resolvedOutputs,
+      ...(resolvedElseOutputs === undefined ? {} : { elseOutputs: resolvedElseOutputs }),
+    };
   }
 
   bindOutput(value: CombinatorValue, signal: SignalId, source: SourceSpan): void {

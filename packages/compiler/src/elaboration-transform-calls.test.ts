@@ -43,12 +43,14 @@ function transformCalls(text: string): string {
 
 describe('elaboration call/member transform', () => {
   test('forwards numeric and bypassed Signal metadata once and keeps absent metadata void', () => {
-    const code = transformCalls(`Param.number('N', 1, metadata()); Param.number('Plain', 2);
+    const code =
+      transformCalls(`Param.number('N', 1, metadata()); Param.number('Plain', 2); Param.number('Automatic');
 Param.signal('S', channel, metadata());`);
     expect(code).toContain('__dsl.declareBlueprintNumberParameter');
     expect(code).toContain('__dsl.declareBlueprintSignalParameter');
     expect(code.match(/__dsl.invoke\(metadata/g)).toHaveLength(2);
     expect(code).toContain("'Plain', 2, void 0");
+    expect(code).toContain("'Automatic', void 0, void 0");
     expect(code.indexOf('__dsl.invoke(metadata')).toBeGreaterThan(code.indexOf("'N', 1"));
   });
 

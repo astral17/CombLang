@@ -15,6 +15,8 @@ import type {
   NetworkOwnershipState,
   PendingArithmeticOperand,
   PendingDeciderCondition,
+  PendingDeciderOutput,
+  RuntimeDeciderCondition,
 } from './elaboration-values.js';
 
 function networkNames(
@@ -31,7 +33,7 @@ function combinatorInputNames(combinator: CombinatorDescriptor): readonly string
   const addOperand = (value: PlanArithmeticOperand | PendingArithmeticOperand) => {
     if (value.kind !== 'constant') addRef(value);
   };
-  const addCondition = (condition: PlanDeciderCondition | PendingDeciderCondition): void => {
+  const addCondition = (condition: RuntimeDeciderCondition): void => {
     if (condition.kind === 'and' || condition.kind === 'or') {
       for (const child of condition.conditions) addCondition(child);
     } else if (
@@ -44,8 +46,10 @@ function combinatorInputNames(combinator: CombinatorDescriptor): readonly string
       addRef(condition);
     }
   };
-  const addOutput = (output: Extract<DirectPlanProducer, { kind: 'decider' }>['output']) => {
-    if ('refKind' in output) addRef(output);
+  const addOutput = (
+    output: Extract<DirectPlanProducer, { kind: 'decider' }>['output'] | PendingDeciderOutput,
+  ) => {
+    if (output.kind !== 'parameter-signal-constant' && 'refKind' in output) addRef(output);
   };
 
   if (combinator.kind === 'arithmetic') {

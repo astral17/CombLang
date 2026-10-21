@@ -864,16 +864,18 @@ export function validateDslSemantics(file: ParsedSourceFile): readonly Diagnosti
       if (!isDeclarationMethod || call === undefined || call.questionDotToken !== undefined) {
         report(
           'CL1050',
-          'Param supports only direct Param.number(label, default, metadata?) and Param.signal(label, default) declarations.',
+          'Param supports only direct Param.number(label, default?, metadata?) and Param.signal(label, default) declarations.',
           call ?? node,
         );
       } else if (
-        (call.arguments.length !== 2 && !(method === 'number' && call.arguments.length === 3)) ||
+        (method === 'number'
+          ? call.arguments.length < 1 || call.arguments.length > 3
+          : call.arguments.length !== 2) ||
         call.arguments.some(ts.isSpreadElement)
       ) {
         report(
           'CL1050',
-          'Param.number requires two or three non-spread arguments; Param.signal requires exactly two.',
+          'Param.number requires one to three non-spread arguments; Param.signal requires exactly two.',
           call,
         );
       }

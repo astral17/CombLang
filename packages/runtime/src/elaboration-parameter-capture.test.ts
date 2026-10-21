@@ -129,6 +129,27 @@ __runtime.declareBlueprintNumberParameter('amount', 5, undefined, { start: 1, en
     ).toThrow('is not a function');
   });
 
+  test('captures an omitted numeric default as absent without mutating its authentic registration', () => {
+    const result = executeElaborationProgramWithParameters(
+      parameterProgram(`
+const automatic = __runtime.declareBlueprintNumberParameter(
+  'automatic', undefined, { variable: 'x' }, { start: 10, end: 46 }
+);`),
+    );
+    const captured = result.parameters[0]!;
+    expect(captured.registration).toEqual({
+      kind: 'number',
+      label: 'automatic',
+      source: { fileId: sourceFileId('parameter-capture.factorio.ts'), start: 10, end: 46 },
+      metadata: { variable: 'x' },
+    });
+    expect(captured.handle).not.toHaveProperty('defaultValue');
+    expect(captured.registration).not.toHaveProperty('defaultValue');
+    expect(Object.isFrozen(captured.registration)).toBe(true);
+    expect(Object.isFrozen(captured.registration.metadata)).toBe(true);
+    expect(JSON.stringify(result.plan)).not.toContain('automatic');
+  });
+
   test('creates independent nominal handles for separate executions', () => {
     const program = parameterProgram(
       `__runtime.declareBlueprintNumberParameter('amount', 5, {}, { start: 1, end: 2 });`,
@@ -234,13 +255,21 @@ __runtime.declareBlueprintNumberParameter('amount', 5, metadata, { start: 1, end
     expect(() => executeElaborationProgramWithParameters(accessorProgram)).toThrow(
       'metadata fields must be enumerable data properties',
     );
-    expect(() =>
-      executeElaborationProgramWithParameters(
-        parameterProgram(
-          `__runtime.declareBlueprintNumberParameter('no default', undefined, {}, { start: 1, end: 2 });`,
+    for (const invalid of ['null', 'Number.NaN', 'Number.POSITIVE_INFINITY']) {
+      expect(() =>
+        executeElaborationProgramWithParameters(
+          parameterProgram(
+            `__runtime.declareBlueprintNumberParameter('invalid', ${invalid}, {}, { start: 1, end: 2 });`,
+          ),
         ),
-      ),
-    ).toThrow('number declarations require a finite positional default');
+      ).toThrowError(
+        expect.objectContaining({
+          code: 'CP1000',
+          span: { fileId: sourceFileId('parameter-capture.factorio.ts'), start: 1, end: 2 },
+          message: expect.stringContaining('$.defaultValue'),
+        }),
+      );
+    }
 
     const bounded = new BlueprintParameterCapture();
     expect(() =>

@@ -3898,38 +3898,38 @@ output += Constant({ sections: [{ multiplier: scale * 0.5, filters: [] }] });`,
   );
 
   test.each([
+    ['normal', 'Decider({ condition: input[A] > amount, outputs: [amount * A] })', 'outputs'],
     [
-      'Decider({ condition: input[A] > amount, outputs: [amount * A] })',
-      'RT2027',
-      'Numeric expressions accept only finite numbers and owning number parameters.',
-    ],
-    [
+      'else',
       'Decider({ condition: input[A] > amount, outputs: [input[A]], elseOutputs: [amount * A] })',
-      'RT2027',
-      'Numeric expressions accept only finite numbers and owning number parameters.',
+      'elseOutputs',
     ],
   ])(
-    'retains real source diagnostics for unreachable numeric use in %s',
-    (device, code, message) => {
+    'binds a direct number parameter in a Decider %s constant output locally',
+    (_branch, device, field) => {
       const text = `${exactSource}\nconst input = new Network();\noutput += ${device};`;
       const compilation = sourceApi.compileSourceProgram(
-        { path: 'unreachable-numeric-slot.factorio.ts', text },
+        { path: 'decider-parameter-output.factorio.ts', text },
         parameterHost(),
       );
-      expect(compilation.pipelineDiagnostics).toEqual([
-        expect.objectContaining({
-          code,
-          message,
-          span: expect.objectContaining({ fileId: compilation.fileId }),
-        }),
-      ]);
-      expect(compilation.pipelineDiagnostics[0]!.span!.end).toBeGreaterThan(
-        compilation.pipelineDiagnostics[0]!.span!.start,
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      expect(compilation.resolvedCircuit).toBeDefined();
+      const parameter = sourceApi.listSourceCompilationParameters(compilation)[0]!.parameter;
+      const outputs = (pair: ReturnType<typeof sourceApi.bindSourceCompilationCircuit>) => {
+        const decider = pair.plan.producers.find(({ kind }) => kind === 'decider');
+        if (decider?.kind !== 'decider') throw new Error('Expected the captured Decider.');
+        return field === 'outputs' ? decider.outputs : decider.elseOutputs;
+      };
+      expect(outputs(sourceApi.bindSourceCompilationCircuit(compilation))).toContainEqual(
+        expect.objectContaining({ kind: 'signal-constant', value: 5 }),
       );
-      expect(compilation.resolvedCircuit).toBeUndefined();
-      expect(() => sourceApi.exportSourceCompilationNativeBlueprint(compilation, options)).toThrow(
-        TypeError,
-      );
+      expect(
+        outputs(sourceApi.bindSourceCompilationCircuit(compilation, [{ parameter, value: 9 }])),
+      ).toContainEqual(expect.objectContaining({ kind: 'signal-constant', value: 9 }));
+      expect(exportFailure(compilation)).toMatchObject({
+        code: 'CP1002',
+        span: expect.objectContaining({ fileId: compilation.fileId }),
+      });
     },
   );
 

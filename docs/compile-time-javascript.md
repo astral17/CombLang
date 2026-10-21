@@ -20,14 +20,17 @@ The generated JavaScript calls the elaboration runtime through a compiler-select
 
 The language reserves all free DSL identifiers, including `Param`. User variables, parameters, destructuring bindings, functions, classes, and enums cannot be named `Signal`, `Param`, `Section`, `Network`, `CC`, `Constant`, `Selector`, `IF`, `to`, `when`, `pair`, `Each`/`EACH`, `Anything`/`Any`/`ANYTHING`/`ANY`, or `Everything`/`All`/`EVERYTHING`/`ALL`; such a binding reports `CL1045`. Property names and methods are not free identifiers, so ordinary names such as `object.Each`, `{ All() {} }`, `object.to(...)`, and `object.then(...)` remain valid. In shorthand `{ Each }`, the property name stays ordinary while the value is the free DSL wildcard reference.
 
-The initial `Param.number(label, default)` and
-`Param.signal(label, Signal(...))` source forms are limited to direct exact
-Arithmetic, Constant-filter, Decider-threshold, and Selector configuration
-slots. Selector support covers `select.index` (number or Signal) and
-`count.output` (Signal); `selectMax` stays concrete. They bind to concrete NCIR
-or a matching Direct Plan/ResolvedCircuit pair through host-local compilation
-APIs; they do not add native Factorio parameter fields. Source declarations
-return opaque views distinct from the nominal
+`Param.number(label[, default[, metadata]])` accepts a finite explicit default
+or an omitted/`undefined` default. `Param.signal(label, Signal(...))` still
+requires its concrete current-session Signal and exactly two arguments. Number
+parameters are limited to direct exact Arithmetic, Constant-filter,
+Decider-threshold, Decider-constant-output, and Selector configuration slots.
+Selector support covers `select.index` (number or Signal) and `count.output`
+(Signal); `selectMax` stays concrete. They bind to concrete NCIR or a matching
+Direct Plan/ResolvedCircuit pair through host-local compilation APIs. Automatic
+number allocation is restricted to fully accounted supported producer families;
+see the [Param API](api/parameters.md). These source forms do not, by themselves,
+add native Factorio parameter fields. Source declarations return opaque views distinct from the nominal
 handles retained by the owning host. Reading, reflecting, destructuring, or
 enumerating a source view is rejected with a located parameter diagnostic;
 validated configuration slots resolve the view back to its original host

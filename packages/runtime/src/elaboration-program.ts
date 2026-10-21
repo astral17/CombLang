@@ -68,6 +68,8 @@ import { normalizeSignalValueSources, SignalValueSourceError } from './constant-
 import {
   ConstantConfigurationSourceError,
   normalizeConstantConfigurationSourceWithParameters,
+  prepareConstantConfigurationSource,
+  type ConstantConfigurationSourceContext,
 } from './constant-configuration-source.js';
 import {
   RuntimeValueRegistry,
@@ -88,6 +90,9 @@ import {
   type PairValue,
   type PendingArithmeticOperand,
   type PendingDeciderCondition,
+  type PendingDeciderOutput,
+  type ParameterSignalValue,
+  type RuntimeDeciderCondition,
   type RuntimeObjectKind,
   type RuntimeObjectValue,
   type SelectedRuntimeState,
@@ -131,6 +136,8 @@ import {
 } from '@comblang/compiler/entity-replay-context';
 import type {
   EntityPlacement,
+  LogicalDeciderCondition,
+  LogicalDeciderOutput,
   LogicalNetworkRef,
   SelectorProducerConfig,
 } from '@comblang/compiler/ir';
@@ -146,6 +153,8 @@ import {
 import {
   createArithmeticConfigurationTemplate,
   type ArithmeticConfigurationTemplate,
+  type ArithmeticTemplateOperand,
+  type ArithmeticTemplateOutput,
 } from '../../compiler/src/arithmetic-configuration-template.js';
 import {
   ArithmeticConfigurationSourceError,
@@ -153,13 +162,16 @@ import {
   prepareArithmeticConfigurationSource,
   type PreparedArithmeticConfigurationSource,
 } from './arithmetic-configuration-source.js';
+import { bindArithmeticConfigurationTemplate } from '../../compiler/src/arithmetic-configuration-binding.js';
 import type { ConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-template.js';
+import { bindConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-binding.js';
 import {
   createDeciderConfigurationTemplate,
   type DeciderConfigurationTemplate,
   type DeciderTemplateCondition,
   type DeciderTemplateOutput,
 } from '../../compiler/src/decider-configuration-template.js';
+import { bindDeciderConfigurationTemplate } from '../../compiler/src/decider-configuration-binding.js';
 import { type SelectorConfigurationTemplate } from '../../compiler/src/selector-configuration-template.js';
 import {
   createBlueprintParameterSourceView,
@@ -167,6 +179,7 @@ import {
   BlueprintParameterError,
   type BlueprintNumberParameterHandle,
   type BlueprintParameterSession,
+  type BlueprintSignalParameterHandle,
 } from '../../compiler/src/blueprint-parameters.js';
 import {
   assertBlueprintNumericFunctionArity,
@@ -178,10 +191,13 @@ import {
   isBlueprintParameterShaped,
   lookupBlueprintParameterSlot,
 } from '../../compiler/src/blueprint-parameter-validation.js';
+import { createProducerNumberDefaultContext } from './source-producer-number-defaults.js';
+import type { SourceResolvedNumberDefaultContext } from './source-resolved-number-defaults.js';
 import {
   createSourceNumericExpressionView,
   findSourceNumericExpressionView,
 } from './source-numeric-expressions.js';
+import { bindSelectorConfigurationTemplate } from '../../compiler/src/selector-configuration-binding.js';
 import {
   bindPreparedSelectorConfigurationSource,
   prepareSelectorConfigurationSource,
@@ -230,6 +246,7 @@ interface CapturedDeciderConfigurationTemplate {
 interface PendingDeciderTemplateCapture {
   readonly producer: CombinatorValue;
   readonly captureId: string;
+  readonly template: DeciderConfigurationTemplate;
 }
 
 interface CapturedSelectorConfigurationTemplate {
@@ -239,6 +256,7 @@ interface CapturedSelectorConfigurationTemplate {
 }
 
 type PlanDeciderOutput = Extract<DirectPlanProducer, { kind: 'decider' }>['output'];
+type RuntimeDeciderOutput = PlanDeciderOutput | PendingDeciderOutput;
 
 type ExactArithmeticConfiguration = Omit<
   Extract<DirectPlanArithmetic, { readonly kind: 'arithmetic' }>,
@@ -252,10 +270,18 @@ type ExactArithmeticConfiguration = Omit<
 >;
 
 type PendingCombinatorConfiguration =
-  | { readonly kind: 'arithmetic'; readonly configuration: ExactArithmeticConfiguration }
-  | { readonly kind: 'selector'; readonly configuration: SelectorProducerConfig };
+  | {
+      readonly kind: 'arithmetic';
+      readonly configuration?: ExactArithmeticConfiguration;
+      readonly template?: ArithmeticConfigurationTemplate;
+    }
+  | {
+      readonly kind: 'selector';
+      readonly configuration?: SelectorProducerConfig;
+      readonly template?: SelectorConfigurationTemplate;
+    };
 
-function pendingDeciderCondition(condition: PlanDeciderCondition): PendingDeciderCondition {
+function pendingDeciderCondition(condition: RuntimeDeciderCondition): PendingDeciderCondition {
   if (condition.kind === 'and' || condition.kind === 'or') {
     return { kind: condition.kind, conditions: condition.conditions.map(pendingDeciderCondition) };
   }
@@ -267,6 +293,62 @@ function pendingDeciderCondition(condition: PlanDeciderCondition): PendingDecide
     return { ...condition, constant: { kind: 'constant' } };
   }
   return condition;
+}
+
+function planDeciderConditionFromLogical(condition: LogicalDeciderCondition): PlanDeciderCondition {
+  const networkReference = (reference: LogicalNetworkRef): PlanNetworkRef =>
+    reference.refKind === 'single'
+      ? { refKind: 'single', network: reference.network as NetworkId }
+      : {
+          refKind: 'pair',
+          networks: [reference.networks[0] as NetworkId, reference.networks[1] as NetworkId],
+        };
+  if (condition.kind === 'and' || condition.kind === 'or') {
+    return {
+      kind: condition.kind,
+      conditions: condition.conditions.map(planDeciderConditionFromLogical),
+    };
+  }
+  const left = condition.left;
+  if (condition.right.kind === 'signal') {
+    const right = { ...networkReference(condition.right), signal: condition.right.signal };
+    return left.kind === 'signal'
+      ? {
+          kind: 'compare-signals',
+          left: { ...networkReference(left), signal: left.signal },
+          comparator: condition.comparator,
+          right,
+        }
+      : {
+          kind: 'compare-wildcard-signal',
+          left: { ...networkReference(left), wildcard: left.value },
+          comparator: condition.comparator,
+          right,
+        };
+  }
+  const reference = networkReference(left);
+  return left.kind === 'signal'
+    ? {
+        kind: 'compare-signal',
+        ...reference,
+        signal: left.signal,
+        comparator: condition.comparator,
+        constant: condition.right.value,
+      }
+    : left.value === 'each'
+      ? {
+          kind: 'compare-each',
+          ...reference,
+          comparator: condition.comparator,
+          constant: condition.right.value,
+        }
+      : {
+          kind: 'compare-wildcard',
+          ...reference,
+          wildcard: left.value,
+          comparator: condition.comparator,
+          constant: condition.right.value,
+        };
 }
 
 function pendingArithmeticOperand(value: PlanArithmeticOperand): PendingArithmeticOperand {
@@ -281,18 +363,18 @@ function pendingArithmeticOperand(value: PlanArithmeticOperand): PendingArithmet
 }
 
 interface BoundArithmeticConfigurationSource {
-  readonly configuration: ExactArithmeticConfiguration;
+  readonly configuration?: ExactArithmeticConfiguration;
   readonly prepared: PreparedArithmeticConfigurationSource;
 }
 
 interface NormalizedDeciderConfiguration {
-  readonly condition: PlanDeciderCondition;
+  readonly condition: RuntimeDeciderCondition;
   readonly outputs: readonly DeciderOutputCandidate[];
   readonly elseOutputs?: readonly DeciderOutputCandidate[];
 }
 
 interface DeciderOutputCandidate {
-  readonly output: PlanDeciderOutput;
+  readonly output: RuntimeDeciderOutput;
   readonly source: SourceSpan;
   readonly instancePath: readonly string[];
   readonly syntaxIntent: DeciderOutputSyntaxIntent;
@@ -305,6 +387,18 @@ function conditionUsesEach(condition: PlanDeciderCondition): boolean {
   return (
     condition.kind === 'compare-each' ||
     (condition.kind === 'compare-wildcard-signal' && condition.left.wildcard === 'each')
+  );
+}
+
+function hasPendingDeciderConstant(condition: RuntimeDeciderCondition): boolean {
+  if (condition.kind === 'and' || condition.kind === 'or') {
+    return condition.conditions.some(hasPendingDeciderConstant);
+  }
+  return (
+    (condition.kind === 'compare-each' ||
+      condition.kind === 'compare-signal' ||
+      condition.kind === 'compare-wildcard') &&
+    typeof condition.constant !== 'number'
   );
 }
 
@@ -395,7 +489,7 @@ interface TopologySnapshot {
   readonly entityInvocations: ReadonlyMap<EntityValue['id'], SourceSpan>;
   readonly linkedProducersLength: number;
   readonly pendingCombinatorInstallationsLength: number;
-  readonly pendingDeciderConditions: ReadonlyMap<object, PlanDeciderCondition>;
+  readonly pendingDeciderConditions: ReadonlyMap<object, RuntimeDeciderCondition>;
 }
 
 interface EntityFacetAuthority {
@@ -473,25 +567,29 @@ type PendingCombinatorInstallation =
       readonly kind: 'constant';
       readonly producer: CombinatorValue;
       readonly entity: EntityValue;
-      readonly configuration: ConstantConfiguration;
+      readonly configuration?: ConstantConfiguration;
+      readonly template?: ConstantConfigurationTemplate;
     }
   | {
       readonly kind: 'arithmetic';
       readonly producer: CombinatorValue;
       readonly entity: EntityValue;
-      readonly configuration: ExactArithmeticConfiguration;
+      readonly configuration?: ExactArithmeticConfiguration;
+      readonly template?: ArithmeticConfigurationTemplate;
     }
   | {
       readonly kind: 'selector';
       readonly producer: CombinatorValue;
       readonly entity?: EntityValue;
-      readonly configuration: SelectorProducerConfig;
+      readonly configuration?: SelectorProducerConfig;
+      readonly template?: SelectorConfigurationTemplate;
     }
   | {
       readonly kind: 'decider';
       readonly producer: CombinatorValue;
       readonly entity: EntityValue;
-      readonly condition: PlanDeciderCondition;
+      readonly condition?: PlanDeciderCondition;
+      readonly template?: DeciderConfigurationTemplate;
     };
 
 export interface ElaborationExecutionOptions {
@@ -609,7 +707,8 @@ class ElaborationRecorder {
     readonly association: LinkedProducerAssociation;
   }[] = [];
   readonly #pendingCombinatorInstallations: PendingCombinatorInstallation[] = [];
-  readonly #pendingDeciderConditions = new Map<object, PlanDeciderCondition>();
+  readonly #pendingDeciderConditions = new Map<object, RuntimeDeciderCondition>();
+  #resolvedNumberDefaultContext: SourceResolvedNumberDefaultContext | undefined;
   #entityRevision = 0;
   #entityOperationOrdinal = 0;
   readonly #entityInvocations = new Map<EntityValue['id'], SourceSpan>();
@@ -1031,17 +1130,32 @@ class ElaborationRecorder {
             'RT2027',
           );
         }
-        let normalized: ReturnType<typeof normalizeConstantConfigurationSourceWithParameters>;
+        let configuration: ConstantConfiguration | undefined;
+        let template: ConstantConfigurationTemplate | undefined;
         try {
-          normalized = normalizeConstantConfigurationSourceWithParameters(
-            first!.value,
-            {
-              isSignal: (value): value is SignalHandle => this.#isSignal(value),
-              isSignalValue: (value): value is SignalValue => this.#isSignalValue(value),
-            },
-            this.#parameterCapture?.session,
-            '$.configuration',
-          );
+          const context: ConstantConfigurationSourceContext = {
+            isSignal: (value): value is SignalHandle => this.#isSignal(value),
+            isSignalValue: (value): value is SignalValue => this.#isSignalValue(value),
+          };
+          if (this.#hasAutomaticNumberDefaults()) {
+            const prepared = prepareConstantConfigurationSource(
+              first!.value,
+              context,
+              this.#parameterCapture!.session,
+              '$.configuration',
+            );
+            if (prepared.hasParameterSlots) template = prepared.template;
+            else configuration = bindConstantConfigurationTemplate(prepared.template);
+          } else {
+            const normalized = normalizeConstantConfigurationSourceWithParameters(
+              first!.value,
+              context,
+              this.#parameterCapture?.session,
+              '$.configuration',
+            );
+            configuration = normalized.configuration;
+            template = normalized.template;
+          }
         } catch (error) {
           if (error instanceof ConstantConfigurationSourceError) {
             throw new ElaborationExecutionError(
@@ -1055,18 +1169,18 @@ class ElaborationRecorder {
           throw error;
         }
         const producer = this.#createConstantProducer(
-          normalized.configuration,
+          configuration,
           rawSpan,
           undefined,
           true,
-          normalized.template,
+          template,
         );
-        if (normalized.template !== undefined && this.#parameterCapture !== undefined) {
+        if (template !== undefined && this.#parameterCapture !== undefined) {
           const { captureId } = this.#combinators.capture(producer);
           this.#constantTemplates.push(
             Object.freeze({
               captureId,
-              template: normalized.template,
+              template,
               source: Object.freeze({ ...this.#span(rawSpan) }),
             }),
           );
@@ -1105,24 +1219,34 @@ class ElaborationRecorder {
         let pendingConfiguration: PendingCombinatorConfiguration | undefined;
         if (normalized.prepared.hasParameterSlots && 'template' in normalized.prepared) {
           const template = normalized.prepared.template;
-          if (template.operation !== normalized.configuration.operation) {
+          if (template.operation !== (normalized.configuration?.operation ?? template.operation)) {
             throw new Error('Prepared Arithmetic template changed its operation before capture.');
           }
           descriptor = {
             kind: 'arithmetic',
-            left: pendingArithmeticOperand(normalized.configuration.left),
-            operation: normalized.configuration.operation,
-            right: pendingArithmeticOperand(normalized.configuration.right),
-            output: normalized.configuration.output,
+            left:
+              normalized.configuration === undefined
+                ? this.#pendingArithmeticTemplateOperand(template.left)
+                : pendingArithmeticOperand(normalized.configuration.left),
+            operation: template.operation,
+            right:
+              normalized.configuration === undefined
+                ? this.#pendingArithmeticTemplateOperand(template.right)
+                : pendingArithmeticOperand(normalized.configuration.right),
+            output:
+              normalized.configuration?.output ?? this.#arithmeticTemplateOutput(template.output),
             pendingConfiguration: template,
             source: this.#span(rawSpan),
             instancePath: this.#path(),
           };
-          pendingConfiguration = {
-            kind: 'arithmetic',
-            configuration: normalized.configuration,
-          };
+          pendingConfiguration =
+            normalized.configuration === undefined
+              ? { kind: 'arithmetic', template }
+              : { kind: 'arithmetic', configuration: normalized.configuration };
         } else {
+          if (normalized.configuration === undefined) {
+            throw new Error('A concrete Arithmetic configuration was not prepared.');
+          }
           descriptor = {
             kind: 'arithmetic',
             ...normalized.configuration,
@@ -1273,44 +1397,53 @@ class ElaborationRecorder {
           }
           throw error;
         }
-        let descriptorConfiguration: ReturnType<typeof bindPreparedSelectorConfigurationSource>;
-        try {
-          descriptorConfiguration = bindPreparedSelectorConfigurationSource(prepared);
-        } catch (error) {
-          if (error instanceof SelectorConfigurationSourceError) {
-            throw new ElaborationExecutionError(
-              diagnosticMessage(error),
-              error.configurationShape ? this.#span(first!.source) : sourceSpanFor(error.path),
-              'RT2027',
-              undefined,
-              { cause: error.cause ?? error },
-            );
-          }
-          throw error;
-        }
         const pendingTemplate =
           prepared.hasParameterSlots &&
           'template' in prepared &&
           this.#parameterCapture !== undefined
             ? prepared.template
             : undefined;
+        let descriptorConfiguration:
+          ReturnType<typeof bindPreparedSelectorConfigurationSource> | undefined;
+        if (!(this.#hasAutomaticNumberDefaults() && pendingTemplate !== undefined)) {
+          try {
+            descriptorConfiguration = bindPreparedSelectorConfigurationSource(prepared);
+          } catch (error) {
+            if (error instanceof SelectorConfigurationSourceError) {
+              throw new ElaborationExecutionError(
+                diagnosticMessage(error),
+                error.configurationShape ? this.#span(first!.source) : sourceSpanFor(error.path),
+                'RT2027',
+                undefined,
+                { cause: error.cause ?? error },
+              );
+            }
+            throw error;
+          }
+        }
         let selectorDescriptor: CombinatorDescriptor;
         if (pendingTemplate === undefined) {
+          if (descriptorConfiguration === undefined) {
+            throw new Error('A concrete Selector configuration was not prepared.');
+          }
           selectorDescriptor = {
             kind: 'selector',
             ...descriptorConfiguration,
             source: this.#span(rawSpan),
             instancePath: this.#path(),
           };
-        } else if (descriptorConfiguration.operation === 'select') {
+        } else if ((descriptorConfiguration?.operation ?? pendingTemplate.operation) === 'select') {
           if (pendingTemplate.operation !== 'select') {
             throw new Error('Prepared Selector template changed its operation before capture.');
           }
           selectorDescriptor = {
             kind: 'selector',
             operation: 'select',
-            input: descriptorConfiguration.input,
-            selectMax: descriptorConfiguration.selectMax,
+            input: descriptorConfiguration?.input ?? pendingTemplate.input,
+            selectMax:
+              descriptorConfiguration?.operation === 'select'
+                ? descriptorConfiguration.selectMax
+                : pendingTemplate.selectMax,
             pendingConfiguration: pendingTemplate,
             source: this.#span(rawSpan),
             instancePath: this.#path(),
@@ -1322,7 +1455,7 @@ class ElaborationRecorder {
           selectorDescriptor = {
             kind: 'selector',
             operation: 'count',
-            input: descriptorConfiguration.input,
+            input: descriptorConfiguration?.input ?? pendingTemplate.input,
             pendingConfiguration: pendingTemplate,
             source: this.#span(rawSpan),
             instancePath: this.#path(),
@@ -1333,7 +1466,9 @@ class ElaborationRecorder {
           rawSpan,
           pendingTemplate === undefined
             ? undefined
-            : { kind: 'selector', configuration: descriptorConfiguration },
+            : descriptorConfiguration === undefined
+              ? { kind: 'selector', template: pendingTemplate }
+              : { kind: 'selector', configuration: descriptorConfiguration },
         );
         if (pendingTemplate !== undefined) {
           const { captureId } = this.#combinators.capture(producer);
@@ -1951,22 +2086,60 @@ class ElaborationRecorder {
           this.#operatorContext,
         );
         let prepared: PreparedDeciderComparisonSource;
-        let value: number;
         try {
           prepared = prepareDeciderComparisonSource(head, right, this.#parameterCapture?.session, {
             snapshotSignal: (signal) => this.#signalSnapshot(signal),
           });
-          value = bindPreparedDeciderComparisonSource(prepared);
         } catch (error) {
-          if (!(error instanceof DeciderComparisonSourceError)) throw error;
-          const message = error.message.startsWith(`${error.path}: `)
-            ? error.message.slice(error.path.length + 2)
-            : error.message;
+          const comparisonError =
+            error instanceof DeciderComparisonSourceError
+              ? error
+              : error instanceof Error &&
+                  error.name === 'DeciderComparisonSourceError' &&
+                  typeof (error as { readonly path?: unknown }).path === 'string'
+                ? (error as DeciderComparisonSourceError)
+                : undefined;
+          if (comparisonError === undefined) throw error;
+          const message = comparisonError.message.startsWith(`${comparisonError.path}: `)
+            ? comparisonError.message.slice(comparisonError.path.length + 2)
+            : comparisonError.message;
           throw new ElaborationExecutionError(message, this.#span(rawSpan), 'RT2027', undefined, {
-            cause: error,
+            cause: comparisonError,
           });
         }
-        const result = operators.constantComparisonCondition(head, value, this.#operatorContext);
+        let result: ConditionValue;
+        if (this.#hasAutomaticNumberDefaults()) {
+          const constant = { kind: 'constant' as const };
+          const condition: PendingDeciderCondition =
+            head.kind === 'compare-signal'
+              ? { ...head, constant }
+              : head.kind === 'compare-each'
+                ? { ...head, constant }
+                : { ...head, constant };
+          result = this.#runtimeValue({ kind: 'condition', condition });
+        } else {
+          let value: number;
+          try {
+            value = bindPreparedDeciderComparisonSource(prepared);
+          } catch (error) {
+            const comparisonError =
+              error instanceof DeciderComparisonSourceError
+                ? error
+                : error instanceof Error &&
+                    error.name === 'DeciderComparisonSourceError' &&
+                    typeof (error as { readonly path?: unknown }).path === 'string'
+                  ? (error as DeciderComparisonSourceError)
+                  : undefined;
+            if (comparisonError === undefined) throw error;
+            const message = comparisonError.message.startsWith(`${comparisonError.path}: `)
+              ? comparisonError.message.slice(comparisonError.path.length + 2)
+              : comparisonError.message;
+            throw new ElaborationExecutionError(message, this.#span(rawSpan), 'RT2027', undefined, {
+              cause: comparisonError,
+            });
+          }
+          result = operators.constantComparisonCondition(head, value, this.#operatorContext);
+        }
         this.#deciderParameterSlots.set(result.condition as object, prepared.root);
         return result;
       }
@@ -2147,7 +2320,9 @@ class ElaborationRecorder {
       this.#recordDslCall();
       return this.#runtimeValue({
         kind: 'condition',
-        condition: operators.invertCondition(value.condition),
+        condition: operators.invertCondition(
+          this.#requireConcreteDeciderCondition(value.condition),
+        ),
       });
     },
     unaryMinus: (value: unknown, rawSpan: RawSpan): unknown => {
@@ -2524,6 +2699,45 @@ class ElaborationRecorder {
       if (!sourceExpression) {
         return operators.dispatchBinary(operator, left, right, rawSpan, this.#operatorContext);
       }
+      if (operator === '*' && this.#parameterCapture !== undefined) {
+        const leftParameter = findBlueprintParameterHandle(left);
+        const rightParameter = findBlueprintParameterHandle(right);
+        const parameterHandle = leftParameter ?? rightParameter;
+        const parameterValue = leftParameter === undefined ? right : left;
+        const signal =
+          leftParameter !== undefined && this.#isSignal(right)
+            ? right
+            : rightParameter !== undefined && this.#isSignal(left)
+              ? left
+              : undefined;
+        if (parameterHandle !== undefined && signal !== undefined) {
+          try {
+            const slot = lookupBlueprintParameterSlot(
+              parameterValue,
+              'number',
+              this.#parameterCapture.session,
+              '$.deciderOutput.value',
+            );
+            if (slot === undefined) throw new Error('Numeric parameter handle was not registered.');
+            this.#recordDslCall();
+            return this.#runtimeValue<ParameterSignalValue>(
+              Object.freeze({
+                kind: 'parameter-signal-value',
+                signal: this.#signalSnapshot(signal),
+                parameter: slot.handle as BlueprintNumberParameterHandle,
+              }),
+            );
+          } catch (error) {
+            throw new ElaborationExecutionError(
+              error instanceof Error ? error.message : 'Invalid parameterized Decider output.',
+              this.#span(rawSpan),
+              'RT2027',
+              undefined,
+              { cause: error },
+            );
+          }
+        }
+      }
       const leftExpression = findSourceNumericExpressionView(left);
       const rightExpression = findSourceNumericExpressionView(right);
       const leftParameterLike =
@@ -2653,6 +2867,15 @@ class ElaborationRecorder {
           association.kind === 'decider' || association.kind === 'pending-decider',
       );
       this.#finalizeUnusedCombinators();
+      const producerDescriptors = this.#preparePendingDeciderTemplates();
+      if (this.#hasAutomaticNumberDefaults()) {
+        this.#validateAutomaticNumberEntityCoverage();
+        this.#resolvedNumberDefaultContext = createProducerNumberDefaultContext(
+          this.#parameterCapture!.session,
+          this.#parameterCapture!.declarations(),
+          producerDescriptors,
+        );
+      }
       this.#installPendingCombinatorConfigurations();
       this.#validateFinalDeciderModes();
       const declarations = new Map(this.#networks.map((network) => [network.name, network]));
@@ -2697,22 +2920,31 @@ class ElaborationRecorder {
         producers: Object.freeze(
           this.#combinators.states().map((state) => {
             const producer = this.#combinators.toPlan(state);
-            const canonicalProducer =
-              hasLinkedDecider && producer.kind === 'decider' && state.descriptor.kind === 'decider'
-                ? {
-                    ...producer,
-                    outputs:
-                      state.descriptor.outputs ??
-                      (state.descriptor.output === undefined ? [] : [state.descriptor.output]),
-                    outputOrigins: state.descriptor.outputOrigins ?? [],
-                    ...(state.descriptor.elseOutputs === undefined
-                      ? {}
-                      : {
-                          elseOutputs: state.descriptor.elseOutputs,
-                          elseOutputOrigins: state.descriptor.elseOutputOrigins ?? [],
-                        }),
-                  }
-                : producer;
+            let canonicalProducer = producer;
+            if (
+              hasLinkedDecider &&
+              producer.kind === 'decider' &&
+              state.descriptor.kind === 'decider'
+            ) {
+              const outputs = (
+                state.descriptor.outputs ??
+                (state.descriptor.output === undefined ? [] : [state.descriptor.output])
+              ).map((output) => this.#requireConcreteDeciderOutput(output));
+              const elseOutputs = (state.descriptor.elseOutputs ?? []).map((output) =>
+                this.#requireConcreteDeciderOutput(output),
+              );
+              canonicalProducer = {
+                ...producer,
+                outputs,
+                outputOrigins: state.descriptor.outputOrigins ?? [],
+                ...(state.descriptor.elseOutputs === undefined
+                  ? {}
+                  : {
+                      elseOutputs,
+                      elseOutputOrigins: state.descriptor.elseOutputOrigins ?? [],
+                    }),
+              };
+            }
             const linked = this.#linkedProducerByIdentity.get(state.identity);
             return linked === undefined
               ? canonicalProducer
@@ -2854,28 +3086,11 @@ class ElaborationRecorder {
     const parameterCapture = this.#parameterCapture;
     if (parameterCapture === undefined) return Object.freeze([]);
     return Object.freeze(
-      this.#pendingDeciderTemplateCaptures.map(({ producer, captureId }) => {
+      this.#pendingDeciderTemplateCaptures.map(({ producer, captureId, template }) => {
         const descriptor = this.#combinators.stateFor(producer).descriptor;
         if (descriptor.kind !== 'decider' || 'pendingConfiguration' in descriptor) {
           throw new Error('A captured Decider template lost its producer descriptor.');
         }
-        const condition = this.#deciderConditionTemplate(descriptor.condition);
-        if (!condition.hasNumberParameter) {
-          throw new Error('A captured Decider template has no registered number parameter.');
-        }
-        const outputs =
-          descriptor.outputs ?? (descriptor.output === undefined ? [] : [descriptor.output]);
-        const template = createDeciderConfigurationTemplate(parameterCapture.session, {
-          condition: condition.value,
-          outputs: outputs.map((output) => this.#deciderTemplateOutput(output)),
-          ...(descriptor.elseOutputs === undefined
-            ? {}
-            : {
-                elseOutputs: descriptor.elseOutputs.map((output) =>
-                  this.#deciderTemplateOutput(output),
-                ),
-              }),
-        });
         return Object.freeze({
           captureId,
           template,
@@ -2885,8 +3100,60 @@ class ElaborationRecorder {
     );
   }
 
+  #preparePendingDeciderTemplates(): readonly CombinatorDescriptor[] {
+    const session = this.#parameterCapture?.session;
+    return Object.freeze(
+      this.#combinators.states().map(({ identity, descriptor }) => {
+        if (descriptor.kind !== 'decider' || !('pendingConfiguration' in descriptor)) {
+          return descriptor;
+        }
+        if (session === undefined) {
+          throw new Error('A pending Decider template has no owning parameter session.');
+        }
+        const outputs =
+          descriptor.outputs ??
+          (descriptor.output === undefined || descriptor.elseOutputs !== undefined
+            ? []
+            : [descriptor.output]);
+        const template = createDeciderConfigurationTemplate(session, {
+          condition: descriptor.pendingConfiguration.condition,
+          outputs: outputs.map((output) => this.#deciderTemplateOutput(output)),
+          ...(descriptor.elseOutputs === undefined
+            ? {}
+            : {
+                elseOutputs: descriptor.elseOutputs.map((output) =>
+                  this.#deciderTemplateOutput(output),
+                ),
+              }),
+        });
+        const installationIndex = this.#pendingCombinatorInstallations.findIndex(
+          (candidate) => candidate.kind === 'decider' && candidate.producer.identity === identity,
+        );
+        if (installationIndex >= 0) {
+          const installation = this.#pendingCombinatorInstallations[installationIndex]!;
+          if (installation.kind !== 'decider') {
+            throw new Error('Pending Decider installation changed kind.');
+          }
+          this.#pendingCombinatorInstallations[installationIndex] = { ...installation, template };
+        }
+        const captureIndex = this.#pendingDeciderTemplateCaptures.findIndex(
+          (candidate) => candidate.producer.identity === identity,
+        );
+        if (captureIndex >= 0) {
+          const capture = this.#pendingDeciderTemplateCaptures[captureIndex]!;
+          this.#pendingDeciderTemplateCaptures[captureIndex] = { ...capture, template };
+        }
+        return { ...descriptor, pendingConfiguration: template };
+      }),
+    );
+  }
+
   selectorTemplates(): readonly CapturedSelectorConfigurationTemplate[] {
     return Object.freeze([...this.#selectorTemplates]);
+  }
+
+  resolvedNumberDefaults(): SourceResolvedNumberDefaultContext | undefined {
+    return this.#resolvedNumberDefaultContext;
   }
 
   executionApi(): typeof this.api {
@@ -3262,6 +3529,13 @@ class ElaborationRecorder {
       const { captureId } = this.#combinators.capture(value);
       return { kind: 'producer', captureId };
     }
+    if (this.#isParameterSignalValue(value)) {
+      throw new ElaborationExecutionError(
+        't.instantiate(...) cannot retain a pending numeric Decider output value.',
+        this.#span(rawSpan),
+        'RT2026',
+      );
+    }
     if (this.#isEntity(value)) return { kind: 'entity', entityId: value.id };
     if (value === undefined) return { kind: 'undefined' };
     if (
@@ -3334,6 +3608,97 @@ class ElaborationRecorder {
     );
   }
 
+  #hasAutomaticNumberDefaults(): boolean {
+    return (
+      this.#parameterCapture
+        ?.declarations()
+        .some(
+          ({ registration }) =>
+            registration.kind === 'number' && registration.defaultValue === undefined,
+        ) ?? false
+    );
+  }
+
+  #validateAutomaticNumberEntityCoverage(): void {
+    const entities = this.#entityRegistry?.records() ?? [];
+    const seenEntityIds = new Set<string>();
+    const linkedByEntityId = new Map<
+      string,
+      { readonly producer: CombinatorValue; readonly association: LinkedProducerAssociation }[]
+    >();
+    for (const linked of this.#linkedProducers) {
+      const entityId = linked.association.entity.id;
+      const matches = linkedByEntityId.get(entityId) ?? [];
+      matches.push(linked);
+      linkedByEntityId.set(entityId, matches);
+    }
+
+    const expectedFamily = (kind: LinkedProducerAssociation['kind']): string => {
+      switch (kind) {
+        case 'constant':
+        case 'pending-constant':
+          return 'constant-combinator';
+        case 'arithmetic':
+        case 'pending-arithmetic':
+          return 'arithmetic-combinator';
+        case 'decider':
+        case 'pending-decider':
+          return 'decider-combinator';
+        case 'selector':
+        case 'pending-selector':
+          return 'selector-combinator';
+      }
+    };
+
+    for (const [index, entity] of entities.entries()) {
+      const path = `$.entities[${index}]`;
+      if (seenEntityIds.has(entity.id)) {
+        throw new BlueprintParameterError(
+          'CP1002',
+          path,
+          'automatic numeric allocation requires unique physical Entity identities.',
+          entity.provenance.source,
+        );
+      }
+      seenEntityIds.add(entity.id);
+      const matches = linkedByEntityId.get(entity.id) ?? [];
+      if (matches.length !== 1) {
+        throw new BlueprintParameterError(
+          'CP1002',
+          path,
+          `automatic numeric allocation requires exactly one supported linked producer for each live Entity; found ${matches.length}.`,
+          entity.provenance.source,
+        );
+      }
+      const { producer, association } = matches[0]!;
+      const descriptor = this.#combinators.stateFor(producer).descriptor;
+      const family = expectedFamily(association.kind);
+      if (
+        entity.profile.prototypeKey !== `entity:${family}` ||
+        descriptor.kind !== family.slice(0, family.indexOf('-'))
+      ) {
+        throw new BlueprintParameterError(
+          'CP1002',
+          path,
+          'automatic numeric allocation supports only exactly linked Constant, Arithmetic, Decider, and Selector producer Entities.',
+          entity.provenance.source,
+        );
+      }
+    }
+
+    for (const [entityId, matches] of linkedByEntityId) {
+      if (!seenEntityIds.has(entityId) || matches.length !== 1) {
+        const entity = matches[0]?.association.entity;
+        throw new BlueprintParameterError(
+          'CP1002',
+          '$.entities',
+          'automatic numeric allocation found a linked producer without exactly one live physical Entity.',
+          entity === undefined ? undefined : this.#entityRegistry?.record(entity).provenance.source,
+        );
+      }
+    }
+  }
+
   #installPendingCombinatorConfigurations(): void {
     for (const pending of this.#pendingCombinatorInstallations) {
       const current = this.#linkedProducerByIdentity.get(pending.producer.identity);
@@ -3348,11 +3713,22 @@ class ElaborationRecorder {
         if (index < 0) {
           throw new Error('Pending Constant installation lost its registration order entry.');
         }
-        this.#combinators.installPendingConstant(pending.producer, pending.configuration);
+        const configuration =
+          pending.configuration ??
+          (pending.template === undefined || this.#resolvedNumberDefaultContext === undefined
+            ? undefined
+            : bindConstantConfigurationTemplate(
+                pending.template,
+                this.#resolvedNumberDefaultContext.bindingsForConstantTemplate(pending.template),
+              ));
+        if (configuration === undefined) {
+          throw new Error('Pending Constant installation has no resolved configuration.');
+        }
+        this.#combinators.installPendingConstant(pending.producer, configuration);
         const association: LinkedConstantAssociation = {
           kind: 'constant',
           entity: pending.entity,
-          configuration: pending.configuration,
+          configuration,
         };
         this.#linkedProducerByIdentity.set(pending.producer.identity, association);
         this.#linkedProducers[index] = { producer: pending.producer, association };
@@ -3366,8 +3742,18 @@ class ElaborationRecorder {
         if (index < 0) {
           throw new Error('Pending Arithmetic installation lost its registration order entry.');
         }
-
-        this.#combinators.installPendingArithmetic(pending.producer, pending.configuration);
+        const arithmeticConfiguration =
+          pending.configuration ??
+          (pending.template === undefined || this.#resolvedNumberDefaultContext === undefined
+            ? undefined
+            : bindArithmeticConfigurationTemplate(
+                pending.template,
+                this.#resolvedNumberDefaultContext.bindingsForArithmeticTemplate(pending.template),
+              ));
+        if (arithmeticConfiguration === undefined) {
+          throw new Error('Pending Arithmetic installation has no resolved configuration.');
+        }
+        this.#combinators.installPendingArithmetic(pending.producer, arithmeticConfiguration);
         const installed = this.#combinators.stateFor(pending.producer).descriptor;
         if (installed.kind !== 'arithmetic' || 'pendingConfiguration' in installed) {
           throw new Error('Pending Arithmetic installation did not produce a concrete descriptor.');
@@ -3399,18 +3785,71 @@ class ElaborationRecorder {
         if (index < 0) {
           throw new Error('Pending Decider installation lost its registration order entry.');
         }
-        this.#combinators.installPendingDecider(pending.producer, pending.condition);
+        let boundConfiguration: ReturnType<typeof bindDeciderConfigurationTemplate> | undefined;
+        if (pending.template !== undefined) {
+          try {
+            boundConfiguration = bindDeciderConfigurationTemplate(
+              pending.template,
+              this.#resolvedNumberDefaultContext?.bindingsForDeciderTemplate(pending.template) ??
+                [],
+            );
+          } catch (error) {
+            const parameterError =
+              error instanceof BlueprintParameterError
+                ? error
+                : error instanceof Error &&
+                    error.name === 'BlueprintParameterError' &&
+                    typeof (error as { readonly path?: unknown }).path === 'string'
+                  ? (error as BlueprintParameterError)
+                  : undefined;
+            if (parameterError === undefined) throw error;
+            const message = parameterError.message.startsWith(`${parameterError.path}: `)
+              ? parameterError.message.slice(parameterError.path.length + 2)
+              : parameterError.message;
+            throw new ElaborationExecutionError(
+              message,
+              parameterError.span ?? this.#combinators.stateFor(pending.producer).descriptor.source,
+              'RT2027',
+              undefined,
+              { cause: parameterError },
+            );
+          }
+        }
+        const condition =
+          boundConfiguration === undefined
+            ? pending.condition
+            : planDeciderConditionFromLogical(boundConfiguration.condition);
+        if (condition === undefined) {
+          throw new Error('Pending Decider installation has no resolved condition.');
+        }
+        const resolvedOutputs = boundConfiguration?.outputs.map((output) =>
+          this.#planDeciderOutputFromLogical(output),
+        );
+        const resolvedElseOutputs = boundConfiguration?.elseOutputs?.map((output) =>
+          this.#planDeciderOutputFromLogical(output),
+        );
+        this.#combinators.installPendingDecider(
+          pending.producer,
+          condition,
+          resolvedOutputs,
+          resolvedElseOutputs,
+        );
         const installed = this.#combinators.stateFor(pending.producer).descriptor;
         if (installed.kind !== 'decider' || 'pendingConfiguration' in installed) {
           throw new Error('Pending Decider installation did not produce a concrete descriptor.');
         }
-        const outputs =
-          installed.outputs ?? (installed.output === undefined ? [] : [installed.output]);
+        const installedCondition = this.#requireConcreteDeciderCondition(installed.condition);
+        const outputs = (
+          installed.outputs ?? (installed.output === undefined ? [] : [installed.output])
+        ).map((output) => this.#requireConcreteDeciderOutput(output));
+        const elseOutputs = (installed.elseOutputs ?? []).map((output) =>
+          this.#requireConcreteDeciderOutput(output),
+        );
         const configuration: EntityDeciderConfiguration = {
           mode: 'decider',
-          condition: installed.condition,
+          condition: installedCondition,
           outputs,
-          ...(installed.elseOutputs === undefined ? {} : { elseOutputs: installed.elseOutputs }),
+          ...(elseOutputs.length === 0 ? {} : { elseOutputs }),
         };
         const association: LinkedDeciderAssociation = {
           kind: 'decider',
@@ -3437,27 +3876,38 @@ class ElaborationRecorder {
         }
       }
 
-      this.#combinators.installPendingSelector(pending.producer, pending.configuration);
+      const selectorConfiguration =
+        pending.configuration ??
+        (pending.template === undefined || this.#resolvedNumberDefaultContext === undefined
+          ? undefined
+          : bindSelectorConfigurationTemplate(
+              pending.template,
+              this.#resolvedNumberDefaultContext.bindingsForSelectorTemplate(pending.template),
+            ));
+      if (selectorConfiguration === undefined) {
+        throw new Error('Pending Selector installation has no resolved configuration.');
+      }
+      this.#combinators.installPendingSelector(pending.producer, selectorConfiguration);
       if (pending.entity !== undefined) {
-        const configuration: EntitySelectorConfiguration =
-          pending.configuration.operation === 'select'
+        const entityConfiguration: EntitySelectorConfiguration =
+          selectorConfiguration.operation === 'select'
             ? {
                 mode: 'selector',
                 operation: 'select',
-                input: pending.configuration.input,
-                selectMax: pending.configuration.selectMax,
-                index: pending.configuration.index,
+                input: selectorConfiguration.input,
+                selectMax: selectorConfiguration.selectMax,
+                index: selectorConfiguration.index,
               }
             : {
                 mode: 'selector',
                 operation: 'count',
-                input: pending.configuration.input,
-                output: pending.configuration.output,
+                input: selectorConfiguration.input,
+                output: selectorConfiguration.output,
               };
         const association: LinkedSelectorAssociation = {
           kind: 'selector',
           entity: pending.entity,
-          configuration,
+          configuration: entityConfiguration,
         };
         this.#linkedProducerByIdentity.set(pending.producer.identity, association);
         this.#linkedProducers[index] = { producer: pending.producer, association };
@@ -3522,17 +3972,25 @@ class ElaborationRecorder {
         throw new Error('A pending Decider reached final mode validation.');
       }
       const descriptor = state.descriptor;
-      const usesEach = conditionUsesEach(descriptor.condition);
+      const usesEach = conditionUsesEach(
+        this.#requireConcreteDeciderCondition(descriptor.condition),
+      );
       const branches = [
         {
-          outputs:
+          outputs: (
             descriptor.outputs ??
             (descriptor.output === undefined || descriptor.elseOutputs !== undefined
               ? []
-              : [descriptor.output]),
+              : [descriptor.output])
+          ).map((output) => this.#requireConcreteDeciderOutput(output)),
           origins: descriptor.outputOrigins,
         },
-        { outputs: descriptor.elseOutputs ?? [], origins: descriptor.elseOutputOrigins },
+        {
+          outputs: (descriptor.elseOutputs ?? []).map((output) =>
+            this.#requireConcreteDeciderOutput(output),
+          ),
+          origins: descriptor.elseOutputOrigins,
+        },
       ] as const;
       for (const { outputs, origins } of branches) {
         for (const [index, output] of outputs.entries()) {
@@ -3721,10 +4179,28 @@ class ElaborationRecorder {
         ? this.#resolveCanonicalProfile('Selector', rawSpan)
         : undefined;
     let registeredDescriptor: CombinatorDescriptor = descriptor;
-    let pendingDeciderConditionValue: PlanDeciderCondition | undefined;
-    if (descriptor.kind === 'decider' && this.#conditionHasNumberParameter(descriptor.condition)) {
+    let pendingDeciderConditionValue: RuntimeDeciderCondition | undefined;
+    const deciderOutputRows =
+      descriptor.kind === 'decider'
+        ? (descriptor.outputs ??
+          (descriptor.output === undefined || descriptor.elseOutputs !== undefined
+            ? []
+            : [descriptor.output]))
+        : [];
+    const hasParameterizedDeciderOutput =
+      descriptor.kind === 'decider' &&
+      [...deciderOutputRows, ...(descriptor.elseOutputs ?? [])].some(
+        (output) => output.kind === 'parameter-signal-constant',
+      );
+    if (
+      descriptor.kind === 'decider' &&
+      (this.#conditionHasNumberParameter(descriptor.condition) || hasParameterizedDeciderOutput)
+    ) {
       const conditionTemplate = this.#deciderConditionTemplate(descriptor.condition);
-      if (!conditionTemplate.hasNumberParameter) {
+      if (
+        this.#conditionHasNumberParameter(descriptor.condition) &&
+        !conditionTemplate.hasNumberParameter
+      ) {
         throw new Error('Parameterized Decider condition lost its captured numeric root.');
       }
       const session = this.#parameterCapture?.session;
@@ -3737,7 +4213,14 @@ class ElaborationRecorder {
       }
       const pendingConfiguration = createDeciderConfigurationTemplate(session, {
         condition: conditionTemplate.value,
-        outputs: [],
+        outputs: deciderOutputRows.map((output) => this.#deciderTemplateOutput(output)),
+        ...(descriptor.elseOutputs === undefined
+          ? {}
+          : {
+              elseOutputs: descriptor.elseOutputs.map((output) =>
+                this.#deciderTemplateOutput(output),
+              ),
+            }),
       });
       pendingDeciderConditionValue = descriptor.condition;
       registeredDescriptor = {
@@ -3843,22 +4326,31 @@ class ElaborationRecorder {
       this.#linkedProducers.push({ producer: value, association });
     }
     if (descriptor.kind === 'selector' && 'pendingConfiguration' in descriptor) {
-      if (pendingConfiguration?.kind !== 'selector') {
-        throw new Error(
-          'Pending Selector construction did not retain its already-bound configuration.',
-        );
+      if (
+        pendingConfiguration?.kind !== 'selector' ||
+        (pendingConfiguration.configuration === undefined &&
+          pendingConfiguration.template === undefined)
+      ) {
+        throw new Error('Pending Selector construction did not retain its prepared configuration.');
       }
       this.#pendingCombinatorInstallations.push({
         kind: 'selector',
         producer: value,
         ...(linkedSelectorEntity === undefined ? {} : { entity: linkedSelectorEntity }),
-        configuration: pendingConfiguration.configuration,
+        ...(pendingConfiguration.configuration === undefined
+          ? { template: pendingConfiguration.template! }
+          : { configuration: pendingConfiguration.configuration }),
       });
     } else if (pendingConfiguration?.kind === 'selector') {
       throw new Error('A concrete Selector cannot retain a pending configuration cache.');
     }
     if (descriptor.kind === 'arithmetic' && 'pendingConfiguration' in descriptor) {
-      if (pendingConfiguration?.kind !== 'arithmetic' || linkedArithmeticEntity === undefined) {
+      if (
+        pendingConfiguration?.kind !== 'arithmetic' ||
+        linkedArithmeticEntity === undefined ||
+        (pendingConfiguration.configuration === undefined &&
+          pendingConfiguration.template === undefined)
+      ) {
         throw new Error(
           'Pending Arithmetic construction did not retain its bound configuration and Entity.',
         );
@@ -3867,7 +4359,9 @@ class ElaborationRecorder {
         kind: 'arithmetic',
         producer: value,
         entity: linkedArithmeticEntity,
-        configuration: pendingConfiguration.configuration,
+        ...(pendingConfiguration.configuration === undefined
+          ? { template: pendingConfiguration.template! }
+          : { configuration: pendingConfiguration.configuration }),
       });
     } else if (pendingConfiguration?.kind === 'arithmetic') {
       throw new Error('A concrete Arithmetic cannot retain a pending configuration cache.');
@@ -3888,7 +4382,10 @@ class ElaborationRecorder {
     const hasNumberParameter =
       'pendingConfiguration' in descriptor
         ? true
-        : this.#conditionHasNumberParameter(descriptor.condition);
+        : this.#conditionHasNumberParameter(descriptor.condition) ||
+          [...outputs, ...(descriptor.elseOutputs ?? [])].some(
+            (output) => output.kind === 'parameter-signal-constant',
+          );
     if (profile === undefined) {
       if (hasNumberParameter) {
         throw new ElaborationExecutionError(
@@ -3901,38 +4398,67 @@ class ElaborationRecorder {
     }
     const existing = this.#linkedProducerByIdentity.get(producer.identity);
     if ('pendingConfiguration' in descriptor) {
-      if (existing !== undefined) return;
-      const condition = this.#pendingDeciderConditions.get(producer.identity);
-      if (condition === undefined) {
-        throw new Error('Pending Decider lost its validated concrete condition before linking.');
+      let entity: EntityValue;
+      if (existing?.kind === 'decider' || existing?.kind === 'pending-decider') {
+        entity = existing.entity;
+      } else {
+        if (existing !== undefined) return;
+        const condition = this.#pendingDeciderConditions.get(producer.identity);
+        if (condition === undefined) {
+          throw new Error('Pending Decider lost its validated concrete condition before linking.');
+        }
+        entity = this.#allocateEntity(profile.ref, undefined, descriptor.placement, rawSpan);
+        if (descriptor.placement !== undefined) {
+          const { placement: _placement, ...withoutPlacement } = descriptor;
+          this.#combinators.update(producer, withoutPlacement);
+        }
       }
-      const entity = this.#allocateEntity(profile.ref, undefined, descriptor.placement, rawSpan);
-      if (descriptor.placement !== undefined) {
-        const { placement: _placement, ...withoutPlacement } = descriptor;
-        this.#combinators.update(producer, withoutPlacement);
-      }
-      const association: LinkedPendingDeciderAssociation = { kind: 'pending-decider', entity };
       this.#pendingDeciderConditions.delete(producer.identity);
+      const association: LinkedPendingDeciderAssociation = { kind: 'pending-decider', entity };
       this.#linkedProducerByIdentity.set(producer.identity, association);
-      this.#linkedProducers.push({ producer, association });
-      this.#pendingCombinatorInstallations.push({
-        kind: 'decider',
-        producer,
-        entity,
-        condition,
-      });
+      const linkedIndex = this.#linkedProducers.findIndex(
+        ({ producer: candidate }) => candidate.identity === producer.identity,
+      );
+      if (linkedIndex >= 0) this.#linkedProducers[linkedIndex] = { producer, association };
+      else this.#linkedProducers.push({ producer, association });
+      const installationIndex = this.#pendingCombinatorInstallations.findIndex(
+        (candidate) =>
+          candidate.kind === 'decider' && candidate.producer.identity === producer.identity,
+      );
+      if (installationIndex < 0) {
+        this.#pendingCombinatorInstallations.push({
+          kind: 'decider',
+          producer,
+          entity,
+          template: descriptor.pendingConfiguration,
+        });
+      }
       if (this.#parameterCapture !== undefined) {
-        const { captureId } = this.#combinators.capture(producer);
-        this.#pendingDeciderTemplateCaptures.push({ producer, captureId });
+        const captureIndex = this.#pendingDeciderTemplateCaptures.findIndex(
+          (candidate) => candidate.producer.identity === producer.identity,
+        );
+        if (captureIndex < 0) {
+          const { captureId } = this.#combinators.capture(producer);
+          this.#pendingDeciderTemplateCaptures.push({
+            producer,
+            captureId,
+            template: descriptor.pendingConfiguration,
+          });
+        }
       }
       return;
     }
+    const condition = this.#requireConcreteDeciderCondition(descriptor.condition);
+    const concreteOutputs = outputs.map((output) => this.#requireConcreteDeciderOutput(output));
+    const concreteElseOutputs = (descriptor.elseOutputs ?? []).map((output) =>
+      this.#requireConcreteDeciderOutput(output),
+    );
     if (existing?.kind === 'decider') {
       const configuration: EntityDeciderConfiguration = {
         mode: 'decider',
-        condition: descriptor.condition,
-        outputs,
-        ...(descriptor.elseOutputs === undefined ? {} : { elseOutputs: descriptor.elseOutputs }),
+        condition,
+        outputs: concreteOutputs,
+        ...(descriptor.elseOutputs === undefined ? {} : { elseOutputs: concreteElseOutputs }),
       };
       const association = { ...existing, configuration } satisfies LinkedDeciderAssociation;
       const entry = this.#linkedProducers.findIndex(
@@ -3950,9 +4476,9 @@ class ElaborationRecorder {
     }
     const configuration: EntityDeciderConfiguration = {
       mode: 'decider',
-      condition: descriptor.condition,
-      outputs,
-      ...(descriptor.elseOutputs === undefined ? {} : { elseOutputs: descriptor.elseOutputs }),
+      condition,
+      outputs: concreteOutputs,
+      ...(descriptor.elseOutputs === undefined ? {} : { elseOutputs: concreteElseOutputs }),
     };
     const association = {
       kind: 'decider' as const,
@@ -3961,10 +4487,6 @@ class ElaborationRecorder {
     } satisfies LinkedDeciderAssociation;
     this.#linkedProducerByIdentity.set(producer.identity, association);
     this.#linkedProducers.push({ producer, association });
-    if (hasNumberParameter && this.#parameterCapture !== undefined) {
-      const { captureId } = this.#combinators.capture(producer);
-      this.#pendingDeciderTemplateCaptures.push({ producer, captureId });
-    }
   }
 
   #ensureSecondaryOutput(value: CombinatorValue, rawSpan: RawSpan): NetworkValue {
@@ -4864,6 +5386,10 @@ class ElaborationRecorder {
     return this.#hasRuntimeKind(value, 'signal-value');
   }
 
+  #isParameterSignalValue(value: unknown): value is ParameterSignalValue {
+    return this.#hasRuntimeKind(value, 'parameter-signal-value');
+  }
+
   #isSection(value: unknown): value is SectionValue {
     return this.#hasRuntimeKind(value, 'section');
   }
@@ -5005,8 +5531,12 @@ class ElaborationRecorder {
         this.#parameterCapture?.session,
         source,
       );
+      const deferConfiguration =
+        this.#hasAutomaticNumberDefaults() && prepared.hasParameterSlots && 'template' in prepared;
       return {
-        configuration: bindPreparedArithmeticConfigurationSource(prepared),
+        ...(deferConfiguration
+          ? {}
+          : { configuration: bindPreparedArithmeticConfigurationSource(prepared) }),
         prepared,
       };
     } catch (error) {
@@ -5028,6 +5558,38 @@ class ElaborationRecorder {
         { cause: error },
       );
     }
+  }
+
+  #defaultSignalForTemplate(value: SignalId | BlueprintSignalParameterHandle): SignalId {
+    if (this.#isSignal(value) || isSignalId(value)) return this.#signalSnapshot(value);
+    const session = this.#parameterCapture?.session;
+    if (session === undefined) {
+      throw new Error('Parameterized Signal templates require an owning parameter session.');
+    }
+    const slot = lookupBlueprintParameterSlot(value, 'signal', session, '$.configuration.signal');
+    if (slot === undefined || slot.registration.defaultValue === undefined) {
+      throw new Error('Parameterized Signal template has no concrete source default.');
+    }
+    return this.#signalSnapshot(slot.registration.defaultValue as SignalId);
+  }
+
+  #pendingArithmeticTemplateOperand(value: ArithmeticTemplateOperand): PendingArithmeticOperand {
+    if (value.kind === 'constant') return { kind: 'constant' };
+    const reference =
+      value.refKind === 'single'
+        ? { refKind: 'single' as const, network: value.network }
+        : { refKind: 'pair' as const, networks: value.networks };
+    return value.kind === 'signal'
+      ? { kind: 'signal', signal: this.#defaultSignalForTemplate(value.signal), ...reference }
+      : { kind: 'each', ...reference };
+  }
+
+  #arithmeticTemplateOutput(
+    value: ArithmeticTemplateOutput,
+  ): { kind: 'signal'; signal: SignalId } | { kind: 'each' } {
+    return value.kind === 'each'
+      ? { kind: 'each' }
+      : { kind: 'signal', signal: this.#defaultSignalForTemplate(value.signal) };
   }
 
   #createSectionValue(arguments_: readonly CallArgument[], rawSpan: RawSpan): SectionValue {
@@ -5217,7 +5779,7 @@ class ElaborationRecorder {
     );
   }
 
-  #deciderConditionTemplate(condition: PlanDeciderCondition): {
+  #deciderConditionTemplate(condition: RuntimeDeciderCondition): {
     readonly value: DeciderTemplateCondition;
     readonly hasNumberParameter: boolean;
   } {
@@ -5274,6 +5836,14 @@ class ElaborationRecorder {
       };
     }
     const slot = this.#deciderParameterSlots.get(condition as object);
+    const constant =
+      slot ??
+      ('constant' in condition && typeof condition.constant === 'number'
+        ? condition.constant
+        : undefined);
+    if (constant === undefined) {
+      throw new Error('Parameterized Decider condition lost its captured numeric root.');
+    }
     const left =
       condition.kind === 'compare-each'
         ? { kind: 'wildcard' as const, value: 'each' as const, ...networkReference(condition) }
@@ -5295,14 +5865,67 @@ class ElaborationRecorder {
         comparator: condition.comparator,
         right: {
           kind: 'constant',
-          value: slot ?? condition.constant,
+          value: constant,
         },
       },
       hasNumberParameter: slot !== undefined,
     };
   }
 
-  #deciderTemplateOutput(output: PlanDeciderOutput): DeciderTemplateOutput {
+  #requireConcreteDeciderCondition(condition: RuntimeDeciderCondition): PlanDeciderCondition {
+    if (hasPendingDeciderConstant(condition)) {
+      throw new Error('A pending Decider condition reached concrete configuration handling.');
+    }
+    return condition as PlanDeciderCondition;
+  }
+
+  #requireConcreteDeciderOutput(output: RuntimeDeciderOutput): PlanDeciderOutput {
+    if (output.kind === 'parameter-signal-constant') {
+      throw new Error('A pending Decider output reached concrete configuration handling.');
+    }
+    return output;
+  }
+
+  #planDeciderOutputFromLogical(output: LogicalDeciderOutput): PlanDeciderOutput {
+    const reference = (value: LogicalNetworkRef): PlanNetworkRef =>
+      value.refKind === 'single'
+        ? { refKind: 'single', network: value.network as NetworkId }
+        : {
+            refKind: 'pair',
+            networks: [value.networks[0] as NetworkId, value.networks[1] as NetworkId],
+          };
+    if (output.mode === 'constant') {
+      if (output.signal.kind === 'signal') {
+        return {
+          kind: 'signal-constant',
+          signal: output.signal.signal,
+          value: output.value,
+        };
+      }
+      if (output.signal.value === 'each') {
+        return { kind: 'each-constant', value: output.value };
+      }
+      throw new Error('Only an Each wildcard can have a Decider constant output.');
+    }
+    if (output.input === undefined) {
+      throw new Error('A Decider copy output has no validated input topology.');
+    }
+    const input = reference(output.input);
+    if (output.signal.kind === 'signal') {
+      return { kind: 'signal', signal: output.signal.signal, ...input };
+    }
+    if (output.signal.value === 'each') return { kind: 'each', ...input };
+    return { kind: 'wildcard', wildcard: output.signal.value, ...input };
+  }
+
+  #deciderTemplateOutput(output: RuntimeDeciderOutput): DeciderTemplateOutput {
+    if (output.kind === 'parameter-signal-constant') {
+      return {
+        mode: 'constant',
+        signal: { kind: 'signal', signal: this.#signalSnapshot(output.signal) },
+        value: output.parameter,
+      };
+    }
     const input =
       'refKind' in output
         ? output.refKind === 'single'
@@ -5431,6 +6054,7 @@ class ElaborationRecorder {
   #assertDeciderOutputContainer(value: unknown, seen: Set<object>, source: RawSpan): void {
     if (
       this.#isSignalValue(value) ||
+      this.#isParameterSignalValue(value) ||
       this.#isWildcardCount(value) ||
       this.#isSelected(value) ||
       this.#isPair(value) ||
@@ -5563,7 +6187,7 @@ class ElaborationRecorder {
   }
 
   #createConstantProducer(
-    configuration: import('@comblang/factorio').ConstantConfiguration,
+    configuration: ConstantConfiguration | undefined,
     rawSpan: RawSpan,
     outputs: readonly { readonly signal: SignalId; readonly value: number }[] | undefined,
     exact: boolean,
@@ -5586,7 +6210,7 @@ class ElaborationRecorder {
         kind: 'constant',
         ...(exact
           ? pendingConfiguration === undefined
-            ? { configuration }
+            ? { configuration: configuration! }
             : { pendingConfiguration }
           : {
               outputs: (outputs ?? []).map(({ signal, value }) => ({
@@ -5602,7 +6226,7 @@ class ElaborationRecorder {
     if (entity !== undefined) {
       const association: LinkedProducerAssociation =
         pendingConfiguration === undefined
-          ? { kind: 'constant', entity, configuration }
+          ? { kind: 'constant', entity, configuration: configuration! }
           : { kind: 'pending-constant', entity };
       this.#linkedProducerByIdentity.set(producer.identity, association);
       this.#linkedProducers.push({ producer, association });
@@ -5611,7 +6235,7 @@ class ElaborationRecorder {
           kind: 'constant',
           producer,
           entity,
-          configuration,
+          ...(configuration === undefined ? { template: pendingConfiguration } : { configuration }),
         });
       }
     }
@@ -6535,14 +7159,17 @@ class ElaborationRecorder {
     return this.#hasRuntimeKind(value, 'condition');
   }
 
-  #conditionHasNumberParameter(condition: PlanDeciderCondition): boolean {
+  #conditionHasNumberParameter(condition: RuntimeDeciderCondition): boolean {
     if (condition.kind === 'and' || condition.kind === 'or') {
       return condition.conditions.some((child) => this.#conditionHasNumberParameter(child));
     }
     return this.#deciderParameterSlots.has(condition as object);
   }
 
-  #assertNoParameterizedNegatedCondition(condition: PlanDeciderCondition, rawSpan: RawSpan): void {
+  #assertNoParameterizedNegatedCondition(
+    condition: RuntimeDeciderCondition,
+    rawSpan: RawSpan,
+  ): void {
     if (this.#conditionHasNumberParameter(condition)) {
       throw new ElaborationExecutionError(
         'Source number parameters and derived numeric expressions are not supported in negated Decider conditions.',
@@ -6610,7 +7237,38 @@ class ElaborationRecorder {
         ? {}
         : { elseOutputs: alternate.outputs, elseOutputOrigins: alternate.origins }),
     };
-    this.#combinators.update(value, descriptor, this.#span(rawSpan));
+    const alreadyPending = 'pendingConfiguration' in state.descriptor;
+    const hasParameterizedOutput = [...normal.outputs, ...alternate.outputs].some(
+      (output) => output.kind === 'parameter-signal-constant',
+    );
+    if (!alreadyPending && hasParameterizedOutput) {
+      const session = this.#parameterCapture?.session;
+      if (session === undefined) {
+        throw new ElaborationExecutionError(
+          'Parameterized Decider outputs require an owning parameter session.',
+          this.#span(rawSpan),
+          'RT2027',
+        );
+      }
+      const conditionTemplate = this.#deciderConditionTemplate(descriptor.condition);
+      const pendingConfiguration = createDeciderConfigurationTemplate(session, {
+        condition: conditionTemplate.value,
+        outputs: normal.outputs.map((output) => this.#deciderTemplateOutput(output)),
+        ...(alternate.outputs.length === 0
+          ? {}
+          : {
+              elseOutputs: alternate.outputs.map((output) => this.#deciderTemplateOutput(output)),
+            }),
+      });
+      this.#combinators.deferPendingDecider(value, {
+        ...descriptor,
+        condition: pendingDeciderCondition(descriptor.condition),
+        pendingConfiguration,
+      });
+      this.#pendingDeciderConditions.set(value.identity, descriptor.condition);
+    } else {
+      this.#combinators.update(value, descriptor, this.#span(rawSpan));
+    }
     this.#colors.registerCombinatorInputs(
       value.identity,
       this.#combinators.stateFor(value).descriptor,
@@ -6683,7 +7341,7 @@ class ElaborationRecorder {
     rows: readonly DeciderOutputCandidate[],
     branch: 'normal' | 'else',
   ): {
-    readonly outputs: readonly PlanDeciderOutput[];
+    readonly outputs: readonly RuntimeDeciderOutput[];
     readonly origins: readonly DeciderOutputOrigin[];
   } {
     return {
@@ -6716,7 +7374,12 @@ class ElaborationRecorder {
   }
 
   #deciderOutputSyntaxIntent(output: unknown): DeciderOutputSyntaxIntent {
-    if (this.#isSignalValue(output) || this.#isWildcardCount(output)) return 'explicit-constant';
+    if (
+      this.#isSignalValue(output) ||
+      this.#isParameterSignalValue(output) ||
+      this.#isWildcardCount(output)
+    )
+      return 'explicit-constant';
     if (this.#isSelected(output)) {
       const selection = this.#selectedSelection(output);
       return isSignalId(selection)
@@ -6731,10 +7394,14 @@ class ElaborationRecorder {
     throw new Error('Unsupported decider output specification.');
   }
 
-  #deciderOutput(
-    output: unknown,
-    rawSpan: RawSpan,
-  ): Extract<DirectPlanProducer, { kind: 'decider' }>['output'] {
+  #deciderOutput(output: unknown, rawSpan: RawSpan): RuntimeDeciderOutput {
+    if (this.#isParameterSignalValue(output)) {
+      return {
+        kind: 'parameter-signal-constant',
+        signal: output.signal,
+        parameter: output.parameter,
+      };
+    }
     if (this.#isSignalValue(output)) {
       return { kind: 'signal-constant', signal: output.signal, value: output.value };
     }
@@ -6779,6 +7446,7 @@ class ElaborationRecorder {
       if (candidate === undefined) return [];
       if (
         this.#isSignalValue(candidate) ||
+        this.#isParameterSignalValue(candidate) ||
         this.#isWildcardCount(candidate) ||
         this.#isSelected(candidate) ||
         this.#isPair(candidate) ||
@@ -6816,6 +7484,7 @@ class ElaborationRecorder {
       this.#isSelected(value) ||
       this.#isDestination(value) ||
       this.#isSignalValue(value) ||
+      this.#isParameterSignalValue(value) ||
       this.#isSection(value) ||
       this.#isWildcardToken(value) ||
       this.#isWildcardCount(value) ||
@@ -6907,6 +7576,7 @@ function executeElaborationProgramInternal(
   parameterCapture?: BlueprintParameterCapture,
 ): {
   readonly plan: DirectElaborationPlan;
+  readonly resolvedNumberDefaults?: SourceResolvedNumberDefaultContext;
   readonly arithmeticTemplates: readonly CapturedArithmeticConfigurationTemplate[];
   readonly boundArithmeticOutputCaptureIds: readonly string[];
   readonly constantTemplates: readonly CapturedConstantConfigurationTemplate[];
@@ -6944,8 +7614,10 @@ function executeElaborationProgramInternal(
     throw error;
   }
   const plan = recorder.plan();
+  const resolvedNumberDefaults = recorder.resolvedNumberDefaults();
   return Object.freeze({
     plan,
+    ...(resolvedNumberDefaults === undefined ? {} : { resolvedNumberDefaults }),
     arithmeticTemplates: recorder.arithmeticTemplates(),
     boundArithmeticOutputCaptureIds: recorder.arithmeticOutputBindingCaptureIds(),
     constantTemplates: recorder.constantTemplates(),
@@ -6967,6 +7639,7 @@ export interface ExecutedElaborationWithBlueprintParameters {
   readonly plan: DirectElaborationPlan;
   readonly session: BlueprintParameterSession;
   readonly parameters: readonly CapturedBlueprintParameter[];
+  readonly resolvedNumberDefaults?: SourceResolvedNumberDefaultContext;
   readonly arithmeticTemplates: readonly CapturedArithmeticConfigurationTemplate[];
   readonly boundArithmeticOutputCaptureIds: readonly string[];
   readonly constantTemplates: readonly CapturedConstantConfigurationTemplate[];

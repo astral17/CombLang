@@ -44,7 +44,10 @@ import {
 } from './executed-blueprint-configuration-binding.js';
 import { materializeCapturedPlan } from './source-configuration-materialization.js';
 import { executeResolvedDirectPlan } from './direct-plan.js';
-import type { BlueprintParameterBinding } from '../../compiler/src/blueprint-parameter-validation.js';
+import {
+  readBlueprintParameterBindings,
+  type BlueprintParameterBinding,
+} from '../../compiler/src/blueprint-parameter-validation.js';
 import {
   executeElaborationProgramWithParameters,
   type ExecutedElaborationWithBlueprintParameters,
@@ -290,7 +293,10 @@ export function listSourceCompilationParameters(
   if (state === undefined) return Object.freeze([]);
   return Object.freeze(
     state.source.parameters.map(({ handle, registration }) => {
-      const defaultValue = registration.defaultValue;
+      const resolvedDefault = state.source.resolvedNumberDefaults?.declarations.find(
+        (declaration) => declaration.handle === handle,
+      )?.defaultValue;
+      const defaultValue = registration.defaultValue ?? resolvedDefault;
       const source = registration.source;
       if (defaultValue === undefined || source === undefined) {
         throw new Error('Captured source parameters must have a concrete default and source span.');
@@ -307,6 +313,25 @@ export function listSourceCompilationParameters(
   );
 }
 
+function effectiveSourceParameterBindings(
+  source: ExecutedElaborationWithBlueprintParameters,
+  bindings: readonly BlueprintParameterBinding[],
+): readonly BlueprintParameterBinding[] {
+  const resolvedDefaults = source.resolvedNumberDefaults;
+  if (resolvedDefaults === undefined) return bindings;
+  const overrides = readBlueprintParameterBindings(source.session, bindings);
+  const overridden = new Set(overrides.map(({ parameter }) => parameter));
+  const automaticDefaults = source.parameters.flatMap(({ handle, registration }) => {
+    if (registration.kind !== 'number' || registration.defaultValue !== undefined) return [];
+    const declaration = resolvedDefaults.declarations.find((item) => item.handle === handle);
+    if (declaration === undefined) {
+      throw new Error('Automatic NUMBER declaration lost its resolved host-local default.');
+    }
+    return overridden.has(handle) ? [] : [{ parameter: handle, value: declaration.defaultValue }];
+  });
+  return [...automaticDefaults, ...overrides.map(({ parameter, value }) => ({ parameter, value }))];
+}
+
 /** Binds this exact compilation's declarations into a fresh concrete NCIR. */
 export function bindSourceCompilationParameters(
   compilation: LocalSourceCompilation,
@@ -319,7 +344,11 @@ export function bindSourceCompilationParameters(
   if (state.execution === undefined) {
     throw new TypeError('Compilation has no canonical execution available for parameter binding.');
   }
-  return bindCapturedSourceConfigurationTemplates(state.source, state.execution, bindings);
+  return bindCapturedSourceConfigurationTemplates(
+    state.source,
+    state.execution,
+    effectiveSourceParameterBindings(state.source, bindings),
+  );
 }
 
 /** Projects this exact compilation's supported native parameter slots into metadata. */
@@ -437,7 +466,7 @@ export function exportSourceCompilationNativeBlueprint(
     ) {
       reject(
         `$.parameters[${index}].defaultValue`,
-        'native original must be an explicit signed int32 integer.',
+        'native original must be a signed int32 integer.',
         declaration.source,
       );
     }
@@ -1383,6 +1412,7 @@ export function exportSourceCompilationNativeBlueprint(
   const replacement = bindCapturedSourceConfigurationTemplatesWithRelations(
     state.source,
     state.execution,
+    effectiveSourceParameterBindings(state.source, []),
   );
   const projected = buildNativeBlueprintFcir(replacement.circuit, options);
   const relations = new Map(
@@ -2159,7 +2189,7 @@ export function bindSourceCompilationCircuit(
   const replacement = bindCapturedSourceConfigurationTemplatesWithRelations(
     state.source,
     state.execution,
-    bindings,
+    effectiveSourceParameterBindings(state.source, bindings),
   );
   const plan = materializeCapturedPlan(
     compilation.plan,

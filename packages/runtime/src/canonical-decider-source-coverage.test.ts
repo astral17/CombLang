@@ -200,18 +200,16 @@ const exact = Decider({ condition: input[A] > amount, outputs: [input[A]] });`;
     );
   });
 
-  test('rejects missing defaults, reversed slots, forged handles, and foreign handles', () => {
+  test('allocates a missing default and rejects reversed slots, forged handles, and foreign handles', () => {
     const source = `const A = Signal('virtual', 'signal-A');
 const input = new Network();
 const exact = Decider({ condition: input[A] > amount, outputs: [input[A]] });`;
     const parsed = parseFile({ path: sourceFile, text: source });
-    expect(() => exactParameterizedExecution(source, { missingDefault: true })).toThrowError(
-      expect.objectContaining({
-        code: 'CP1000',
-        span: { fileId: parsed.id, start: 0, end: 1 },
-        message: expect.stringContaining('number declarations require a finite positional default'),
-      }),
-    );
+    const automatic = exactParameterizedExecution(source, { missingDefault: true });
+    expect(automatic.plan.producers[0]).toMatchObject({
+      kind: 'decider',
+      condition: { kind: 'compare-signal', constant: 1 },
+    });
 
     const reversed = source.replace('input[A] > amount', 'amount < input[A]');
     expect(() => exactParameterizedExecution(reversed)).toThrowError(

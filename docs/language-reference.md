@@ -245,12 +245,14 @@ physical Producer identity per constructor call.
 
 The [Param API](api/parameters.md) also permits `Param.number(...)` or
 `Param.signal(...)` directly in `select.index`, and `Param.signal(...)` directly
-in `count.output`. Each slot requires a concrete default; the default Selector
-configuration remains concrete, and host-local binding changes the paired
-Selector Producer and Entity without re-executing source or changing topology.
-This does not parameterize `selectMax` or add native Factorio parameter fields.
+in `count.output`. A number parameter may omit its default for bounded
+source-wide allocation; a Signal parameter still requires its concrete default.
+The default Selector configuration remains concrete, and host-local binding
+changes the paired Selector Producer and Entity without re-executing source or
+changing topology. This does not parameterize `selectMax` or by itself add
+native Factorio parameter fields.
 
-Numeric declarations also accept `Param.number(label, default, metadata?)`, with
+Numeric declarations also accept `Param.number(label[, default[, metadata]])`, with
 only `variable?: string`, `formula?: string` and `dependent?: boolean` in an
 optional plain/null-prototype enumerable data record. The third argument is
 evaluated once, after the label and default. Metadata is validated, snapshotted
