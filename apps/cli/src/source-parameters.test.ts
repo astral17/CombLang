@@ -378,6 +378,77 @@ output += Constant({ sections: [{ filters: [
     }
   });
 
+  test('lists, exports, overrides and resets an output-only Decider count', async () => {
+    const { environment } = await parameterHost();
+    const key = '__comblang_cli_decider_output_count_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const previous = globals[key];
+    globals[key] = 0;
+    const path = await sourceFile(`globalThis.${key} = Number(globalThis.${key} ?? 0) + 1;
+const amount = Param.number('Count', 2, { variable: 'x' });
+const input = new Network();
+const output = new Network();
+output += Decider({ condition: input[EACH] > 0, outputs: [EACH * amount], elseOutputs: [amount * EACH] });`);
+    const overridesPath = await temporaryFile(
+      'decider-count-overrides.json',
+      '[{"id":0,"value":9}]',
+    );
+    const resetPath = await temporaryFile('decider-count-reset.json', '[]');
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      expect(await run(['parameters', 'list', '--json', path], environment)).toBe(0);
+      expect(JSON.parse(String(log.mock.calls[0]?.[0])).parameters).toEqual([
+        expect.objectContaining({ id: 0, kind: 'number', label: 'Count', defaultValue: 2 }),
+      ]);
+      expect(globals[key]).toBe(1);
+
+      log.mockClear();
+      expect(await run(['blueprint', 'export', '--parameters', '--json', path], environment)).toBe(
+        0,
+      );
+      const template = JSON.parse(String(log.mock.calls[0]?.[0])).document.blueprint;
+      expect(template.parameters).toEqual([
+        { type: 'number', number: '2', name: 'Count', variable: 'x' },
+      ]);
+      expect(template.entities[0]!.control_behavior.decider_conditions).toMatchObject({
+        outputs: [{ signal: { type: 'virtual', name: 'signal-each' }, constant: 2 }],
+        else_outputs: [{ signal: { type: 'virtual', name: 'signal-each' }, constant: 2 }],
+      });
+      expect(globals[key]).toBe(2);
+
+      log.mockClear();
+      expect(
+        await run(
+          ['blueprint', 'export', '--json', '--overrides', overridesPath, path],
+          environment,
+        ),
+      ).toBe(0);
+      const overridden = JSON.parse(String(log.mock.calls[0]?.[0])).document.blueprint;
+      expect(overridden.entities[0]!.control_behavior.decider_conditions).toMatchObject({
+        outputs: [{ signal: { type: 'virtual', name: 'signal-each' }, constant: 9 }],
+        else_outputs: [{ signal: { type: 'virtual', name: 'signal-each' }, constant: 9 }],
+      });
+      expect(overridden).not.toHaveProperty('parameters');
+      expect(globals[key]).toBe(3);
+
+      log.mockClear();
+      expect(
+        await run(['blueprint', 'export', '--json', '--overrides', resetPath, path], environment),
+      ).toBe(0);
+      const reset = JSON.parse(String(log.mock.calls[0]?.[0])).document.blueprint;
+      expect(reset.entities[0]!.control_behavior.decider_conditions).toMatchObject({
+        outputs: [{ signal: { type: 'virtual', name: 'signal-each' }, constant: 2 }],
+        else_outputs: [{ signal: { type: 'virtual', name: 'signal-each' }, constant: 2 }],
+      });
+      expect(globals[key]).toBe(4);
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete globals[key];
+      else globals[key] = previous;
+    }
+  });
+
   test('prints empty listings and warnings plainly, and never returns a partial listing on compile errors', async () => {
     const warningSource = await sourceFile(`function Double(input) { return input * 2; }
 function Triple(input: Network) { return input * 3; }

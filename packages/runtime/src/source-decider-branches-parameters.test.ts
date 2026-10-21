@@ -73,6 +73,25 @@ describe('parameterized Decider branch construction', () => {
     expect(listSourceCompilationParameters(compilation)).toHaveLength(1);
   });
 
+  test('compiles and binds the documented parameterized EACH output-count example', () => {
+    const documentation = readFileSync(
+      new URL('../../../docs/api/decider.md', import.meta.url),
+      'utf8',
+    );
+    const example = documentation.match(
+      /## Parameterized EACH output counts[\s\S]*?```ts\r?\n([\s\S]*?)```/,
+    )?.[1];
+    if (example === undefined) throw new Error('Expected the EACH output-count example.');
+    const compilation = compile(example);
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(listSourceCompilationParameters(compilation)).toMatchObject([
+      { label: 'Count', defaultValue: 2 },
+    ]);
+    expect(bindSourceCompilationCircuit(compilation).plan.producers).toMatchObject([
+      { kind: 'decider', outputs: [{ kind: 'each-constant', value: 2 }] },
+    ]);
+  });
+
   test('captures late fluent branches after attachment and placement, with one producer and one source execution', () => {
     const counterKey = '__comblang_parameterized_decider_source_runs';
     const globals = globalThis as Record<string, unknown>;

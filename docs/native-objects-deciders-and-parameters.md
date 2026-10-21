@@ -285,9 +285,12 @@ parameter slots.
 
 Explicit native parameter metadata export rejects symbolic multipliers with
 located `CP1002`, even at default 1 or when the same handle is a supported filter
-count. A derived Constant count can be exported with formula-only dependencies
-that have valid explicit variables and direct-leaf metadata; derived multiplier
-expressions remain unsupported with `CP1002`. A fractional declaration can fail the existing native original-int32 check
+count. A direct number parameter in a Decider constant output row is retained in
+native metadata and projected to that exact normal/else row using its effective
+original count; it is not a formula. Derived Decider output-count expressions
+are not accepted by the source compiler. A derived Constant count can be exported with
+formula-only dependencies that have valid explicit variables and direct-leaf
+metadata; derived multiplier expressions remain unsupported with `CP1002`. A fractional declaration can fail the existing native original-int32 check
 first. Ordinary concrete CLI/Worker export retains the default multiplier;
 native-export failure is separate from successful compilation. The
 [browser parameter controls](blueprint-json.md#optional-worker-local-parameter-binding)
@@ -425,7 +428,7 @@ names across types/qualities reserve placeholder names.
 Exhaustion, unused Signal declarations, distinct handles with the same
 normalized original, a same-name namespace/quality conflict, non-normal
 qualities, virtual wildcards, Arithmetic input Signal parameters, symbolic
-Decider outputs and Signal use in another native slot fail atomically with
+Decider Signal outputs and Signal use in another native slot fail atomically with
 located `CP1002`. Other producer families or an unlinked physical Entity also
 reject a source compilation that declares a Signal parameter.
 Numeric-only exports and ordinary concrete binding are unaffected. The reviewed
@@ -594,7 +597,7 @@ are rejected at the second declaration, with a reference to the first.
 For valid captured compilations, unsupported declarations or uses fail
 atomically with `CP1002`, a declaration or device-call source span, and a
 semantic path. Unused parameters, Arithmetic input Signal parameters, symbolic
-Decider outputs (including else outputs), unsupported Selector slots, and
+Decider Signal outputs (including else outputs), unsupported Selector slots, and
 symbolic multipliers remain outside this subset and fail with `CP1002` even
 when their local results are constant-equivalent. A marked Selector numeric formula is authenticated at
 the exact `select.index` slot and must survive projection unchanged in

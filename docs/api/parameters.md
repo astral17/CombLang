@@ -55,8 +55,11 @@ limited derived source expressions described below:
 For native typed-formula export, a registered expression in an exact Arithmetic
 constant `left`/`right` operand, Constant filter `value`, constant-right
 threshold of an exact Decider/`when`/`IF`, or numeric `index` of a Selector
-`select` can produce a formula row. Constant section multipliers and Decider
-constant output values remain local binding only. Native Signal placeholders are a separate bounded feature
+`select` can produce a formula row. Constant section multipliers remain local
+binding only; derived Decider output-count expressions are not accepted by the
+source compiler. A direct number
+parameter in a Decider constant output is exported as its native original
+count, not as a formula. Native Signal placeholders are a separate bounded feature
 for Constant filter `signal`, exact Arithmetic `output`, Selector Signal
 `select.index`, and Selector `count.output` slots. In `select`, that Signal
 provides the numeric index from the input network; it does not name the selected
@@ -198,9 +201,11 @@ Listing and initial binding show Count = 3. Binding it to 9 changes only the
 first filter; Reset restores 3 without executing the source again.
 
 Direct Decider constant output rows (`amount * A` or `amount * EACH`) also
-participate in automatic numeric allocation and local binding. They do not add
-native formula-expression slots; unsupported native parameter projections are
-refused with a located `CP1002`.
+participate in automatic numeric allocation and local binding. A direct number
+parameter is retained in native parameter metadata and projected to the exact
+normal or else output row using its effective original count. This is a numeric
+original, not a native formula slot. Derived output-count expressions are not
+accepted by the source compiler.
 
 ## Complete circuit example
 
@@ -698,7 +703,7 @@ Signal parameters are not supported in input operands or Network keys. Numeric
 Selector index parameters and formulas keep their existing numeric path.
 Non-normal qualities, virtual wildcards, source defaults named `parameter-N`,
 placeholder-pool exhaustion, unused declarations, other unlinked producer
-families, symbolic Decider outputs and Signal handles in any other native slot
+families, symbolic Decider Signal outputs and Signal handles in any other native slot
 reject atomically with located `CP1002`. No general native replacement, formula
 evaluation, or broader native acceptance is implied. A prior user-reported
 Factorio 2.1.21 placement example (mods unspecified) showed matching Constant

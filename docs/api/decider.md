@@ -107,11 +107,29 @@ placement acceptance. Unsupported shapes remain a located `CP1002`.
 
 Decider constant output rows also accept a direct number parameter, for example
 `amount * A` or `amount * EACH`, in exact, fluent, and `IF` configurations.
-These values bind locally, including rows appended after attaching a fluent
-builder. An omitted numeric default uses the source-wide automatic allocator;
-its supported-family coverage rules are documented in the [Param API](parameters.md).
-Derived numeric expressions are not accepted in these output rows, and this
-local binding support does not add native formula-expression slots.
+The native parameter template retains that declaration and projects its
+effective original count into the exact output row. This is not a formula slot
+and does not establish Factorio placement or evaluation. Binding locally still
+supports these rows, including rows appended after attaching a fluent builder.
+An omitted numeric default uses the source-wide automatic allocator; its
+supported-family coverage rules are documented in the [Param API](parameters.md).
+Derived numeric output-count expressions are not accepted by the source
+compiler; these rows do not support native formula expressions.
+
+## Parameterized EACH output counts
+
+Complete source; requires trusted canonical Decider authority. `Count` is used
+only by the Decider output row:
+
+```ts
+const amount = Param.number('Count', 2);
+const input = new Network();
+const output = new Network();
+output += Decider({ condition: input[EACH] > 0, outputs: [amount * EACH] });
+```
+
+Native-template export keeps the original count `2` and number metadata;
+local binding can override it and Reset restores `2` without rerunning source.
 
 ## Compact example
 

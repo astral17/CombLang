@@ -845,13 +845,10 @@ test('a later test starts from empty T0', ({ network, tick, expectSignal }) => {
             file: {
               path: 'worker-decider-each-output.factorio.ts',
               text: `globalThis.${localExpressionRunKey} = Number(globalThis.${localExpressionRunKey} ?? 0) + 1;
-const A = Signal('virtual', 'signal-A');
-const B = Signal('virtual', 'signal-B');
-const amount = Param.number('Count');
+const amount = Param.number('Count', 2, { variable: 'x' });
 const input = new Network();
 const output = new Network();
-input += CC(10 * A, 1 * B);
-const gate = when(input[EACH] > amount).then(amount * EACH);
+const gate = when(input[EACH] > 0).then(amount * EACH);
 output += gate;
 gate.then(EACH * amount);
 gate.else(amount * EACH);`,
@@ -863,19 +860,23 @@ gate.else(amount * EACH);`,
       );
       expect(globals[localExpressionRunKey]).toBe(1);
       expect(parsed.result.pipelineDiagnostics).toEqual([]);
-      expect(parsed.result.blueprintExport).toMatchObject({
-        ok: false,
-        diagnostics: [
-          {
-            code: 'CP1002',
-            severity: 'error',
-            span: {
-              fileId: expect.any(String),
-              start: expect.any(Number),
-              end: expect.any(Number),
-            },
-          },
-        ],
+      expect(parsed.result.blueprintExport).toMatchObject({ ok: true });
+      if (parsed.result.blueprintExport?.ok !== true) {
+        throw new Error('Expected a native-template Worker export for Decider output counts.');
+      }
+      const template = parsed.result.blueprintExport.document.blueprint;
+      expect(template.parameters).toEqual([
+        { type: 'number', number: '2', name: 'Count', variable: 'x' },
+      ]);
+      expect(template.entities[0]?.control_behavior).toMatchObject({
+        decider_conditions: {
+          conditions: [{ constant: 0 }],
+          outputs: [
+            { signal: { type: 'virtual', name: 'signal-each' }, constant: 2 },
+            { signal: { type: 'virtual', name: 'signal-each' }, constant: 2 },
+          ],
+          else_outputs: [{ signal: { type: 'virtual', name: 'signal-each' }, constant: 2 }],
+        },
       });
       const binding = parsed.parameterBinding;
       if (binding?.ok !== true || binding.token === undefined) {
@@ -909,7 +910,7 @@ gate.else(amount * EACH);`,
         return producer;
       };
       expect(decider(defaults)).toMatchObject({
-        condition: { kind: 'compare-each', constant: 2 },
+        condition: { kind: 'compare-each', constant: 0 },
         outputs: [
           { kind: 'each-constant', value: 2 },
           { kind: 'each-constant', value: 2 },
@@ -917,7 +918,7 @@ gate.else(amount * EACH);`,
         elseOutputs: [{ kind: 'each-constant', value: 2 }],
       });
       expect(decider(overridden)).toMatchObject({
-        condition: { kind: 'compare-each', constant: 9 },
+        condition: { kind: 'compare-each', constant: 0 },
         outputs: [
           { kind: 'each-constant', value: 9 },
           { kind: 'each-constant', value: 9 },
@@ -943,6 +944,25 @@ gate.else(amount * EACH);`,
       });
       expect(topology(overridden)).toEqual(topology(defaults));
       expect(topology(reset)).toEqual(topology(defaults));
+      expect(
+        createSourceCircuitArtifact(overridden.plan, overridden.resolvedCircuit).blueprint.blueprint
+          .entities[0]?.control_behavior,
+      ).toMatchObject({
+        decider_conditions: {
+          outputs: [
+            { signal: { type: 'virtual', name: 'signal-each' }, constant: 9 },
+            { signal: { type: 'virtual', name: 'signal-each' }, constant: 9 },
+          ],
+          else_outputs: [{ signal: { type: 'virtual', name: 'signal-each' }, constant: 9 }],
+        },
+      });
+      expect(
+        createSourceCircuitArtifact(overridden.plan, overridden.resolvedCircuit).blueprint
+          .blueprint,
+      ).not.toHaveProperty('parameters');
+      expect(JSON.stringify(parsed)).not.toMatch(
+        /parameterContext|configurationTemplate|sourceHandle/i,
+      );
       expect(globals[localExpressionRunKey]).toBe(1);
     } finally {
       if (previous === undefined) delete globals[localExpressionRunKey];

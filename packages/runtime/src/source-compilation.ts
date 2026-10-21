@@ -675,6 +675,12 @@ export function exportSourceCompilationNativeBlueprint(
         conditionPath: readonly number[];
         measured: MeasuredNativeNumericFormula;
       }
+    | {
+        kind: 'decider-output-count';
+        branch: 'outputs' | 'elseOutputs';
+        outputIndex: number;
+        parameter: BlueprintParameterHandle;
+      }
     | { kind: 'selector-index-signal'; parameter: BlueprintParameterHandle }
     | { kind: 'selector-count-output'; parameter: BlueprintParameterHandle }
   ))[] = [];
@@ -800,23 +806,37 @@ export function exportSourceCompilationNativeBlueprint(
     const accepted = new Set<BlueprintParameterHandle>();
     for (const key of ['outputs', 'elseOutputs'] as const) {
       capture.template[key]?.forEach((output, index) => {
+        const outputPath = `${path}.${key}[${index}]`;
         if (
           output.signal.kind === 'signal' &&
           canonicalBlueprintParameterHandle(output.signal.signal) !== undefined
         ) {
           reject(
-            `${path}.${key}[${index}].signal`,
+            `${outputPath}.signal`,
             'native source export does not support symbolic Decider outputs.',
             capture.source,
           );
         }
-        if (output.mode === 'constant' && typeof output.value !== 'number') {
+        if (output.mode !== 'constant' || typeof output.value === 'number') return;
+        const parameter = canonicalBlueprintParameterHandle(output.value);
+        if (parameter === undefined || parameter.kind !== 'number') {
           reject(
-            `${path}.${key}[${index}].value`,
-            'native source export does not support symbolic Decider output constants.',
+            `${outputPath}.value`,
+            'native source export supports only direct number parameters in Decider constant output values.',
             capture.source,
           );
         }
+        accepted.add(parameter);
+        used.add(parameter);
+        occurrences.push({
+          kind: 'decider-output-count',
+          captureId: capture.captureId,
+          branch: key,
+          outputIndex: index,
+          parameter,
+          path: `${outputPath}.value`,
+          source: capture.source,
+        });
       });
     }
     const collectThresholds = (
@@ -1666,6 +1686,55 @@ export function exportSourceCompilationNativeBlueprint(
           occurrence.kind === 'decider-threshold-expression'
             ? 'marked Decider expression did not survive native row projection at its evaluated default.'
             : 'marked Decider threshold did not survive native row projection unchanged.',
+          occurrence.source,
+        );
+      }
+      continue;
+    }
+    if (occurrence.kind === 'decider-output-count') {
+      const producer = replacement.circuit.producers[relation.producerIndex];
+      if (producer?.kind !== 'decider' || entity === undefined) {
+        reject(occurrence.path, 'marked Decider producer is unavailable.', occurrence.source);
+      }
+      const sourceRows =
+        occurrence.branch === 'outputs' ? producer.config.outputs : producer.config.elseOutputs;
+      const sourceOutput = sourceRows?.[occurrence.outputIndex];
+      const expected = defaults.get(occurrence.parameter);
+      const expectedSignalKey =
+        sourceOutput?.signal.kind === 'signal'
+          ? signalKey(sourceOutput.signal.signal as SignalId)
+          : undefined;
+      const expectedEach =
+        sourceOutput?.signal.kind === 'wildcard' && sourceOutput.signal.value === 'each';
+      const nativeBehavior = readRecord(entity.native.control_behavior);
+      const nativeDecider = readRecord(nativeBehavior?.decider_conditions);
+      const nativeRows =
+        nativeDecider?.[occurrence.branch === 'outputs' ? 'outputs' : 'else_outputs'];
+      const nativeOutput = Array.isArray(nativeRows)
+        ? readRecord(nativeRows[occurrence.outputIndex])
+        : undefined;
+      const projectedSignal = readRecord(nativeOutput?.signal);
+      const signalProjectionMatches =
+        expectedSignalKey !== undefined
+          ? nativeSignalKey(nativeOutput?.signal) === expectedSignalKey
+          : expectedEach &&
+            projectedSignal?.type === 'virtual' &&
+            projectedSignal.name === 'signal-each';
+      if (
+        sourceRows === undefined ||
+        sourceOutput?.mode !== 'constant' ||
+        sourceOutput.value !== expected ||
+        typeof expected !== 'number' ||
+        !Array.isArray(nativeRows) ||
+        nativeRows.length !== sourceRows.length ||
+        nativeOutput?.constant !== expected ||
+        nativeOutput?.copy_count_from_input !== false ||
+        (expectedSignalKey === undefined && !expectedEach) ||
+        !signalProjectionMatches
+      ) {
+        reject(
+          occurrence.path,
+          'marked Decider output count did not survive authenticated branch/row projection unchanged.',
           occurrence.source,
         );
       }

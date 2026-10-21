@@ -3905,7 +3905,7 @@ output += Constant({ sections: [{ multiplier: scale * 0.5, filters: [] }] });`,
       'elseOutputs',
     ],
   ])(
-    'binds a direct number parameter in a Decider %s constant output locally',
+    'exports a direct number parameter in a Decider %s constant output',
     (_branch, device, field) => {
       const text = `${exactSource}\nconst input = new Network();\noutput += ${device};`;
       const compilation = sourceApi.compileSourceProgram(
@@ -3914,30 +3914,51 @@ output += Constant({ sections: [{ multiplier: scale * 0.5, filters: [] }] });`,
       );
       expect(compilation.pipelineDiagnostics).toEqual([]);
       expect(compilation.resolvedCircuit).toBeDefined();
+      const originalArtifact = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
       const parameter = sourceApi.listSourceCompilationParameters(compilation)[0]!.parameter;
-      const outputs = (pair: ReturnType<typeof sourceApi.bindSourceCompilationCircuit>) => {
+      const getOutputs = (pair: ReturnType<typeof sourceApi.bindSourceCompilationCircuit>) => {
         const decider = pair.plan.producers.find(({ kind }) => kind === 'decider');
         if (decider?.kind !== 'decider') throw new Error('Expected the captured Decider.');
         return field === 'outputs' ? decider.outputs : decider.elseOutputs;
       };
-      expect(outputs(sourceApi.bindSourceCompilationCircuit(compilation))).toContainEqual(
+      const defaults = sourceApi.bindSourceCompilationCircuit(compilation);
+      const overridden = sourceApi.bindSourceCompilationCircuit(compilation, [
+        { parameter, value: 9 },
+      ]);
+      const reset = sourceApi.bindSourceCompilationCircuit(compilation, []);
+      expect(getOutputs(defaults)).toContainEqual(
         expect.objectContaining({ kind: 'signal-constant', value: 5 }),
       );
-      expect(
-        outputs(sourceApi.bindSourceCompilationCircuit(compilation, [{ parameter, value: 9 }])),
-      ).toContainEqual(expect.objectContaining({ kind: 'signal-constant', value: 9 }));
-      expect(exportFailure(compilation)).toMatchObject({
-        code: 'CP1002',
-        span: expect.objectContaining({ fileId: compilation.fileId }),
+      expect(getOutputs(overridden)).toContainEqual(
+        expect.objectContaining({ kind: 'signal-constant', value: 9 }),
+      );
+      expect(reset.plan).toEqual(defaults.plan);
+
+      const native = emitNativeBlueprintJson(
+        sourceApi.exportSourceCompilationNativeBlueprint(compilation, options),
+      ).blueprint;
+      expect(native.parameters).toEqual([{ type: 'number', number: '5', name: 'Amount' }]);
+      const decider = native.entities.find(({ name }) => name === 'decider-combinator');
+      expect(decider?.control_behavior).toMatchObject({
+        decider_conditions: {
+          [field === 'outputs' ? 'outputs' : 'else_outputs']: [
+            expect.objectContaining({
+              signal: { type: 'virtual', name: 'signal-A' },
+              copy_count_from_input: false,
+              constant: 5,
+            }),
+          ],
+        },
       });
+      expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(originalArtifact);
     },
   );
 
-  test('keeps parameterized EACH Decider counts local and rejects native export with CP1002', () => {
-    const compilation = compile(`const amount = Param.number('Count', 5);
+  test('exports a parameterized EACH Decider count and keeps binding local', () => {
+    const compilation = compile(`const amount = Param.number('Count', 5, { variable: 'x' });
 const input = new Network();
 const output = new Network();
-output += Decider({ condition: input[EACH] > 0, outputs: [amount * EACH] });`);
+output += Decider({ condition: input[EACH] > 0, outputs: [EACH * amount] });`);
     const originalArtifact = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
     const parameter = sourceApi.listSourceCompilationParameters(compilation)[0]!.parameter;
     const defaults = sourceApi.bindSourceCompilationCircuit(compilation);
@@ -3955,11 +3976,230 @@ output += Decider({ condition: input[EACH] > 0, outputs: [amount * EACH] });`);
       outputs: [{ kind: 'each-constant', value: 9 }],
     });
     expect(reset.plan).toEqual(defaults.plan);
-    expect(exportFailure(compilation)).toMatchObject({
-      code: 'CP1002',
-      span: expect.objectContaining({ fileId: compilation.fileId }),
+    const native = emitNativeBlueprintJson(
+      sourceApi.exportSourceCompilationNativeBlueprint(compilation, options),
+    ).blueprint;
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '5', name: 'Count', variable: 'x' },
+    ]);
+    expect(
+      native.entities.find(({ name }) => name === 'decider-combinator')?.control_behavior,
+    ).toMatchObject({
+      decider_conditions: {
+        outputs: [
+          {
+            signal: { type: 'virtual', name: 'signal-each' },
+            copy_count_from_input: false,
+            constant: 5,
+          },
+        ],
+      },
+    });
+    const concrete = generateBlueprintJson(overridden.resolvedCircuit.ir);
+    expect(concrete.blueprint.entities[0]?.control_behavior).toMatchObject({
+      decider_conditions: {
+        outputs: [
+          {
+            signal: { type: 'virtual', name: 'signal-each' },
+            copy_count_from_input: false,
+            constant: 9,
+          },
+        ],
+      },
     });
     expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(originalArtifact);
+  });
+
+  test.each([
+    [
+      'exact Decider',
+      `output += Decider({ condition: input[A] > 0, outputs: [A * amount, input[A], amount * A], elseOutputs: [amount * A] }).at(4, 5, 2);`,
+    ],
+    [
+      'IF',
+      `output += IF(input[A] > 0, [A * amount, input[A], amount * A], { fallback: amount * A });`,
+    ],
+    [
+      'late fluent branches',
+      `const gate = when(input[A] > 0).at(4, 5, 2).then(A * amount, input[A]);
+output += gate;
+gate.then(amount * A);
+gate.else(A * amount);`,
+    ],
+  ])(
+    'exports output-only direct number counts in %s without row/topology changes',
+    (_form, body) => {
+      const key = '__comblang_native_decider_output_only_runs';
+      const globals = globalThis as Record<string, unknown>;
+      const existed = Object.hasOwn(globals, key);
+      const previous = globals[key];
+      globals[key] = 0;
+      try {
+        const compilation = sourceApi.compileSourceProgram(
+          {
+            path: 'native-decider-output-only.factorio.ts',
+            text: `globalThis.${key} += 1;
+const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Count', 5, { variable: 'x' });
+const input = new Network();
+const output = new Network();
+${body}`,
+          },
+          parameterHost(),
+        );
+        expect(compilation.pipelineDiagnostics).toEqual([]);
+        const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+        const defaults = sourceApi.bindSourceCompilationCircuit(compilation);
+        const parameter = sourceApi.listSourceCompilationParameters(compilation)[0]!.parameter;
+        const overridden = sourceApi.bindSourceCompilationCircuit(compilation, [
+          { parameter, value: 9 },
+        ]);
+        const reset = sourceApi.bindSourceCompilationCircuit(compilation, []);
+        const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+        const json = emitNativeBlueprintJson(native).blueprint;
+        const entity = json.entities[0]!;
+        const behavior = entity.control_behavior as {
+          decider_conditions: {
+            outputs: {
+              signal?: { name?: string };
+              constant?: number;
+              copy_count_from_input?: boolean;
+            }[];
+            else_outputs: {
+              signal?: { name?: string };
+              constant?: number;
+              copy_count_from_input?: boolean;
+            }[];
+          };
+        };
+
+        expect(native.parameters).toEqual([
+          { type: 'number', number: '5', name: 'Count', variable: 'x' },
+        ]);
+        expect(behavior.decider_conditions.outputs).toEqual([
+          {
+            signal: { type: 'virtual', name: 'signal-A' },
+            copy_count_from_input: false,
+            constant: 5,
+          },
+          {
+            signal: { type: 'virtual', name: 'signal-A' },
+            copy_count_from_input: true,
+            networks: { red: true, green: false },
+          },
+          {
+            signal: { type: 'virtual', name: 'signal-A' },
+            copy_count_from_input: false,
+            constant: 5,
+          },
+        ]);
+        expect(behavior.decider_conditions.else_outputs).toEqual([
+          {
+            signal: { type: 'virtual', name: 'signal-A' },
+            copy_count_from_input: false,
+            constant: 5,
+          },
+        ]);
+        expect(native.entities).toEqual(
+          buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).entities,
+        );
+        expect(native.wires).toEqual(
+          buildNativeBlueprintFcir(compilation.resolvedCircuit!.ir, options).wires,
+        );
+        expect(entity).toMatchObject({ entity_number: 1 });
+        expect(defaults.plan.producers.map(({ entityId }) => entityId)).toEqual(
+          overridden.plan.producers.map(({ entityId }) => entityId),
+        );
+        expect(
+          defaults.resolvedCircuit.ir.entities.map(({ id, placement }) => ({ id, placement })),
+        ).toEqual(
+          overridden.resolvedCircuit.ir.entities.map(({ id, placement }) => ({ id, placement })),
+        );
+        expect(reset.plan).toEqual(defaults.plan);
+        expect(globals[key]).toBe(1);
+        expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
+      } finally {
+        if (existed) globals[key] = previous;
+        else delete globals[key];
+      }
+    },
+  );
+
+  test.each([
+    ['explicit zero', `Param.number('Count', 0)`, 0],
+    ['automatic nonzero', `Param.number('Count')`, undefined],
+  ])('exports a Decider output original for %s', (_label, declaration, explicitDefault) => {
+    const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const amount = ${declaration};
+const input = new Network();
+const output = new Network();
+output += Decider({ condition: input[A] > 0, outputs: [amount * A] });`);
+    const listed = sourceApi.listSourceCompilationParameters(compilation);
+    const effectiveDefault = listed[0]!.defaultValue;
+    expect(typeof effectiveDefault).toBe('number');
+    if (explicitDefault !== undefined) expect(effectiveDefault).toBe(explicitDefault);
+    else expect(effectiveDefault).toBeGreaterThan(0);
+    const native = emitNativeBlueprintJson(
+      sourceApi.exportSourceCompilationNativeBlueprint(compilation, options),
+    ).blueprint;
+    expect(native.parameters).toEqual([
+      { type: 'number', number: String(effectiveDefault), name: 'Count' },
+    ]);
+    expect(native.entities[0]?.control_behavior).toMatchObject({
+      decider_conditions: {
+        outputs: [{ signal: { type: 'virtual', name: 'signal-A' }, constant: effectiveDefault }],
+      },
+    });
+  });
+
+  test('keeps derived Decider output-count expressions unsupported', () => {
+    const compilation = sourceApi.compileSourceProgram(
+      {
+        path: 'derived-decider-output-count.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Count', 5);
+const derived = amount + 1;
+const input = new Network();
+const output = new Network();
+output += Decider({ condition: input[A] > 0, outputs: [derived * A] });`,
+      },
+      parameterHost(),
+    );
+    expect(compilation.pipelineDiagnostics).toMatchObject([{ code: 'RT2027', severity: 'error' }]);
+    expect(compilation.resolvedCircuit).toBeUndefined();
+  });
+
+  test('keeps output-only bindings and concrete export intact after duplicate originals reject native export', () => {
+    const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const first = Param.number('First', 5);
+const second = Param.number('Second', 5);
+const input = new Network();
+const output = new Network();
+output += Decider({ condition: input[A] > 0, outputs: [first * A] });
+output += Decider({ condition: input[A] > 0, outputs: [second * A] });`);
+    const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+    expect(exportFailure(compilation)).toMatchObject({
+      code: 'CP1002',
+      path: '$.parameters[1].defaultValue',
+    });
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
+    const parameters = sourceApi.listSourceCompilationParameters(compilation);
+    const amount = parameters.find(({ label }) => label === 'First')!;
+    const bound = sourceApi.bindSourceCompilationCircuit(compilation, [
+      { parameter: amount.parameter, value: 9 },
+    ]);
+    expect(bound.plan.producers).toMatchObject([
+      { outputs: [{ kind: 'signal-constant', value: 9 }] },
+      { outputs: [{ kind: 'signal-constant', value: 5 }] },
+    ]);
+    const concrete = generateBlueprintJson(bound.resolvedCircuit.ir);
+    expect(
+      concrete.blueprint.entities.map(({ control_behavior }) => control_behavior),
+    ).toMatchObject([
+      { decider_conditions: { outputs: [{ constant: 9 }] } },
+      { decider_conditions: { outputs: [{ constant: 5 }] } },
+    ]);
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
   });
 
   test('binds a derived Decider threshold locally but refuses native-template export', () => {
