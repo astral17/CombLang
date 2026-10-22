@@ -124,6 +124,52 @@ function arithmeticTemplate(
 }
 
 describe('producer-composed automatic numeric defaults', () => {
+  test('keeps default-free Signal identity separate from numeric choices and projections', () => {
+    const session = createBlueprintParameterSession();
+    const automatic = session.number('Automatic count');
+    const channel = session.signal('Required channel');
+    const template = createConstantConfigurationTemplate(session, {
+      sections: [{ filters: [{ signal: channel, value: automatic }] }],
+    });
+    const context = createProducerNumberDefaultContext(
+      session,
+      declarations(session, [automatic, channel]),
+      [constantDescriptor(template)],
+    );
+    const numberSnapshot = context.declarations.find(({ handle }) => handle === automatic);
+    const signalSnapshot = context.declarations.find(({ handle }) => handle === channel);
+
+    expect(numberSnapshot).toMatchObject({ kind: 'number', defaultValue: 2 });
+    expect(signalSnapshot).toMatchObject({ kind: 'signal', label: 'Required channel' });
+    expect(signalSnapshot).not.toHaveProperty('defaultValue');
+    expect(automatic.defaultValue).toBeUndefined();
+    expect(channel.defaultValue).toBeUndefined();
+
+    const numericOnly = context.bindingsForConstantTemplate(template);
+    expect(numericOnly).toEqual([{ parameter: automatic, value: 2 }]);
+    expect(() => bindConstantConfigurationTemplate(template, numericOnly)).toThrowError(
+      expect.objectContaining({ code: 'CP1002' }),
+    );
+
+    const bound = bindConstantConfigurationTemplate(
+      template,
+      context.bindingsForConstantTemplate(template, [{ parameter: channel, value: A }]),
+    );
+    expect(bound.sections[0]?.filters).toEqual([{ signal: A, value: 2 }]);
+
+    const literalSession = createBlueprintParameterSession();
+    const sameAutomatic = literalSession.number('Automatic count');
+    const literalTemplate = createConstantConfigurationTemplate(literalSession, {
+      sections: [{ filters: [{ signal: A, value: sameAutomatic }] }],
+    });
+    const literalContext = createProducerNumberDefaultContext(
+      literalSession,
+      declarations(literalSession, [sameAutomatic]),
+      [constantDescriptor(literalTemplate)],
+    );
+    expect(literalContext.declarations[0]?.defaultValue).toBe(numberSnapshot?.defaultValue);
+  });
+
   test('reserves final typed slot values and binds authentic templates with stable reset defaults', () => {
     const session = createBlueprintParameterSession();
     const first = session.number('First automatic');

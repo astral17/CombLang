@@ -320,6 +320,78 @@ test('explicit virtual binding', ({ network, expectSignal, tick }) => {
     }
   });
 
+  test('combines automatic numeric defaults with per-case default-free Signal bindings', () => {
+    const source = `const amount = Param.number('Amount');
+const explicit = Param.number('Explicit amount', 4);
+const channel = Param.signal('Required channel');
+const secondChannel = Param.signal('Second required channel');
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: channel, value: amount },
+  { signal: secondChannel, value: amount },
+  { signal: Signal('virtual', 'signal-fixed'), value: explicit },
+] }] });`;
+    const compilation = compileSourceProgram(
+      { path: 'automatic-number-with-required-signal.factorio.ts', text: source },
+      canonicalEntityHost(),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.requiredParameterIds).toEqual([2, 3]);
+    expect(compilation.plan).toBeUndefined();
+    expect(compilation.resolvedCircuit).toBeUndefined();
+    expect(compilation.execution).toBeUndefined();
+
+    const result = runSourceCompilationTests(
+      compilation,
+      `test('automatic and explicit numbers bind with two required Signals', ({ network, expectSignal, tick }) => {
+  tick();
+  expectSignal(network('output'), Signal('item', 'iron-plate', 'uncommon')).toBe(2);
+  expectSignal(network('output'), Signal('fluid', 'water', 'rare')).toBe(2);
+  expectSignal(network('output'), Signal('virtual', 'signal-fixed')).toBe(4);
+}, { parameters: [
+  { id: 2, value: Signal('item', 'iron-plate', 'uncommon') },
+  { id: 3, value: Signal('fluid', 'water', 'rare') },
+] });
+test('numeric override composes with both Signal bindings', ({ network, expectSignal, tick }) => {
+  tick();
+  expectSignal(network('output'), Signal('item', 'iron-plate')).toBe(7);
+  expectSignal(network('output'), Signal('fluid', 'water')).toBe(7);
+  expectSignal(network('output'), Signal('virtual', 'signal-fixed')).toBe(4);
+}, { parameters: [
+  { id: 0, value: 7 },
+  { id: 2, value: Signal('item', 'iron-plate') },
+  { id: 3, value: Signal('fluid', 'water') },
+] });
+test('missing Signal binding', () => {
+  throw new Error('missing-binding callback must not run');
+});
+test('empty snapshot still lacks required Signal', () => {
+  throw new Error('missing-binding callback must not run');
+}, { parameters: [] });
+test('valid case after missing bindings resets automatic count', ({ network, expectSignal, tick }) => {
+  tick();
+  expectSignal(network('output'), Signal('virtual', 'signal-B', 'rare')).toBe(2);
+  expectSignal(network('output'), Signal('fluid', 'water', 'uncommon')).toBe(2);
+}, { parameters: [
+  { id: 2, value: Signal('virtual', 'signal-B', 'rare') },
+  { id: 3, value: Signal('fluid', 'water', 'uncommon') },
+] });`,
+    );
+    expect(result).toMatchObject({
+      passed: 3,
+      failed: 2,
+      results: [
+        { status: 'passed' },
+        { status: 'passed' },
+        { status: 'failed', code: 'CP1002' },
+        { status: 'failed', code: 'CP1002' },
+        { status: 'passed' },
+      ],
+    });
+    expect(result.results[2]!.message).not.toContain('missing-binding callback must not run');
+    expect(result.results[3]!.message).not.toContain('missing-binding callback must not run');
+  });
+
   test('an explicit case snapshot does not inherit an invalid run-wide snapshot', () => {
     const compilation = compile();
     const source = `test('inherits invalid defaults', () => { throw new Error('invalid body ran'); });

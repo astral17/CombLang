@@ -1378,6 +1378,65 @@ output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] })
     expect(error).not.toHaveBeenCalled();
   });
 
+  test('lists, exports and runs automatic numeric defaults with a required Constant Signal', async () => {
+    const { environment } = await parameterHost();
+    const path = await sourceFile(`const amount = Param.number('Amount');
+const channel = Param.signal('Channel');
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: amount }] }] });`);
+    const casesPath = join(dirname(path), 'automatic-number-signal.test.ts');
+    await writeFile(
+      casesPath,
+      `test('explicit required Signal uses automatic count', ({ network, expectSignal, tick }) => {
+  tick();
+  expectSignal(network('output'), Signal('item', 'iron-plate', 'uncommon')).toBe(2);
+}, { parameters: [{ id: 1, value: Signal('item', 'iron-plate', 'uncommon') }] });
+test('empty snapshot cannot satisfy the Signal declaration', () => {
+  throw new Error('missing-binding callback must not run');
+}, { parameters: [] });
+test('valid case follows a missing binding', ({ network, expectSignal, tick }) => {
+  tick();
+  expectSignal(network('output'), Signal('virtual', 'signal-B', 'rare')).toBe(2);
+}, { parameters: [{ id: 1, value: Signal('virtual', 'signal-B', 'rare') }] });`,
+    );
+    const { log, error } = capture();
+
+    expect(await run(['parameters', 'list', '--json', path], environment)).toBe(0);
+    const listing = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(listing.parameters).toEqual([
+      expect.objectContaining({ id: 0, kind: 'number', label: 'Amount', defaultValue: 2 }),
+      expect.objectContaining({ id: 1, kind: 'signal', label: 'Channel' }),
+    ]);
+    expect(listing.parameters[1]).not.toHaveProperty('defaultValue');
+
+    log.mockClear();
+    expect(await run(['blueprint', 'export', '--parameters', '--json', path], environment)).toBe(0);
+    const native = JSON.parse(String(log.mock.calls[0]?.[0])).document.blueprint;
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '2', name: 'Amount' },
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Channel',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    expect(native.entities[0].control_behavior.sections.sections[0].filters).toMatchObject([
+      { name: 'parameter-0', count: 2 },
+    ]);
+
+    log.mockClear();
+    expect(await run(['test', '--json', path, casesPath], environment)).toBe(1);
+    const report = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(report.tests).toMatchObject({
+      passed: 2,
+      failed: 1,
+      results: [{ status: 'passed' }, { status: 'failed', code: 'CP1002' }, { status: 'passed' }],
+    });
+    expect(String(log.mock.calls[0]?.[0])).not.toContain('missing-binding callback must not run');
+    expect(error.mock.calls).toEqual([]);
+  });
+
   test('exports Selector Signal index and count-output parameters through the CLI', async () => {
     const { environment } = await parameterHost();
     const path =

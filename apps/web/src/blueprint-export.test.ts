@@ -243,6 +243,69 @@ output += Constant({ sections: [{ filters: [
     expect(concrete.result).not.toHaveProperty('parameters');
   });
 
+  test('Worker native projection composes automatic numbers with required Constant Signals', async () => {
+    const { environment } = await parameterHost();
+    const runtime = new CompilerWorkerRuntime({
+      resolveEntityReplayContext: () => ({
+        ...environment,
+        entityPrototypeResolver: entityPrototypeResolverFromProvider(environment.prototypes),
+      }),
+    });
+    const request = {
+      kind: 'parse' as const,
+      revision: 62,
+      file: {
+        path: 'automatic-number-signal-worker.factorio.ts',
+        text: `const amount = Param.number('Amount');
+const channel = Param.signal('Channel');
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: amount }] }] });`,
+      },
+      entityReplayContext: entityReplayContextTransport(environment.trustedEntityReplayContext),
+    };
+
+    const native = await runtime.handle({ ...request, blueprintExport: { parameters: true } });
+    expect(native.result.pipelineDiagnostics).toEqual([]);
+    expect(native.result.requiredParameterIds).toEqual([1]);
+    expect(native.result.plan).toBeUndefined();
+    expect(native.result.resolvedCircuit).toBeUndefined();
+    expect(native.result).not.toHaveProperty('execution');
+    expect(native.result.blueprintExport?.ok).toBe(true);
+    if (!native.result.blueprintExport?.ok) throw new Error('Composed Worker export failed.');
+    expect(native.result.blueprintExport.document.blueprint.parameters).toEqual([
+      { type: 'number', number: '2', name: 'Amount' },
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Channel',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    expect(native.result.blueprintExport.document.blueprint.entities[0]).toMatchObject({
+      control_behavior: {
+        sections: {
+          sections: [{ filters: [{ name: 'parameter-0', count: 2 }] }],
+        },
+      },
+    });
+
+    const concrete = await runtime.handle({
+      ...request,
+      revision: 63,
+      blueprintExport: { parameters: false },
+    });
+    expect(concrete.result.pipelineDiagnostics).toEqual([]);
+    expect(concrete.result.blueprintExport).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          code: 'BP1001',
+          message: expect.stringContaining('Compilation did not produce a resolved circuit'),
+        },
+      ],
+    });
+  });
+
   test.each([
     [
       "const amount = Param.number('Unused', 5);",

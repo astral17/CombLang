@@ -90,17 +90,18 @@ export function exportCompiledSourceBlueprint(
   const errors = compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error');
   if (errors.length > 0) return { ok: false, diagnostics: errors };
   try {
-    if (compilation.resolvedCircuit === undefined) {
-      throw new Error('Compilation did not produce a resolved circuit for blueprint export.');
-    }
     const projection = {
       label: options.label ?? 'CombLang generated circuit',
       maxDeciderConditionRows: 1024,
     };
-    const document =
-      options.parameters === true && listSourceCompilationParameters(compilation).length > 0
-        ? emitNativeBlueprintJson(exportSourceCompilationNativeBlueprint(compilation, projection))
-        : generateBlueprintJson(compilation.resolvedCircuit.ir, projection);
+    const nativeParametersRequested =
+      options.parameters === true && listSourceCompilationParameters(compilation).length > 0;
+    if (!nativeParametersRequested && compilation.resolvedCircuit === undefined) {
+      throw new Error('Compilation did not produce a resolved circuit for blueprint export.');
+    }
+    const document = nativeParametersRequested
+      ? emitNativeBlueprintJson(exportSourceCompilationNativeBlueprint(compilation, projection))
+      : generateBlueprintJson(compilation.resolvedCircuit!.ir, projection);
     return { ok: true, document };
   } catch (error) {
     const typed =

@@ -12,7 +12,10 @@ import { signal, SparseBus } from '@comblang/factorio';
 import { evaluateSelector } from '@comblang/simulator';
 import { emitNativeBlueprintJson } from '../../compiler/src/native-blueprint-emitter.js';
 import { buildNativeBlueprintFcir } from '../../compiler/src/native-blueprint-projector.js';
-import { BlueprintParameterError } from '../../compiler/src/blueprint-parameters.js';
+import {
+  BlueprintParameterError,
+  inspectBlueprintParameterHandle,
+} from '../../compiler/src/blueprint-parameters.js';
 import { validateNativeBlueprintFcir } from '../../compiler/src/native-blueprint-ir.js';
 import * as sourceApi from './source-compilation.js';
 import type { EntityPrototypeResolver } from './entity-registry.js';
@@ -4749,13 +4752,6 @@ const output = new Network();
 output += Arithmetic({ left: 2, operation: 'add', right: 5, output: channel });`,
     },
     {
-      label: 'automatic numeric coexistence',
-      source: `const amount = Param.number('Amount');
-const channel = Param.signal('Channel');
-const output = new Network();
-output += Constant({ sections: [{ filters: [{ signal: channel, value: amount }] }] });`,
-    },
-    {
       label: 'shared placeholder pool overflow',
       source: `const output = new Network();
 ${Array.from({ length: 11 }, (_, index) => `const p${index} = Param.signal('P${index}');`).join('\n')}
@@ -4770,4 +4766,128 @@ output += Constant({ sections: [{ filters: [${Array.from({ length: 11 }, (_, ind
       expect.objectContaining({ code: 'CP1002', severity: 'error', span: expect.any(Object) }),
     ]);
   });
+
+  test('composes automatic numeric defaults with required Constant Signal templates', () => {
+    const sourceCallsKey = '__comblang_mixed_symbolic_auto_number_source_calls';
+    const numberGetterKey = '__comblang_mixed_symbolic_auto_number_getter_calls';
+    const globals = globalThis as typeof globalThis & Record<string, unknown>;
+    globals[sourceCallsKey] = 0;
+    globals[numberGetterKey] = 0;
+    try {
+      const compilation = compile(`
+globalThis.${sourceCallsKey} += 1;
+const defaults = { get automatic() {
+  globalThis.${numberGetterKey} += 1;
+  return undefined;
+} };
+const amount = Param.number('Amount', defaults.automatic);
+const channel = Param.signal('Channel');
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: amount }] }] });`);
+
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      expect(compilation.requiredParameterIds).toEqual([1]);
+      expect(compilation.plan).toBeUndefined();
+      expect(compilation.resolvedCircuit).toBeUndefined();
+      expect(compilation.execution).toBeUndefined();
+      const declarations = sourceApi.listSourceCompilationParameters(compilation);
+      expect(declarations.map(({ kind, defaultValue }) => ({ kind, defaultValue }))).toEqual([
+        { kind: 'number', defaultValue: 2 },
+        { kind: 'signal', defaultValue: undefined },
+      ]);
+
+      const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      expect(sourceApi.exportSourceCompilationNativeBlueprint(compilation, options)).toEqual(
+        native,
+      );
+      expect(native.parameters).toEqual([
+        { type: 'number', number: '2', name: 'Amount' },
+        {
+          type: 'id',
+          id: 'parameter-0',
+          name: 'Channel',
+          'quality-condition': { quality: 'normal', comparator: '=' },
+        },
+      ]);
+      expect(emitNativeBlueprintJson(native).blueprint.entities[0]?.control_behavior).toMatchObject(
+        {
+          sections: {
+            sections: [{ filters: [{ name: 'parameter-0', count: 2 }] }],
+          },
+        },
+      );
+
+      const channel = declarations[1]!;
+      expect(() => sourceApi.bindSourceCompilationCircuit(compilation, [])).toThrowError(
+        expect.objectContaining({ code: 'CP1002', span: channel.source }),
+      );
+      const concrete = sourceApi.bindSourceCompilationCircuit(compilation, [
+        { parameter: channel.parameter, value: signal('item', 'iron-plate', 'uncommon') },
+      ]);
+      expect(concrete.plan.producers.find(({ kind }) => kind === 'constant')).toMatchObject({
+        configuration: {
+          sections: [
+            {
+              filters: [
+                { signal: { type: 'item', name: 'iron-plate', quality: 'uncommon' }, value: 2 },
+              ],
+            },
+          ],
+        },
+      });
+      expect(sourceApi.exportSourceCompilationNativeBlueprint(compilation, options)).toEqual(
+        native,
+      );
+      expect(globals[sourceCallsKey]).toBe(1);
+      expect(globals[numberGetterKey]).toBe(1);
+      expect(
+        inspectBlueprintParameterHandle(channel.parameter, '$.channel').defaultValue,
+      ).toBeUndefined();
+    } finally {
+      delete globals[sourceCallsKey];
+      delete globals[numberGetterKey];
+    }
+  });
+
+  test.each([
+    {
+      family: 'arithmetic-combinator',
+      tail: `const arithmetic = new Network();
+arithmetic += Arithmetic({ left: 3, operation: 'add', right: 5, output: Signal('virtual', 'signal-arithmetic') });`,
+    },
+    {
+      family: 'selector-combinator',
+      tail: `const input = new Network();
+const selected = new Network();
+selected += Selector({ input, operation: 'select', index: 1 });`,
+    },
+    {
+      family: 'decider-combinator',
+      tail: `const input = new Network();
+const decision = new Network();
+decision += Decider({ condition: input[Signal('virtual', 'signal-input')] > 5, outputs: [input[Signal('virtual', 'signal-output')]] });`,
+    },
+  ])(
+    'preserves independent $family setup alongside composed parameter contexts',
+    ({ family, tail }) => {
+      const compilation = compile(`const amount = Param.number('Amount');
+const channel = Param.signal('Channel');
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: amount }] }] });
+${tail}`);
+      expect(compilation.requiredParameterIds).toEqual([1]);
+      const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      const document = emitNativeBlueprintJson(native).blueprint;
+      expect(document.parameters).toEqual([
+        { type: 'number', number: '2', name: 'Amount' },
+        {
+          type: 'id',
+          id: 'parameter-0',
+          name: 'Channel',
+          'quality-condition': { quality: 'normal', comparator: '=' },
+        },
+      ]);
+      expect(document.entities.map(({ name }) => name)).toEqual(['constant-combinator', family]);
+    },
+  );
 });

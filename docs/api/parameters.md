@@ -70,10 +70,13 @@ truly unreferenced declarations remain unsupported.
 
 The default-free Signal slice is narrower: it currently supports only a direct
 `Constant` filter `signal` field. The count may be a literal or an existing
-explicitly defaulted numeric slot. Source construction is symbolic; the private
-native template uses an allocated `parameter-N` identity, but the public
+explicitly defaulted or automatically defaulted numeric slot. Automatic numeric
+allocation and Signal-template allocation are independent: the numeric original
+remains a real number default, while the private native template uses an
+allocated `parameter-N` identity only for the Signal field. The public
 compilation artifact contains no concrete plan or resolved circuit, and the
-placeholder is never a test default. Parameter listing omits `defaultValue`.
+Signal placeholder is never a test default. Parameter listing reports the
+chosen numeric default and omits `defaultValue` for the required Signal.
 Every test case that uses such a Signal must provide an explicit binding; a
 missing value or `parameters: []` fails with located `CP1002` before that case's
 callback, while a later independently bound case can still run. Bindings accept
@@ -82,10 +85,33 @@ item, fluid, or virtual Signals and preserve quality. `blueprint export
 explicit `--overrides` value. This structural export is not Factorio acceptance
 evidence.
 
-Default-free Signals in Arithmetic, Selector or Decider slots, and coexistence
-with automatic numeric defaults, remain unsupported and fail with located
-`CP1002`. Browser case controls, broader producer slots and ingredient/property
-dependencies remain pending.
+#### Automatic numeric defaults with a required Signal
+
+Create the symbolic circuit in `main.factorio.ts`:
+
+```javascript
+const count = Param.number('Count');
+const channel = Param.signal('Channel');
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: count }] }] });
+```
+
+Register the independently bound case in `circuit.test.js`:
+
+```javascript
+test(
+  'bind the required channel',
+  ({ network, expectSignal, tick }) => {
+    tick();
+    expectSignal(network('output'), Signal('item', 'iron-plate')).toBe(2);
+  },
+  { parameters: [{ id: 1, value: Signal('item', 'iron-plate') }] },
+);
+```
+
+Default-free Signals in Arithmetic, Selector or Decider slots remain unsupported
+and fail with located `CP1002`. Browser case controls, broader producer slots
+and ingredient/property dependencies remain pending.
 
 This nominal Signal slot matrix does not add Decider condition or output slots.
 However, once a Signal handle is authenticated in one of the supported slots,

@@ -2907,14 +2907,6 @@ class ElaborationRecorder {
         ({ registration }) =>
           registration.kind === 'signal' && registration.defaultValue === undefined,
       );
-      if (missingSignal !== undefined && this.#hasAutomaticNumberDefaults()) {
-        throw new BlueprintParameterError(
-          'CP1002',
-          '$.parameters',
-          'Automatic numeric defaults cannot be combined with default-free Signal parameters in this slice.',
-          missingSignal.registration.source,
-        );
-      }
       if (missingSignal !== undefined && this.#parameterCapture !== undefined) {
         this.#resolvedSignalTemplateContext = createSourceSignalTemplateContext(
           this.#parameterCapture.session,

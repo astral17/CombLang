@@ -239,14 +239,26 @@ describe('execution-local resolved numeric default context', () => {
 
     const signalSession = createBlueprintParameterSession();
     const missingSignal = signalSession.signal('Missing signal default');
-    expect(() =>
-      createSourceResolvedNumberDefaultContext(signalSession, declarations([missingSignal]), []),
-    ).toThrowError(
-      expect.objectContaining({
-        code: 'CP1002',
-        message: expect.stringContaining('Signal declarations without an explicit default'),
-      }),
+    const signalContext = createSourceResolvedNumberDefaultContext(
+      signalSession,
+      declarations([missingSignal]),
+      [],
     );
+    expect(signalContext.declarations).toMatchObject([
+      { kind: 'signal', label: 'Missing signal default' },
+    ]);
+    expect(signalContext.declarations[0]).not.toHaveProperty('defaultValue');
+
+    const signalTemplate = createConstantConfigurationTemplate(signalSession, {
+      sections: [{ filters: [{ signal: missingSignal, value: 5 }] }],
+    });
+    expect(signalContext.bindingsForConstantTemplate(signalTemplate)).toEqual([]);
+    expect(() =>
+      bindConstantConfigurationTemplate(
+        signalTemplate,
+        signalContext.bindingsForConstantTemplate(signalTemplate),
+      ),
+    ).toThrowError(expect.objectContaining({ code: 'CP1002' }));
   });
 
   test('requires one distinct nonzero int32 choice per missing NUMBER and excludes explicit defaults', () => {

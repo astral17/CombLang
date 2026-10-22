@@ -188,6 +188,39 @@ or invalid-JSON override files remain ingress errors that prevent registration.
 If the source declares no parameters, only `[]` is a valid snapshot. Source
 compilation and supported parameter declarations are unchanged by this adapter.
 
+#### Automatic numeric defaults with a required Signal
+
+Within the direct Constant-filter slice, an automatically selected number can
+feed a filter count while the Signal identity remains required per case.
+Circuit source (`main.factorio.ts`):
+
+```ts
+const count = Param.number('Count');
+const channel = Param.signal('Channel');
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: count }] }] });
+```
+
+Test file (`circuit.test.js`):
+
+```js
+test(
+  'iron plate channel',
+  ({ network, expectSignal, tick }) => {
+    tick();
+    expectSignal(network('output'), Signal('item', 'iron-plate', 'uncommon')).toBe(2);
+  },
+  { parameters: [{ id: 1, value: Signal('item', 'iron-plate', 'uncommon') }] },
+);
+```
+
+The number keeps its selected numeric reset default and can be overridden in a
+case; a later case that omits that numeric override returns to the selected
+default. The Signal's native `parameter-N` metadata is only a template identity,
+not a chosen value. Listing exposes no Signal default, and an omitted binding or
+`parameters: []` still fails before the affected callback. This composition does
+not extend default-free Signal support beyond direct Constant filter fields.
+
 CLI and host runtime routes now support these snapshots, including required
 bindings for the direct Constant-filter default-free Signal slice. Browser
 per-case routing is still pending. This does not add default-free Signal support

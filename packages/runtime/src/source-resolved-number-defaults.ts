@@ -42,14 +42,22 @@ import type { CapturedBlueprintParameter } from './blueprint-parameter-capture.j
 const INT32_MIN = -2_147_483_648;
 const INT32_MAX = 2_147_483_647;
 
-export interface SourceResolvedParameterSnapshot {
+interface SourceResolvedParameterSnapshotBase {
   readonly handle: BlueprintParameterHandle;
-  readonly kind: 'number' | 'signal';
   readonly label: string;
-  readonly defaultValue: number | SignalId;
   readonly source?: SourceSpan;
   readonly metadata?: BlueprintNumberParameterMetadata;
 }
+
+export type SourceResolvedParameterSnapshot =
+  | (SourceResolvedParameterSnapshotBase & {
+      readonly kind: 'number';
+      readonly defaultValue: number;
+    })
+  | (SourceResolvedParameterSnapshotBase & {
+      readonly kind: 'signal';
+      readonly defaultValue?: SignalId;
+    });
 
 /** Host-local binding context; snapshots are not authentic registry registrations. */
 export interface SourceResolvedNumberDefaultContext {
@@ -160,14 +168,6 @@ function validateDeclarations(
           fail('CP1001', `${path}.handle`, 'duplicate declaration handle.', registration.source);
         }
         seen.add(slot.handle);
-        if (registration.kind === 'signal' && registration.defaultValue === undefined) {
-          fail(
-            'CP1002',
-            `${path}.defaultValue`,
-            'Signal declarations without an explicit default are unsupported by this source binding context.',
-            registration.source,
-          );
-        }
         declarations.push(Object.freeze({ handle: slot.handle, registration }));
       } finally {
         entry.release();
@@ -324,26 +324,43 @@ function validateOverrides(
 function snapshotDeclaration(
   handle: BlueprintParameterHandle,
   registration: BlueprintParameterRegistration,
-  effectiveDefault: number | SignalId,
+  effectiveDefault: number | SignalId | undefined,
 ): SourceResolvedParameterSnapshot {
   const source = registration.source;
-  const snapshotDefault =
-    registration.kind === 'number'
-      ? effectiveDefault
-      : canonicalizeBlueprintParameterSignal(
-          effectiveDefault,
-          `$.declarations.${registration.label}.defaultValue`,
-          source,
-        );
-  return Object.freeze({
+  const common = {
     handle,
-    kind: registration.kind,
     label: registration.label,
-    defaultValue: snapshotDefault,
     ...(registration.source === undefined ? {} : { source: copySource(registration.source)! }),
     ...(registration.metadata === undefined
       ? {}
       : { metadata: copyMetadata(registration.metadata)! }),
+  };
+  if (registration.kind === 'number') {
+    if (typeof effectiveDefault !== 'number') {
+      fail(
+        'CP1002',
+        '$.declarations',
+        `NUMBER declaration "${registration.label}" has no resolved default.`,
+        registration.source,
+      );
+    }
+    return Object.freeze({
+      ...common,
+      kind: 'number',
+      defaultValue: effectiveDefault,
+    });
+  }
+  if (effectiveDefault === undefined) {
+    return Object.freeze({ ...common, kind: 'signal' });
+  }
+  return Object.freeze({
+    ...common,
+    kind: 'signal',
+    defaultValue: canonicalizeBlueprintParameterSignal(
+      effectiveDefault,
+      `$.declarations.${registration.label}.defaultValue`,
+      source,
+    ),
   });
 }
 
@@ -364,15 +381,10 @@ export function createSourceResolvedNumberDefaultContext(
   );
   const declarationsSnapshot = Object.freeze(
     declarations.map(({ handle, registration }) => {
-      const effectiveDefault = registration.defaultValue ?? chosenDefaults.get(handle);
-      if (effectiveDefault === undefined) {
-        fail(
-          'CP1002',
-          '$.declarations',
-          `NUMBER declaration "${registration.label}" has no resolved default.`,
-          registration.source,
-        );
-      }
+      const effectiveDefault =
+        registration.kind === 'number' && registration.defaultValue === undefined
+          ? chosenDefaults.get(handle)
+          : registration.defaultValue;
       return snapshotDeclaration(handle, registration, effectiveDefault);
     }),
   );

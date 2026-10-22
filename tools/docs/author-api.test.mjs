@@ -17,6 +17,7 @@ import {
   exportSourceCompilationNativeBlueprint,
 } from '../../packages/runtime/src/source-compilation.js';
 import { createSourceParameterBindingSession } from '@comblang/runtime/source-parameter-binding';
+import { runSourceCompilationTests } from '../../packages/runtime/src/source-compilation-test-runner.js';
 import {
   runExecutedDirectPlanTests,
   runResolvedDirectPlanTests,
@@ -82,6 +83,24 @@ function run(compilation, body) {
 }
 
 describe('author API documentation', () => {
+  test('runs the separate symbolic Constant source and its documented bound test file', async () => {
+    const example = read('parameters').match(
+      /#### Automatic numeric defaults with a required Signal[\s\S]*?```javascript\r?\n([\s\S]*?)\r?\n```[\s\S]*?```javascript\r?\n([\s\S]*?)\r?\n```/,
+    );
+    if (example === null) throw new Error('Missing symbolic source/test documentation pair');
+    const compilation = result(example[1], await bundled);
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.requiredParameterIds).toEqual([1]);
+    expect(compilation.execution).toBeUndefined();
+    expect(runSourceCompilationTests(compilation, example[2])).toMatchObject({
+      passed: 1,
+      failed: 0,
+    });
+    expect(createSourceParameterBindingSession(compilation).parameters[1]).not.toHaveProperty(
+      'defaultValue',
+    );
+  });
+
   test('runs the documented formula-only dependency through local binding and native projection', async () => {
     const source = read('parameters').match(
       /#### Formula-only dependency example[\s\S]*?```javascript\r?\n([\s\S]*?)\r?\n```/,
