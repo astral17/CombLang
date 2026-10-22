@@ -84,14 +84,17 @@ Signal values use `{ "type": "virtual", "name": "signal-A", "quality": "rare" }`
 full snapshot against the original defaults, not a patch on a previous choice:
 omitted IDs use defaults and `[]` restores all defaults. Explicit entries for
 unused declarations are rejected even when their value equals the default.
-Without declarations, only `[]` is accepted when the flag is present.
+Without declarations, any case snapshot must be `[]` when it is supplied or
+inherited.
 
-The command executes the circuit source once, binds once, then passes the
-matching concrete plan and resolved circuit to the test runner. Every callback
-starts independently at T0; neither a changed drive nor a failed earlier test
-contaminates the next. No overrides retains the original execution path.
-Existing debug aliases, trace documents and environment reporting are preserved.
-Numeric formula metadata is opaque and is never evaluated by CLI tests.
+The command executes the circuit source and registers the test file once. The
+`--overrides` array is a run-wide fallback for cases that omit their own
+snapshot; each case is bound independently against the owning source execution.
+Every callback starts independently at T0; neither a changed drive nor a failed
+earlier test contaminates the next. With no run-wide or case-level overrides,
+the original execution path is retained. Existing debug aliases, trace documents
+and environment reporting are preserved. Numeric formula metadata is opaque and
+is never evaluated by CLI tests.
 
 `--project` selects both configured source and test paths, or accepts exactly
 two explicit replacements; one path cannot mix configured and explicit roles.
@@ -103,12 +106,13 @@ Arguments and override-file syntax are checked before project/provider/source
 work. `--` ends option parsing, so subsequent paths stay literal.
 
 JSON retains `{ diagnostics, tests?, ...environment }`, not an export envelope.
-Located binding/setup errors retain compiler codes and declaration spans where
-known, keep compile warnings, and omit `tests`; unknown IDs have no invented
-declaration location. Exit codes are 0 for success, 1 for circuit/binding/test
-failure, and 2 for arguments, override ingress, provider or file I/O errors.
-Plain output retains PASS/FAIL rows and the summary; setup errors do not register
-tests. Malformed test scripts still produce the ordinary registration-failure
+Compile/setup diagnostics retain compiler codes and source spans where known and
+keep compile warnings. Binding failures are failed case results with their
+runtime code/details; a binding source span is not misreported as a test-file
+stack line. Unknown IDs have no invented declaration location. Exit codes are 0
+for success, 1 for circuit/binding/test failure, and 2 for arguments, override
+ingress, provider or file I/O errors. Plain output retains PASS/FAIL rows and the
+summary. Malformed test scripts still produce the ordinary registration-failure
 test report.
 
 See [concrete export and supported slots](blueprint-json.md#source-export-cli)
@@ -121,10 +125,11 @@ CLI parser. `test` does not accept `--parameters`, `--label` or
 via `blueprint export --parameters` is a separate mode. CLI simulator success
 and agreement with concrete JSON are not native Factorio acceptance evidence.
 
-### Host-local per-case parameter snapshots
+### Per-case parameter snapshots
 
-Host callers that retain the owning `LocalSourceCompilation` can route distinct
-parameter snapshots to test cases without rerunning the source:
+The CLI test file can select a snapshot for each case; a host caller can use the
+same source-aware runtime API directly. Neither route reruns the source or
+changes the original construction/export artifact:
 
 ```ts
 import { runSourceCompilationTests } from '@comblang/runtime';
@@ -145,20 +150,43 @@ const result = runSourceCompilationTests(
 );
 ```
 
+The CLI form uses the same optional third argument to `test`:
+
+```js
+test(
+  'rare signal scenario',
+  ({ network, expectSignal, tick }) => {
+    tick();
+    expectSignal(network('output'), Signal('virtual', 'signal-B', 'rare')).toBe(5);
+  },
+  { parameters: [{ id: 1, value: { type: 'virtual', name: 'signal-B', quality: 'rare' } }] },
+);
+```
+
+When `--overrides defaults.json` is present, that file supplies the run-wide
+fallback for cases without a `parameters` field. The per-case array is a full
+snapshot, not a patch: it replaces the fallback, omitted IDs return to the
+source's original values, and `[]` explicitly selects all originals. Without
+`--overrides`, cases with no `parameters` field use the captured original
+execution. Declaration IDs belong only to that exact source execution; labels
+are display names, never binding keys.
+
 An omitted case-level `parameters` field uses the optional run-wide snapshot;
 an explicit case array replaces it completely, so omitted IDs in that case
-return to source defaults. `[]` explicitly selects the source defaults. IDs are
-local to this exact captured source execution; labels are display names, not
-binding keys. Invalid snapshots fail only their case before its callback, and
-later cases continue. With no run-wide or case-level snapshot, the runner keeps
-the compilation's existing execution path. Source compilation and its current
-supported parameter declarations are unchanged by this adapter.
+return to source defaults. `[]` explicitly selects the source defaults. Invalid
+semantic values fail only the affected case before its callback, and later cases
+continue. An invalid run-wide snapshot therefore fails inherited cases, while
+an explicit valid case array or `[]` can still succeed. Duplicate and unknown
+IDs go to the owning runtime binder unchanged so its normal validation and
+diagnostics remain authoritative. Malformed arguments and unreadable, oversized
+or invalid-JSON override files remain ingress errors that prevent registration.
+If the source declares no parameters, only `[]` is a valid snapshot. Source
+compilation and supported parameter declarations are unchanged by this adapter.
 
-This is currently a host runtime API only. Browser and CLI per-case routing are
-not wired: CLI `--overrides` still binds one concrete plan/resolved-circuit pair
-before running the test file. This does not add default-free Signal source
-compilation, native ingredient dependencies, automatic recipe lookup, or a
-construction-screen binding UI.
+CLI and host runtime routes now support these snapshots. Browser per-case routing
+is still pending. This does not add default-free Signal source compilation,
+native ingredient dependencies, automatic recipe lookup, or a construction-screen
+binding UI.
 
 The test callback receives these convenience methods and complete APIs:
 

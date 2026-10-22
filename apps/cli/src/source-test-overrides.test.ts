@@ -12,6 +12,7 @@ import { loadPrototypeDatabase, syntheticPrototypeDatabase } from '@comblang/pro
 import * as sourceApi from '@comblang/runtime/source-compilation';
 import * as bindingApi from '@comblang/runtime/source-parameter-binding';
 import * as runtime from '@comblang/runtime';
+import { parseDiagnosticPolicy } from '@comblang/shared';
 import { run, type CliCompilationEnvironment } from './main.js';
 
 const directories: string[] = [];
@@ -122,8 +123,9 @@ function assertions(
   inputCount: number,
   outputCount: number,
   normalOutputCount = outputCount,
+  register = true,
 ) {
-  return `${registered}const S = Signal(${JSON.stringify(channel.type)}, ${JSON.stringify(channel.name)}, ${JSON.stringify(channel.quality)});
+  return `${register ? registered : ''}const S = Signal(${JSON.stringify(channel.type)}, ${JSON.stringify(channel.name)}, ${JSON.stringify(channel.quality)});
 test('fresh concrete values', ({ network, session, tick, expectSignal, execution }) => {
   const input = network('input'); const output = network('outputAlias');
   expectSignal(input, S).toBe(0); expectSignal(output, S).toBe(0);
@@ -304,7 +306,7 @@ describe('CLI test owning compilation and setup diagnostics', () => {
     [[{ id: 0, value: 1.5 }], 'CP1000', 'filters[0].value', true],
     [{ overrides: [] }, 'CP1000', '$.overrides', false],
   ] as const)(
-    'keeps adapter code/path/span for %j without registration',
+    'keeps per-case adapter code/path/span for %j',
     async (values, code, path, hasSpan) => {
       const { environment } = await parameterHost();
       const f = await files(
@@ -320,25 +322,33 @@ describe('CLI test owning compilation and setup diagnostics', () => {
         ),
       ).toBe(1);
       const report = c.report();
-      const diag = report.diagnostics.find((d: { code: string }) => d.code === code);
-      expect(diag).toMatchObject({
-        code,
-        severity: 'error',
-        message: expect.stringContaining(path),
+      expect(report.diagnostics).toContainEqual(
+        expect.objectContaining({ code: 'CL2001', severity: 'warning' }),
+      );
+      expect(report.tests).toMatchObject({
+        passed: 0,
+        failed: 1,
+        results: [
+          {
+            name: 'registered',
+            status: 'failed',
+            failureKind: 'runtime',
+            code,
+            message: expect.stringContaining(path),
+          },
+        ],
       });
+      const failure = report.tests.results[0];
       if (hasSpan)
-        expect(diag.span).toMatchObject({
+        expect(failure.details.source).toMatchObject({
           fileId: expect.any(String),
           start: expect.any(Number),
           end: expect.any(Number),
         });
-      else expect(diag).not.toHaveProperty('span');
-      expect(report.diagnostics).toContainEqual(
-        expect.objectContaining({ code: 'CL2001', severity: 'warning' }),
-      );
-      expect(report).not.toHaveProperty('tests');
+      else expect(failure.details).not.toHaveProperty('source');
+      expect(failure).not.toHaveProperty('line');
       expect(globals[sourceCounter]).toBe(1);
-      expect(globals[testCounter]).toBe(0);
+      expect(globals[testCounter]).toBe(1);
     },
   );
 
@@ -349,16 +359,22 @@ describe('CLI test owning compilation and setup diagnostics', () => {
     expect(
       await run(['test', '--overrides', f.valuesPath, f.sourcePath, f.testPath], environment),
     ).toBe(1);
-    expect(c.error).toHaveBeenCalledWith(
-      expect.stringContaining(`${relative(process.cwd(), f.sourcePath).replaceAll('\\', '/')}:2:`),
+    const output = c.error.mock.calls.map(([text]) => String(text)).join('\n');
+    expect(output).toContain('FAIL registered CP1000');
+    expect(output).toContain(
+      `[binding ${relative(process.cwd(), f.sourcePath).replaceAll('\\', '/')}:2:`,
     );
-    expect(c.error).toHaveBeenCalledWith(expect.stringContaining('error CP1000'));
-    expect(c.log.mock.calls.some(([text]) => String(text).startsWith('PASS'))).toBe(false);
+    expect(output).not.toContain(`${relative(process.cwd(), f.testPath).replaceAll('\\', '/')}:`);
   });
 
-  test('unexpected binding failure stays a setup error with no fallback or source rerun', async () => {
+  test('unexpected binding failure stays a case setup error with no fallback or source rerun', async () => {
     const { environment } = await parameterHost();
-    const f = await files();
+    const bodyKey = '__comblang_cli_unexpected_binding_body_runs';
+    vi.stubGlobal(bodyKey, 0);
+    const f = await files(
+      source,
+      `${registered}test('must not use the original execution', () => { globalThis.${bodyKey} += 1; });`,
+    );
     const c = capture();
     vi.spyOn(bindingApi, 'createSourceParameterBindingSession').mockImplementation(() => {
       throw new Error('binding fault');
@@ -370,13 +386,22 @@ describe('CLI test owning compilation and setup diagnostics', () => {
         environment,
       ),
     ).toBe(1);
-    expect(c.report().diagnostics).toContainEqual(
-      expect.objectContaining({ code: 'EX1001', message: 'binding fault' }),
-    );
-    expect(c.report()).not.toHaveProperty('tests');
+    expect(c.report().tests).toMatchObject({
+      passed: 0,
+      failed: 1,
+      results: [
+        {
+          name: 'must not use the original execution',
+          status: 'failed',
+          failureKind: 'runtime',
+          message: 'binding fault',
+        },
+      ],
+    });
     expect(originalRunner).not.toHaveBeenCalled();
+    expect(globals[bodyKey]).toBe(0);
     expect(globals[sourceCounter]).toBe(1);
-    expect(globals[testCounter]).toBe(0);
+    expect(globals[testCounter]).toBe(1);
   });
 
   test.each([[], [{ id: 0, value: 5 }], {}].map((values) => ({ values })))(
@@ -394,11 +419,14 @@ describe('CLI test owning compilation and setup diagnostics', () => {
       ).toBe(succeeds ? 0 : 1);
       if (succeeds) expect(c.report().tests).toMatchObject({ passed: 1, failed: 0 });
       else {
-        expect(c.report().diagnostics).toContainEqual(expect.objectContaining({ code: 'CLI1001' }));
-        expect(c.report()).not.toHaveProperty('tests');
+        expect(c.report().tests).toMatchObject({
+          passed: 0,
+          failed: 1,
+          results: [{ status: 'failed', code: 'CP1000', failureKind: 'runtime' }],
+        });
       }
       expect(globals[sourceCounter]).toBe(1);
-      expect(globals[testCounter]).toBe(succeeds ? 1 : 0);
+      expect(globals[testCounter]).toBe(1);
     },
   );
 
@@ -416,16 +444,60 @@ describe('CLI test owning compilation and setup diagnostics', () => {
       expect(globals[testCounter]).toBe(0);
     },
   );
+
+  test('a project diagnostic policy error prevents registration and binding', async () => {
+    const base = await parameterHost();
+    const environment = {
+      ...base.environment,
+      diagnosticPolicy: parseDiagnosticPolicy({
+        rules: { 'producer.unused-output': { severity: 'error' } },
+      }),
+    } satisfies CliCompilationEnvironment;
+    const text = `${counted}const warningInput = new Network(); const warningProducer = warningInput + 0;`;
+    const f = await files(text);
+    const c = capture();
+    const bind = vi.spyOn(bindingApi, 'createSourceParameterBindingSession');
+    expect(
+      await run(
+        ['test', '--json', '--overrides', f.valuesPath, f.sourcePath, f.testPath],
+        environment,
+      ),
+    ).toBe(1);
+    expect(c.report().diagnostics).toContainEqual(
+      expect.objectContaining({ code: 'CL2001', severity: 'error' }),
+    );
+    expect(c.report()).not.toHaveProperty('tests');
+    expect(bind).not.toHaveBeenCalled();
+    expect(globals[sourceCounter]).toBe(1);
+    expect(globals[testCounter]).toBe(0);
+  });
 });
 
 describe('CLI test selected pair and fresh sessions', () => {
-  test('binds once, executes source once and isolates a failed first test from fresh quality-aware T0', async () => {
+  test('routes run defaults and independent case snapshots without source or registration reruns', async () => {
     const { environment } = await parameterHost();
     const tests = `const C = Signal('virtual', 'signal-A');
-test('changed first session', ({ network, drive, tick, expectSignal }) => {
+test('failed driven session', ({ network, drive, tick, expectSignal }) => {
   drive(network('input'), [[C, 100]]); tick(3);
   expectSignal(network('output'), C).toBe(-999);
-});\n${assertions(8, { type: 'virtual', name: 'signal-C', quality: 'rare' }, 8, 8, 0)}`;
+});
+${assertions(8, { type: 'virtual', name: 'signal-C', quality: 'rare' }, 8, 8, 0)}
+test('case replaces the full run snapshot', ({ network, tick, expectSignal }) => {
+  const rare = Signal('virtual', 'signal-B', 'rare');
+  expectSignal(network('input'), rare).toBe(0);
+  expectSignal(network('output'), rare).toBe(0);
+  tick(); expectSignal(network('input'), rare).toBe(6);
+  expectSignal(network('output'), rare).toBe(6);
+  expectSignal(network('output'), Signal('virtual', 'signal-C', 'rare')).toBe(0);
+}, { parameters: [
+  { id: 0, value: 6 },
+  { id: 1, value: { type: 'virtual', name: 'signal-B', quality: 'rare' } },
+  { id: 2, value: 1 }
+] });
+test('empty case snapshot restores source originals', ({ network, tick, expectSignal }) => {
+  expectSignal(network('output'), Signal('virtual', 'signal-A')).toBe(0);
+  tick(); expectSignal(network('output'), Signal('virtual', 'signal-A')).toBe(5);
+}, { parameters: [] });`;
     const f = await files(source, tests);
     const c = capture();
     const original = bindingApi.createSourceParameterBindingSession;
@@ -437,7 +509,6 @@ test('changed first session', ({ network, drive, tick, expectSignal }) => {
         bind.mockImplementation((raw) => session.bind(raw));
         return { parameters: session.parameters, bind };
       });
-    const runner = vi.spyOn(runtime, 'runResolvedDirectPlanTests');
     expect(
       await run(
         ['test', '--json', '--overrides', f.valuesPath, f.sourcePath, f.testPath],
@@ -445,21 +516,169 @@ test('changed first session', ({ network, drive, tick, expectSignal }) => {
       ),
     ).toBe(1);
     expect(owner).toHaveBeenCalledTimes(1);
-    expect(bind).toHaveBeenCalledExactlyOnceWith(chosen);
-    expect(runner).toHaveBeenCalledTimes(1);
+    expect(bind).toHaveBeenCalledTimes(4);
+    expect(bind).toHaveBeenNthCalledWith(1, chosen);
+    expect(bind).toHaveBeenNthCalledWith(2, chosen);
+    expect(bind).toHaveBeenNthCalledWith(3, [
+      { id: 0, value: 6 },
+      { id: 1, value: { type: 'virtual', name: 'signal-B', quality: 'rare' } },
+      { id: 2, value: 1 },
+    ]);
+    expect(bind).toHaveBeenNthCalledWith(4, []);
+    expect(c.report().tests.results[2].message).toBeUndefined();
     expect(c.report().tests).toMatchObject({
-      passed: 1,
+      passed: 3,
       failed: 1,
       results: [
-        { name: 'changed first session', status: 'failed', line: 4 },
+        { name: 'failed driven session', status: 'failed', line: 4 },
         {
           name: 'fresh concrete values',
           status: 'passed',
           trace: { endTick: 2 },
           debug: { format: 'comblang-debug' },
         },
+        { name: 'case replaces the full run snapshot', status: 'passed' },
+        { name: 'empty case snapshot restores source originals', status: 'passed' },
       ],
     });
+    expect(globals[sourceCounter]).toBe(1);
+    expect(globals[testCounter]).toBe(1);
+
+    expect(await run(['blueprint', 'export', '--json', f.sourcePath], environment)).toBe(0);
+    expect(
+      c.report().document.blueprint.entities[0].control_behavior.sections.sections[0].filters[0],
+    ).toMatchObject({
+      name: 'signal-A',
+      count: 5,
+    });
+    expect(globals[sourceCounter]).toBe(2);
+  });
+
+  test('isolates invalid case bindings between passing run-default cases', async () => {
+    const { environment } = await parameterHost();
+    const badBodyKey = '__comblang_cli_invalid_case_body_runs';
+    vi.stubGlobal(badBodyKey, 0);
+    const testSource = `${assertions(8, { type: 'virtual', name: 'signal-C', quality: 'rare' }, 8, 8, 0)}
+test('duplicate IDs', () => { globalThis.${badBodyKey} += 1; }, { parameters: [{ id: 0, value: 3 }, { id: 0, value: 4 }] });
+test('unknown ID', () => { globalThis.${badBodyKey} += 1; }, { parameters: [{ id: 99, value: 3 }] });
+test('invalid number', () => { globalThis.${badBodyKey} += 1; }, { parameters: [{ id: 0, value: 1.5 }] });
+test('invalid Signal', () => { globalThis.${badBodyKey} += 1; }, { parameters: [{ id: 1, value: 'signal-C' }] });
+test('passing fallback after invalid cases', ({ network, tick, expectSignal }) => {
+  tick(); expectSignal(network('input'), Signal('virtual', 'signal-C', 'rare')).toBe(8);
+});`;
+    const f = await files(source, testSource, chosen);
+    const c = capture();
+    expect(
+      await run(
+        ['test', '--json', '--overrides', f.valuesPath, f.sourcePath, f.testPath],
+        environment,
+      ),
+    ).toBe(1);
+    const results = c.report().tests.results;
+    expect(c.report().tests).toMatchObject({ passed: 2, failed: 4 });
+    expect(
+      results.map(({ status, code }: { status: string; code?: string }) => [status, code]),
+    ).toEqual([
+      ['passed', undefined],
+      ['failed', 'CP1000'],
+      ['failed', 'CP1000'],
+      ['failed', 'CP1000'],
+      ['failed', 'CP1000'],
+      ['passed', undefined],
+    ]);
+    expect(
+      results.slice(1, 5).every((result: { line?: number }) => result.line === undefined),
+    ).toBe(true);
+    expect(globals[badBodyKey]).toBe(0);
+    expect(globals[sourceCounter]).toBe(1);
+    expect(globals[testCounter]).toBe(1);
+  });
+
+  test('an invalid run default fails only inherited cases while [] and explicit values reset it', async () => {
+    const { environment } = await parameterHost();
+    const badBodyKey = '__comblang_cli_invalid_run_default_body_runs';
+    vi.stubGlobal(badBodyKey, 0);
+    const tests = `${registered}
+test('inherits invalid run values', () => { globalThis.${badBodyKey} += 1; });
+test('empty snapshot resets defaults', ({ network, tick, expectSignal }) => {
+  tick(); expectSignal(network('input'), Signal('virtual', 'signal-A')).toBe(5);
+}, { parameters: [] });
+test('explicit snapshot replaces invalid run values', ({ network, tick, expectSignal }) => {
+  tick(); expectSignal(network('input'), Signal('virtual', 'signal-A')).toBe(9);
+}, { parameters: [{ id: 0, value: 9 }] });`;
+    const f = await files(source, tests, [{ id: 0, value: 1.5 }]);
+    const c = capture();
+    expect(
+      await run(
+        ['test', '--json', '--overrides', f.valuesPath, f.sourcePath, f.testPath],
+        environment,
+      ),
+    ).toBe(1);
+    expect(c.report().tests).toMatchObject({
+      passed: 2,
+      failed: 1,
+      results: [
+        { name: 'inherits invalid run values', status: 'failed', code: 'CP1000' },
+        { name: 'empty snapshot resets defaults', status: 'passed' },
+        { name: 'explicit snapshot replaces invalid run values', status: 'passed' },
+      ],
+    });
+    expect(globals[badBodyKey]).toBe(0);
+    expect(globals[sourceCounter]).toBe(1);
+    expect(globals[testCounter]).toBe(1);
+  });
+
+  test('same-label numeric IDs stay independent when case order is reversed', async () => {
+    const { environment } = await parameterHost();
+    const numericSource = `${counted}const first = Param.number('Amount', 5);
+const second = Param.number('Amount', 5);
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: Signal('virtual', 'signal-A'), value: first },
+  { signal: Signal('virtual', 'signal-B'), value: second }
+] }] });`;
+    const firstCase = `test('first declaration', ({ network, tick, expectSignal }) => {
+  tick();
+  expectSignal(network('output'), Signal('virtual', 'signal-A')).toBe(11);
+  expectSignal(network('output'), Signal('virtual', 'signal-B')).toBe(5);
+}, { parameters: [{ id: 0, value: 11 }] });`;
+    const secondCase = `test('second declaration', ({ network, tick, expectSignal }) => {
+  tick();
+  expectSignal(network('output'), Signal('virtual', 'signal-A')).toBe(5);
+  expectSignal(network('output'), Signal('virtual', 'signal-B')).toBe(13);
+}, { parameters: [{ id: 1, value: 13 }] });`;
+    for (const cases of [
+      [firstCase, secondCase],
+      [secondCase, firstCase],
+    ]) {
+      const f = await files(numericSource, `${registered}\n${cases.join('\n')}`);
+      const c = capture();
+      expect(await run(['test', '--json', f.sourcePath, f.testPath], environment)).toBe(0);
+      expect(c.report().tests).toMatchObject({ passed: 2, failed: 0 });
+      expect(globals[sourceCounter]).toBe(1);
+      expect(globals[testCounter]).toBe(1);
+    }
+  });
+
+  test('replays a bound Entity-bearing source through the matching host authority', async () => {
+    const { environment } = await parameterHost();
+    const entitySource = `${source}\nconst structural = Entity('structural');\nvoid structural;`;
+    const tests = `${registered}test('bound pair keeps its trusted Entity context', ({ execution }) => {
+  const entity = execution.circuit.ir.entities.find(({ configuration }) => configuration?.mode === 'constant');
+  if (entity?.configuration?.value?.sections?.[0]?.filters?.[0]?.value !== 13) {
+    throw new Error('The bound Entity-bearing execution did not use the selected value.');
+  }
+});`;
+    const f = await files(entitySource, tests, [{ id: 0, value: 13 }]);
+    const c = capture();
+    expect(
+      await run(
+        ['test', '--json', '--overrides', f.valuesPath, f.sourcePath, f.testPath],
+        environment,
+      ),
+    ).toBe(0);
+    expect(c.report().tests).toMatchObject({ passed: 1, failed: 0 });
+    expect(c.report().entityReplayIdentity).toBeTypeOf('string');
     expect(globals[sourceCounter]).toBe(1);
     expect(globals[testCounter]).toBe(1);
   });
@@ -580,8 +799,7 @@ test('changed first session', ({ network, drive, tick, expectSignal }) => {
     const { environment } = await parameterHost();
     const f = await files(source, assertions(5, { type: 'virtual', name: 'signal-A' }, 5, 10));
     const c = capture();
-    const bound = vi.spyOn(runtime, 'runResolvedDirectPlanTests');
-    const executed = vi.spyOn(runtime, 'runExecutedDirectPlanTests');
+    const sourceRunner = vi.spyOn(runtime, 'runSourceCompilationTests');
     expect(await run(['test', '--json', f.sourcePath, f.testPath], environment)).toBe(0);
     const report = c.report();
     expect(report.tests).toMatchObject({ passed: 1, failed: 0 });
@@ -591,8 +809,10 @@ test('changed first session', ({ network, drive, tick, expectSignal }) => {
     expect(await run(['test', f.sourcePath, f.testPath], environment)).toBe(0);
     expect(c.log).toHaveBeenCalledWith('PASS fresh concrete values');
     expect(c.log).toHaveBeenCalledWith('1 passed, 0 failed.');
-    expect(executed).toHaveBeenCalledTimes(2);
-    expect(bound).not.toHaveBeenCalled();
+    expect(sourceRunner).toHaveBeenCalledTimes(2);
+    expect(
+      sourceRunner.mock.calls.every(([, , options]) => options?.parameters === undefined),
+    ).toBe(true);
     expect(globals[sourceCounter]).toBe(2);
   });
 
@@ -748,20 +968,22 @@ test('fresh T0 uses the selected threshold', ({ network, tick, expectSignal }) =
       ),
     ).toBe(1);
     const failure = invalidCapture.report();
-    const diagnostic = failure.diagnostics.find((item: { code: string }) => item.code === 'CP1000');
-    expect(diagnostic).toMatchObject({
+    const bindingFailure = failure.tests.results[0];
+    expect(bindingFailure).toMatchObject({
       code: 'CP1000',
-      severity: 'error',
+      status: 'failed',
+      failureKind: 'runtime',
       message: expect.stringContaining('Decider constant values must be safe integers'),
-      span: { fileId: expect.any(String), start: expect.any(Number), end: expect.any(Number) },
+      details: {
+        source: { fileId: expect.any(String), start: expect.any(Number), end: expect.any(Number) },
+      },
     });
-    expect(diagnostic.span.fileId).toContain(invalid.sourcePath.replaceAll('\\', '/'));
-    expect(expressionSource.slice(diagnostic.span.start, diagnostic.span.end)).toContain(
-      "Param.number('Amount', 5)",
-    );
-    expect(failure).not.toHaveProperty('tests');
+    const span = bindingFailure.details.source;
+    expect(span.fileId).toContain(invalid.sourcePath.replaceAll('\\', '/'));
+    expect(expressionSource.slice(span.start, span.end)).toContain("Param.number('Amount', 5)");
+    expect(bindingFailure).not.toHaveProperty('line');
     expect(globals[sourceCounter]).toBe(1);
-    expect(globals[testCounter]).toBe(0);
+    expect(globals[testCounter]).toBe(1);
   });
 
   test('preserves Signal quality beside a derived Constant count through CLI tests and JSON', async () => {

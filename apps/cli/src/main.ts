@@ -36,21 +36,15 @@ import {
   type FactorioDumpMetadata,
   type PrototypeProvider,
 } from '@comblang/prototypes';
-import {
-  executionFailureDiagnostic,
-  runExecutedDirectPlanTests,
-  runResolvedDirectPlanTests,
-} from '@comblang/runtime';
+import { runSourceCompilationTests } from '@comblang/runtime';
 import {
   conservativeEntityProvisioningPolicy,
   EntityProvisioningService,
 } from '@comblang/runtime/entity-provisioning';
 import {
   compileParsedSourceProgram,
-  listSourceCompilationParameters,
   type LocalSourceCompilation,
 } from '@comblang/runtime/source-compilation';
-import { createSourceParameterBindingSession } from '@comblang/runtime/source-parameter-binding';
 import { offsetToPosition, type Diagnostic, type DiagnosticPolicy } from '@comblang/shared';
 import { resolveProjectOptions } from './project-profile.js';
 import { BlueprintCliError, runBlueprintCommand } from './blueprint-command.js';
@@ -325,7 +319,7 @@ async function testCircuit(
     diagnostics.push(...compilation.pipelineDiagnostics);
   }
 
-  let tests: ReturnType<typeof runExecutedDirectPlanTests> | undefined;
+  let tests: ReturnType<typeof runSourceCompilationTests> | undefined;
   if (
     compilation?.execution !== undefined &&
     !diagnostics.some(({ severity }) => severity === 'error')
@@ -333,36 +327,9 @@ async function testCircuit(
     const options = {
       sourceName: relative(process.cwd(), absoluteTest).replaceAll('\\', '/'),
       stackLineOffset: 3,
+      ...(overrides === undefined ? {} : { parameters: overrides.values }),
     };
-    if (overrides === undefined) {
-      tests = runExecutedDirectPlanTests(compilation.execution, testSource, options);
-    } else {
-      try {
-        if (listSourceCompilationParameters(compilation).length === 0) {
-          if (!Array.isArray(overrides.values) || overrides.values.length !== 0) {
-            throw new CliInputError(
-              'CLI1001',
-              'Source has no parameter declarations; overrides must be an empty array.',
-            );
-          }
-          tests = runExecutedDirectPlanTests(compilation.execution, testSource, options);
-        } else {
-          const bound = createSourceParameterBindingSession(compilation).bind(overrides.values);
-          tests = runResolvedDirectPlanTests(
-            bound.plan,
-            bound.resolvedCircuit,
-            testSource,
-            options,
-          );
-        }
-      } catch (error) {
-        diagnostics.push(
-          error instanceof CliInputError
-            ? { code: error.code, severity: 'error', message: error.message }
-            : executionFailureDiagnostic(error),
-        );
-      }
-    }
+    tests = runSourceCompilationTests(compilation, testSource, options);
   }
 
   if (json) {
@@ -390,7 +357,25 @@ async function testCircuit(
         const location = result.line === undefined ? '' : `:${result.line}:${result.column ?? 1}`;
         const code = result.code === undefined ? '' : ` ${result.code}`;
         const message = result.message === undefined ? '' : ` - ${result.message}`;
-        const formatted = `${label} ${result.name}${location}${code}${message}`;
+        let bindingLocation = '';
+        if (
+          result.failureKind === 'runtime' &&
+          result.details !== null &&
+          typeof result.details === 'object' &&
+          'source' in result.details
+        ) {
+          const span = (result.details as { source?: unknown }).source;
+          if (
+            span !== null &&
+            typeof span === 'object' &&
+            'start' in span &&
+            Number.isSafeInteger((span as { start: unknown }).start)
+          ) {
+            const position = offsetToPosition(source.text, (span as { start: number }).start);
+            bindingLocation = ` [binding ${source.path}:${position.line + 1}:${position.column + 1}]`;
+          }
+        }
+        const formatted = `${label} ${result.name}${location}${code}${message}${bindingLocation}`;
         if (result.status === 'passed') console.log(formatted);
         else {
           console.error(formatted);
