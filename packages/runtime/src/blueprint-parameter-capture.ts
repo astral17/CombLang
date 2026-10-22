@@ -51,14 +51,20 @@ export class BlueprintParameterCapture {
 
   signal(
     label: unknown,
-    defaultValue: SignalId,
+    defaultValue: SignalId | undefined,
     metadata: unknown,
     source: SourceSpan,
   ): BlueprintParameterHandle {
     this.#assertOpen(source);
     this.#assertLabel(label, source);
     this.#assertMetadata(metadata, source);
-    return this.#register(this.session.signal(label, { defaultValue, source }), source);
+    return this.#register(
+      this.session.signal(label, {
+        ...(defaultValue === undefined ? {} : { defaultValue }),
+        source,
+      }),
+      source,
+    );
   }
 
   seal(): void {

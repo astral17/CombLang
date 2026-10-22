@@ -14,19 +14,19 @@ Source globals, not importable TypeScript library declarations:
 
 ```text
 Param.number(label[, defaultValue[, metadata]]) -> opaque number parameter
-Param.signal(label, defaultSignal) -> opaque Signal parameter
+Param.signal(label[, defaultSignal]) -> opaque Signal parameter
 ```
 
-| Argument              | Contract                                                                                                                             |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `label`               | Required nonblank string. Preserved display text, not a unique key.                                                                  |
-| Number `defaultValue` | Optional finite number; omit it or pass `undefined` to request an automatic local default. Each field applies its own numeric rules. |
-| `defaultSignal`       | Required current-source `Signal(...)` handle, including optional quality; not a plain `{ type, name }` object.                       |
-| Number `metadata`     | Optional plain data record with `variable?: string`, `formula?: string`, `dependent?: boolean`.                                      |
+| Argument              | Contract                                                                                                                                                                     |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `label`               | Required nonblank string. Preserved display text, not a unique key.                                                                                                          |
+| Number `defaultValue` | Optional finite number; omit it or pass `undefined` to request an automatic local default. Each field applies its own numeric rules.                                         |
+| `defaultSignal`       | Optional current-source `Signal(...)` handle, including optional quality; omit it or pass `undefined` when each test must bind a value. Not a plain `{ type, name }` object. |
+| Number `metadata`     | Optional plain data record with `variable?: string`, `formula?: string`, `dependent?: boolean`.                                                                              |
 
 Defaults are positional; there is no `{ default: ... }` wrapper. Numeric
 metadata remains the third argument, so there is no second-position metadata
-overload. `Param.signal` accepts exactly two arguments and no metadata. Creating
+overload. `Param.signal` accepts one or two arguments and no metadata. Creating
 a declaration creates no combinator, wire or tick delay. Distinct declarations
 remain distinct even when their labels and defaults are equal.
 
@@ -67,6 +67,25 @@ output. In `count`, it names the Signal that receives the count. A referenced
 number declaration is retained
 as an original row even when its original value has no direct physical slot;
 truly unreferenced declarations remain unsupported.
+
+The default-free Signal slice is narrower: it currently supports only a direct
+`Constant` filter `signal` field. The count may be a literal or an existing
+explicitly defaulted numeric slot. Source construction is symbolic; the private
+native template uses an allocated `parameter-N` identity, but the public
+compilation artifact contains no concrete plan or resolved circuit, and the
+placeholder is never a test default. Parameter listing omits `defaultValue`.
+Every test case that uses such a Signal must provide an explicit binding; a
+missing value or `parameters: []` fails with located `CP1002` before that case's
+callback, while a later independently bound case can still run. Bindings accept
+item, fluid, or virtual Signals and preserve quality. `blueprint export
+--parameters` emits native placeholder metadata; concrete export requires an
+explicit `--overrides` value. This structural export is not Factorio acceptance
+evidence.
+
+Default-free Signals in Arithmetic, Selector or Decider slots, and coexistence
+with automatic numeric defaults, remain unsupported and fail with located
+`CP1002`. Browser case controls, broader producer slots and ingredient/property
+dependencies remain pending.
 
 This nominal Signal slot matrix does not add Decider condition or output slots.
 However, once a Signal handle is authenticated in one of the supported slots,

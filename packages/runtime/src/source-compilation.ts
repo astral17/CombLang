@@ -1,7 +1,7 @@
 import { transformElaborationModule } from '@comblang/compiler/elaboration-transform';
 import type { DirectElaborationPlan } from '@comblang/compiler/direct-plan-schema';
 import type { LogicalDeciderCondition, NativeCircuitIr } from '@comblang/compiler/ir';
-import { signalKey, type SignalId } from '@comblang/factorio';
+import { signal, signalKey, type SignalId } from '@comblang/factorio';
 import {
   cloneEntityReplayContextTransport,
   entityReplayContextIdentity,
@@ -110,6 +110,8 @@ export interface SourceCompilationArtifact extends ParseWorkerResult {
   readonly entityReplayContext?: EntityReplayContextTransport;
   /** Future result-cache identity; no compilation-result cache consumes it yet. */
   readonly entityReplayIdentity?: string;
+  /** IDs of used Signal declarations that require an explicit test binding. */
+  readonly requiredParameterIds?: readonly number[];
   readonly elaborationJavaScript?: string;
   readonly plan?: DirectElaborationPlan;
   /** Detached physical IR; present only after host-authorized lowering succeeds. */
@@ -126,7 +128,7 @@ export interface SourceCompilationParameter {
   readonly parameter: BlueprintParameterHandle;
   readonly kind: BlueprintParameterKind;
   readonly label: string;
-  readonly defaultValue: number | SignalId;
+  readonly defaultValue?: number | SignalId;
   readonly source: SourceSpan;
   readonly metadata?: BlueprintNumberParameterMetadata;
 }
@@ -136,6 +138,8 @@ const capturedParametersByCompilation = new WeakMap<
   {
     readonly source: ExecutedElaborationWithBlueprintParameters;
     readonly execution?: ExecutedDirectPlan;
+    readonly plan?: DirectElaborationPlan;
+    readonly resolvedCircuit?: ResolvedCircuit;
   }
 >();
 const parameterSourceArtifacts = new WeakSet<object>();
@@ -199,11 +203,12 @@ function compileParsedSource(
   const entityReplayContext = replayTransport(environment);
   let plan: DirectElaborationPlan | undefined;
   let execution: ExecutedDirectPlan | undefined;
-  let parameterPairedExecution: ExecutedDirectPlan | undefined;
   let resolvedCircuit: ResolvedCircuit | undefined;
   let elaborationJavaScript: string | undefined;
   let hasSourceParameterDeclarations = false;
   let capturedParameters: ExecutedElaborationWithBlueprintParameters | undefined;
+  let privateResolvedCircuit: ResolvedCircuit | undefined;
+  let privateExecution: ExecutedDirectPlan | undefined;
   observe?.('semantic');
   const semanticDiagnostics = validateDslSemantics(parsed);
   const compilerDiagnostics: Diagnostic[] = [...preflightDiagnostics, ...semanticDiagnostics];
@@ -241,8 +246,9 @@ function compileParsedSource(
           environment.trustedEntityReplayContext,
         );
         execution = lowered.execution;
-        parameterPairedExecution = lowered.execution;
         resolvedCircuit = lowered.resolvedCircuit;
+        privateExecution = lowered.execution;
+        privateResolvedCircuit = lowered.resolvedCircuit;
         appendCompilerDiagnostics(executedPlan.diagnostics ?? []);
         appendCompilerDiagnostics(lowered.diagnostics);
       }
@@ -252,6 +258,19 @@ function compileParsedSource(
       appendCompilerDiagnostics([executionFailureDiagnostic(error)]);
     }
   }
+
+  const hasDefaultFreeSignal =
+    capturedParameters?.parameters.some(
+      ({ registration }) =>
+        registration.kind === 'signal' && registration.defaultValue === undefined,
+    ) ?? false;
+  const requiredParameterIds =
+    capturedParameters?.resolvedSignalTemplates === undefined
+      ? []
+      : capturedParameters.resolvedSignalTemplates.requiredParameters.flatMap((handle) => {
+          const id = capturedParameters!.parameters.findIndex((entry) => entry.handle === handle);
+          return id < 0 ? [] : [id];
+        });
 
   const compilation = canonicalizeCompilationArtifacts({
     fileId: parsed.id,
@@ -271,14 +290,19 @@ function compileParsedSource(
           entityReplayIdentity: entityReplayContextIdentity(entityReplayContext),
         }),
     ...(elaborationJavaScript === undefined ? {} : { elaborationJavaScript }),
-    ...(plan === undefined ? {} : { plan }),
-    ...(resolvedCircuit === undefined ? {} : { resolvedCircuit }),
-    ...(execution === undefined ? {} : { execution }),
+    ...(hasDefaultFreeSignal || plan === undefined ? {} : { plan }),
+    ...(hasDefaultFreeSignal || resolvedCircuit === undefined ? {} : { resolvedCircuit }),
+    ...(requiredParameterIds.length > 0 || hasDefaultFreeSignal
+      ? { requiredParameterIds: Object.freeze(requiredParameterIds) }
+      : {}),
+    ...(hasDefaultFreeSignal || execution === undefined ? {} : { execution }),
   } as unknown as Record<string, any>) as unknown as LocalSourceCompilation;
   if (capturedParameters !== undefined) {
     capturedParametersByCompilation.set(compilation, {
       source: capturedParameters,
-      ...(parameterPairedExecution === undefined ? {} : { execution: parameterPairedExecution }),
+      ...(privateExecution === undefined ? {} : { execution: privateExecution }),
+      ...(plan === undefined ? {} : { plan }),
+      ...(privateResolvedCircuit === undefined ? {} : { resolvedCircuit: privateResolvedCircuit }),
     });
   }
   if (hasSourceParameterDeclarations) parameterSourceArtifacts.add(compilation);
@@ -298,14 +322,14 @@ export function listSourceCompilationParameters(
       )?.defaultValue;
       const defaultValue = registration.defaultValue ?? resolvedDefault;
       const source = registration.source;
-      if (defaultValue === undefined || source === undefined) {
-        throw new Error('Captured source parameters must have a concrete default and source span.');
+      if (source === undefined) {
+        throw new Error('Captured source parameters must have a source span.');
       }
       return Object.freeze({
         parameter: handle,
         kind: registration.kind,
         label: registration.label,
-        defaultValue,
+        ...(defaultValue === undefined ? {} : { defaultValue }),
         source,
         ...(registration.metadata === undefined ? {} : { metadata: registration.metadata }),
       });
@@ -332,6 +356,27 @@ function effectiveSourceParameterBindings(
   return [...automaticDefaults, ...overrides.map(({ parameter, value }) => ({ parameter, value }))];
 }
 
+function concreteSourceParameterBindings(
+  source: ExecutedElaborationWithBlueprintParameters,
+  bindings: readonly BlueprintParameterBinding[],
+): readonly BlueprintParameterBinding[] {
+  const effective = effectiveSourceParameterBindings(source, bindings);
+  const validated = readBlueprintParameterBindings(source.session, effective);
+  const bound = new Set(validated.map(({ parameter }) => parameter));
+  for (const parameter of source.resolvedSignalTemplates?.requiredParameters ?? []) {
+    if (bound.has(parameter)) continue;
+    const index = source.parameters.findIndex((entry) => entry.handle === parameter);
+    const registration = source.parameters[index]?.registration;
+    throw new BlueprintParameterError(
+      'CP1002',
+      `$.parameters[${index}].value`,
+      `Signal parameter "${registration?.label ?? parameter.label}" requires an explicit binding.`,
+      registration?.source,
+    );
+  }
+  return effective;
+}
+
 /** Binds this exact compilation's declarations into a fresh concrete NCIR. */
 export function bindSourceCompilationParameters(
   compilation: LocalSourceCompilation,
@@ -347,7 +392,7 @@ export function bindSourceCompilationParameters(
   return bindCapturedSourceConfigurationTemplates(
     state.source,
     state.execution,
-    effectiveSourceParameterBindings(state.source, bindings),
+    concreteSourceParameterBindings(state.source, bindings),
   );
 }
 
@@ -363,8 +408,10 @@ export function exportSourceCompilationNativeBlueprint(
   if (state.execution === undefined) {
     throw new TypeError('Compilation has no canonical execution available for parameter binding.');
   }
-  if (compilation.resolvedCircuit === undefined) {
-    throw new TypeError('Compilation has no resolved circuit available for parameter binding.');
+  if (state.resolvedCircuit === undefined || state.plan === undefined) {
+    throw new TypeError(
+      'Compilation has no private canonical template base for parameter binding.',
+    );
   }
   function reject(path: string, message: string, source?: SourceSpan): never {
     throw new BlueprintParameterError('CP1002', path, message, source);
@@ -375,8 +422,9 @@ export function exportSourceCompilationNativeBlueprint(
     BlueprintParameterHandle,
     {
       readonly declaration: SourceCompilationParameter;
-      readonly original: SignalId;
-      readonly key: string;
+      readonly original?: SignalId;
+      readonly key?: string;
+      readonly placeholder?: string;
     }
   >();
   const signalInfoByOriginalKey = new Map<
@@ -395,8 +443,28 @@ export function exportSourceCompilationNativeBlueprint(
       readonly key: string;
     }[]
   >();
+  const templatePlaceholderNames = new Set(
+    signalDeclarations.flatMap((declaration) => {
+      const name = state.source.resolvedSignalTemplates?.placeholderFor(declaration.parameter);
+      return name === undefined ? [] : [name];
+    }),
+  );
   for (const [index, declaration] of declarations.entries()) {
     if (declaration.kind === 'signal') {
+      if (declaration.defaultValue === undefined) {
+        const placeholder = state.source.resolvedSignalTemplates?.placeholderFor(
+          declaration.parameter,
+        );
+        if (placeholder === undefined) {
+          reject(
+            `$.parameters[${index}]`,
+            'default-free Signal declaration has no authenticated Constant template allocation.',
+            declaration.source,
+          );
+        }
+        signalInfoByParameter.set(declaration.parameter, { declaration, placeholder });
+        continue;
+      }
       const original = declaration.defaultValue as SignalId;
       let key: string;
       try {
@@ -475,7 +543,7 @@ export function exportSourceCompilationNativeBlueprint(
     const firstSignal = signalDeclarations[0]!;
     const firstSignalIndex = declarations.indexOf(firstSignal);
     const signalPath = `$.parameters[${firstSignalIndex}]`;
-    const producers = compilation.resolvedCircuit.ir.producers;
+    const producers = state.resolvedCircuit.ir.producers;
     const unsupportedProducer = producers.find(
       (producer) =>
         producer.kind !== 'constant' &&
@@ -493,7 +561,7 @@ export function exportSourceCompilationNativeBlueprint(
     const linkedEntities = new Set(
       producers.flatMap((producer) => (producer.entityId === undefined ? [] : [producer.entityId])),
     );
-    const unlinkedEntity = (compilation.resolvedCircuit.ir.entities ?? []).find(
+    const unlinkedEntity = (state.resolvedCircuit.ir.entities ?? []).find(
       (entity) => !linkedEntities.has(entity.id),
     );
     if (unlinkedEntity !== undefined) {
@@ -562,7 +630,7 @@ export function exportSourceCompilationNativeBlueprint(
         ...(condition.right.kind === 'signal' ? [condition.right.signal] : []),
       ];
     };
-    for (const producer of compilation.resolvedCircuit.ir.producers) {
+    for (const producer of state.resolvedCircuit.ir.producers) {
       if (
         producer.kind !== 'constant' &&
         producer.kind !== 'arithmetic' &&
@@ -617,6 +685,7 @@ export function exportSourceCompilationNativeBlueprint(
                 : [];
       for (const concreteSignal of concreteSignals) {
         const key = signalKey(concreteSignal);
+        if (templatePlaceholderNames.has(concreteSignal.name)) continue;
         reservedSignalPlaceholderNames.add(concreteSignal.name);
         for (const sameName of signalInfoByOriginalName.get(concreteSignal.name) ?? []) {
           if (sameName.key !== key) {
@@ -1233,7 +1302,7 @@ export function exportSourceCompilationNativeBlueprint(
         }
       }
     }
-    const producers = compilation.resolvedCircuit.ir.producers;
+    const producers = state.resolvedCircuit.ir.producers;
     if (
       producers.some(
         (producer) =>
@@ -1252,7 +1321,7 @@ export function exportSourceCompilationNativeBlueprint(
     const linkedEntities = new Set(
       producers.flatMap((producer) => (producer.entityId === undefined ? [] : [producer.entityId])),
     );
-    const unlinkedEntity = (compilation.resolvedCircuit.ir.entities ?? []).find(
+    const unlinkedEntity = (state.resolvedCircuit.ir.entities ?? []).find(
       (entity) => !linkedEntities.has(entity.id),
     );
     if (unlinkedEntity !== undefined) {
@@ -1345,6 +1414,19 @@ export function exportSourceCompilationNativeBlueprint(
         ...declaration.metadata,
       });
     }
+    const templatePlaceholder = state.source.resolvedSignalTemplates?.placeholderFor(
+      declaration.parameter,
+    );
+    if (templatePlaceholder !== undefined) {
+      allocatedSignalNames.set(declaration.parameter, templatePlaceholder);
+      reservedSignalPlaceholderNames.add(templatePlaceholder);
+      return Object.freeze({
+        type: 'id',
+        id: templatePlaceholder,
+        name: declaration.label,
+        'quality-condition': Object.freeze({ quality: 'normal', comparator: '=' }),
+      });
+    }
     const info = signalInfoByParameter.get(declaration.parameter);
     if (info === undefined) {
       reject(
@@ -1429,10 +1511,19 @@ export function exportSourceCompilationNativeBlueprint(
   }
 
   // The binder authenticates templates, their session and their exact physical producer relation.
+  const nativeBindings = [
+    ...effectiveSourceParameterBindings(state.source, []),
+    ...(state.source.resolvedSignalTemplates?.requiredParameters.flatMap((parameter) => {
+      const placeholder = state.source.resolvedSignalTemplates?.placeholderFor(parameter);
+      return placeholder === undefined
+        ? []
+        : [{ parameter, value: signal('virtual', placeholder) }];
+    }) ?? []),
+  ];
   const replacement = bindCapturedSourceConfigurationTemplatesWithRelations(
     state.source,
     state.execution,
-    effectiveSourceParameterBindings(state.source, []),
+    nativeBindings,
   );
   const projected = buildNativeBlueprintFcir(replacement.circuit, options);
   const relations = new Map(
@@ -1813,7 +1904,12 @@ export function exportSourceCompilationNativeBlueprint(
           projectedKey = undefined;
         }
       }
-      if (info === undefined || projectedKey !== info.key) {
+      const expectedKey =
+        info?.key ??
+        (info?.placeholder === undefined
+          ? undefined
+          : signalKey({ type: 'virtual', name: info.placeholder }));
+      if (info === undefined || projectedKey !== expectedKey) {
         reject(
           occurrence.path,
           'marked Constant Signal default did not survive authenticated projection unchanged.',
@@ -1842,6 +1938,7 @@ export function exportSourceCompilationNativeBlueprint(
   }
   const replacementsByOriginal = new Map<string, string>();
   for (const [parameter, info] of signalInfoByParameter) {
+    if (info.key === undefined) continue;
     const placeholder = allocatedSignalNames.get(parameter);
     if (placeholder === undefined) {
       reject(
@@ -2248,25 +2345,25 @@ export function bindSourceCompilationCircuit(
   if (state === undefined) {
     throw new TypeError('Compilation has no host-local source parameter declarations.');
   }
-  if (state.execution === undefined || compilation.plan === undefined) {
+  if (state.execution === undefined || state.plan === undefined) {
     throw new TypeError('Compilation has no canonical execution available for parameter binding.');
   }
-  if (compilation.resolvedCircuit === undefined) {
+  if (state.resolvedCircuit === undefined) {
     throw new TypeError('Compilation has no resolved circuit available for parameter binding.');
   }
 
   const replacement = bindCapturedSourceConfigurationTemplatesWithRelations(
     state.source,
     state.execution,
-    effectiveSourceParameterBindings(state.source, bindings),
+    concreteSourceParameterBindings(state.source, bindings),
   );
   const plan = materializeCapturedPlan(
-    compilation.plan,
+    state.plan,
     replacement.captureRelations,
     replacement.circuit,
   );
   const resolvedCircuit = canonicalResolvedCircuit(
-    compilation.resolvedCircuit,
+    state.resolvedCircuit,
     plan,
     replacement.circuit,
   ) as ResolvedCircuit;

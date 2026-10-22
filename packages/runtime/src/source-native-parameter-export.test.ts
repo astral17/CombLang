@@ -65,7 +65,13 @@ function compile(text: string) {
     parameterHost(),
   );
   expect(compilation.pipelineDiagnostics).toEqual([]);
-  expect(compilation.resolvedCircuit).toBeDefined();
+  if (compilation.requiredParameterIds === undefined) {
+    expect(compilation.resolvedCircuit).toBeDefined();
+  } else {
+    expect(compilation.plan).toBeUndefined();
+    expect(compilation.resolvedCircuit).toBeUndefined();
+    expect(compilation.execution).toBeUndefined();
+  }
   return compilation;
 }
 
@@ -4606,5 +4612,162 @@ output += Constant({ sections: [{ filters: [
         sections: [{ filters: [{ name: 'parameter-0' }, { name: 'parameter-1' }] }],
       },
     });
+  });
+
+  test.each([
+    {
+      family: 'Arithmetic',
+      tail: `result += Arithmetic({ left: amount, operation: 'add', right: 1, output: Signal('virtual', 'signal-B') });`,
+    },
+    {
+      family: 'Selector',
+      tail: `result += Selector({ input: output, operation: 'select', index: amount });`,
+    },
+  ])('keeps unrelated defaulted $family slots usable beside a symbolic Constant', ({ tail }) => {
+    const compilation = sourceApi.compileSourceProgram(
+      {
+        path: 'symbolic-constant-composition.factorio.ts',
+        text: `const channel = Param.signal('Channel');
+const amount = Param.number('Amount', 1);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });
+const result = new Network();
+${tail}`,
+      },
+      parameterHost(),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.requiredParameterIds).toEqual([0]);
+    const channel = sourceApi.listSourceCompilationParameters(compilation)[0]!;
+    const before = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    const bound = sourceApi.bindSourceCompilationCircuit(compilation, [
+      { parameter: channel.parameter, value: signal('virtual', 'signal-A') },
+    ]);
+    expect(() => executeResolvedDirectPlan(bound.plan, bound.resolvedCircuit)).not.toThrow();
+    expect(sourceApi.exportSourceCompilationNativeBlueprint(compilation, options)).toEqual(before);
+  });
+
+  test('keeps default-free Constant Signals private until binding and reuses their native IDs', () => {
+    const sourceCallsKey = '__comblang_default_free_signal_source_calls';
+    const getterCallsKey = '__comblang_default_free_signal_getter_calls';
+    const globals = globalThis as typeof globalThis & Record<string, unknown>;
+    globals[sourceCallsKey] = 0;
+    globals[getterCallsKey] = 0;
+    const compilation = compile(`
+globalThis.${sourceCallsKey} += 1;
+const defaults = { get value() {
+  globalThis.${getterCallsKey} += 1;
+  return Signal('virtual', 'signal-default');
+} };
+const explicit = Param.signal('Defaulted', defaults.value);
+const required = Param.signal('Required');
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: Signal('virtual', 'parameter-0'), value: 3 },
+  { signal: explicit, value: 5 },
+  { signal: required, value: 7 }
+] }] });`);
+
+    try {
+      expect(compilation.requiredParameterIds).toEqual([1]);
+      expect(
+        sourceApi
+          .listSourceCompilationParameters(compilation)
+          .map(({ defaultValue }) => defaultValue),
+      ).toEqual([{ type: 'virtual', name: 'signal-default' }, undefined]);
+      const artifact = sourceApi.sourceCompilationArtifact(compilation);
+      expect(structuredClone(artifact)).toEqual(artifact);
+      expect(artifact).toMatchObject({ requiredParameterIds: [1] });
+      expect(artifact).not.toHaveProperty('plan');
+      expect(artifact).not.toHaveProperty('resolvedCircuit');
+      expect(() => sourceApi.bindSourceCompilationCircuit({ ...compilation } as never)).toThrow(
+        TypeError,
+      );
+      expect(() =>
+        sourceApi.exportSourceCompilationNativeBlueprint(artifact as never, options),
+      ).toThrow(TypeError);
+
+      const required = sourceApi.listSourceCompilationParameters(compilation)[1]!;
+      expect(() => sourceApi.bindSourceCompilationCircuit(compilation)).toThrowError(
+        expect.objectContaining({ code: 'CP1002', span: required.source }),
+      );
+      const bound = sourceApi.bindSourceCompilationCircuit(compilation, [
+        { parameter: required.parameter, value: signal('fluid', 'water', 'rare') },
+      ]);
+      expect(bound.plan.producers.find(({ kind }) => kind === 'constant')).toMatchObject({
+        configuration: {
+          sections: [
+            {
+              filters: [
+                { signal: { type: 'virtual', name: 'parameter-0' }, value: 3 },
+                { signal: { type: 'virtual', name: 'signal-default' }, value: 5 },
+                { signal: { type: 'fluid', name: 'water', quality: 'rare' }, value: 7 },
+              ],
+            },
+          ],
+        },
+      });
+
+      const firstNative = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      const secondNative = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      expect(secondNative).toEqual(firstNative);
+      expect(firstNative.parameters).toMatchObject([
+        { type: 'id', id: 'parameter-1', name: 'Defaulted' },
+        { type: 'id', id: 'parameter-2', name: 'Required' },
+      ]);
+      expect(
+        emitNativeBlueprintJson(firstNative).blueprint.entities[0]?.control_behavior,
+      ).toMatchObject({
+        sections: {
+          sections: [
+            {
+              filters: [
+                { name: 'parameter-0', count: 3 },
+                { name: 'parameter-1', count: 5 },
+                { name: 'parameter-2', count: 7 },
+              ],
+            },
+          ],
+        },
+      });
+      expect(globals[sourceCallsKey]).toBe(1);
+      expect(globals[getterCallsKey]).toBe(1);
+      expect(sourceApi.listSourceCompilationParameters(compilation)[1]).not.toHaveProperty(
+        'defaultValue',
+      );
+    } finally {
+      delete globals[sourceCallsKey];
+      delete globals[getterCallsKey];
+    }
+  });
+
+  test.each([
+    {
+      label: 'unsupported producer slot',
+      source: `const channel = Param.signal('Channel');
+const output = new Network();
+output += Arithmetic({ left: 2, operation: 'add', right: 5, output: channel });`,
+    },
+    {
+      label: 'automatic numeric coexistence',
+      source: `const amount = Param.number('Amount');
+const channel = Param.signal('Channel');
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: amount }] }] });`,
+    },
+    {
+      label: 'shared placeholder pool overflow',
+      source: `const output = new Network();
+${Array.from({ length: 11 }, (_, index) => `const p${index} = Param.signal('P${index}');`).join('\n')}
+output += Constant({ sections: [{ filters: [${Array.from({ length: 11 }, (_, index) => `({ signal: p${index}, value: ${index + 1} })`).join(', ')}] }] });`,
+    },
+  ])('reports a located CP1002 for $label', ({ source: sourceText }) => {
+    const compilation = sourceApi.compileSourceProgram(
+      { path: 'unsupported-default-free-signal.factorio.ts', text: sourceText },
+      parameterHost(),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([
+      expect.objectContaining({ code: 'CP1002', severity: 'error', span: expect.any(Object) }),
+    ]);
   });
 });

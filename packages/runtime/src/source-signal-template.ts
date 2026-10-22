@@ -1,0 +1,272 @@
+import { signal, signalKey, type SignalId } from '@comblang/factorio';
+import type { SourceSpan } from '@comblang/shared';
+
+import {
+  canonicalBlueprintParameterHandle,
+  BlueprintParameterError,
+  type BlueprintParameterHandle,
+  type BlueprintParameterSession,
+} from '../../compiler/src/blueprint-parameters.js';
+import {
+  inspectArithmeticConfigurationTemplate,
+  type ArithmeticConfigurationTemplate,
+} from '../../compiler/src/arithmetic-configuration-template.js';
+import {
+  inspectConstantConfigurationTemplate,
+  type ConstantConfigurationTemplate,
+} from '../../compiler/src/constant-configuration-template.js';
+import {
+  inspectDeciderConfigurationTemplate,
+  type DeciderConfigurationTemplate,
+} from '../../compiler/src/decider-configuration-template.js';
+import {
+  inspectSelectorConfigurationTemplate,
+  type SelectorConfigurationTemplate,
+} from '../../compiler/src/selector-configuration-template.js';
+import type { CapturedBlueprintParameter } from './blueprint-parameter-capture.js';
+import type { CombinatorDescriptor } from './elaboration-values.js';
+
+interface CapturedTemplate<T> {
+  readonly template: T;
+  readonly source: SourceSpan;
+}
+
+export interface SourceSignalTemplateContext {
+  readonly requiredParameters: readonly BlueprintParameterHandle[];
+  bindingsForConstantTemplate(
+    template: ConstantConfigurationTemplate,
+  ): readonly { readonly parameter: BlueprintParameterHandle; readonly value: SignalId }[];
+  placeholderFor(parameter: BlueprintParameterHandle): string | undefined;
+}
+
+function fail(path: string, message: string, source?: SourceSpan): never {
+  throw new BlueprintParameterError('CP1002', path, message, source);
+}
+
+function dataSignal(value: unknown): SignalId | undefined {
+  if (value === null || typeof value !== 'object') return undefined;
+  const type = Object.getOwnPropertyDescriptor(value, 'type');
+  const name = Object.getOwnPropertyDescriptor(value, 'name');
+  const quality = Object.getOwnPropertyDescriptor(value, 'quality');
+  if (
+    type === undefined ||
+    name === undefined ||
+    !('value' in type) ||
+    !('value' in name) ||
+    (quality !== undefined && !('value' in quality)) ||
+    typeof type.value !== 'string' ||
+    typeof name.value !== 'string' ||
+    (quality !== undefined && typeof quality.value !== 'string')
+  ) {
+    return undefined;
+  }
+  try {
+    const candidate = {
+      type: type.value as SignalId['type'],
+      name: name.value,
+      ...(quality === undefined ? {} : { quality: quality.value as string }),
+    };
+    signalKey(candidate);
+    return candidate;
+  } catch {
+    return undefined;
+  }
+}
+
+function collectLiteralSignalNames(
+  value: unknown,
+  names: Set<string>,
+  seen: WeakSet<object>,
+): void {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return;
+  if (canonicalBlueprintParameterHandle(value) !== undefined) return;
+  if (seen.has(value)) return;
+  seen.add(value);
+  const candidate = dataSignal(value);
+  if (candidate !== undefined) {
+    names.add(candidate.name);
+    return;
+  }
+  for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(value))) {
+    if ('value' in descriptor) collectLiteralSignalNames(descriptor.value, names, seen);
+  }
+}
+
+function collectSignalParameters(
+  value: unknown,
+  used: Set<BlueprintParameterHandle>,
+  seen: WeakSet<object>,
+): void {
+  if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return;
+  const parameter = canonicalBlueprintParameterHandle(value);
+  if (parameter !== undefined) {
+    if (parameter.kind === 'signal') used.add(parameter);
+    return;
+  }
+  if (seen.has(value)) return;
+  seen.add(value);
+  for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(value))) {
+    if ('value' in descriptor) collectSignalParameters(descriptor.value, used, seen);
+  }
+}
+
+/**
+ * Allocates the one native ID placeholder pool for this source owner. Missing-default
+ * Signal declarations are accepted only in direct Constant filter slots; their
+ * placeholders materialize the private template base and are never defaults.
+ */
+export function createSourceSignalTemplateContext(
+  session: BlueprintParameterSession,
+  declarations: readonly CapturedBlueprintParameter[],
+  producers: readonly CombinatorDescriptor[],
+  templates: {
+    readonly constants: readonly CapturedTemplate<ConstantConfigurationTemplate>[];
+    readonly arithmetics: readonly CapturedTemplate<ArithmeticConfigurationTemplate>[];
+    readonly deciders: readonly CapturedTemplate<DeciderConfigurationTemplate>[];
+    readonly selectors: readonly CapturedTemplate<SelectorConfigurationTemplate>[];
+  },
+): SourceSignalTemplateContext | undefined {
+  const usedSignals = new Set<BlueprintParameterHandle>();
+  const directConstantSignalSlots = new Set<BlueprintParameterHandle>();
+  const unsupportedSignalUses = new Set<BlueprintParameterHandle>();
+
+  for (const capture of templates.constants) {
+    const inspected = inspectConstantConfigurationTemplate(capture.template, '$.constant');
+    if (inspected.session !== session) {
+      fail('$.constant', 'template belongs to a different parameter session.', capture.source);
+    }
+    for (const parameter of inspected.usedParameters) {
+      if (parameter.kind === 'signal') usedSignals.add(parameter);
+    }
+    for (const section of capture.template.sections) {
+      for (const filter of section.filters) {
+        const parameter = canonicalBlueprintParameterHandle(filter.signal);
+        if (parameter?.kind === 'signal') directConstantSignalSlots.add(parameter);
+      }
+    }
+  }
+  for (const capture of templates.arithmetics) {
+    const inspected = inspectArithmeticConfigurationTemplate(capture.template, '$.arithmetic');
+    if (inspected.session !== session) {
+      fail('$.arithmetic', 'template belongs to a different parameter session.', capture.source);
+    }
+    for (const parameter of inspected.usedParameters) {
+      if (parameter.kind === 'signal') {
+        usedSignals.add(parameter);
+        unsupportedSignalUses.add(parameter);
+      }
+    }
+  }
+  for (const capture of templates.deciders) {
+    const inspected = inspectDeciderConfigurationTemplate(capture.template, '$.decider');
+    if (inspected.session !== session) {
+      fail('$.decider', 'template belongs to a different parameter session.', capture.source);
+    }
+    for (const parameter of inspected.usedParameters) {
+      if (parameter.kind === 'signal') {
+        usedSignals.add(parameter);
+        unsupportedSignalUses.add(parameter);
+      }
+    }
+  }
+  for (const capture of templates.selectors) {
+    const inspected = inspectSelectorConfigurationTemplate(capture.template, '$.selector');
+    if (inspected.session !== session) {
+      fail('$.selector', 'template belongs to a different parameter session.', capture.source);
+    }
+    for (const parameter of inspected.usedParameters) {
+      if (parameter.kind === 'signal') {
+        usedSignals.add(parameter);
+        unsupportedSignalUses.add(parameter);
+      }
+    }
+  }
+  for (const producer of producers) {
+    if (producer.kind === 'constant') continue;
+    const unsupported = new Set<BlueprintParameterHandle>();
+    collectSignalParameters(producer, unsupported, new WeakSet());
+    for (const parameter of unsupported) {
+      usedSignals.add(parameter);
+      unsupportedSignalUses.add(parameter);
+    }
+  }
+
+  if (usedSignals.size === 0) return undefined;
+
+  const declarationsByHandle = new Map(declarations.map((entry) => [entry.handle, entry] as const));
+  const missingUsed = declarations.filter(
+    ({ handle, registration }) =>
+      registration.kind === 'signal' &&
+      registration.defaultValue === undefined &&
+      usedSignals.has(handle),
+  );
+  for (const { handle, registration } of missingUsed) {
+    if (
+      !directConstantSignalSlots.has(handle) ||
+      unsupportedSignalUses.has(handle) ||
+      registration.source === undefined
+    ) {
+      fail(
+        '$.parameters',
+        `Signal declaration "${registration.label}" without a default is supported only in a direct Constant filter Signal slot.`,
+        registration.source,
+      );
+    }
+  }
+  if (missingUsed.length === 0) return undefined;
+
+  const reservedNames = new Set<string>();
+  const seen = new WeakSet<object>();
+  for (const producer of producers) collectLiteralSignalNames(producer, reservedNames, seen);
+  for (const { registration } of declarations) {
+    if (registration.kind === 'signal' && registration.defaultValue !== undefined) {
+      reservedNames.add((registration.defaultValue as SignalId).name);
+    }
+  }
+
+  const placeholders = new Map<BlueprintParameterHandle, string>();
+  for (const { handle } of declarations) {
+    if (handle.kind !== 'signal' || !usedSignals.has(handle)) continue;
+    let allocated: string | undefined;
+    for (let candidate = 0; candidate < 10; candidate += 1) {
+      const name = `parameter-${candidate}`;
+      if (!reservedNames.has(name)) {
+        reservedNames.add(name);
+        allocated = name;
+        break;
+      }
+    }
+    if (allocated === undefined) {
+      const registration = declarationsByHandle.get(handle)!.registration;
+      fail(
+        '$.parameters',
+        'native Signal placeholder pool parameter-0 through parameter-9 is exhausted.',
+        registration.source,
+      );
+    }
+    placeholders.set(handle, allocated);
+  }
+
+  const requiredParameters = Object.freeze(missingUsed.map(({ handle }) => handle));
+  const bindings = new Map(
+    requiredParameters.map((parameter) => [
+      parameter,
+      signal('virtual', placeholders.get(parameter)!),
+    ]),
+  );
+  return Object.freeze({
+    requiredParameters,
+    placeholderFor(parameter: BlueprintParameterHandle) {
+      return placeholders.get(parameter);
+    },
+    bindingsForConstantTemplate(template: ConstantConfigurationTemplate) {
+      const inspected = inspectConstantConfigurationTemplate(template, '$.constant');
+      return Object.freeze(
+        inspected.usedParameters.flatMap((parameter) => {
+          const value = bindings.get(parameter);
+          return value === undefined ? [] : [Object.freeze({ parameter, value })];
+        }),
+      );
+    },
+  });
+}

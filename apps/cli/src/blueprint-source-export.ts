@@ -216,9 +216,6 @@ export async function runSourceBlueprintExport(
         format,
       );
     }
-    if (compilation.resolvedCircuit === undefined) {
-      throw new BlueprintCliError('CLIBP1000', 'Compilation did not produce a resolved circuit.');
-    }
     const projection = {
       label: options.label ?? 'CombLang generated circuit',
       maxDeciderConditionRows: 1024,
@@ -236,6 +233,12 @@ export async function runSourceBlueprintExport(
             `--overrides was provided for ${path}, but the source has no parameter declarations; only an empty [] override array is valid.`,
           );
         }
+        if (compilation.resolvedCircuit === undefined) {
+          throw new BlueprintCliError(
+            'CLIBP1000',
+            'Compilation has no concrete circuit; default-free Signal parameters require explicit --overrides values.',
+          );
+        }
         document = generateBlueprintJson(compilation.resolvedCircuit.ir, projection);
       } else {
         const bound = createSourceParameterBindingSession(compilation).bind(options.overrideValues);
@@ -246,6 +249,12 @@ export async function runSourceBlueprintExport(
         exportSourceCompilationNativeBlueprint(compilation, projection),
       );
     } else {
+      if (compilation.resolvedCircuit === undefined) {
+        throw new BlueprintCliError(
+          'CLIBP1000',
+          'Compilation has no concrete circuit; use --parameters for native parameter metadata or provide explicit --overrides values.',
+        );
+      }
       document = generateBlueprintJson(compilation.resolvedCircuit.ir, projection);
     }
     const output = JSON.stringify(document, null, 2);

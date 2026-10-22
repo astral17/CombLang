@@ -115,7 +115,7 @@ export async function runSourceParameterListing(
           : parameters
               .map(
                 ({ id, kind, label, defaultValue }) =>
-                  `${id}\t${kind}\t${JSON.stringify(label)}\t${JSON.stringify(defaultValue)}`,
+                  `${id}\t${kind}\t${JSON.stringify(label)}\t${defaultValue === undefined ? 'binding required' : JSON.stringify(defaultValue)}`,
               )
               .join('\n'),
       );

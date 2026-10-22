@@ -488,4 +488,24 @@ const input = CC(); const a = Double(input); const b = Double(input); const c = 
     });
     expect(failure).not.toHaveProperty('parameters');
   });
+
+  test('lists a default-free Signal without inventing a default in JSON or text', async () => {
+    const { environment } = await parameterHost();
+    const source = await sourceFile(`const channel = Param.signal('Channel');
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    expect(await run(['parameters', 'list', '--json', source], environment)).toBe(0);
+    const json = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(json.parameters).toHaveLength(1);
+    expect(json.parameters[0]).toMatchObject({ id: 0, kind: 'signal', label: 'Channel' });
+    expect(json.parameters[0]).not.toHaveProperty('defaultValue');
+
+    log.mockClear();
+    expect(await run(['parameters', 'list', source], environment)).toBe(0);
+    expect(String(log.mock.calls[0]?.[0])).toContain('0\tsignal\t"Channel"\tbinding required');
+    expect(error).not.toHaveBeenCalled();
+  });
 });

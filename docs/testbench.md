@@ -166,14 +166,19 @@ test(
 When `--overrides defaults.json` is present, that file supplies the run-wide
 fallback for cases without a `parameters` field. The per-case array is a full
 snapshot, not a patch: it replaces the fallback, omitted IDs return to the
-source's original values, and `[]` explicitly selects all originals. Without
-`--overrides`, cases with no `parameters` field use the captured original
-execution. Declaration IDs belong only to that exact source execution; labels
-are display names, never binding keys.
+source's original values, and `[]` explicitly selects all originals for
+defaulted parameters. Without `--overrides`, cases with no `parameters` field
+use the captured original execution when one exists. A symbolic construction
+with a used default-free Signal instead attempts an empty binding and reports
+located `CP1002`; provide the required IDs on each intended case. Declaration
+IDs belong only to that exact source execution; labels are display names, never
+binding keys.
 
 An omitted case-level `parameters` field uses the optional run-wide snapshot;
 an explicit case array replaces it completely, so omitted IDs in that case
-return to source defaults. `[]` explicitly selects the source defaults. Invalid
+return to source defaults. `[]` explicitly selects the source defaults for
+defaulted parameters, but it does not satisfy required default-free Signal
+bindings. Invalid
 semantic values fail only the affected case before its callback, and later cases
 continue. An invalid run-wide snapshot therefore fails inherited cases, while
 an explicit valid case array or `[]` can still succeed. Duplicate and unknown
@@ -183,10 +188,11 @@ or invalid-JSON override files remain ingress errors that prevent registration.
 If the source declares no parameters, only `[]` is a valid snapshot. Source
 compilation and supported parameter declarations are unchanged by this adapter.
 
-CLI and host runtime routes now support these snapshots. Browser per-case routing
-is still pending. This does not add default-free Signal source compilation,
-native ingredient dependencies, automatic recipe lookup, or a construction-screen
-binding UI.
+CLI and host runtime routes now support these snapshots, including required
+bindings for the direct Constant-filter default-free Signal slice. Browser
+per-case routing is still pending. This does not add default-free Signal support
+outside Constant filter slots, native ingredient dependencies, automatic recipe
+lookup, or a construction-screen binding UI.
 
 The test callback receives these convenience methods and complete APIs:
 

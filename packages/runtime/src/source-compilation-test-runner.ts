@@ -59,6 +59,10 @@ export function runSourceCompilationTests(
 
     if (!hasEffectiveParameters && !hasBindingSetupError) {
       if (compilation.execution !== undefined) return compilation.execution;
+      if (bindingSession !== undefined) {
+        const bound = bindingSession.bind();
+        return executeResolvedDirectPlan(bound.plan, bound.resolvedCircuit);
+      }
       throw new TypeError('Source compilation has no executable direct plan.');
     }
     if (hasBindingSetupError) throw bindingSetupError;

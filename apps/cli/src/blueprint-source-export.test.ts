@@ -1333,6 +1333,51 @@ output += Arithmetic({ left: 2, operation: 'add', right: amount * 2, output: res
     expect(conditions.output_signal).not.toHaveProperty('type');
   });
 
+  test('exports default-free Constant Signal metadata and requires concrete values outside metadata mode', async () => {
+    const { environment } = await parameterHost();
+    const path = await sourceFile(`const channel = Param.signal('Channel');
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });`);
+    const overridesPath = join(dirname(path), 'default-free-signal-values.json');
+    await writeFile(
+      overridesPath,
+      JSON.stringify([{ id: 0, value: { type: 'item', name: 'iron-plate', quality: 'rare' } }]),
+    );
+    const { log, error } = capture();
+
+    expect(await run(['blueprint', 'export', '--parameters', '--json', path], environment)).toBe(0);
+    const nativeDocument = JSON.parse(String(log.mock.calls[0]?.[0])).document.blueprint;
+    expect(nativeDocument.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Channel',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    expect(nativeDocument.entities[0].control_behavior.sections.sections[0].filters).toMatchObject([
+      { name: 'parameter-0', count: 5 },
+    ]);
+
+    log.mockClear();
+    expect(await run(['blueprint', 'export', '--json', path], environment)).toBe(2);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      ok: false,
+      error: { code: 'CLIBP1000', message: expect.stringContaining('explicit --overrides') },
+    });
+
+    log.mockClear();
+    expect(
+      await run(['blueprint', 'export', '--json', '--overrides', overridesPath, path], environment),
+    ).toBe(0);
+    const concreteDocument = JSON.parse(String(log.mock.calls[0]?.[0])).document.blueprint;
+    expect(concreteDocument).not.toHaveProperty('parameters');
+    expect(
+      concreteDocument.entities[0].control_behavior.sections.sections[0].filters,
+    ).toMatchObject([{ name: 'iron-plate', quality: 'rare', count: 5 }]);
+    expect(error).not.toHaveBeenCalled();
+  });
+
   test('exports Selector Signal index and count-output parameters through the CLI', async () => {
     const { environment } = await parameterHost();
     const path =

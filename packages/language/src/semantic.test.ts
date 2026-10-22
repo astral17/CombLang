@@ -614,7 +614,7 @@ const prototypes = {};`,
   test('validates the closed source parameter declaration forms and their spans', () => {
     const valid = parseFile({
       path: 'source-parameter-declarations.ts',
-      text: `Param.number('Amount', 5); Param.number('Automatic'); Param.number('Automatic undefined', undefined); Param.signal('Channel', Signal('virtual', 'signal-A'));`,
+      text: `Param.number('Amount', 5); Param.number('Automatic'); Param.number('Automatic undefined', undefined); Param.signal('Channel'); Param.signal('Channel undefined', undefined); Param.signal('Concrete', Signal('virtual', 'signal-A'));`,
     });
     expect(validateDslSemantics(valid)).toEqual([]);
 
@@ -641,7 +641,8 @@ Param.number('N', 1, metadata); Param.number('Empty', 2, {}); Param.number('Plai
     for (const call of [
       "Param.number('N', 1, {}, 4)",
       'Param.number(...values)',
-      "Param.signal('Missing')",
+      'Param.signal()',
+      "Param.signal('Too many', Signal('virtual', 'signal-A'), undefined)",
       "Param.signal('S', Signal('signal-A'), {})",
       "Param.number?.('N', 1, {})",
       "const alias = Param.number; alias('N', 1, {})",

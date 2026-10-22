@@ -18,6 +18,7 @@ const registrationCounter = '__comblang_scenario_registration_runs';
 const defaultsKey = '__comblang_scenario_run_defaults';
 const invalidCallbackKey = '__comblang_scenario_invalid_callbacks';
 const originalExecutionKey = '__comblang_scenario_original_execution';
+const requiredSignalCallbackKey = '__comblang_required_signal_callbacks';
 
 afterEach(() => {
   const globals = globalThis as Record<string, unknown>;
@@ -27,6 +28,7 @@ afterEach(() => {
     defaultsKey,
     invalidCallbackKey,
     originalExecutionKey,
+    requiredSignalCallbackKey,
   ]) {
     delete globals[key];
   }
@@ -265,6 +267,56 @@ test('nonempty is rejected', () => globalThis.__scenarioNoDeclarationBody(), { p
       expect(invalidBodyRan).toBe(false);
     } finally {
       delete globals.__scenarioNoDeclarationBody;
+    }
+  });
+
+  test('requires each used default-free Signal binding without blocking a later valid case', () => {
+    const globals = globalThis as typeof globalThis & { [requiredSignalCallbackKey]?: string[] };
+    globals[requiredSignalCallbackKey] = [];
+    const source = `const channel = Param.signal('Required channel');
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: channel, value: 5 }] }] });`;
+    const compilation = compileSourceProgram(
+      { path: 'default-free-signal-runner.factorio.ts', text: source },
+      canonicalEntityHost(),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.requiredParameterIds).toEqual([0]);
+    expect(compilation.plan).toBeUndefined();
+    expect(compilation.resolvedCircuit).toBeUndefined();
+    try {
+      const result = runSourceCompilationTests(
+        compilation,
+        `test('explicit item binding', ({ network, expectSignal, tick }) => {
+  tick();
+  expectSignal(network('output'), Signal('item', 'iron-plate', 'uncommon')).toBe(5);
+}, { parameters: [{ id: 0, value: Signal('item', 'iron-plate', 'uncommon') }] });
+test('missing binding', () => globalThis.${requiredSignalCallbackKey}.push('missing'));
+test('empty snapshot', () => globalThis.${requiredSignalCallbackKey}.push('empty'), { parameters: [] });
+test('explicit fluid binding', ({ network, expectSignal, tick }) => {
+  tick();
+  expectSignal(network('output'), Signal('fluid', 'water', 'rare')).toBe(5);
+}, { parameters: [{ id: 0, value: Signal('fluid', 'water', 'rare') }] });
+test('explicit virtual binding', ({ network, expectSignal, tick }) => {
+  tick();
+  expectSignal(network('output'), Signal('virtual', 'signal-B', 'legendary')).toBe(5);
+}, { parameters: [{ id: 0, value: Signal('virtual', 'signal-B', 'legendary') }] });`,
+      );
+
+      expect(result).toMatchObject({
+        passed: 3,
+        failed: 2,
+        results: [
+          { status: 'passed' },
+          { status: 'failed', code: 'CP1002' },
+          { status: 'failed', code: 'CP1002' },
+          { status: 'passed' },
+          { status: 'passed' },
+        ],
+      });
+      expect(globals[requiredSignalCallbackKey]).toEqual([]);
+    } finally {
+      delete globals[requiredSignalCallbackKey];
     }
   });
 

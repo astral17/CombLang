@@ -164,7 +164,10 @@ import {
   type PreparedArithmeticConfigurationSource,
 } from './arithmetic-configuration-source.js';
 import { bindArithmeticConfigurationTemplate } from '../../compiler/src/arithmetic-configuration-binding.js';
-import type { ConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-template.js';
+import {
+  inspectConstantConfigurationTemplate,
+  type ConstantConfigurationTemplate,
+} from '../../compiler/src/constant-configuration-template.js';
 import { bindConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-binding.js';
 import {
   createDeciderConfigurationTemplate,
@@ -194,6 +197,10 @@ import {
 } from '../../compiler/src/blueprint-parameter-validation.js';
 import { createProducerNumberDefaultContext } from './source-producer-number-defaults.js';
 import type { SourceResolvedNumberDefaultContext } from './source-resolved-number-defaults.js';
+import {
+  createSourceSignalTemplateContext,
+  type SourceSignalTemplateContext,
+} from './source-signal-template.js';
 import {
   createSourceNumericExpressionView,
   findSourceNumericExpressionView,
@@ -710,6 +717,7 @@ class ElaborationRecorder {
   readonly #pendingCombinatorInstallations: PendingCombinatorInstallation[] = [];
   readonly #pendingDeciderConditions = new Map<object, RuntimeDeciderCondition>();
   #resolvedNumberDefaultContext: SourceResolvedNumberDefaultContext | undefined;
+  #resolvedSignalTemplateContext: SourceSignalTemplateContext | undefined;
   #entityRevision = 0;
   #entityOperationOrdinal = 0;
   readonly #entityInvocations = new Map<EntityValue['id'], SourceSpan>();
@@ -1147,6 +1155,28 @@ class ElaborationRecorder {
             );
             if (prepared.hasParameterSlots) template = prepared.template;
             else configuration = bindConstantConfigurationTemplate(prepared.template);
+          } else if (this.#hasDefaultFreeSignalParameters()) {
+            const prepared = prepareConstantConfigurationSource(
+              first!.value,
+              context,
+              this.#parameterCapture!.session,
+              '$.configuration',
+            );
+            if (prepared.hasParameterSlots) {
+              template = prepared.template;
+              const inspected = inspectConstantConfigurationTemplate(
+                prepared.template,
+                '$.configuration',
+              );
+              const hasRequiredSignal = inspected.usedParameters.some(
+                (parameter) => parameter.kind === 'signal' && parameter.defaultValue === undefined,
+              );
+              if (!hasRequiredSignal) {
+                configuration = bindConstantConfigurationTemplate(prepared.template);
+              }
+            } else {
+              configuration = bindConstantConfigurationTemplate(prepared.template);
+            }
           } else {
             const normalized = normalizeConstantConfigurationSourceWithParameters(
               first!.value,
@@ -1406,7 +1436,10 @@ class ElaborationRecorder {
             : undefined;
         let descriptorConfiguration:
           ReturnType<typeof bindPreparedSelectorConfigurationSource> | undefined;
-        if (!(this.#hasAutomaticNumberDefaults() && pendingTemplate !== undefined)) {
+        if (
+          !(this.#hasAutomaticNumberDefaults() || this.#hasDefaultFreeSignalParameters()) ||
+          pendingTemplate === undefined
+        ) {
           try {
             descriptorConfiguration = bindPreparedSelectorConfigurationSource(prepared);
           } catch (error) {
@@ -2109,7 +2142,7 @@ class ElaborationRecorder {
           });
         }
         let result: ConditionValue;
-        if (this.#hasAutomaticNumberDefaults()) {
+        if (this.#hasAutomaticNumberDefaults() || this.#hasDefaultFreeSignalParameters()) {
           const constant = { kind: 'constant' as const };
           const condition: PendingDeciderCondition =
             head.kind === 'compare-signal'
@@ -2869,6 +2902,37 @@ class ElaborationRecorder {
       );
       this.#finalizeUnusedCombinators();
       const producerDescriptors = this.#preparePendingDeciderTemplates();
+      const capturedDeclarations = this.#parameterCapture?.declarations() ?? [];
+      const missingSignal = capturedDeclarations.find(
+        ({ registration }) =>
+          registration.kind === 'signal' && registration.defaultValue === undefined,
+      );
+      if (missingSignal !== undefined && this.#hasAutomaticNumberDefaults()) {
+        throw new BlueprintParameterError(
+          'CP1002',
+          '$.parameters',
+          'Automatic numeric defaults cannot be combined with default-free Signal parameters in this slice.',
+          missingSignal.registration.source,
+        );
+      }
+      if (missingSignal !== undefined && this.#parameterCapture !== undefined) {
+        this.#resolvedSignalTemplateContext = createSourceSignalTemplateContext(
+          this.#parameterCapture.session,
+          capturedDeclarations,
+          producerDescriptors,
+          {
+            constants: this.#constantTemplates,
+            arithmetics: this.#arithmeticTemplates,
+            deciders: this.#pendingDeciderTemplateCaptures.map(
+              ({ producer, captureId, template }) => {
+                const descriptor = this.#combinators.stateFor(producer).descriptor;
+                return { captureId, template, source: descriptor.source };
+              },
+            ),
+            selectors: this.#selectorTemplates,
+          },
+        );
+      }
       if (this.#hasAutomaticNumberDefaults()) {
         this.#validateAutomaticNumberEntityCoverage();
         this.#resolvedNumberDefaultContext = createProducerNumberDefaultContext(
@@ -3157,6 +3221,10 @@ class ElaborationRecorder {
     return this.#resolvedNumberDefaultContext;
   }
 
+  resolvedSignalTemplates(): SourceSignalTemplateContext | undefined {
+    return this.#resolvedSignalTemplateContext;
+  }
+
   executionApi(): typeof this.api {
     const executionOperations: Record<string, unknown> = { ...this.api };
     if (this.#parameterCapture !== undefined) {
@@ -3182,12 +3250,12 @@ class ElaborationRecorder {
           );
         }
         this.#recordDslCall();
-        if (!this.#isSignal(args[1])) {
+        if (args[1] !== undefined && !this.#isSignal(args[1])) {
           throw new Error('Signal defaults must come from Signal(...) in this execution session.');
         }
         const handle = this.#parameterCapture!.signal(
           args[0],
-          this.#signalSnapshot(args[1]),
+          args[1] === undefined ? undefined : this.#signalSnapshot(args[1]),
           args[2],
           this.#span(args[3]),
         );
@@ -3620,6 +3688,17 @@ class ElaborationRecorder {
     );
   }
 
+  #hasDefaultFreeSignalParameters(): boolean {
+    return (
+      this.#parameterCapture
+        ?.declarations()
+        .some(
+          ({ registration }) =>
+            registration.kind === 'signal' && registration.defaultValue === undefined,
+        ) ?? false
+    );
+  }
+
   #validateAutomaticNumberEntityCoverage(): void {
     const entities = this.#entityRegistry?.records() ?? [];
     const seenEntityIds = new Set<string>();
@@ -3716,12 +3795,16 @@ class ElaborationRecorder {
         }
         const configuration =
           pending.configuration ??
-          (pending.template === undefined || this.#resolvedNumberDefaultContext === undefined
+          (pending.template === undefined
             ? undefined
-            : bindConstantConfigurationTemplate(
-                pending.template,
-                this.#resolvedNumberDefaultContext.bindingsForConstantTemplate(pending.template),
-              ));
+            : bindConstantConfigurationTemplate(pending.template, [
+                ...(this.#resolvedNumberDefaultContext?.bindingsForConstantTemplate(
+                  pending.template,
+                ) ?? []),
+                ...(this.#resolvedSignalTemplateContext?.bindingsForConstantTemplate(
+                  pending.template,
+                ) ?? []),
+              ]));
         if (configuration === undefined) {
           throw new Error('Pending Constant installation has no resolved configuration.');
         }
@@ -3745,11 +3828,13 @@ class ElaborationRecorder {
         }
         const arithmeticConfiguration =
           pending.configuration ??
-          (pending.template === undefined || this.#resolvedNumberDefaultContext === undefined
+          (pending.template === undefined
             ? undefined
             : bindArithmeticConfigurationTemplate(
                 pending.template,
-                this.#resolvedNumberDefaultContext.bindingsForArithmeticTemplate(pending.template),
+                this.#resolvedNumberDefaultContext?.bindingsForArithmeticTemplate(
+                  pending.template,
+                ) ?? [],
               ));
         if (arithmeticConfiguration === undefined) {
           throw new Error('Pending Arithmetic installation has no resolved configuration.');
@@ -3879,11 +3964,12 @@ class ElaborationRecorder {
 
       const selectorConfiguration =
         pending.configuration ??
-        (pending.template === undefined || this.#resolvedNumberDefaultContext === undefined
+        (pending.template === undefined
           ? undefined
           : bindSelectorConfigurationTemplate(
               pending.template,
-              this.#resolvedNumberDefaultContext.bindingsForSelectorTemplate(pending.template),
+              this.#resolvedNumberDefaultContext?.bindingsForSelectorTemplate(pending.template) ??
+                [],
             ));
       if (selectorConfiguration === undefined) {
         throw new Error('Pending Selector installation has no resolved configuration.');
@@ -5543,7 +5629,9 @@ class ElaborationRecorder {
         source,
       );
       const deferConfiguration =
-        this.#hasAutomaticNumberDefaults() && prepared.hasParameterSlots && 'template' in prepared;
+        (this.#hasAutomaticNumberDefaults() || this.#hasDefaultFreeSignalParameters()) &&
+        prepared.hasParameterSlots &&
+        'template' in prepared;
       return {
         ...(deferConfiguration
           ? {}
@@ -5578,8 +5666,13 @@ class ElaborationRecorder {
       throw new Error('Parameterized Signal templates require an owning parameter session.');
     }
     const slot = lookupBlueprintParameterSlot(value, 'signal', session, '$.configuration.signal');
-    if (slot === undefined || slot.registration.defaultValue === undefined) {
+    if (slot === undefined) {
       throw new Error('Parameterized Signal template has no concrete source default.');
+    }
+    if (slot.registration.defaultValue === undefined) {
+      // Pending producer slots are rejected at source finalization for this slice;
+      // retain only a native-shaped private identity until that located refusal.
+      return this.#signalSnapshot({ type: 'virtual', name: 'parameter-0' });
     }
     return this.#signalSnapshot(slot.registration.defaultValue as SignalId);
   }
@@ -7591,6 +7684,7 @@ function executeElaborationProgramInternal(
 ): {
   readonly plan: DirectElaborationPlan;
   readonly resolvedNumberDefaults?: SourceResolvedNumberDefaultContext;
+  readonly resolvedSignalTemplates?: SourceSignalTemplateContext;
   readonly arithmeticTemplates: readonly CapturedArithmeticConfigurationTemplate[];
   readonly boundArithmeticOutputCaptureIds: readonly string[];
   readonly constantTemplates: readonly CapturedConstantConfigurationTemplate[];
@@ -7629,9 +7723,11 @@ function executeElaborationProgramInternal(
   }
   const plan = recorder.plan();
   const resolvedNumberDefaults = recorder.resolvedNumberDefaults();
+  const resolvedSignalTemplates = recorder.resolvedSignalTemplates();
   return Object.freeze({
     plan,
     ...(resolvedNumberDefaults === undefined ? {} : { resolvedNumberDefaults }),
+    ...(resolvedSignalTemplates === undefined ? {} : { resolvedSignalTemplates }),
     arithmeticTemplates: recorder.arithmeticTemplates(),
     boundArithmeticOutputCaptureIds: recorder.arithmeticOutputBindingCaptureIds(),
     constantTemplates: recorder.constantTemplates(),
@@ -7654,6 +7750,7 @@ export interface ExecutedElaborationWithBlueprintParameters {
   readonly session: BlueprintParameterSession;
   readonly parameters: readonly CapturedBlueprintParameter[];
   readonly resolvedNumberDefaults?: SourceResolvedNumberDefaultContext;
+  readonly resolvedSignalTemplates?: SourceSignalTemplateContext;
   readonly arithmeticTemplates: readonly CapturedArithmeticConfigurationTemplate[];
   readonly boundArithmeticOutputCaptureIds: readonly string[];
   readonly constantTemplates: readonly CapturedConstantConfigurationTemplate[];

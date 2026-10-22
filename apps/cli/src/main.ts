@@ -321,7 +321,7 @@ async function testCircuit(
 
   let tests: ReturnType<typeof runSourceCompilationTests> | undefined;
   if (
-    compilation?.execution !== undefined &&
+    (compilation?.execution !== undefined || compilation?.requiredParameterIds !== undefined) &&
     !diagnostics.some(({ severity }) => severity === 'error')
   ) {
     const options = {

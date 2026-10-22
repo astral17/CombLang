@@ -24,14 +24,22 @@ import type {
   LocalSourceCompilation,
 } from './source-compilation.js';
 
-export interface SourceParameterDescriptor {
+interface SourceParameterDescriptorBase {
   readonly id: number;
-  readonly kind: 'number' | 'signal';
   readonly label: string;
-  readonly defaultValue: number | SignalId;
   readonly source: SourceSpan;
-  readonly metadata?: BlueprintNumberParameterMetadata;
 }
+
+export type SourceParameterDescriptor =
+  | (SourceParameterDescriptorBase & {
+      readonly kind: 'number';
+      readonly defaultValue: number;
+      readonly metadata?: BlueprintNumberParameterMetadata;
+    })
+  | (SourceParameterDescriptorBase & {
+      readonly kind: 'signal';
+      readonly defaultValue?: SignalId;
+    });
 
 export interface SourceParameterOverride {
   readonly id: number;
@@ -157,8 +165,8 @@ export function createSourceParameterBindingSession(
   }
   if (
     compilation.pipelineDiagnostics.some(({ severity }) => severity === 'error') ||
-    compilation.plan === undefined ||
-    compilation.resolvedCircuit === undefined
+    (compilation.requiredParameterIds === undefined &&
+      (compilation.plan === undefined || compilation.resolvedCircuit === undefined))
   ) {
     throw new TypeError('Source parameter binding requires a successful lowered compilation.');
   }
@@ -166,21 +174,39 @@ export function createSourceParameterBindingSession(
   const declarations = Object.freeze(
     listed.map((parameter, id): PrivateDeclaration => {
       const source = copySource(parameter.source);
-      const descriptor: SourceParameterDescriptor = Object.freeze({
-        id,
-        kind: parameter.kind,
-        label: parameter.label,
-        defaultValue: copyDefault(
-          parameter.kind,
-          parameter.defaultValue,
-          `$.parameters[${id}].defaultValue`,
+      let descriptor: SourceParameterDescriptor;
+      if (parameter.kind === 'number') {
+        if (parameter.defaultValue === undefined) {
+          throw new TypeError('NUMBER declarations must have a resolved concrete default.');
+        }
+        descriptor = Object.freeze({
+          id,
+          kind: 'number',
+          label: parameter.label,
+          defaultValue: parameter.defaultValue as number,
           source,
-        ),
-        source,
-        ...(parameter.metadata === undefined
-          ? {}
-          : { metadata: copyMetadata(parameter.metadata)! }),
-      });
+          ...(parameter.metadata === undefined
+            ? {}
+            : { metadata: copyMetadata(parameter.metadata)! }),
+        });
+      } else {
+        descriptor = Object.freeze({
+          id,
+          kind: 'signal',
+          label: parameter.label,
+          source,
+          ...(parameter.defaultValue === undefined
+            ? {}
+            : {
+                defaultValue: copyDefault(
+                  'signal',
+                  parameter.defaultValue,
+                  `$.parameters[${id}].defaultValue`,
+                  source,
+                ) as SignalId,
+              }),
+        });
+      }
       return Object.freeze({ handle: parameter.parameter, descriptor });
     }),
   );
