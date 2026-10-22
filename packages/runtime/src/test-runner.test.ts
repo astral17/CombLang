@@ -4,7 +4,14 @@ import { TraceReader, type TestSession } from '@comblang/simulator';
 import { afterEach, describe, expect, test } from 'vitest';
 
 import { executeElaborationProgram } from './elaboration-program.js';
-import { runDirectPlanTests } from './test-runner.js';
+import { elaborateDirectPlan } from './direct-plan.js';
+import {
+  runDirectPlanTests,
+  runExecutedDirectPlanTests,
+  runResolvedDirectPlanTests,
+  runTestsWithExecution,
+} from './test-runner.js';
+import { compileSourceProgram } from './source-compilation.js';
 
 const latePromiseKey = '__comblangLateTestPromise';
 const lateSessionKey = '__comblangLateTestSession';
@@ -19,6 +26,117 @@ afterEach(() => {
 });
 
 describe('direct plan test runner lifecycle', () => {
+  test('snapshots optional case parameters before later test-file mutations', () => {
+    const parsed = parseFile({
+      path: 'case-parameters.factorio.ts',
+      text: 'const input = new Network();',
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const execution = elaborateDirectPlan(plan);
+    const received: unknown[] = [];
+    const result = runTestsWithExecution(
+      (parameters) => {
+        received.push(parameters);
+        return execution;
+      },
+      `const entries = [{ id: 0, value: 4 }];
+test('snapshot', () => {}, { parameters: entries });
+entries[0].value = 99;
+test('omitted', () => {});`,
+    );
+
+    expect(result).toMatchObject({ passed: 2, failed: 0 });
+    expect(received).toEqual([[{ id: 0, value: 4 }], undefined]);
+    expect(Object.isFrozen(received[0])).toBe(true);
+    expect(Object.isFrozen((received[0] as Array<unknown>)[0])).toBe(true);
+  });
+
+  test('rejects unsupported or malformed generic bindings per case without running the callback', () => {
+    const parsed = parseFile({
+      path: 'unsupported-case-parameters.factorio.ts',
+      text: 'const input = new Network();',
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const execution = elaborateDirectPlan(plan);
+    const ran: string[] = [];
+    const globals = globalThis as typeof globalThis & { __unsupportedCaseRan?: string[] };
+    globals.__unsupportedCaseRan = ran;
+    try {
+      const source = `test('empty', () => {} , { parameters: [] });
+test('unsupported', () => globalThis.__unsupportedCaseRan.push('nonempty'), { parameters: [{ id: 0, value: 7 }] });
+test('malformed', () => globalThis.__unsupportedCaseRan.push('malformed'), { parameters: {} });
+test('continues', () => {});`;
+      const sourceCompilation = compileSourceProgram({
+        path: 'unsupported-case-parameters.factorio.ts',
+        text: 'const input = new Network();',
+      });
+      const results = [
+        runDirectPlanTests(plan, source),
+        runExecutedDirectPlanTests(execution, source),
+        runResolvedDirectPlanTests(
+          sourceCompilation.plan!,
+          sourceCompilation.resolvedCircuit!,
+          source,
+        ),
+      ];
+
+      for (const result of results) {
+        expect(result).toMatchObject({
+          passed: 2,
+          failed: 2,
+          results: [
+            { status: 'passed' },
+            { status: 'failed', failureKind: 'runtime', code: 'CP1000' },
+            { status: 'failed', failureKind: 'runtime', code: 'CP1000' },
+            { status: 'passed' },
+          ],
+        });
+      }
+      expect(ran).toEqual([]);
+    } finally {
+      delete globals.__unsupportedCaseRan;
+    }
+  });
+
+  test('reports malformed metadata before the body and continues registration order', () => {
+    const parsed = parseFile({
+      path: 'malformed-case-options.factorio.ts',
+      text: 'const input = new Network();',
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const execution = elaborateDirectPlan(plan);
+    const calls: unknown[] = [];
+    const ran: string[] = [];
+    const globals = globalThis as typeof globalThis & { __malformedCaseRan?: string[] };
+    globals.__malformedCaseRan = ran;
+    try {
+      const result = runTestsWithExecution(
+        (parameters) => {
+          calls.push(parameters);
+          return execution;
+        },
+        `const bad = {};
+Object.defineProperty(bad, 'id', { enumerable: true, get() { throw new Error('must not run'); } });
+test('bad metadata', () => globalThis.__malformedCaseRan.push('bad'), { parameters: [bad] });
+test('good metadata', () => {}, { parameters: [] });`,
+      );
+
+      expect(result).toMatchObject({
+        passed: 1,
+        failed: 1,
+        results: [
+          { name: 'bad metadata', status: 'failed', code: 'CP1000' },
+          { name: 'good metadata', status: 'passed' },
+        ],
+      });
+      expect(result.results[0]).not.toHaveProperty('line');
+      expect(calls).toEqual([[]]);
+      expect(ran).toEqual([]);
+    } finally {
+      delete globals.__malformedCaseRan;
+    }
+  });
+
   test('reports a failed scheduled boundary with its last committed trace and isolates the next test', () => {
     const parsed = parseFile({
       path: 'failed-boundary.factorio.ts',

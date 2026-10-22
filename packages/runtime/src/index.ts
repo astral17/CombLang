@@ -20,4 +20,17 @@ export type { ElaborationExecutionOptions } from './elaboration-program.js';
 export * from './elaboration.js';
 export * from './resolved-circuit.js';
 export * from './execution-diagnostic.js';
-export * from './test-runner.js';
+export {
+  runDirectPlanTests,
+  runExecutedDirectPlanTests,
+  runResolvedDirectPlanTests,
+} from './test-runner.js';
+export type {
+  DirectPlanTestFailureKind,
+  DirectPlanTestCaseResult,
+  DirectPlanTestRun,
+  DirectPlanTestApi,
+  DirectPlanTestRunnerOptions,
+} from './test-runner.js';
+export { runSourceCompilationTests } from './source-compilation-test-runner.js';
+export type { SourceCompilationTestRunnerOptions } from './source-compilation-test-runner.js';

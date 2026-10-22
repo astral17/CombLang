@@ -19,6 +19,13 @@ import {
 } from './direct-plan.js';
 import { elaborateDirectPlan } from './direct-plan.js';
 import type { NetworkHandle } from './elaboration.js';
+import {
+  assertBlueprintParameterExactKeys,
+  createBlueprintParameterDataBudget,
+  openBlueprintParameterArray,
+  openBlueprintParameterRecord,
+} from '../../compiler/src/blueprint-parameter-validation.js';
+import { BlueprintParameterError } from '../../compiler/src/blueprint-parameters.js';
 
 export type DirectPlanTestFailureKind = 'assertion' | 'debug-query' | 'structure' | 'runtime';
 
@@ -65,11 +72,125 @@ export interface DirectPlanTestRunnerOptions {
 }
 
 type TestBody = (api: DirectPlanTestApi) => unknown;
-type RegisterTest = (name: string, body: TestBody) => void;
+type RegisterTest = (name: string, body: TestBody, options?: unknown) => void;
 
 interface RegisteredTest {
   readonly name: string;
   readonly body: TestBody;
+  readonly hasParameters: boolean;
+  readonly parameters?: unknown;
+  readonly metadataError?: unknown;
+  readonly hasMetadataError: boolean;
+}
+
+interface TestParameterOptions {
+  readonly hasParameters: boolean;
+  readonly parameters?: unknown;
+}
+
+function snapshotTestParameterData(
+  value: unknown,
+  path: string,
+  depth: number,
+  budget: ReturnType<typeof createBlueprintParameterDataBudget>,
+): unknown {
+  if (
+    value === null ||
+    value === undefined ||
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'boolean'
+  ) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    const opened = openBlueprintParameterArray(value, path, depth, budget);
+    try {
+      return Object.freeze(
+        opened.value.map((entry, index) =>
+          snapshotTestParameterData(entry, `${path}[${index}]`, depth + 1, budget),
+        ),
+      );
+    } finally {
+      opened.release();
+    }
+  }
+  if (typeof value === 'object') {
+    const opened = openBlueprintParameterRecord(value, path, depth, budget);
+    try {
+      const copy = Object.create(null) as Record<string, unknown>;
+      for (const [key, entry] of Object.entries(opened.value)) {
+        copy[key] = snapshotTestParameterData(entry, `${path}.${key}`, depth + 1, budget);
+      }
+      return Object.freeze(copy);
+    } finally {
+      opened.release();
+    }
+  }
+  throw new BlueprintParameterError(
+    'CP1000',
+    path,
+    'only bounded plain parameter data is supported.',
+  );
+}
+
+function readTestParameterOptions(options: unknown): TestParameterOptions {
+  const budget = createBlueprintParameterDataBudget();
+  const opened = openBlueprintParameterRecord(options, '$.options', 0, budget);
+  try {
+    assertBlueprintParameterExactKeys(opened.value, ['parameters'], '$.options');
+    if (!Object.hasOwn(opened.value, 'parameters')) return { hasParameters: false };
+    if (opened.value.parameters === undefined) {
+      throw new BlueprintParameterError(
+        'CP1000',
+        '$.options.parameters',
+        'expected an override array when the parameters field is supplied.',
+      );
+    }
+    return {
+      hasParameters: true,
+      parameters: snapshotTestParameterData(
+        opened.value.parameters,
+        '$.options.parameters',
+        1,
+        budget,
+      ),
+    };
+  } finally {
+    opened.release();
+  }
+}
+
+/** Internal shared check for runners that do not own a source binding session. */
+export function assertEmptyTestParameterOverrides(parameters: unknown): void {
+  if (parameters === undefined) return;
+  const opened = openBlueprintParameterArray(
+    parameters,
+    '$.options.parameters',
+    0,
+    createBlueprintParameterDataBudget(),
+  );
+  try {
+    if (opened.value.length !== 0) {
+      throw new BlueprintParameterError(
+        'CP1000',
+        '$.options.parameters',
+        'this test runner does not own source parameter declarations; only [] is accepted.',
+      );
+    }
+  } finally {
+    opened.release();
+  }
+}
+
+/** Internal bounded snapshot helper shared with the host-local source adapter. */
+export function snapshotTestParameterOverrides(value: unknown): unknown {
+  return snapshotTestParameterData(
+    value,
+    '$.options.parameters',
+    0,
+    createBlueprintParameterDataBudget(),
+  );
 }
 
 function regexEscape(value: string): string {
@@ -81,6 +202,7 @@ function errorLocation(
   sourceName: string,
   stackLineOffset: number,
 ): { line?: number; column?: number } {
+  if (error instanceof BlueprintParameterError) return {};
   if (!(error instanceof Error) || error.stack === undefined) return {};
   const match = new RegExp(`${regexEscape(sourceName)}:(\\d+):(\\d+)`).exec(error.stack);
   if (match === null) return {};
@@ -128,11 +250,31 @@ function failure(
       debugScopePath: error.details.scopePath,
     };
   }
-  return { ...common, failureKind: 'runtime' };
+  return {
+    ...common,
+    failureKind: 'runtime',
+    ...(error instanceof BlueprintParameterError
+      ? {
+          code: error.code,
+          details: {
+            path: error.path,
+            ...(error.span === undefined
+              ? {}
+              : {
+                  source: {
+                    fileId: error.span.fileId,
+                    start: error.span.start,
+                    end: error.span.end,
+                  },
+                }),
+          },
+        }
+      : {}),
+  };
 }
 
-function runTestsWithExecution(
-  getExecution: () => ExecutedDirectPlan,
+export function runTestsWithExecution(
+  getExecution: (caseParameters?: unknown) => ExecutedDirectPlan,
   source: string,
   options: DirectPlanTestRunnerOptions = {},
 ): DirectPlanTestRun {
@@ -146,12 +288,30 @@ function runTestsWithExecution(
   }
 
   const registered: RegisteredTest[] = [];
-  const test: RegisterTest = (name, body) => {
+  const test: RegisterTest = function (name, body, options) {
     if (typeof name !== 'string' || name.trim().length === 0) {
       throw new TypeError('test(name, body) requires a non-empty name.');
     }
     if (typeof body !== 'function') throw new TypeError(`Test "${name}" requires a function body.`);
-    registered.push({ name, body });
+    let testOptions: TestParameterOptions = { hasParameters: false };
+    let metadataError: unknown;
+    let hasMetadataError = false;
+    if (arguments.length >= 3) {
+      try {
+        testOptions = readTestParameterOptions(options);
+      } catch (error) {
+        metadataError = error;
+        hasMetadataError = true;
+      }
+    }
+    registered.push({
+      name,
+      body,
+      hasParameters: testOptions.hasParameters,
+      ...(testOptions.hasParameters ? { parameters: testOptions.parameters } : {}),
+      ...(hasMetadataError ? { metadataError } : {}),
+      hasMetadataError,
+    });
   };
 
   try {
@@ -170,9 +330,19 @@ function runTestsWithExecution(
   }
 
   const results = registered.map((registeredTest): DirectPlanTestCaseResult => {
+    if (registeredTest.hasMetadataError) {
+      return failure(
+        registeredTest.name,
+        registeredTest.metadataError,
+        sourceName,
+        stackLineOffset,
+      );
+    }
     let execution: ExecutedDirectPlan;
     try {
-      execution = getExecution();
+      execution = getExecution(
+        registeredTest.hasParameters ? registeredTest.parameters : undefined,
+      );
     } catch (error) {
       return failure(registeredTest.name, error, sourceName, stackLineOffset);
     }
@@ -250,7 +420,14 @@ export function runExecutedDirectPlanTests(
   source: string,
   options: DirectPlanTestRunnerOptions = {},
 ): DirectPlanTestRun {
-  return runTestsWithExecution(() => execution, source, options);
+  return runTestsWithExecution(
+    (parameters) => {
+      assertEmptyTestParameterOverrides(parameters);
+      return execution;
+    },
+    source,
+    options,
+  );
 }
 
 /** Compatibility entry point for callers that only own a serializable Direct Plan. */
@@ -262,7 +439,8 @@ export function runDirectPlanTests(
   let attempted = false;
   let execution: ExecutedDirectPlan | undefined;
   let failure: unknown;
-  const getExecution = (): ExecutedDirectPlan => {
+  const getExecution = (parameters?: unknown): ExecutedDirectPlan => {
+    assertEmptyTestParameterOverrides(parameters);
     if (!attempted) {
       attempted = true;
       try {
@@ -296,5 +474,12 @@ export function runResolvedDirectPlanTests(
       failed: 1,
     };
   }
-  return runTestsWithExecution(() => execution, source, options);
+  return runTestsWithExecution(
+    (parameters) => {
+      assertEmptyTestParameterOverrides(parameters);
+      return execution;
+    },
+    source,
+    options,
+  );
 }

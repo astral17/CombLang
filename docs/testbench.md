@@ -121,6 +121,45 @@ CLI parser. `test` does not accept `--parameters`, `--label` or
 via `blueprint export --parameters` is a separate mode. CLI simulator success
 and agreement with concrete JSON are not native Factorio acceptance evidence.
 
+### Host-local per-case parameter snapshots
+
+Host callers that retain the owning `LocalSourceCompilation` can route distinct
+parameter snapshots to test cases without rerunning the source:
+
+```ts
+import { runSourceCompilationTests } from '@comblang/runtime';
+import { compileSourceProgram } from '@comblang/runtime/source-compilation';
+
+const compilation = compileSourceProgram(source, authorizedHostEnvironment);
+const result = runSourceCompilationTests(
+  compilation,
+  `test('signal B', ({ network, expectSignal, tick }) => {
+    tick();
+    expectSignal(network('output'), Signal('virtual', 'signal-B')).toBe(5);
+  }, { parameters: [{ id: 1, value: Signal('virtual', 'signal-B') }] });
+  test('restore source defaults', ({ network, expectSignal, tick }) => {
+    tick();
+    expectSignal(network('output'), Signal('virtual', 'signal-A')).toBe(5);
+  }, { parameters: [] });`,
+  { parameters: [{ id: 0, value: 7 }] },
+);
+```
+
+An omitted case-level `parameters` field uses the optional run-wide snapshot;
+an explicit case array replaces it completely, so omitted IDs in that case
+return to source defaults. `[]` explicitly selects the source defaults. IDs are
+local to this exact captured source execution; labels are display names, not
+binding keys. Invalid snapshots fail only their case before its callback, and
+later cases continue. With no run-wide or case-level snapshot, the runner keeps
+the compilation's existing execution path. Source compilation and its current
+supported parameter declarations are unchanged by this adapter.
+
+This is currently a host runtime API only. Browser and CLI per-case routing are
+not wired: CLI `--overrides` still binds one concrete plan/resolved-circuit pair
+before running the test file. This does not add default-free Signal source
+compilation, native ingredient dependencies, automatic recipe lookup, or a
+construction-screen binding UI.
+
 The test callback receives these convenience methods and complete APIs:
 
 | Surface                      | Purpose                                                                                                |
