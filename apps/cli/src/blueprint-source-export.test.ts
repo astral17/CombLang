@@ -1505,6 +1505,53 @@ countNetwork += Selector({ input, operation: 'count', output: countOutput });`);
     });
   });
 
+  test('exports default-free Selector index and count-output parameters through the CLI', async () => {
+    const { environment } = await parameterHost();
+    const path = await sourceFile(`const index = Param.signal('Index');
+const countOutput = Param.signal('Count output');
+const input = new Network();
+const selectOutput = new Network();
+const countNetwork = new Network();
+selectOutput += Selector({ input, operation: 'select', index });
+countNetwork += Selector({ input, operation: 'count', output: countOutput });`);
+    const { log, error } = capture();
+    expect(await run(['blueprint', 'export', '--parameters', '--json', path], environment)).toBe(0);
+    expect(error.mock.calls).toEqual([]);
+    const result = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(result.ok).toBe(true);
+    expect(result.document.blueprint.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Index',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      {
+        type: 'id',
+        id: 'parameter-1',
+        name: 'Count output',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    const [selectEntity, countEntity] = result.document.blueprint.entities;
+    expect(selectEntity.control_behavior).toMatchObject({
+      operation: 'select',
+      index_signal: { type: 'virtual', name: 'parameter-0' },
+    });
+    expect(countEntity.control_behavior).toMatchObject({
+      operation: 'count',
+      count_signal: { type: 'virtual', name: 'parameter-1' },
+    });
+
+    log.mockClear();
+    expect(await run(['blueprint', 'export', '--json', path], environment)).toBe(2);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0])).error).toMatchObject({
+      code: 'CLIBP1000',
+      message: expect.stringContaining('explicit --overrides'),
+    });
+    expect(error.mock.calls).toEqual([]);
+  });
+
   test('exports and binds fractional, divided, and powered Selector formulas without publishing failures', async () => {
     const { environment } = await parameterHost();
     const path = await sourceFile(`const amount = Param.number('Amount', 10, { variable: 'x' });

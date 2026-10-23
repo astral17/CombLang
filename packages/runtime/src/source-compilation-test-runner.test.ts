@@ -392,6 +392,107 @@ test('valid case after missing bindings resets automatic count', ({ network, exp
     expect(result.results[3]!.message).not.toContain('missing-binding callback must not run');
   });
 
+  test('binds Selector index/count Signals with automatic numbers across isolated test snapshots', () => {
+    const sourceKey = '__comblang_selector_signal_source_runs';
+    const getterKey = '__comblang_selector_signal_default_getters';
+    const globals = globalThis as typeof globalThis & Record<string, unknown>;
+    globals[sourceKey] = 0;
+    globals[getterKey] = 0;
+    try {
+      const compilation = compileSourceProgram(
+        {
+          path: 'selector-required-signal-runner.factorio.ts',
+          text: `globalThis.${sourceKey} = Number(globalThis.${sourceKey} ?? 0) + 1;
+const defaults = { get automatic() {
+  globalThis.${getterKey} = Number(globalThis.${getterKey} ?? 0) + 1;
+  return undefined;
+} };
+const amount = Param.number('Amount', defaults.automatic);
+const index = Param.signal('Index channel');
+const count = Param.signal('Count channel');
+const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const defaultSignal = Signal('virtual', 'signal-default');
+const input = new Network();
+const selected = new Network();
+const counted = new Network();
+const defaultsOutput = new Network();
+input += Constant({ sections: [{ filters: [
+  { signal: A, value: 5 },
+  { signal: B, value: 3 },
+  { signal: index, value: 1 },
+] }] });
+selected += Selector({ input, operation: 'select', index });
+counted += Selector({ input, operation: 'count', output: count });
+defaultsOutput += Constant({ sections: [{ filters: [{ signal: defaultSignal, value: amount }] }] });`,
+        },
+        canonicalEntityHost(),
+      );
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      expect(compilation.requiredParameterIds).toEqual([1, 2]);
+      expect(compilation.plan).toBeUndefined();
+
+      const result = runSourceCompilationTests(
+        compilation,
+        `test('quality-bearing index drives select and count retains its output Signal', ({ network, expectSignal, tick }) => {
+  tick(2);
+  expectSignal(network('selected'), Signal('virtual', 'signal-B')).toBe(3);
+  expectSignal(network('counted'), Signal('item', 'iron-plate', 'uncommon')).toBe(3);
+  expectSignal(network('defaultsOutput'), Signal('virtual', 'signal-default')).toBe(2);
+}, { parameters: [
+  { id: 1, value: Signal('virtual', 'signal-index', 'rare') },
+  { id: 2, value: Signal('item', 'iron-plate', 'uncommon') },
+] });
+test('missing required Selector Signals are rejected', () => { throw new Error('missing bindings callback ran'); });
+test('empty snapshots do not satisfy required Selector Signals', () => { throw new Error('empty callback ran'); }, { parameters: [] });
+test('wrong-kind index binding is rejected', () => { throw new Error('wrong-kind callback ran'); }, { parameters: [
+  { id: 1, value: 7 },
+  { id: 2, value: Signal('fluid', 'water') },
+] });
+test('number override composes with both Selector bindings', ({ network, expectSignal, tick }) => {
+  tick(2);
+  expectSignal(network('selected'), Signal('virtual', 'signal-B')).toBe(3);
+  expectSignal(network('counted'), Signal('fluid', 'water', 'rare')).toBe(3);
+  expectSignal(network('defaultsOutput'), Signal('virtual', 'signal-default')).toBe(9);
+}, { parameters: [
+  { id: 0, value: 9 },
+  { id: 1, value: Signal('virtual', 'signal-index', 'rare') },
+  { id: 2, value: Signal('fluid', 'water', 'rare') },
+] });
+test('later case resets the automatic number and still supplies required Signals', ({ network, expectSignal, tick }) => {
+  tick(2);
+  expectSignal(network('counted'), Signal('virtual', 'signal-count')).toBe(3);
+  expectSignal(network('defaultsOutput'), Signal('virtual', 'signal-default')).toBe(2);
+}, { parameters: [
+  { id: 1, value: Signal('virtual', 'signal-index', 'rare') },
+  { id: 2, value: Signal('virtual', 'signal-count') },
+] });`,
+      );
+      expect(result).toMatchObject({
+        passed: 3,
+        failed: 3,
+        results: [
+          { status: 'passed' },
+          { status: 'failed', code: 'CP1002' },
+          { status: 'failed', code: 'CP1002' },
+          { status: 'failed', code: 'CP1000' },
+          { status: 'passed' },
+          { status: 'passed' },
+        ],
+      });
+      expect(globals[sourceKey]).toBe(1);
+      expect(globals[getterKey]).toBe(1);
+      expect(
+        result.results
+          .slice(1, 4)
+          .every(({ message }) => !(message ?? '').includes('callback ran')),
+      ).toBe(true);
+    } finally {
+      delete globals[sourceKey];
+      delete globals[getterKey];
+    }
+  });
+
   test('an explicit case snapshot does not inherit an invalid run-wide snapshot', () => {
     const compilation = compile();
     const source = `test('inherits invalid defaults', () => { throw new Error('invalid body ran'); });

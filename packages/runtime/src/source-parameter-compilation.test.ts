@@ -4056,7 +4056,7 @@ output += laterReservation;`,
   test('executes the documented automatic numeric default example with the same reset value', () => {
     const page = readFileSync(new URL('../../../docs/api/parameters.md', import.meta.url), 'utf8');
     const section = page.match(
-      /### Automatic numeric defaults([\s\S]*?)## Complete circuit example/,
+      /^### Automatic numeric defaults\r?\n([\s\S]*?)^## Complete circuit example/m,
     )?.[1];
     const example = section?.match(/```javascript\r?\n([\s\S]*?)```/)?.[1];
     if (example === undefined)

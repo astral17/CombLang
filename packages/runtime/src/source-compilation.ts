@@ -458,7 +458,7 @@ export function exportSourceCompilationNativeBlueprint(
         if (placeholder === undefined) {
           reject(
             `$.parameters[${index}]`,
-            'default-free Signal declaration has no authenticated Constant template allocation.',
+            'default-free Signal declaration has no authenticated Constant or Selector template allocation.',
             declaration.source,
           );
         }
@@ -1705,15 +1705,21 @@ export function exportSourceCompilationNativeBlueprint(
           sourceKey = undefined;
         }
       }
+      const expectedKey =
+        info?.key ??
+        (info?.placeholder === undefined
+          ? undefined
+          : signalKey({ type: 'virtual', name: info.placeholder }));
       if (
         info === undefined ||
-        sourceKey !== info.key ||
+        expectedKey === undefined ||
+        sourceKey !== expectedKey ||
         behavior?.operation !== expectedOperation ||
-        nativeSignalKey(projectedSignal) !== info.key
+        nativeSignalKey(projectedSignal) !== expectedKey
       ) {
         reject(
           occurrence.path,
-          `marked Selector ${expectedOperation === 'select' ? 'index' : 'count output'} Signal default did not survive authenticated native projection unchanged.`,
+          `marked Selector ${expectedOperation === 'select' ? 'index' : 'count output'} Signal identity did not survive authenticated native projection unchanged.`,
           occurrence.source,
         );
       }

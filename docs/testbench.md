@@ -190,8 +190,12 @@ compilation and supported parameter declarations are unchanged by this adapter.
 
 #### Automatic numeric defaults with a required Signal
 
-Within the direct Constant-filter slice, an automatically selected number can
-feed a filter count while the Signal identity remains required per case.
+An automatically selected number can feed a Constant filter count while a
+default-free Signal remains required per case. The same full-snapshot rule
+applies to the supported Selector Signal slots: `select.index` reads the
+numeric index value from its input network, while `count.output` names the
+Signal receiving the number of distinct input Signals. These are separate
+roles; see the paired [Selector source and test examples](api/parameters.md#default-free-selector-signal-slots).
 Circuit source (`main.factorio.ts`):
 
 ```ts
@@ -218,13 +222,13 @@ The number keeps its selected numeric reset default and can be overridden in a
 case; a later case that omits that numeric override returns to the selected
 default. The Signal's native `parameter-N` metadata is only a template identity,
 not a chosen value. Listing exposes no Signal default, and an omitted binding or
-`parameters: []` still fails before the affected callback. This composition does
-not extend default-free Signal support beyond direct Constant filter fields.
+`parameters: []` still fails before the affected callback.
 
-CLI and host runtime routes now support these snapshots, including required
-bindings for the direct Constant-filter default-free Signal slice. Browser
-per-case routing is still pending. This does not add default-free Signal support
-outside Constant filter slots, native ingredient dependencies, automatic recipe
+Default-free Signal support is limited to direct Constant filter `signal`,
+Selector select `index`, and Selector count `output` fields. Arithmetic output
+and Decider slots remain unsupported. CLI and host runtime routes support these
+snapshots for the Constant and Selector slots. Browser per-case routing is still
+pending. This does not add native ingredient dependencies, automatic recipe
 lookup, or a construction-screen binding UI.
 
 The test callback receives these convenience methods and complete APIs:

@@ -101,6 +101,41 @@ describe('author API documentation', () => {
     );
   });
 
+  test('runs separate symbolic Selector index and count source/test pairs', async () => {
+    const section = read('parameters')
+      .split('#### Default-free Selector Signal slots\n')[1]
+      ?.split('\nThis nominal Signal slot matrix')[0];
+    if (section === undefined) throw new Error('Missing default-free Selector examples');
+    const examples = [...section.matchAll(/```javascript\r?\n([\s\S]*?)\r?\n```/g)].map(
+      (match) => match[1],
+    );
+    if (examples.length !== 4) {
+      throw new Error(`Expected two separate Selector source/test pairs, found ${examples.length}`);
+    }
+    const labels = ['Index channel', 'Count channel'];
+    for (const [index, label] of labels.entries()) {
+      const compilation = result(examples[index * 2], await bundled);
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      expect(compilation.requiredParameterIds).toEqual([0]);
+      expect(compilation.plan).toBeUndefined();
+      expect(compilation.execution).toBeUndefined();
+      const scenario = runSourceCompilationTests(compilation, examples[index * 2 + 1]);
+      expect(scenario).toMatchObject({
+        passed: 1,
+        failed: 0,
+      });
+      const native = exportSourceCompilationNativeBlueprint(compilation, {
+        label: 'Documented default-free Selector Signal',
+        maxDeciderConditionRows: 1024,
+      });
+      expect(native.parameters).toMatchObject([{ id: 'parameter-0', name: label }]);
+      expect(native.entities).toHaveLength(2);
+      expect(createSourceParameterBindingSession(compilation).parameters[0]).not.toHaveProperty(
+        'defaultValue',
+      );
+    }
+  });
+
   test('runs the documented formula-only dependency through local binding and native projection', async () => {
     const source = read('parameters').match(
       /#### Formula-only dependency example[\s\S]*?```javascript\r?\n([\s\S]*?)\r?\n```/,

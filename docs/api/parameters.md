@@ -68,22 +68,26 @@ number declaration is retained
 as an original row even when its original value has no direct physical slot;
 truly unreferenced declarations remain unsupported.
 
-The default-free Signal slice is narrower: it currently supports only a direct
-`Constant` filter `signal` field. The count may be a literal or an existing
-explicitly defaulted or automatically defaulted numeric slot. Automatic numeric
-allocation and Signal-template allocation are independent: the numeric original
-remains a real number default, while the private native template uses an
-allocated `parameter-N` identity only for the Signal field. The public
-compilation artifact contains no concrete plan or resolved circuit, and the
-Signal placeholder is never a test default. Parameter listing reports the
-chosen numeric default and omits `defaultValue` for the required Signal.
-Every test case that uses such a Signal must provide an explicit binding; a
-missing value or `parameters: []` fails with located `CP1002` before that case's
-callback, while a later independently bound case can still run. Bindings accept
-item, fluid, or virtual Signals and preserve quality. `blueprint export
---parameters` emits native placeholder metadata; concrete export requires an
-explicit `--overrides` value. This structural export is not Factorio acceptance
-evidence.
+Default-free Signal construction supports exactly three direct slots:
+`Constant` filter `signal`, `Selector` select `index`, and `Selector` count
+`output`. In a select operation, the bound Signal is read from the input network
+as the numeric index; it does not name the selected output. In a count
+operation, it names the output Signal receiving the count. The Constant filter
+count may be literal or use an existing explicitly or automatically defaulted
+numeric slot. Automatic numeric allocation and Signal-template allocation are
+independent: the numeric original remains a real number default, while the
+private native template uses an allocated `parameter-N` identity only for each
+Signal slot. A shared handle used by a Constant filter and Selector slot keeps
+one declaration and one placeholder. The public compilation artifact contains
+no concrete plan or resolved circuit, and a Signal placeholder is never a test
+default. Parameter listing reports the chosen numeric default and omits
+`defaultValue` for each required Signal. Every test case that uses such a Signal
+must provide an explicit binding; a missing value or `parameters: []` fails with
+located `CP1002` before that case's callback, while a later independently bound
+case can still run. Bindings accept item, fluid, or virtual Signals and preserve
+quality. `blueprint export --parameters` emits native placeholder metadata;
+concrete export requires an explicit `--overrides` value. This structural
+export is not Factorio acceptance evidence.
 
 #### Automatic numeric defaults with a required Signal
 
@@ -109,9 +113,80 @@ test(
 );
 ```
 
-Default-free Signals in Arithmetic, Selector or Decider slots remain unsupported
-and fail with located `CP1002`. Browser case controls, broader producer slots
-and ingredient/property dependencies remain pending.
+Default-free Signals in Arithmetic or Decider slots remain unsupported and fail
+with located `CP1002`. Browser case controls, broader producer slots and
+ingredient/property dependencies remain pending.
+
+#### Default-free Selector Signal slots
+
+Keep select-index and count-output examples in separate source and test files:
+the two slots have different meanings. The select index below is also written
+to the input bus, so the bound Signal's value chooses the second-ranked input
+Signal. Circuit source (`main.factorio.ts`):
+
+```javascript
+const index = Param.signal('Index channel');
+const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const input = new Network();
+const selected = new Network();
+input += Constant({
+  sections: [
+    {
+      filters: [
+        { signal: A, value: 5 },
+        { signal: B, value: 3 },
+        { signal: index, value: 1 },
+      ],
+    },
+  ],
+});
+selected += Selector({ input, operation: 'select', index });
+```
+
+Test file (`circuit.test.js`):
+
+```javascript
+test(
+  'bind the numeric select index channel',
+  ({ network, expectSignal, tick }) => {
+    tick(2);
+    expectSignal(network('selected'), Signal('virtual', 'signal-B')).toBe(3);
+  },
+  { parameters: [{ id: 0, value: Signal('virtual', 'signal-index', 'rare') }] },
+);
+```
+
+For count, the bound Signal names the output channel and its count is the number
+of distinct input Signals. Circuit source (`count.factorio.ts`):
+
+```javascript
+const count = Param.signal('Count channel');
+const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const input = new Network();
+const counted = new Network();
+input += CC(5 * A, 3 * B);
+counted += Selector({ input, operation: 'count', output: count });
+```
+
+Test file (`count.test.js`):
+
+```javascript
+test(
+  'bind the count output channel',
+  ({ network, expectSignal, tick }) => {
+    tick(2);
+    expectSignal(network('counted'), Signal('fluid', 'water', 'rare')).toBe(2);
+  },
+  { parameters: [{ id: 0, value: Signal('fluid', 'water', 'rare') }] },
+);
+```
+
+Both slots use the existing required-Signal binding mechanism and share its
+native placeholder pool with Constant Signal slots. They do not add Selector
+operations or create a placeholder default; plain concrete export still
+requires explicit bindings.
 
 This nominal Signal slot matrix does not add Decider condition or output slots.
 However, once a Signal handle is authenticated in one of the supported slots,

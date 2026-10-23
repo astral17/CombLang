@@ -36,6 +36,9 @@ export interface SourceSignalTemplateContext {
   bindingsForConstantTemplate(
     template: ConstantConfigurationTemplate,
   ): readonly { readonly parameter: BlueprintParameterHandle; readonly value: SignalId }[];
+  bindingsForSelectorTemplate(
+    template: SelectorConfigurationTemplate,
+  ): readonly { readonly parameter: BlueprintParameterHandle; readonly value: SignalId }[];
   placeholderFor(parameter: BlueprintParameterHandle): string | undefined;
 }
 
@@ -112,7 +115,8 @@ function collectSignalParameters(
 
 /**
  * Allocates the one native ID placeholder pool for this source owner. Missing-default
- * Signal declarations are accepted only in direct Constant filter slots; their
+ * Signal declarations are accepted only in direct Constant filter and Selector
+ * parameter slots; their
  * placeholders materialize the private template base and are never defaults.
  */
 export function createSourceSignalTemplateContext(
@@ -128,6 +132,7 @@ export function createSourceSignalTemplateContext(
 ): SourceSignalTemplateContext | undefined {
   const usedSignals = new Set<BlueprintParameterHandle>();
   const directConstantSignalSlots = new Set<BlueprintParameterHandle>();
+  const directSelectorSignalSlots = new Set<BlueprintParameterHandle>();
   const unsupportedSignalUses = new Set<BlueprintParameterHandle>();
 
   for (const capture of templates.constants) {
@@ -177,14 +182,33 @@ export function createSourceSignalTemplateContext(
     for (const parameter of inspected.usedParameters) {
       if (parameter.kind === 'signal') {
         usedSignals.add(parameter);
-        unsupportedSignalUses.add(parameter);
       }
     }
+    const directSlot =
+      capture.template.operation === 'select'
+        ? canonicalBlueprintParameterHandle(capture.template.index)
+        : canonicalBlueprintParameterHandle(capture.template.output);
+    if (directSlot?.kind === 'signal') directSelectorSignalSlots.add(directSlot);
   }
   for (const producer of producers) {
     if (producer.kind === 'constant') continue;
     const unsupported = new Set<BlueprintParameterHandle>();
-    collectSignalParameters(producer, unsupported, new WeakSet());
+    const matchingSelectorCapture =
+      producer.kind === 'selector' && 'pendingConfiguration' in producer
+        ? templates.selectors.find(({ template }) => template === producer.pendingConfiguration)
+        : undefined;
+    if (
+      matchingSelectorCapture !== undefined &&
+      producer.kind === 'selector' &&
+      'pendingConfiguration' in producer
+    ) {
+      // Only the exact captured template may account for the supported parameter slots.
+      // Continue scanning the rest of the descriptor so unrelated handle uses remain refused.
+      const { pendingConfiguration: _pendingConfiguration, ...descriptor } = producer;
+      collectSignalParameters(descriptor, unsupported, new WeakSet());
+    } else {
+      collectSignalParameters(producer, unsupported, new WeakSet());
+    }
     for (const parameter of unsupported) {
       usedSignals.add(parameter);
       unsupportedSignalUses.add(parameter);
@@ -202,13 +226,13 @@ export function createSourceSignalTemplateContext(
   );
   for (const { handle, registration } of missingUsed) {
     if (
-      !directConstantSignalSlots.has(handle) ||
+      (!directConstantSignalSlots.has(handle) && !directSelectorSignalSlots.has(handle)) ||
       unsupportedSignalUses.has(handle) ||
       registration.source === undefined
     ) {
       fail(
         '$.parameters',
-        `Signal declaration "${registration.label}" without a default is supported only in a direct Constant filter Signal slot.`,
+        `Signal declaration "${registration.label}" without a default is supported only in a direct Constant filter, Selector select-index, or Selector count-output Signal slot.`,
         registration.source,
       );
     }
@@ -261,6 +285,21 @@ export function createSourceSignalTemplateContext(
     },
     bindingsForConstantTemplate(template: ConstantConfigurationTemplate) {
       const inspected = inspectConstantConfigurationTemplate(template, '$.constant');
+      if (inspected.session !== session) {
+        fail('$.constant', 'template belongs to a different parameter session.');
+      }
+      return Object.freeze(
+        inspected.usedParameters.flatMap((parameter) => {
+          const value = bindings.get(parameter);
+          return value === undefined ? [] : [Object.freeze({ parameter, value })];
+        }),
+      );
+    },
+    bindingsForSelectorTemplate(template: SelectorConfigurationTemplate) {
+      const inspected = inspectSelectorConfigurationTemplate(template, '$.selector');
+      if (inspected.session !== session) {
+        fail('$.selector', 'template belongs to a different parameter session.');
+      }
       return Object.freeze(
         inspected.usedParameters.flatMap((parameter) => {
           const value = bindings.get(parameter);

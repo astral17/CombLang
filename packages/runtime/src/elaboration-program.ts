@@ -3958,11 +3958,14 @@ class ElaborationRecorder {
         pending.configuration ??
         (pending.template === undefined
           ? undefined
-          : bindSelectorConfigurationTemplate(
-              pending.template,
-              this.#resolvedNumberDefaultContext?.bindingsForSelectorTemplate(pending.template) ??
-                [],
-            ));
+          : bindSelectorConfigurationTemplate(pending.template, [
+              ...(this.#resolvedNumberDefaultContext?.bindingsForSelectorTemplate(
+                pending.template,
+              ) ?? []),
+              ...(this.#resolvedSignalTemplateContext?.bindingsForSelectorTemplate(
+                pending.template,
+              ) ?? []),
+            ]));
       if (selectorConfiguration === undefined) {
         throw new Error('Pending Selector installation has no resolved configuration.');
       }

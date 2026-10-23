@@ -394,6 +394,24 @@ output += Arithmetic({ left: 2, operation: 'add', right: 3, output: result });`)
     },
   );
 
+  test('still rejects duplicate Constant filters when their required ID is also a Selector index', () => {
+    const compilation = compile(`const channel = Param.signal('Shared channel');
+const input = new Network();
+const output = new Network();
+input += Constant({ sections: [{ filters: [
+  { signal: channel, value: 5 },
+  { signal: channel, value: 13 },
+] }] });
+output += Selector({ input, operation: 'select', index: channel });`);
+    const artifact = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+
+    const error = exportFailure(compilation);
+    expect(error.code).toBe('CP1002');
+    expect(error.path).toContain('filters[1]');
+    expect(error.message).toMatch(/duplicate native Constant filter identity/i);
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(artifact);
+  });
+
   test.each([
     { operation: 'select', field: 'index_signal', type: 'item', name: 'iron-plate' },
     {
@@ -4848,6 +4866,160 @@ output += Constant({ sections: [{ filters: [{ signal: channel, value: amount }] 
       delete globals[numberGetterKey];
     }
   });
+
+  test('exports required Signal parameters from the exact Selector index and count slots', () => {
+    const compilation = compile(`const index = Param.signal('Index channel');
+const count = Param.signal('Count channel', Signal('virtual', 'signal-count'));
+const constantChannel = Param.signal('Constant-only channel');
+const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const input = new Network();
+const selectedOutput = new Network();
+const selectedFanout = new Network();
+const counted = new Network();
+input += Constant({ sections: [{ filters: [
+  { signal: A, value: 5 },
+  { signal: B, value: 3 },
+  { signal: index, value: 1 },
+  { signal: constantChannel, value: 0 },
+] }] });
+const selected = Selector({ input, operation: 'select', index }).at(2, 3);
+selected.to(selectedOutput, selectedFanout);
+counted += Selector({ input, operation: 'count', output: count });`);
+
+    expect(compilation.requiredParameterIds).toEqual([0, 2]);
+    const declarations = sourceApi.listSourceCompilationParameters(compilation);
+    expect(
+      declarations.map(({ kind, label, defaultValue }) => ({ kind, label, defaultValue })),
+    ).toEqual([
+      { kind: 'signal', label: 'Index channel', defaultValue: undefined },
+      {
+        kind: 'signal',
+        label: 'Count channel',
+        defaultValue: { type: 'virtual', name: 'signal-count' },
+      },
+      { kind: 'signal', label: 'Constant-only channel', defaultValue: undefined },
+    ]);
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    expect(native.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Index channel',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      {
+        type: 'id',
+        id: 'parameter-1',
+        name: 'Count channel',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      {
+        type: 'id',
+        id: 'parameter-2',
+        name: 'Constant-only channel',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    const entities = emitNativeBlueprintJson(native).blueprint.entities;
+    expect(entities.map(({ control_behavior }) => control_behavior)).toMatchObject([
+      {
+        sections: {
+          sections: [
+            {
+              index: 1,
+              filters: [
+                { index: 1, name: 'signal-A', count: 5 },
+                { index: 2, name: 'signal-B', count: 3 },
+                { index: 3, name: 'parameter-0', count: 1 },
+                { index: 4, name: 'parameter-2', count: 0 },
+              ],
+            },
+          ],
+        },
+      },
+      { operation: 'select', select_max: true, index_signal: { name: 'parameter-0' } },
+      { operation: 'count', count_signal: { name: 'parameter-1' } },
+    ]);
+    expect(entities[1]?.position).toEqual({ x: 2, y: 3 });
+    expect(emitNativeBlueprintJson(native).blueprint.wires.length).toBeGreaterThan(0);
+
+    const before = structuredClone(native);
+    const defaults = sourceApi.bindSourceCompilationCircuit(compilation, [
+      { parameter: declarations[0]!.parameter, value: signal('virtual', 'signal-B', 'rare') },
+      { parameter: declarations[2]!.parameter, value: signal('fluid', 'water', 'rare') },
+    ]);
+    expect(defaults.plan.producers.filter(({ kind }) => kind === 'selector')).toMatchObject([
+      { operation: 'select', index: { type: 'virtual', name: 'signal-B', quality: 'rare' } },
+      { operation: 'count', output: { type: 'virtual', name: 'signal-count' } },
+    ]);
+    expect(() => sourceApi.bindSourceCompilationCircuit(compilation, [])).toThrowError(
+      expect.objectContaining({ code: 'CP1002' }),
+    );
+    const bound = sourceApi.bindSourceCompilationCircuit(compilation, [
+      { parameter: declarations[0]!.parameter, value: signal('virtual', 'signal-B', 'rare') },
+      { parameter: declarations[1]!.parameter, value: signal('item', 'iron-plate', 'uncommon') },
+      { parameter: declarations[2]!.parameter, value: signal('fluid', 'water', 'rare') },
+    ]);
+    expect(bound.plan.producers.filter(({ kind }) => kind === 'selector')).toMatchObject([
+      { operation: 'select', index: { type: 'virtual', name: 'signal-B', quality: 'rare' } },
+      { operation: 'count', output: { type: 'item', name: 'iron-plate', quality: 'uncommon' } },
+    ]);
+    const boundIndexSelector = bound.plan.producers.find(
+      (producer) => producer.kind === 'selector' && producer.operation === 'select',
+    );
+    expect(boundIndexSelector).toMatchObject({
+      source: { fileId: expect.any(String), start: expect.any(Number), end: expect.any(Number) },
+      debugCaptureIds: [expect.any(String)],
+    });
+    expect(bound.plan.producers.find(({ kind }) => kind === 'constant')).toMatchObject({
+      configuration: {
+        sections: [
+          {
+            filters: [
+              { signal: { type: 'virtual', name: 'signal-A' } },
+              { signal: { type: 'virtual', name: 'signal-B' } },
+              { signal: { type: 'virtual', name: 'signal-B', quality: 'rare' } },
+              { signal: { type: 'fluid', name: 'water', quality: 'rare' } },
+            ],
+          },
+        ],
+      },
+    });
+    expect(sourceApi.exportSourceCompilationNativeBlueprint(compilation, options)).toEqual(before);
+  });
+
+  test.each([
+    {
+      operation: 'select',
+      slot: 'index',
+      nativeField: 'index_signal',
+      source: `const channel = Param.signal('Channel');
+const input = new Network();
+const selected = new Network();
+selected += Selector({ input, operation: 'select', index: channel });`,
+    },
+    {
+      operation: 'count',
+      slot: 'output',
+      nativeField: 'count_signal',
+      source: `const channel = Param.signal('Channel');
+const input = new Network();
+const counted = new Network();
+counted += Selector({ input, operation: 'count', output: channel });`,
+    },
+  ] as const)(
+    'supports a default-free Selector $operation $slot Signal without other template slots',
+    ({ source: sourceText, nativeField }) => {
+      const compilation = compile(sourceText);
+      expect(compilation.requiredParameterIds).toEqual([0]);
+      const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+      expect(native.parameters).toMatchObject([{ id: 'parameter-0', name: 'Channel' }]);
+      expect(emitNativeBlueprintJson(native).blueprint.entities[0]?.control_behavior).toMatchObject(
+        { [nativeField]: { name: 'parameter-0' } },
+      );
+    },
+  );
 
   test.each([
     {

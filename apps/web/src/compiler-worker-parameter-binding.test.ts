@@ -1912,6 +1912,79 @@ deciderOutput += Decider({ condition: input[A] > 0, outputs: [input[A]], elseOut
     });
   });
 
+  test('exports default-free Selector Signal index and count-output parameters through the Worker', async () => {
+    const runtime = parameterRuntime();
+    const parsed = structuredClone(
+      await runtime.handle(
+        parseRequest(58, {
+          file: {
+            path: 'worker-selector-signal-templates.factorio.ts',
+            text: `const index = Param.signal('Index');
+const countOutput = Param.signal('Count output');
+const A = Signal('virtual', 'signal-index');
+const input = new Network();
+const selectOutput = new Network();
+const countNetwork = new Network();
+const deciderOutput = new Network();
+selectOutput += Selector({ input, operation: 'select', index });
+countNetwork += Selector({ input, operation: 'count', output: countOutput });
+deciderOutput += Decider({ condition: input[A] > 0, outputs: [input[A]], elseOutputs: [2 * A] });`,
+          },
+          parameterBinding: true,
+          blueprintExport: { parameters: true },
+        }),
+      ),
+    );
+    expect(parsed.result.pipelineDiagnostics).toEqual([]);
+    expect(parsed.result.blueprintExport).toMatchObject({ ok: true });
+    if (parsed.result.blueprintExport?.ok !== true) {
+      throw new Error('Expected Selector Signal template export through the Worker.');
+    }
+    const blueprint = parsed.result.blueprintExport.document.blueprint;
+    expect(blueprint.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Index',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      {
+        type: 'id',
+        id: 'parameter-1',
+        name: 'Count output',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    expect(blueprint.entities[0]!.control_behavior).toMatchObject({
+      operation: 'select',
+      index_signal: { name: 'parameter-0' },
+    });
+    expect(blueprint.entities[1]!.control_behavior).toMatchObject({
+      operation: 'count',
+      count_signal: { type: 'virtual', name: 'parameter-1' },
+    });
+    expect(blueprint.entities[2]!.control_behavior).toMatchObject({
+      decider_conditions: {
+        conditions: [{ first_signal: { name: 'signal-index' }, constant: 0 }],
+        outputs: [{ signal: { name: 'signal-index' }, copy_count_from_input: true }],
+        else_outputs: [{ signal: { name: 'signal-index' }, constant: 2 }],
+      },
+    });
+    const parameterBinding = parsed.parameterBinding;
+    if (parameterBinding?.ok !== true) {
+      throw new Error('Expected a retained Worker parameter binding session.');
+    }
+    expect(parameterBinding).toMatchObject({
+      ok: true,
+      parameters: [
+        { id: 0, kind: 'signal', label: 'Index' },
+        { id: 1, kind: 'signal', label: 'Count output' },
+      ],
+    });
+    expect(parameterBinding.parameters[0]).not.toHaveProperty('defaultValue');
+    expect(parameterBinding.parameters[1]).not.toHaveProperty('defaultValue');
+  });
+
   test('exports item/fluid Constant Signal templates and keeps Worker bindings local', async () => {
     const key = '__worker_mixed_signal_namespace_runs';
     const globals = globalThis as Record<string, unknown>;
