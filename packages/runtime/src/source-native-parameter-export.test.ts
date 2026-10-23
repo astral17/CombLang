@@ -331,6 +331,52 @@ to(output)[A] += Arithmetic({ left: 1, operation: 'add', right: 2, output: chann
     expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
   });
 
+  test('a destination binding shadows one default-free output but preserves its live second use', () => {
+    const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const channel = Param.signal('Result');
+const asDestination = new Network();
+const asArithmetic = Arithmetic({ left: 0, operation: 'add', right: 1, output: channel });
+asArithmetic.as(A);
+asArithmetic.to(asDestination);
+const shadowedOutput = new Network();
+const liveOutput = new Network();
+to(shadowedOutput)[A] += Arithmetic({ left: 1, operation: 'add', right: 2, output: channel });
+liveOutput += Arithmetic({ left: 3, operation: 'add', right: 4, output: channel });`);
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+
+    expect(native.parameters).toMatchObject([{ type: 'id', id: 'parameter-0', name: 'Result' }]);
+    const outputs = emitNativeBlueprintJson(native).blueprint.entities.map((entity) => {
+      const behavior = entity.control_behavior as {
+        arithmetic_conditions: { output_signal: Record<string, unknown> };
+      };
+      return behavior.arithmetic_conditions.output_signal;
+    });
+    expect(outputs).toEqual([
+      { type: 'virtual', name: 'signal-A' },
+      { type: 'virtual', name: 'signal-A' },
+      { type: 'virtual', name: 'parameter-0' },
+    ]);
+
+    const [result] = sourceApi.listSourceCompilationParameters(compilation);
+    expect(sourceApi.listSourceCompilationParameters(compilation)).toHaveLength(1);
+    const replacement = signal('item', 'iron-plate', 'uncommon');
+    const bound = sourceApi.bindSourceCompilationCircuit(compilation, [
+      { parameter: result!.parameter, value: replacement },
+    ]);
+    expect(bound.plan.producers.filter(({ kind }) => kind === 'arithmetic')).toMatchObject([
+      { output: { kind: 'signal', signal: signal('virtual', 'signal-A') } },
+      { output: { kind: 'signal', signal: signal('virtual', 'signal-A') } },
+      { output: { kind: 'signal', signal: replacement } },
+    ]);
+    expect(
+      bound.plan.entities.filter(({ configuration }) => configuration?.mode === 'arithmetic'),
+    ).toMatchObject([
+      { configuration: { output: { kind: 'signal', signal: signal('virtual', 'signal-A') } } },
+      { configuration: { output: { kind: 'signal', signal: signal('virtual', 'signal-A') } } },
+      { configuration: { output: { kind: 'signal', signal: replacement } } },
+    ]);
+  });
+
   test('projects an Arithmetic output parameter only at its unshadowed producer', () => {
     const compilation = compile(`const A = Signal('virtual', 'signal-A');
 const channel = Param.signal('Result', A);
@@ -4764,12 +4810,6 @@ output += Constant({ sections: [{ filters: [
 
   test.each([
     {
-      label: 'unsupported producer slot',
-      source: `const channel = Param.signal('Channel');
-const output = new Network();
-output += Arithmetic({ left: 2, operation: 'add', right: 5, output: channel });`,
-    },
-    {
       label: 'shared placeholder pool overflow',
       source: `const output = new Network();
 ${Array.from({ length: 11 }, (_, index) => `const p${index} = Param.signal('P${index}');`).join('\n')}
@@ -5020,6 +5060,75 @@ counted += Selector({ input, operation: 'count', output: channel });`,
       );
     },
   );
+
+  test('exports a default-free Arithmetic output through one allocated native ID', () => {
+    const compilation = compile(`const channel = Param.signal('Result');
+const output = new Network();
+output += Arithmetic({ left: 2, operation: 'add', right: 5, output: channel });`);
+    expect(compilation.requiredParameterIds).toEqual([0]);
+    const parameter = sourceApi.listSourceCompilationParameters(compilation)[0]!;
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    expect(native.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Result',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    expect(emitNativeBlueprintJson(native).blueprint.entities[0]?.control_behavior).toMatchObject({
+      arithmetic_conditions: { output_signal: { name: 'parameter-0' } },
+    });
+
+    const replacement = signal('item', 'iron-plate', 'uncommon');
+    const bound = sourceApi.bindSourceCompilationCircuit(compilation, [
+      { parameter: parameter.parameter, value: replacement },
+    ]);
+    expect(bound.plan.producers).toMatchObject([
+      { kind: 'arithmetic', output: { kind: 'signal', signal: replacement } },
+    ]);
+    expect(sourceApi.exportSourceCompilationNativeBlueprint(compilation, options)).toEqual(native);
+  });
+
+  test('shares one reserved placeholder across Constant, Arithmetic, and Selector Signal roles', () => {
+    const compilation = compile(`const channel = Param.signal('Shared channel');
+const authored = Signal('virtual', 'parameter-0');
+const input = new Network();
+const arithmeticOutput = new Network();
+const selected = new Network();
+const counted = new Network();
+input += Constant({ sections: [{ filters: [
+  { signal: authored, value: 1 },
+  { signal: channel, value: 4 }
+] }] });
+arithmeticOutput += Arithmetic({ left: 1, operation: 'add', right: 2, output: channel });
+selected += Selector({ input, operation: 'select', index: channel });
+counted += Selector({ input, operation: 'count', output: channel });`);
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    const document = emitNativeBlueprintJson(native).blueprint;
+
+    expect(native.parameters).toMatchObject([{ id: 'parameter-1', name: 'Shared channel' }]);
+    expect(document.entities[0]!.control_behavior).toMatchObject({
+      sections: {
+        sections: [
+          {
+            filters: [{ name: 'parameter-0' }, { name: 'parameter-1' }],
+          },
+        ],
+      },
+    });
+    expect(document.entities[1]!.control_behavior).toMatchObject({
+      arithmetic_conditions: { output_signal: { name: 'parameter-1' } },
+    });
+    expect(document.entities[2]!.control_behavior).toMatchObject({
+      operation: 'select',
+      index_signal: { name: 'parameter-1' },
+    });
+    expect(document.entities[3]!.control_behavior).toMatchObject({
+      operation: 'count',
+      count_signal: { name: 'parameter-1' },
+    });
+  });
 
   test.each([
     {

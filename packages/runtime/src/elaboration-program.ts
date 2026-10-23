@@ -155,7 +155,6 @@ import {
   createArithmeticConfigurationTemplate,
   type ArithmeticConfigurationTemplate,
   type ArithmeticTemplateOperand,
-  type ArithmeticTemplateOutput,
 } from '../../compiler/src/arithmetic-configuration-template.js';
 import {
   ArithmeticConfigurationSourceError,
@@ -233,6 +232,12 @@ interface CapturedArithmeticConfigurationTemplate {
   readonly captureId: string;
   readonly template: ArithmeticConfigurationTemplate;
   readonly source: SourceSpan;
+}
+
+interface EffectiveArithmeticConfigurationTemplateCapture extends CapturedArithmeticConfigurationTemplate {
+  readonly producer: CombinatorValue;
+  readonly rawTemplate: ArithmeticConfigurationTemplate;
+  readonly ownerDescriptor: Extract<CombinatorDescriptor, { readonly kind: 'arithmetic' }>;
 }
 
 interface PendingArithmeticConfigurationTemplateCapture extends CapturedArithmeticConfigurationTemplate {
@@ -1264,8 +1269,6 @@ class ElaborationRecorder {
               normalized.configuration === undefined
                 ? this.#pendingArithmeticTemplateOperand(template.right)
                 : pendingArithmeticOperand(normalized.configuration.right),
-            output:
-              normalized.configuration?.output ?? this.#arithmeticTemplateOutput(template.output),
             pendingConfiguration: template,
             source: this.#span(rawSpan),
             instancePath: this.#path(),
@@ -2908,13 +2911,14 @@ class ElaborationRecorder {
           registration.kind === 'signal' && registration.defaultValue === undefined,
       );
       if (missingSignal !== undefined && this.#parameterCapture !== undefined) {
+        const arithmeticTemplateCaptures = this.#effectiveArithmeticTemplateCaptures();
         this.#resolvedSignalTemplateContext = createSourceSignalTemplateContext(
           this.#parameterCapture.session,
           capturedDeclarations,
           producerDescriptors,
           {
             constants: this.#constantTemplates,
-            arithmetics: this.#arithmeticTemplates,
+            arithmetics: arithmeticTemplateCaptures,
             deciders: this.#pendingDeciderTemplateCaptures.map(
               ({ producer, captureId, template }) => {
                 const descriptor = this.#combinators.stateFor(producer).descriptor;
@@ -3043,7 +3047,7 @@ class ElaborationRecorder {
         }
         if (linked.association.kind === 'arithmetic') {
           const descriptor = this.#combinators.stateFor(linked.producer).descriptor;
-          if (descriptor.kind !== 'arithmetic') {
+          if (descriptor.kind !== 'arithmetic' || 'pendingConfiguration' in descriptor) {
             throw new Error('A linked Arithmetic Entity lost its producer descriptor.');
           }
           const output =
@@ -3101,30 +3105,58 @@ class ElaborationRecorder {
   }
 
   arithmeticTemplates(): readonly CapturedArithmeticConfigurationTemplate[] {
-    const parameterCapture = this.#parameterCapture;
-    if (parameterCapture === undefined) return Object.freeze([]);
+    return Object.freeze(
+      this.#effectiveArithmeticTemplateCaptures().map(({ captureId, template, source }) =>
+        Object.freeze({ captureId, template, source }),
+      ),
+    );
+  }
+
+  #effectiveArithmeticTemplateCaptures(): readonly EffectiveArithmeticConfigurationTemplateCapture[] {
+    const session = this.#parameterCapture?.session;
+    if (session === undefined) return Object.freeze([]);
     return Object.freeze(
       this.#arithmeticTemplates.map(({ producer, captureId, template, source }) => {
-        const outputBinding = this.#combinators.stateFor(producer).outputBinding;
-        const effectiveTemplate =
-          outputBinding === undefined
-            ? template
-            : createArithmeticConfigurationTemplate(parameterCapture.session, {
-                left: template.left,
-                operation: template.operation,
-                right: template.right,
-                output: {
-                  kind: 'signal',
-                  signal: Signal(
-                    outputBinding.signal.type,
-                    outputBinding.signal.name,
-                    outputBinding.signal.quality,
-                  ),
-                },
-              });
-        return Object.freeze({ captureId, template: effectiveTemplate, source });
+        const ownerDescriptor = this.#combinators.stateFor(producer).descriptor;
+        if (ownerDescriptor.kind !== 'arithmetic') {
+          throw new Error('A captured Arithmetic template lost its producer descriptor.');
+        }
+        return Object.freeze({
+          captureId,
+          producer,
+          rawTemplate: template,
+          ownerDescriptor,
+          template: this.#effectiveArithmeticTemplate(producer, template, session),
+          source,
+        });
       }),
     );
+  }
+
+  #effectiveArithmeticTemplate(
+    producer: CombinatorValue,
+    template: ArithmeticConfigurationTemplate,
+    session = this.#parameterCapture?.session,
+  ): ArithmeticConfigurationTemplate {
+    if (session === undefined) {
+      throw new Error('A captured Arithmetic template has no owning parameter session.');
+    }
+    const outputBinding = this.#combinators.stateFor(producer).outputBinding;
+    return outputBinding === undefined
+      ? template
+      : createArithmeticConfigurationTemplate(session, {
+          left: template.left,
+          operation: template.operation,
+          right: template.right,
+          output: {
+            kind: 'signal',
+            signal: Signal(
+              outputBinding.signal.type,
+              outputBinding.signal.name,
+              outputBinding.signal.quality,
+            ),
+          },
+        });
   }
 
   arithmeticOutputBindingCaptureIds(): readonly string[] {
@@ -3822,12 +3854,19 @@ class ElaborationRecorder {
           pending.configuration ??
           (pending.template === undefined
             ? undefined
-            : bindArithmeticConfigurationTemplate(
-                pending.template,
-                this.#resolvedNumberDefaultContext?.bindingsForArithmeticTemplate(
+            : (() => {
+                const template = this.#effectiveArithmeticTemplate(
+                  pending.producer,
                   pending.template,
-                ) ?? [],
-              ));
+                );
+                return bindArithmeticConfigurationTemplate(template, [
+                  ...(this.#resolvedNumberDefaultContext?.bindingsForArithmeticTemplate(template) ??
+                    []),
+                  ...(this.#resolvedSignalTemplateContext?.bindingsForArithmeticTemplate(
+                    template,
+                  ) ?? []),
+                ]);
+              })());
         if (arithmeticConfiguration === undefined) {
           throw new Error('Pending Arithmetic installation has no resolved configuration.');
         }
@@ -5665,9 +5704,12 @@ class ElaborationRecorder {
       throw new Error('Parameterized Signal template has no concrete source default.');
     }
     if (slot.registration.defaultValue === undefined) {
-      // Pending producer slots are rejected at source finalization for this slice;
-      // retain only a native-shaped private identity until that located refusal.
-      return this.#signalSnapshot({ type: 'virtual', name: 'parameter-0' });
+      throw new BlueprintParameterError(
+        'CP1002',
+        '$.configuration.signal',
+        `Signal declaration "${slot.registration.label}" without a default is supported only in a direct Constant filter, Selector select-index, Selector count-output, or Arithmetic output Signal slot.`,
+        slot.registration.source,
+      );
     }
     return this.#signalSnapshot(slot.registration.defaultValue as SignalId);
   }
@@ -5681,14 +5723,6 @@ class ElaborationRecorder {
     return value.kind === 'signal'
       ? { kind: 'signal', signal: this.#defaultSignalForTemplate(value.signal), ...reference }
       : { kind: 'each', ...reference };
-  }
-
-  #arithmeticTemplateOutput(
-    value: ArithmeticTemplateOutput,
-  ): { kind: 'signal'; signal: SignalId } | { kind: 'each' } {
-    return value.kind === 'each'
-      ? { kind: 'each' }
-      : { kind: 'signal', signal: this.#defaultSignalForTemplate(value.signal) };
   }
 
   #createSectionValue(arguments_: readonly CallArgument[], rawSpan: RawSpan): SectionValue {

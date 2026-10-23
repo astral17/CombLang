@@ -211,9 +211,13 @@ export type PendingArithmeticOperand =
   | ({ readonly kind: 'signal'; readonly signal: SignalId } & PlanNetworkRef)
   | ({ readonly kind: 'each' } & PlanNetworkRef);
 
-type PendingArithmeticDescriptor = Omit<CompleteArithmeticDescriptor, 'left' | 'right'> & {
+type PendingArithmeticDescriptor = Omit<
+  CompleteArithmeticDescriptor,
+  'left' | 'right' | 'output'
+> & {
   readonly left: PendingArithmeticOperand;
   readonly right: PendingArithmeticOperand;
+  readonly output?: never;
   readonly pendingConfiguration: ArithmeticConfigurationTemplate;
 };
 

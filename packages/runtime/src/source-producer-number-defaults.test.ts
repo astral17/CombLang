@@ -74,7 +74,6 @@ function arithmeticDescriptor(template: ArithmeticConfigurationTemplate): Combin
     left: { kind: 'constant' },
     operation: 'add',
     right: { kind: 'constant' },
-    output: { kind: 'signal', signal: A },
     source,
     instancePath: [],
     pendingConfiguration: template,

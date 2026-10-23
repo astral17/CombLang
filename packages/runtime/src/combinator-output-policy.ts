@@ -51,6 +51,7 @@ export function bindCombinatorOutputSignal(
     );
   }
   if (value.kind === 'arithmetic') {
+    if ('pendingConfiguration' in value) return value;
     return { ...value, output: { kind: 'signal', signal } };
   }
   if (value.kind === 'selector') {

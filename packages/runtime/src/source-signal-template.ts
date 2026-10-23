@@ -31,6 +31,11 @@ interface CapturedTemplate<T> {
   readonly source: SourceSpan;
 }
 
+interface CapturedArithmeticTemplate extends CapturedTemplate<ArithmeticConfigurationTemplate> {
+  readonly rawTemplate: ArithmeticConfigurationTemplate;
+  readonly ownerDescriptor: Extract<CombinatorDescriptor, { readonly kind: 'arithmetic' }>;
+}
+
 export interface SourceSignalTemplateContext {
   readonly requiredParameters: readonly BlueprintParameterHandle[];
   bindingsForConstantTemplate(
@@ -38,6 +43,9 @@ export interface SourceSignalTemplateContext {
   ): readonly { readonly parameter: BlueprintParameterHandle; readonly value: SignalId }[];
   bindingsForSelectorTemplate(
     template: SelectorConfigurationTemplate,
+  ): readonly { readonly parameter: BlueprintParameterHandle; readonly value: SignalId }[];
+  bindingsForArithmeticTemplate(
+    template: ArithmeticConfigurationTemplate,
   ): readonly { readonly parameter: BlueprintParameterHandle; readonly value: SignalId }[];
   placeholderFor(parameter: BlueprintParameterHandle): string | undefined;
 }
@@ -125,7 +133,7 @@ export function createSourceSignalTemplateContext(
   producers: readonly CombinatorDescriptor[],
   templates: {
     readonly constants: readonly CapturedTemplate<ConstantConfigurationTemplate>[];
-    readonly arithmetics: readonly CapturedTemplate<ArithmeticConfigurationTemplate>[];
+    readonly arithmetics: readonly CapturedArithmeticTemplate[];
     readonly deciders: readonly CapturedTemplate<DeciderConfigurationTemplate>[];
     readonly selectors: readonly CapturedTemplate<SelectorConfigurationTemplate>[];
   },
@@ -133,6 +141,7 @@ export function createSourceSignalTemplateContext(
   const usedSignals = new Set<BlueprintParameterHandle>();
   const directConstantSignalSlots = new Set<BlueprintParameterHandle>();
   const directSelectorSignalSlots = new Set<BlueprintParameterHandle>();
+  const directArithmeticSignalSlots = new Set<BlueprintParameterHandle>();
   const unsupportedSignalUses = new Set<BlueprintParameterHandle>();
 
   for (const capture of templates.constants) {
@@ -155,10 +164,23 @@ export function createSourceSignalTemplateContext(
     if (inspected.session !== session) {
       fail('$.arithmetic', 'template belongs to a different parameter session.', capture.source);
     }
+    const outputParameter =
+      capture.template.output.kind === 'signal'
+        ? canonicalBlueprintParameterHandle(capture.template.output.signal)
+        : undefined;
+    const operandSignalParameters = new Set<BlueprintParameterHandle>();
+    for (const operand of [capture.template.left, capture.template.right]) {
+      if (operand.kind !== 'signal') continue;
+      const parameter = canonicalBlueprintParameterHandle(operand.signal);
+      if (parameter?.kind === 'signal') operandSignalParameters.add(parameter);
+    }
+    if (outputParameter?.kind === 'signal') directArithmeticSignalSlots.add(outputParameter);
     for (const parameter of inspected.usedParameters) {
       if (parameter.kind === 'signal') {
         usedSignals.add(parameter);
-        unsupportedSignalUses.add(parameter);
+        if (parameter !== outputParameter || operandSignalParameters.has(parameter)) {
+          unsupportedSignalUses.add(parameter);
+        }
       }
     }
   }
@@ -197,6 +219,13 @@ export function createSourceSignalTemplateContext(
       producer.kind === 'selector' && 'pendingConfiguration' in producer
         ? templates.selectors.find(({ template }) => template === producer.pendingConfiguration)
         : undefined;
+    const matchingArithmeticCapture =
+      producer.kind === 'arithmetic' && 'pendingConfiguration' in producer
+        ? templates.arithmetics.find(
+            ({ rawTemplate, ownerDescriptor }) =>
+              rawTemplate === producer.pendingConfiguration && ownerDescriptor === producer,
+          )
+        : undefined;
     if (
       matchingSelectorCapture !== undefined &&
       producer.kind === 'selector' &&
@@ -204,6 +233,13 @@ export function createSourceSignalTemplateContext(
     ) {
       // Only the exact captured template may account for the supported parameter slots.
       // Continue scanning the rest of the descriptor so unrelated handle uses remain refused.
+      const { pendingConfiguration: _pendingConfiguration, ...descriptor } = producer;
+      collectSignalParameters(descriptor, unsupported, new WeakSet());
+    } else if (
+      matchingArithmeticCapture !== undefined &&
+      producer.kind === 'arithmetic' &&
+      'pendingConfiguration' in producer
+    ) {
       const { pendingConfiguration: _pendingConfiguration, ...descriptor } = producer;
       collectSignalParameters(descriptor, unsupported, new WeakSet());
     } else {
@@ -226,13 +262,15 @@ export function createSourceSignalTemplateContext(
   );
   for (const { handle, registration } of missingUsed) {
     if (
-      (!directConstantSignalSlots.has(handle) && !directSelectorSignalSlots.has(handle)) ||
+      (!directConstantSignalSlots.has(handle) &&
+        !directSelectorSignalSlots.has(handle) &&
+        !directArithmeticSignalSlots.has(handle)) ||
       unsupportedSignalUses.has(handle) ||
       registration.source === undefined
     ) {
       fail(
         '$.parameters',
-        `Signal declaration "${registration.label}" without a default is supported only in a direct Constant filter, Selector select-index, or Selector count-output Signal slot.`,
+        `Signal declaration "${registration.label}" without a default is supported only in a direct Constant filter, Selector select-index, Selector count-output, or Arithmetic output Signal slot.`,
         registration.source,
       );
     }
@@ -241,7 +279,26 @@ export function createSourceSignalTemplateContext(
 
   const reservedNames = new Set<string>();
   const seen = new WeakSet<object>();
-  for (const producer of producers) collectLiteralSignalNames(producer, reservedNames, seen);
+  for (const producer of producers) {
+    const arithmeticCapture =
+      producer.kind === 'arithmetic' && 'pendingConfiguration' in producer
+        ? templates.arithmetics.find(
+            ({ rawTemplate, ownerDescriptor }) =>
+              rawTemplate === producer.pendingConfiguration && ownerDescriptor === producer,
+          )
+        : undefined;
+    if (
+      arithmeticCapture !== undefined &&
+      producer.kind === 'arithmetic' &&
+      'pendingConfiguration' in producer
+    ) {
+      const { pendingConfiguration: _pendingConfiguration, ...descriptor } = producer;
+      collectLiteralSignalNames(descriptor, reservedNames, seen);
+      collectLiteralSignalNames(arithmeticCapture.template, reservedNames, seen);
+    } else {
+      collectLiteralSignalNames(producer, reservedNames, seen);
+    }
+  }
   for (const { registration } of declarations) {
     if (registration.kind === 'signal' && registration.defaultValue !== undefined) {
       reservedNames.add((registration.defaultValue as SignalId).name);
@@ -299,6 +356,18 @@ export function createSourceSignalTemplateContext(
       const inspected = inspectSelectorConfigurationTemplate(template, '$.selector');
       if (inspected.session !== session) {
         fail('$.selector', 'template belongs to a different parameter session.');
+      }
+      return Object.freeze(
+        inspected.usedParameters.flatMap((parameter) => {
+          const value = bindings.get(parameter);
+          return value === undefined ? [] : [Object.freeze({ parameter, value })];
+        }),
+      );
+    },
+    bindingsForArithmeticTemplate(template: ArithmeticConfigurationTemplate) {
+      const inspected = inspectArithmeticConfigurationTemplate(template, '$.arithmetic');
+      if (inspected.session !== session) {
+        fail('$.arithmetic', 'template belongs to a different parameter session.');
       }
       return Object.freeze(
         inspected.usedParameters.flatMap((parameter) => {

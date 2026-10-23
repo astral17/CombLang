@@ -224,12 +224,14 @@ default. The Signal's native `parameter-N` metadata is only a template identity,
 not a chosen value. Listing exposes no Signal default, and an omitted binding or
 `parameters: []` still fails before the affected callback.
 
-Default-free Signal support is limited to direct Constant filter `signal`,
-Selector select `index`, and Selector count `output` fields. Arithmetic output
-and Decider slots remain unsupported. CLI and host runtime routes support these
-snapshots for the Constant and Selector slots. Browser per-case routing is still
-pending. This does not add native ingredient dependencies, automatic recipe
-lookup, or a construction-screen binding UI.
+Default-free Signal support covers direct Constant filter `signal`, Arithmetic
+`output`, Selector select `index`, and Selector count `output` fields. Arithmetic
+operands and Decider slots remain unsupported. CLI and host runtime routes
+support per-case snapshots for these slots, including a Signal output combined
+with numeric Arithmetic defaults or overrides. The native `parameter-N` output
+is only a template identity; each test case must provide its own Signal value.
+Browser per-case routing is still pending. This does not add native ingredient
+dependencies, automatic recipe lookup, or a construction-screen binding UI.
 
 The test callback receives these convenience methods and complete APIs:
 

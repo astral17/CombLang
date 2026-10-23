@@ -458,7 +458,7 @@ export function exportSourceCompilationNativeBlueprint(
         if (placeholder === undefined) {
           reject(
             `$.parameters[${index}]`,
-            'default-free Signal declaration has no authenticated Constant or Selector template allocation.',
+            'default-free Signal declaration has no authenticated Constant, Selector, or Arithmetic output template allocation.',
             declaration.source,
           );
         }
@@ -1611,7 +1611,8 @@ export function exportSourceCompilationNativeBlueprint(
           }
         | undefined;
       const projectedSignal = behavior?.arithmetic_conditions?.output_signal;
-      const projectedType = projectedSignal?.type ?? 'item';
+      const projectedType =
+        projectedSignal?.type ?? (info?.placeholder === undefined ? 'item' : 'virtual');
       const projectedName = projectedSignal?.name;
       const projectedQuality = projectedSignal?.quality;
       let projectedKey: string | undefined;
@@ -1635,11 +1636,17 @@ export function exportSourceCompilationNativeBlueprint(
           sourceKey = undefined;
         }
       }
+      const expectedKey =
+        info?.key ??
+        (info?.placeholder === undefined
+          ? undefined
+          : signalKey(signal('virtual', info.placeholder)));
       if (
         info === undefined ||
+        expectedKey === undefined ||
         sourceOutput?.kind !== 'signal' ||
-        sourceKey !== info.key ||
-        projectedKey !== info.key
+        sourceKey !== expectedKey ||
+        projectedKey !== expectedKey
       ) {
         reject(
           occurrence.path,

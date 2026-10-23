@@ -77,7 +77,6 @@ describe('producer preinstallation numeric-slot inventory', () => {
       left: { kind: 'constant' },
       operation: 'add',
       right: { kind: 'constant' },
-      output: { kind: 'signal', signal: A },
       pendingConfiguration: template,
       source,
       instancePath: [],
@@ -458,7 +457,6 @@ describe('producer preinstallation numeric-slot inventory', () => {
         left: { kind: 'constant' },
         operation: 'add',
         right: { kind: 'constant' },
-        output: { kind: 'signal', signal: A },
         pendingConfiguration: arithmeticTemplate,
       },
       {
@@ -687,7 +685,6 @@ describe('producer preinstallation numeric-slot inventory', () => {
         left: { kind: 'constant' },
         operation: 'add',
         right: { kind: 'constant' },
-        output: { kind: 'signal', signal: A },
         pendingConfiguration: arithmeticTemplate,
       },
       {

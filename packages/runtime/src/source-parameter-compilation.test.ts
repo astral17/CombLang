@@ -289,6 +289,117 @@ output += Arithmetic({ left: 2, operation: 'add', right: ${numeric ? 'amount' : 
     },
   );
 
+  test.each(['EACH', 'A', 'channel'])(
+    'retains concrete output overrides of pending %s with automatic numeric defaults',
+    (configuredOutput) => {
+      const text = `const A = Signal('virtual', 'signal-A');
+const B = Signal('virtual', 'signal-B');
+const amount = Param.number('Amount');
+const channel = Param.signal('Channel');
+const input = CC(5 * A);
+const liveChannel = new Network();
+liveChannel += Constant({ sections: [{ filters: [{ signal: channel, value: 1 }] }] });
+const first = new Network();
+const second = new Network();
+first += Arithmetic({ left: input[EACH], operation: 'multiply', right: amount, output: ${configuredOutput} }).as(B);
+to(second)[B] += Arithmetic({ left: input[EACH], operation: 'multiply', right: amount, output: ${configuredOutput} });`;
+      const compilation = compileSourceProgram(
+        { path: 'pending-arithmetic-output-override.factorio.ts', text },
+        parameterHost(),
+      );
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      const [amount, channel] = listSourceCompilationParameters(compilation);
+      expect(compilation.requiredParameterIds).toEqual([1]);
+      const bound = bindSourceCompilationCircuit(compilation, [
+        { parameter: amount!.parameter, value: 7 },
+        { parameter: channel!.parameter, value: signal('item', 'iron-plate') },
+      ]);
+      const replay = executeResolvedDirectPlan(bound.plan, bound.resolvedCircuit);
+      const simulation = replay.circuit.createSimulation();
+      simulation.step();
+      const snapshot = simulation.step();
+      for (const name of ['first', 'second']) {
+        expect(snapshot.read(replay.network(name).id).get(signal('virtual', 'signal-B'))).toBe(35);
+      }
+    },
+  );
+
+  test('binds a default-free Arithmetic output and numeric override without source re-execution', () => {
+    const key = '__comblang_default_free_arithmetic_output_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const had = Object.hasOwn(globals, key);
+    const before = globals[key];
+    globals[key] = 0;
+    const text = `globalThis.${key} += 1;
+const channel = Param.signal('Result');
+const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Arithmetic({ left: 2, operation: 'add', right: amount, output: channel });`;
+    try {
+      const compilation = compileSourceProgram(
+        { path: 'default-free-arithmetic-output.factorio.ts', text },
+        parameterHost(),
+      );
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      const original = structuredClone(sourceCompilationArtifact(compilation));
+      const [channel, amount] = listSourceCompilationParameters(compilation);
+      expect(() => bindSourceCompilationCircuit(compilation)).toThrowError(
+        expect.objectContaining({ code: 'CP1002', span: channel!.source }),
+      );
+      for (const invalid of [11, { type: 'item', name: '' }, { type: 'invalid', name: 'x' }]) {
+        expect(() =>
+          bindSourceCompilationCircuit(compilation, [
+            { parameter: channel!.parameter, value: invalid },
+          ]),
+        ).toThrowError(expect.objectContaining({ code: 'CP1000', span: channel!.source }));
+        expect(sourceCompilationArtifact(compilation)).toEqual(original);
+      }
+
+      const replacement = signal('item', 'iron-plate', 'uncommon');
+      const bound = bindSourceCompilationCircuit(compilation, [
+        { parameter: channel!.parameter, value: replacement },
+        { parameter: amount!.parameter, value: 11 },
+      ]);
+      expect(bound.plan.producers.find(({ kind }) => kind === 'arithmetic')).toMatchObject({
+        kind: 'arithmetic',
+        right: { kind: 'constant', value: 11 },
+        output: { kind: 'signal', signal: replacement },
+      });
+      expect(
+        bound.plan.entities.find(({ configuration }) => configuration?.mode === 'arithmetic'),
+      ).toMatchObject({
+        configuration: {
+          mode: 'arithmetic',
+          right: { kind: 'constant', value: 11 },
+          output: { kind: 'signal', signal: replacement },
+        },
+      });
+      const replay = executeResolvedDirectPlan(bound.plan, bound.resolvedCircuit);
+      expect(
+        replay.circuit.createSimulation().step().read(replay.network('output').id).get(replacement),
+      ).toBe(13);
+      const resetNumeric = bindSourceCompilationCircuit(compilation, [
+        { parameter: channel!.parameter, value: signal('fluid', 'water', 'rare') },
+      ]);
+      const resetReplay = executeResolvedDirectPlan(
+        resetNumeric.plan,
+        resetNumeric.resolvedCircuit,
+      );
+      expect(
+        resetReplay.circuit
+          .createSimulation()
+          .step()
+          .read(resetReplay.network('output').id)
+          .get(signal('fluid', 'water', 'rare')),
+      ).toBe(7);
+      expect(sourceCompilationArtifact(compilation)).toEqual(original);
+      expect(globals[key]).toBe(1);
+    } finally {
+      if (had) globals[key] = before;
+      else delete globals[key];
+    }
+  });
+
   test.each(['concrete', 'each', 'parameter'] as const)(
     'retains exact Arithmetic wildcard input rules for %s output',
     (mode) => {

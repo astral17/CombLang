@@ -1840,6 +1840,82 @@ output += Arithmetic({ left: 2, operation: 'add', right: amount * 2, output: res
     ]);
   });
 
+  test('exports and binds a default-free Arithmetic output through the Worker session', async () => {
+    const runtime = parameterRuntime();
+    const parsed = structuredClone(
+      await runtime.handle(
+        parseRequest(59, {
+          file: {
+            path: 'worker-default-free-arithmetic-output.factorio.ts',
+            text: `const result = Param.signal('Result');
+const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Arithmetic({ left: 2, operation: 'add', right: amount, output: result });`,
+          },
+          parameterBinding: true,
+          blueprintExport: { parameters: true },
+        }),
+      ),
+    );
+    expect(parsed.result.pipelineDiagnostics).toEqual([]);
+    expect(parsed.result.blueprintExport).toMatchObject({ ok: true });
+    const metadata = parsed.result.blueprintExport;
+    if (metadata?.ok !== true) throw new Error('Expected native Arithmetic template export.');
+    expect(metadata.document.blueprint.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Result',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      { type: 'number', number: '5', name: 'Amount' },
+    ]);
+    expect(metadata.document.blueprint.entities[0]!.control_behavior).toMatchObject({
+      arithmetic_conditions: {
+        second_constant: 5,
+        output_signal: { name: 'parameter-0' },
+      },
+    });
+
+    const binding = parsed.parameterBinding;
+    if (binding?.ok !== true || binding.token === undefined) {
+      throw new Error('Expected a retained Worker parameter binding session.');
+    }
+    expect(binding.parameters).toMatchObject([
+      { id: 0, kind: 'signal', label: 'Result' },
+      { id: 1, kind: 'number', label: 'Amount', defaultValue: 5 },
+    ]);
+    expect(binding.parameters[0]).not.toHaveProperty('defaultValue');
+
+    const bound = runtime.bindParameters(binding.token, parsed.revision, [
+      { id: 0, value: { type: 'item', name: 'iron-plate', quality: 'uncommon' } },
+    ]);
+    expect(bound.plan.producers).toMatchObject([
+      {
+        kind: 'arithmetic',
+        right: { kind: 'constant', value: 5 },
+        output: {
+          kind: 'signal',
+          signal: { type: 'item', name: 'iron-plate', quality: 'uncommon' },
+        },
+      },
+    ]);
+    const reset = runtime.bindParameters(binding.token, parsed.revision, [
+      { id: 0, value: { type: 'virtual', name: 'signal-B', quality: 'rare' } },
+      { id: 1, value: 11 },
+    ]);
+    expect(reset.plan.producers).toMatchObject([
+      {
+        kind: 'arithmetic',
+        right: { kind: 'constant', value: 11 },
+        output: {
+          kind: 'signal',
+          signal: { type: 'virtual', name: 'signal-B', quality: 'rare' },
+        },
+      },
+    ]);
+  });
+
   test('exports Selector Signal index and count-output parameters through the Worker', async () => {
     const runtime = parameterRuntime();
     const parsed = structuredClone(

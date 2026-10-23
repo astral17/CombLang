@@ -104,7 +104,7 @@ describe('author API documentation', () => {
   test('runs separate symbolic Selector index and count source/test pairs', async () => {
     const section = read('parameters')
       .split('#### Default-free Selector Signal slots\n')[1]
-      ?.split('\nThis nominal Signal slot matrix')[0];
+      ?.split('\n#### Default-free Arithmetic output Signal slot')[0];
     if (section === undefined) throw new Error('Missing default-free Selector examples');
     const examples = [...section.matchAll(/```javascript\r?\n([\s\S]*?)\r?\n```/g)].map(
       (match) => match[1],
@@ -134,6 +134,45 @@ describe('author API documentation', () => {
         'defaultValue',
       );
     }
+  });
+
+  test('runs and exports the documented default-free Arithmetic output example', async () => {
+    const section = read('parameters')
+      .split('#### Default-free Arithmetic output Signal slot\n')[1]
+      ?.split('\nThis nominal Signal slot matrix')[0];
+    if (section === undefined) throw new Error('Missing default-free Arithmetic output examples');
+    const examples = [...section.matchAll(/```javascript\r?\n([\s\S]*?)\r?\n```/g)].map(
+      (match) => match[1],
+    );
+    if (examples.length !== 2) {
+      throw new Error(`Expected an Arithmetic source/test pair, found ${examples.length}`);
+    }
+
+    const compilation = result(examples[0], await bundled);
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.requiredParameterIds).toEqual([0]);
+    expect(compilation.plan).toBeUndefined();
+    expect(compilation.execution).toBeUndefined();
+    expect(runSourceCompilationTests(compilation, examples[1])).toMatchObject({
+      passed: 1,
+      failed: 0,
+    });
+    const native = exportSourceCompilationNativeBlueprint(compilation, {
+      label: 'Documented default-free Arithmetic output',
+      maxDeciderConditionRows: 1024,
+    });
+    expect(native.parameters).toHaveLength(2);
+    expect(native.parameters[0]).toMatchObject({ id: 'parameter-0', name: 'Result' });
+    const arithmetic = native.entities.find(
+      ({ native: entity }) => entity.name === 'arithmetic-combinator',
+    );
+    expect(arithmetic?.native.control_behavior.arithmetic_conditions.output_signal).toEqual({
+      type: 'virtual',
+      name: 'parameter-0',
+    });
+    expect(createSourceParameterBindingSession(compilation).parameters[0]).not.toHaveProperty(
+      'defaultValue',
+    );
   });
 
   test('runs the documented formula-only dependency through local binding and native projection', async () => {

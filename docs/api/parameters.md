@@ -68,19 +68,23 @@ number declaration is retained
 as an original row even when its original value has no direct physical slot;
 truly unreferenced declarations remain unsupported.
 
-Default-free Signal construction supports exactly three direct slots:
-`Constant` filter `signal`, `Selector` select `index`, and `Selector` count
-`output`. In a select operation, the bound Signal is read from the input network
-as the numeric index; it does not name the selected output. In a count
-operation, it names the output Signal receiving the count. The Constant filter
-count may be literal or use an existing explicitly or automatically defaulted
-numeric slot. Automatic numeric allocation and Signal-template allocation are
-independent: the numeric original remains a real number default, while the
-private native template uses an allocated `parameter-N` identity only for each
-Signal slot. A shared handle used by a Constant filter and Selector slot keeps
-one declaration and one placeholder. The public compilation artifact contains
-no concrete plan or resolved circuit, and a Signal placeholder is never a test
-default. Parameter listing reports the chosen numeric default and omits
+Default-free Signal construction supports exactly four direct slots:
+`Constant` filter `signal`, `Arithmetic` `output`, `Selector` select `index`,
+and `Selector` count `output`. In a select operation, the bound Signal is read
+from the input network as the numeric index; it does not name the selected
+output. In a count operation, it names the output Signal receiving the count.
+The Constant filter count may be literal or use an existing explicitly or
+automatically defaulted numeric slot. Automatic numeric allocation and
+Signal-template allocation are independent: the numeric original remains a
+real number default, while the private native template uses an allocated
+`parameter-N` identity only for each Signal slot. A shared handle used by
+Constant, Arithmetic, and Selector slots keeps one declaration and one
+placeholder. A concrete Arithmetic destination binding shadows that producer's
+configured output parameter; if the handle is still used by another live
+producer, that use remains required. Unreferenced declarations remain
+unsupported. The public compilation artifact contains no concrete plan or
+resolved circuit, and a Signal placeholder is never a test default. Parameter
+listing reports the chosen numeric default and omits
 `defaultValue` for each required Signal. Every test case that uses such a Signal
 must provide an explicit binding; a missing value or `parameters: []` fails with
 located `CP1002` before that case's callback, while a later independently bound
@@ -113,9 +117,9 @@ test(
 );
 ```
 
-Default-free Signals in Arithmetic or Decider slots remain unsupported and fail
-with located `CP1002`. Browser case controls, broader producer slots and
-ingredient/property dependencies remain pending.
+Default-free Signal parameters in Arithmetic operands or Decider slots remain
+unsupported and fail with located `CP1002`. Browser case controls, broader
+producer slots and ingredient/property dependencies remain pending.
 
 #### Default-free Selector Signal slots
 
@@ -184,9 +188,41 @@ test(
 ```
 
 Both slots use the existing required-Signal binding mechanism and share its
-native placeholder pool with Constant Signal slots. They do not add Selector
+native placeholder pool with Constant and Arithmetic Signal slots. They do not add Selector
 operations or create a placeholder default; plain concrete export still
 requires explicit bindings.
+
+#### Default-free Arithmetic output Signal slot
+
+The bound Signal names the Arithmetic result. Keep the circuit source and test
+case separate so a native placeholder cannot be mistaken for a concrete test
+value. Circuit source (`main.factorio.ts`):
+
+```javascript
+const result = Param.signal('Result');
+const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Arithmetic({ left: 2, operation: 'add', right: amount, output: result });
+```
+
+Test file (`circuit.test.js`):
+
+```javascript
+test(
+  'bind the Arithmetic output channel',
+  ({ network, expectSignal, tick }) => {
+    tick();
+    expectSignal(network('output'), Signal('item', 'iron-plate', 'uncommon')).toBe(7);
+  },
+  { parameters: [{ id: 0, value: Signal('item', 'iron-plate', 'uncommon') }] },
+);
+```
+
+This slot uses the same required-Signal snapshot and shared native placeholder
+pool as Constant and Selector. CLI, Worker, and source-aware host tests accept
+explicit per-case bindings; native metadata export remains distinct from
+concrete export. A placeholder is never a default. `.as(parameter)`, symbolic
+Arithmetic operands, and Decider Signal slots remain unsupported.
 
 This nominal Signal slot matrix does not add Decider condition or output slots.
 However, once a Signal handle is authenticated in one of the supported slots,

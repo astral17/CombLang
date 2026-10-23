@@ -7,7 +7,11 @@ import type {
   PlanNetworkRef,
 } from '@comblang/compiler/direct-plan-schema';
 import type { LogicalArithmeticOutput, SelectorProducerConfig } from '../../compiler/src/ir.js';
-import type { ArithmeticTemplateOperand } from '../../compiler/src/arithmetic-configuration-template.js';
+import { canonicalBlueprintParameterHandle } from '../../compiler/src/blueprint-parameters.js';
+import type {
+  ArithmeticTemplateOperand,
+  ArithmeticTemplateOutput,
+} from '../../compiler/src/arithmetic-configuration-template.js';
 import type { DeciderTemplateCondition } from '../../compiler/src/decider-configuration-template.js';
 import type { SourceSpan } from '@comblang/shared';
 
@@ -206,6 +210,14 @@ export class CombinatorRegistry {
       }
       if (currentPending.kind === 'arithmetic') {
         if (
+          hasConcreteArithmeticOutput(currentPending) ||
+          hasConcreteArithmeticOutput(nextPending)
+        ) {
+          throw new Error(
+            'A pending Arithmetic cannot contain a concrete output before installation.',
+          );
+        }
+        if (
           nextPending.kind !== 'arithmetic' ||
           hasConcreteArithmeticOperands(currentPending) ||
           hasConcreteArithmeticOperands(nextPending)
@@ -218,11 +230,6 @@ export class CombinatorRegistry {
           !sameArithmeticOperandTopology(currentPending.right, nextPending.right)
         ) {
           throw new Error('A pending Arithmetic cannot change its operation or operand topology.');
-        }
-        if (!sameArithmeticOutput(currentPending.output, nextPending.output)) {
-          throw new Error(
-            'A pending Arithmetic output can change only through its output binding.',
-          );
         }
       }
       if (
@@ -363,37 +370,39 @@ export class CombinatorRegistry {
       !sameArithmeticOperandTopology(pending.left, configuration.left) ||
       !sameArithmeticOperandTopology(pending.right, configuration.right) ||
       !sameTemplateArithmeticOperand(template.left, configuration.left) ||
-      !sameTemplateArithmeticOperand(template.right, configuration.right) ||
-      template.output.kind !== configuration.output.kind
+      !sameTemplateArithmeticOperand(template.right, configuration.right)
     ) {
       throw new Error(
         'The Arithmetic configuration does not match its pending operation or operand topology.',
       );
     }
-    if (state.outputBinding === undefined) {
-      if (!sameArithmeticOutput(pending.output, configuration.output)) {
-        throw new Error(
-          'The Arithmetic configuration does not match its pending output selection.',
-        );
-      }
-    } else if (
-      pending.output.kind !== 'signal' ||
-      !sameSignal(pending.output.signal, state.outputBinding.signal)
+    const matchesOutputBinding =
+      state.outputBinding !== undefined &&
+      configuration.output.kind === 'signal' &&
+      sameSignal(configuration.output.signal, state.outputBinding.signal);
+    if (
+      !sameTemplateArithmeticOutput(template.output, configuration.output) &&
+      !matchesOutputBinding
     ) {
-      throw new Error('The pending Arithmetic output no longer matches its output binding.');
+      throw new Error('The Arithmetic configuration does not match its pending output selection.');
     }
 
     const {
       pendingConfiguration: _pendingConfiguration,
       left: _left,
       right: _right,
+      output: _output,
       ...descriptor
     } = pending;
+    const output =
+      state.outputBinding === undefined
+        ? configuration.output
+        : { kind: 'signal' as const, signal: state.outputBinding.signal };
     state.descriptor = {
       ...descriptor,
       left: configuration.left,
       right: configuration.right,
-      output: pending.output,
+      output,
     };
   }
 
@@ -584,14 +593,6 @@ function sameTemplateArithmeticOperand(
   return left.kind !== 'constant' && right.kind !== 'constant' && sameNetworkRef(left, right);
 }
 
-function sameArithmeticOutput(
-  left: LogicalArithmeticOutput,
-  right: LogicalArithmeticOutput,
-): boolean {
-  if (left.kind !== right.kind) return false;
-  return left.kind === 'each' || (right.kind === 'signal' && sameSignal(left.signal, right.signal));
-}
-
 function sameNetworkRef(left: PlanNetworkRef, right: PlanNetworkRef): boolean {
   if (left.refKind !== right.refKind) return false;
   return left.refKind === 'single'
@@ -624,6 +625,23 @@ function isSignalId(value: unknown): value is SignalId {
 
 function sameTemplateSignal(value: unknown, expected: SignalId): boolean {
   return isSignalId(value) && sameSignal(value, expected);
+}
+
+function sameTemplateArithmeticOutput(
+  template: ArithmeticTemplateOutput,
+  output: LogicalArithmeticOutput,
+): boolean {
+  if (template.kind !== output.kind) return false;
+  if (template.kind === 'each') return true;
+  if (output.kind !== 'signal') return false;
+  const parameter = canonicalBlueprintParameterHandle(template.signal);
+  return parameter === undefined
+    ? sameTemplateSignal(template.signal, output.signal)
+    : parameter.kind === 'signal';
+}
+
+function hasConcreteArithmeticOutput(value: CombinatorDescriptor): boolean {
+  return value.kind === 'arithmetic' && Object.hasOwn(value, 'output');
 }
 
 function samePendingDeciderTopology(

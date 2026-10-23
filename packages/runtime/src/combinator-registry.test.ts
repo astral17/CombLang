@@ -186,13 +186,12 @@ describe('pending Arithmetic registry state', () => {
       refKind: 'pair' as const,
       networks: ['red-input', 'green-input'] as const,
     };
-    const initialOutput = signal('virtual', 'initial-output');
     const reboundOutput = signal('virtual', 'rebound-output');
     const template = createArithmeticConfigurationTemplate(session, {
       left: { kind: 'constant', value: amount },
       operation: 'add',
       right: { kind: 'each', ...input },
-      output: { kind: 'signal', signal: initialOutput },
+      output: { kind: 'each' },
     });
     const configuration = bindArithmeticConfigurationTemplate(template, [
       { parameter: amount, value: 7 },
@@ -211,14 +210,13 @@ describe('pending Arithmetic registry state', () => {
       left: { kind: 'constant' },
       operation: 'add',
       right: { kind: 'each', ...input },
-      output: configuration.output,
       pendingConfiguration: template,
       source,
       instancePath: ['root'],
       placement: { x: 4, y: 5 },
     };
     const registry = new CombinatorRegistry();
-    const state = registry.register(producer, descriptor, primary, primaryAttachment);
+    let state = registry.register(producer, descriptor, primary, primaryAttachment);
     const primaryLane = state.outputPort.primary;
     registry.addSecondary(producer, secondary, secondaryAttachment);
     registry.bindName(producer, 'parameterized-arithmetic');
@@ -232,6 +230,7 @@ describe('pending Arithmetic registry state', () => {
       operation: 'add',
       pendingConfiguration: template,
     });
+    expect(state.descriptor).not.toHaveProperty('output');
     if (state.descriptor.kind !== 'arithmetic' || !('pendingConfiguration' in state.descriptor)) {
       throw new Error('Expected a pending Arithmetic descriptor.');
     }
@@ -245,7 +244,7 @@ describe('pending Arithmetic registry state', () => {
       left: { kind: 'constant', value: amount },
       operation: 'add',
       right: { kind: 'each', ...input },
-      output: { kind: 'signal', signal: initialOutput },
+      output: { kind: 'each' },
     });
     expect(() =>
       registry.update(producer, {
@@ -271,6 +270,12 @@ describe('pending Arithmetic registry state', () => {
         left: { kind: 'constant', value: 0 },
       } as unknown as CombinatorDescriptor),
     ).toThrowError(/cannot contain concrete Arithmetic operands/i);
+    expect(() =>
+      registry.update(producer, {
+        ...pendingDescriptor,
+        output: configuration.output,
+      } as unknown as CombinatorDescriptor),
+    ).toThrowError(/cannot contain a concrete output before installation/i);
 
     const wrongOperation: ArithmeticProducerConfig = {
       ...configuration,
@@ -301,14 +306,41 @@ describe('pending Arithmetic registry state', () => {
     expect(() => registry.installPendingArithmetic(producer, wrongTopology)).toThrowError(
       /operation or operand topology/i,
     );
+    expect(() =>
+      registry.installPendingArithmetic(producer, {
+        ...configuration,
+        output: { kind: 'signal', signal: signal('virtual', 'wrong-output') },
+      }),
+    ).toThrowError(/output selection/i);
+    const unboundSnapshot = registry.snapshot();
+    registry.installPendingArithmetic(producer, configuration);
+    expect(state.descriptor).toMatchObject({ kind: 'arithmetic', output: { kind: 'each' } });
+    registry.restore(unboundSnapshot);
+    state = registry.stateFor(producer);
     expect(state.descriptor).toBe(pendingDescriptor);
 
     registry.bindOutput(producer, reboundOutput, source);
     const boundPendingDescriptor = state.descriptor;
+    expect(boundPendingDescriptor).not.toHaveProperty('output');
     const pendingSnapshot = registry.snapshot();
+    expect(() =>
+      registry.installPendingArithmetic(producer, {
+        ...configuration,
+        output: { kind: 'signal', signal: signal('virtual', 'wrong-output') },
+      }),
+    ).toThrowError(/output selection/i);
+    registry.installPendingArithmetic(producer, {
+      ...configuration,
+      output: { kind: 'signal', signal: reboundOutput },
+    });
+    expect(state.descriptor).toMatchObject({
+      output: { kind: 'signal', signal: reboundOutput },
+    });
+    registry.restore(pendingSnapshot);
+    state = registry.stateFor(producer);
     registry.installPendingArithmetic(producer, configuration);
 
-    expect(state.outputPort.primary).toBe(primaryLane);
+    expect(state.outputPort.primary).toEqual(primaryLane);
     expect(state.outputUsed).toBe(true);
     expect(state.descriptor).toMatchObject({
       kind: 'arithmetic',

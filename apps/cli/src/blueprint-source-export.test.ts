@@ -1333,6 +1333,76 @@ output += Arithmetic({ left: 2, operation: 'add', right: amount * 2, output: res
     expect(conditions.output_signal).not.toHaveProperty('type');
   });
 
+  test('exports and tests a default-free Arithmetic output without concrete readiness', async () => {
+    const { environment } = await parameterHost();
+    const path = await sourceFile(`const amount = Param.number('Amount', 5);
+const result = Param.signal('Result');
+const output = new Network();
+output += Arithmetic({ left: 2, operation: 'add', right: amount, output: result });`);
+    const casesPath = join(dirname(path), 'arithmetic-output.test.ts');
+    const overridesPath = join(dirname(path), 'arithmetic-output-overrides.json');
+    await writeFile(
+      overridesPath,
+      JSON.stringify([{ id: 1, value: { type: 'fluid', name: 'water', quality: 'rare' } }]),
+    );
+    await writeFile(
+      casesPath,
+      `test('bind output', ({ network, expectSignal, tick }) => {
+  tick();
+  expectSignal(network('output'), Signal('fluid', 'water', 'rare')).toBe(7);
+}, { parameters: [{ id: 1, value: Signal('fluid', 'water', 'rare') }] });
+test('empty snapshot is rejected before callback', () => {
+  throw new Error('missing callback ran');
+}, { parameters: [] });
+test('valid case follows failure and resets numeric default', ({ network, expectSignal, tick }) => {
+  tick();
+  expectSignal(network('output'), Signal('virtual', 'signal-B', 'rare')).toBe(13);
+}, { parameters: [{ id: 0, value: 11 }, { id: 1, value: Signal('virtual', 'signal-B', 'rare') }] });`,
+    );
+    const { log, error } = capture();
+
+    expect(await run(['blueprint', 'export', '--parameters', '--json', path], environment)).toBe(0);
+    const metadata = JSON.parse(String(log.mock.calls[0]?.[0])).document.blueprint;
+    expect(metadata.parameters).toMatchObject([
+      { type: 'number', number: '5', name: 'Amount' },
+      { type: 'id', id: 'parameter-0', name: 'Result' },
+    ]);
+    expect(metadata.entities[0].control_behavior.arithmetic_conditions).toMatchObject({
+      second_constant: 5,
+      output_signal: { name: 'parameter-0' },
+    });
+
+    log.mockClear();
+    expect(await run(['blueprint', 'export', '--json', path], environment)).toBe(2);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      ok: false,
+      error: { code: 'CLIBP1000', message: expect.stringContaining('explicit --overrides') },
+    });
+
+    log.mockClear();
+    expect(
+      await run(['blueprint', 'export', '--json', '--overrides', overridesPath, path], environment),
+    ).toBe(0);
+    const concrete = JSON.parse(String(log.mock.calls[0]?.[0])).document.blueprint;
+    expect(concrete).not.toHaveProperty('parameters');
+    expect(concrete.entities[0].control_behavior.arithmetic_conditions.output_signal).toEqual({
+      type: 'fluid',
+      name: 'water',
+      quality: 'rare',
+    });
+
+    log.mockClear();
+    expect(await run(['test', '--json', path, casesPath], environment)).toBe(1);
+    const report = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(report.tests).toMatchObject({
+      passed: 2,
+      failed: 1,
+      results: [{ status: 'passed' }, { status: 'failed', code: 'CP1002' }, { status: 'passed' }],
+    });
+    expect(String(log.mock.calls[0]?.[0])).not.toContain('missing callback ran');
+    expect(error).not.toHaveBeenCalled();
+  });
+
   test('exports default-free Constant Signal metadata and requires concrete values outside metadata mode', async () => {
     const { environment } = await parameterHost();
     const path = await sourceFile(`const channel = Param.signal('Channel');
