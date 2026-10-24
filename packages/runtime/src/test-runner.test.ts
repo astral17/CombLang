@@ -10,6 +10,7 @@ import {
   runExecutedDirectPlanTests,
   runResolvedDirectPlanTests,
   runTestsWithExecution,
+  runTestsWithExecutionResolver,
 } from './test-runner.js';
 import { compileSourceProgram } from './source-compilation.js';
 
@@ -246,5 +247,102 @@ test('quiet failure', ({ network, session, tick, expectSignal }) => {
       'TestSession is finished; tick cannot mutate it.',
     );
     expect(globals[lateSessionKey]?.currentTick).toBe(0);
+  });
+
+  test('runs async-resolved cases sequentially and preserves synchronous results', async () => {
+    const parsed = parseFile({
+      path: 'async-resolver.factorio.ts',
+      text: 'const input = new Network();',
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const execution = elaborateDirectPlan(plan);
+    const source = `test('first', ({ tick }) => { tick(); });
+test('second', ({ tick }) => { tick(2); });`;
+
+    const sync = runTestsWithExecution(() => execution, source);
+    const calls: unknown[] = [];
+    let activeResolvers = 0;
+    let maxActiveResolvers = 0;
+    const asyncRun = await runTestsWithExecutionResolver(async (parameters) => {
+      activeResolvers += 1;
+      maxActiveResolvers = Math.max(maxActiveResolvers, activeResolvers);
+      calls.push(parameters);
+      await Promise.resolve();
+      activeResolvers -= 1;
+      return execution;
+    }, source);
+
+    expect(asyncRun).toEqual(sync);
+    expect(calls).toEqual([undefined, undefined]);
+    expect(maxActiveResolvers).toBe(1);
+  });
+
+  test('snapshots async resolver metadata, skips invalid cases, and continues after rejection', async () => {
+    const parsed = parseFile({
+      path: 'async-case-parameters.factorio.ts',
+      text: 'const input = new Network();',
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const execution = elaborateDirectPlan(plan);
+    const calls: unknown[] = [];
+    const source = `const entries = [{ id: 0, value: 4 }];
+const bad = {};
+Object.defineProperty(bad, 'id', { enumerable: true, get() { throw new Error('must not run'); } });
+test('snapshot', () => {}, { parameters: entries });
+entries[0].value = 99;
+test('bad metadata', () => {}, { parameters: [bad] });
+test('omitted', () => {});
+test('empty', () => {}, { parameters: [] });
+test('reject', () => {}, { parameters: [{ id: 1, value: 2 }] });
+test('continues', () => {});`;
+    const result = await runTestsWithExecutionResolver(async (parameters) => {
+      calls.push(parameters);
+      if (Array.isArray(parameters) && parameters[0]?.value === 2) {
+        throw new Error('case binding failed');
+      }
+      return execution;
+    }, source);
+
+    expect(calls).toEqual([[{ id: 0, value: 4 }], undefined, [], [{ id: 1, value: 2 }], undefined]);
+    expect(Object.isFrozen(calls[0])).toBe(true);
+    expect(result).toMatchObject({
+      passed: 4,
+      failed: 2,
+      results: [
+        { name: 'snapshot', status: 'passed' },
+        { name: 'bad metadata', status: 'failed', code: 'CP1000' },
+        { name: 'omitted', status: 'passed' },
+        { name: 'empty', status: 'passed' },
+        { name: 'reject', status: 'failed', message: 'case binding failed' },
+        { name: 'continues', status: 'passed' },
+      ],
+    });
+  });
+
+  test('async resolver reports source syntax errors without resolving and keeps bodies synchronous', async () => {
+    const parsed = parseFile({
+      path: 'async-error.factorio.ts',
+      text: 'const input = new Network();',
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed));
+    const execution = elaborateDirectPlan(plan);
+    let calls = 0;
+    const syntaxError = await runTestsWithExecutionResolver(async () => {
+      calls += 1;
+      return execution;
+    }, `test('broken', () => {`);
+    const asyncBody = await runTestsWithExecutionResolver(async () => {
+      calls += 1;
+      return execution;
+    }, `test('async body', async () => {});`);
+
+    expect(syntaxError).toMatchObject({ failed: 1, results: [{ name: 'Test file' }] });
+    expect(asyncBody).toMatchObject({
+      failed: 1,
+      results: [
+        { name: 'async body', status: 'failed', message: 'Async tests are not supported yet.' },
+      ],
+    });
+    expect(calls).toBe(1);
   });
 });

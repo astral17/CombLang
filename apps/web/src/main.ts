@@ -57,7 +57,18 @@ import {
 import { ParameterPanel } from './parameter-panel.js';
 import { loadTestDraft, saveTestDraft } from './test-draft.js';
 import { TestTracePanel } from './test-trace-panel.js';
-import type { TestWorkerRequest, TestWorkerResponse } from './test-worker-protocol.js';
+import type {
+  TestWorkerBindRequest,
+  TestWorkerRequest,
+  TestWorkerResponse,
+  TestWorkerSourceRequest,
+  TestWorkerTestedResponse,
+} from './test-worker-protocol.js';
+import {
+  shouldTerminateTestRunForInvalidation,
+  TestBindingController,
+  type TestBindingRunSnapshot,
+} from './test-binding-controller.js';
 import { buildDetailTimeline, buildOverviewTimeline, signalLabel } from './timeline-view.js';
 import type {
   BrowserPrototypeProfile,
@@ -223,6 +234,7 @@ let parserWorker: Worker | undefined;
 const compilerWorkerScheduler = new CompilerWorkerScheduler();
 const compilerWorkerProgress = new CompilerWorkerProgressTracker();
 const blueprintImportSession = new BlueprintImportSession();
+const testBindingController = new TestBindingController();
 let parserWorkerId: number | undefined;
 let workerBootstrapTimeout: ReturnType<typeof setTimeout> | undefined;
 let workerTimeout: ReturnType<typeof setTimeout> | undefined;
@@ -236,6 +248,7 @@ let copyResetTimer: ReturnType<typeof setTimeout> | undefined;
 let currentBlueprintJson: string | undefined;
 let currentPlan: DirectElaborationPlan | undefined;
 let currentResolvedCircuit: ResolvedCircuit | undefined;
+let currentSourceParameterCount = 0;
 interface SourcePreview extends SourceCircuitSummary {
   readonly timeline: readonly CircuitTimelineSample[];
 }
@@ -811,6 +824,39 @@ function renderProofError(
   );
 }
 
+function renderSymbolicProofWaiting(): void {
+  pauseSimulation();
+  currentPlan = undefined;
+  currentResolvedCircuit = undefined;
+  currentDemo = undefined;
+  sourceSimulation = undefined;
+  selectedSimulationTick = 0;
+  setSimulationEnabled(false);
+  simulationStatus.textContent = 'No simulation';
+  stateStatus.textContent = 'Tests bind each case independently.';
+  proof.dataset.state = 'valid';
+  proof.setAttribute('aria-busy', 'false');
+  proofTitle.textContent = 'Concrete preview is waiting for parameter values';
+  proofDescription.textContent =
+    'The source is valid, but it has no single public circuit plan. Test cases can bind their own values.';
+  proofCombinators.textContent = '—';
+  proofAttachments.textContent = '—';
+  proofStages.textContent = '—';
+  proofFeedback.textContent = '—';
+  proofLatency.textContent = '—';
+  proofFolds.textContent = String(currentFoldedOperations);
+  const empty = document.createElement('p');
+  empty.className = 'proof-empty';
+  empty.textContent = 'Add { parameters: [...] } to test cases that need explicit values.';
+  waveform.replaceChildren(empty);
+  waveformNetwork.replaceChildren(
+    Object.assign(document.createElement('option'), { value: '', textContent: 'All Networks' }),
+  );
+  waveformViewLabel.textContent = 'Networks overview';
+  instancePaths.replaceChildren();
+  networkColors.replaceChildren();
+}
+
 function renderSourceProof(
   plan: DirectElaborationPlan,
   foldedOperations: number,
@@ -930,7 +976,7 @@ function offsetForTestLine(source: string, line: number): { start: number; end: 
   return { start, end: start + (lines[safeLine - 1]?.length ?? 0) };
 }
 
-function renderTestRun(run: TestWorkerResponse['run']): void {
+function renderTestRun(run: TestWorkerTestedResponse['run']): void {
   testTracePanel.setRun(run);
   testStatus.textContent = `${run.passed} passed · ${run.failed} failed`;
   testStatus.dataset.state = run.failed === 0 ? 'valid' : 'invalid';
@@ -1011,13 +1057,90 @@ function terminateTestWorker(): void {
   testWorkerTimeout = undefined;
   testWorker?.terminate();
   testWorker = undefined;
+  testBindingController.cancel();
+}
+
+function cancelTestsForOperation(message: string): void {
+  const wasActive =
+    testWorker !== undefined ||
+    testBindingController.snapshot !== undefined ||
+    testRenderTimer !== undefined;
+  testRevision += 1;
+  if (testRenderTimer !== undefined) clearTimeout(testRenderTimer);
+  testRenderTimer = undefined;
+  terminateTestWorker();
+  if (wasActive) renderTestsBlocked(message);
+}
+
+function armTestWorkerTimeout(worker: Worker, revision: number): void {
+  if (testWorkerTimeout !== undefined) clearTimeout(testWorkerTimeout);
+  testWorkerTimeout = setTimeout(() => {
+    if (testWorker !== worker || revision !== testRevision) return;
+    terminateTestWorker();
+    renderTestsBlocked('Test execution exceeded the 1200 ms worker budget.');
+  }, 1200);
+}
+
+function isTestBindingSnapshotCurrent(snapshot: TestBindingRunSnapshot): boolean {
+  const capture = compilerWorkerScheduler.bindingCapture;
+  const profileIdentity = activePrototypeProfile?.identity ?? workerPrototypeIdentity;
+  return (
+    testWorker !== undefined &&
+    snapshot.revision === testRevision &&
+    snapshot.sourceRevision === currentRevision &&
+    snapshot.profileSelectionRevision === profileSelectionRevision &&
+    snapshot.profileIdentity === profileIdentity &&
+    parserWorkerId === snapshot.workerId &&
+    compilerWorkerScheduler.isCurrent(snapshot.workerId) &&
+    parameterSourceRevision === snapshot.sourceRevision &&
+    capture?.workerId === snapshot.workerId &&
+    capture.sourceRevision === snapshot.sourceRevision &&
+    capture.token === snapshot.token
+  );
+}
+
+function dispatchPendingTestBinding(): void {
+  const snapshot = testBindingController.snapshot;
+  if (snapshot === undefined || !testBindingController.hasPendingCase) return;
+  if (!isTestBindingSnapshotCurrent(snapshot)) {
+    terminateTestWorker();
+    renderTestsBlocked(
+      'The source, profile, or compiler capture changed while tests were waiting.',
+    );
+    return;
+  }
+  if (
+    compilerWorkerScheduler.phase !== 'ready' ||
+    compilerWorkerScheduler.hasQueuedRequest ||
+    compilerWorkerScheduler.activeRequest !== undefined
+  ) {
+    return;
+  }
+  const revision = ++operationCounter;
+  const request = testBindingController.takeForDispatch(revision);
+  if (request === undefined) return;
+  if (!compilerWorkerScheduler.enqueueBinding(request)) {
+    testBindingController.releaseForRetry(revision);
+    terminateTestWorker();
+    renderTestsBlocked('The compiler capture could not accept a test-case binding.');
+    return;
+  }
+  setTestsWaiting('Binding test-case parameters…');
+  pumpCompilerWorker();
 }
 
 function runTests(): void {
   const plan = currentPlan;
   const resolvedCircuit = currentResolvedCircuit;
-  if (plan === undefined) {
-    setTestsWaiting('Waiting for valid source…');
+  const capture = compilerWorkerScheduler.bindingCapture;
+  const hasCurrentCapture =
+    parameterSourceRevision === currentRevision &&
+    capture !== undefined &&
+    capture.sourceRevision === currentRevision &&
+    capture.workerId === parserWorkerId;
+  const needsPerCaseBinding = plan === undefined || currentSourceParameterCount > 0;
+  if (needsPerCaseBinding && !hasCurrentCapture) {
+    setTestsWaiting('Waiting for the current source parameter capture…');
     return;
   }
   testRevision += 1;
@@ -1025,16 +1148,59 @@ function runTests(): void {
   terminateTestWorker();
   const worker = new Worker(new URL('./test.worker.ts', import.meta.url), { type: 'module' });
   testWorker = worker;
-  const request: TestWorkerRequest = {
-    kind: 'test',
-    revision,
-    plan,
-    ...(resolvedCircuit === undefined ? {} : { resolvedCircuit }),
-    source: testEditor.getValue(),
-  };
-  setTestsWaiting('Running tests…');
+  let request: TestWorkerRequest | TestWorkerSourceRequest;
+  if (needsPerCaseBinding) {
+    const profileIdentity = activePrototypeProfile?.identity ?? workerPrototypeIdentity;
+    const snapshot: TestBindingRunSnapshot = {
+      revision,
+      sourceRevision: currentRevision,
+      workerId: capture!.workerId,
+      profileSelectionRevision,
+      ...(profileIdentity === undefined ? {} : { profileIdentity }),
+      token: capture!.token,
+    };
+    testBindingController.begin(snapshot);
+    request = {
+      kind: 'test-source',
+      revision,
+      sourceRevision: currentRevision,
+      source: testEditor.getValue(),
+    };
+    setTestsWaiting('Running per-case tests…');
+  } else {
+    request = {
+      kind: 'test',
+      revision,
+      plan: plan!,
+      ...(resolvedCircuit === undefined ? {} : { resolvedCircuit }),
+      source: testEditor.getValue(),
+    };
+    setTestsWaiting('Running tests…');
+  }
   worker.addEventListener('message', (event: MessageEvent<TestWorkerResponse>) => {
     if (testWorker !== worker || event.data.revision !== testRevision) return;
+    if (event.data.kind === 'test-phase') {
+      if (event.data.phase === 'waiting-for-binding') {
+        if (testWorkerTimeout !== undefined) clearTimeout(testWorkerTimeout);
+        testWorkerTimeout = undefined;
+        setTestsWaiting('Waiting for a test-case binding…');
+      } else {
+        armTestWorkerTimeout(worker, revision);
+        setTestsWaiting('Running tests…');
+      }
+      return;
+    }
+    if (event.data.kind === 'test-bind-request') {
+      if (testWorkerTimeout !== undefined) clearTimeout(testWorkerTimeout);
+      testWorkerTimeout = undefined;
+      if (!testBindingController.requestCase(event.data)) {
+        terminateTestWorker();
+        renderTestsBlocked('The test Worker sent an unexpected or duplicate binding request.');
+        return;
+      }
+      dispatchPendingTestBinding();
+      return;
+    }
     terminateTestWorker();
     renderTestRun(event.data.run);
   });
@@ -1044,11 +1210,7 @@ function runTests(): void {
     renderTestsBlocked(event.message || 'The test worker crashed.');
   });
   worker.postMessage(request);
-  testWorkerTimeout = setTimeout(() => {
-    if (testWorker !== worker || revision !== testRevision) return;
-    terminateTestWorker();
-    renderTestsBlocked('Test execution exceeded the 1200 ms worker budget.');
-  }, 1200);
+  armTestWorkerTimeout(worker, revision);
 }
 
 function scheduleTestRender(): void {
@@ -1057,7 +1219,13 @@ function scheduleTestRender(): void {
   terminateTestWorker();
   if (testRenderTimer !== undefined) clearTimeout(testRenderTimer);
   testEditor.setDiagnostics([]);
-  setTestsWaiting(currentPlan === undefined ? 'Waiting for valid source…' : 'Waiting for input…');
+  setTestsWaiting(
+    currentPlan === undefined
+      ? parameterSourceRevision === currentRevision
+        ? 'Waiting for per-case test values…'
+        : 'Waiting for valid source…'
+      : 'Waiting for input…',
+  );
   testRenderTimer = setTimeout(() => {
     testRenderTimer = undefined;
     runTests();
@@ -1079,6 +1247,7 @@ function render(): void {
   }
   currentRevision = ++operationCounter;
   parameterSourceRevision = undefined;
+  currentSourceParameterCount = 0;
   parameterPanel.setParameters(undefined);
   parameterPanel.setAvailability(false, 'Waiting for source compilation.', 'pending');
   const prototypeProfile = selectedPrototypeProfileRequest();
@@ -1101,6 +1270,7 @@ function scheduleRender(saveDraft = true): void {
   invalidateBlueprintImportPreview('Source or profile changed; convert again.');
   currentRevision = ++operationCounter;
   parameterSourceRevision = undefined;
+  currentSourceParameterCount = 0;
   parameterPanel.setParameters(undefined);
   parameterPanel.setAvailability(
     false,
@@ -1233,6 +1403,7 @@ function submitBlueprintImport(): void {
     refreshBlueprintImportPanel();
     return;
   }
+  cancelTestsForOperation('Blueprint import started; test cases were cancelled.');
   const revision = ++operationCounter;
   blueprintImportRequestRevision = revision;
   const snapshot = currentBlueprintImportSnapshot();
@@ -1303,6 +1474,7 @@ blueprintImportApply.addEventListener('click', applyBlueprintImport);
 refreshBlueprintImportPanel();
 
 function submitParameterBinding(overrides: readonly SourceParameterOverride[]): void {
+  cancelTestsForOperation('Preview parameter binding started; tests will rerun afterward.');
   const capture = compilerWorkerScheduler.bindingCapture;
   const sourceRevision = parameterSourceRevision;
   if (
@@ -1400,6 +1572,47 @@ function handleWorkerMessage(
       return;
     }
     compilerWorkerProgress.report(workerId, event.data.revision, event.data.stage);
+    return;
+  }
+  if (
+    event.data.kind === 'bound' &&
+    testBindingController.ownsCompilerRevision(event.data.revision)
+  ) {
+    const completion = compilerWorkerScheduler.complete(workerId, event.data);
+    if (completion === 'ignored') return;
+    testBindingController.forgetCompilerRevision(event.data.revision);
+    compilerWorkerProgress.clear();
+    if (workerTimeout !== undefined) clearTimeout(workerTimeout);
+    workerTimeout = undefined;
+    const bindingCompletion = testBindingController.complete(
+      workerId,
+      event.data,
+      isTestBindingSnapshotCurrent,
+    );
+    if (
+      bindingCompletion?.kind === 'test-run-invalidated' &&
+      shouldTerminateTestRunForInvalidation(
+        bindingCompletion,
+        testRevision,
+        currentRevision,
+        testWorker !== undefined,
+      )
+    ) {
+      testRevision += 1;
+      if (testRenderTimer !== undefined) clearTimeout(testRenderTimer);
+      testRenderTimer = undefined;
+      terminateTestWorker();
+      parameterSourceRevision = undefined;
+      parameterPanel.setAvailability(
+        false,
+        `${bindingCompletion.message} Recompile source to continue.`,
+        'invalid',
+      );
+      renderTestsBlocked(bindingCompletion.message);
+    } else if (bindingCompletion?.kind === 'test-bind-response' && testWorker !== undefined) {
+      testWorker.postMessage(bindingCompletion);
+    }
+    pumpCompilerWorker();
     return;
   }
   const completion = compilerWorkerScheduler.complete(workerId, event.data);
@@ -1613,8 +1826,9 @@ function handleWorkerMessage(
     .join(' · ');
   const valid = syntaxErrors.length === 0 && compilerErrors.length === 0;
   const binding = event.data.parameterBinding;
-  if (valid && parsed.plan !== undefined && binding?.ok === true) {
+  if (valid && binding?.ok === true) {
     parameterPanel.setParameters(binding.parameters);
+    currentSourceParameterCount = binding.parameters.length;
     const capture = compilerWorkerScheduler.bindingCapture;
     parameterSourceRevision =
       capture?.sourceRevision === currentRevision ? currentRevision : undefined;
@@ -1626,7 +1840,9 @@ function handleWorkerMessage(
           ? 'This source declares no editable parameters.'
           : parameterSourceRevision === undefined
             ? 'The parameter capture is unavailable; recompile source to continue.'
-            : 'Edit values and Apply, or Reset to the original source defaults.',
+            : parsed.plan === undefined
+              ? 'Use per-case test metadata; preview binding remains a separate operation.'
+              : 'Edit values and Apply, or Reset to the original source defaults.',
       includeNumericParameters.checked ? 'warning' : 'none',
     );
   } else {
@@ -1648,9 +1864,18 @@ function handleWorkerMessage(
         ? `${compilerErrors.length} compiler error(s)`
         : advisories > 0
           ? `${advisorySummary} · ${parsed.plan?.producers.length ?? 0} producers checked`
-          : `executed JS · ${sourceFunctions} functions · ${parsed.plan?.producers.length ?? 0} producers · ${foldedOperations} folds ready`;
-  status.dataset.state = valid ? (advisories > 0 ? 'warning' : 'valid') : 'invalid';
-  if (!valid || parsed.plan === undefined) {
+          : parsed.plan === undefined && parameterSourceRevision !== undefined
+            ? `valid symbolic source · ${currentSourceParameterCount} parameter(s) · tests bind per case`
+            : `executed JS · ${sourceFunctions} functions · ${parsed.plan?.producers.length ?? 0} producers · ${foldedOperations} folds ready`;
+  const symbolicCaptureReady =
+    parsed.plan === undefined && parameterSourceRevision !== undefined && binding?.ok === true;
+  status.dataset.state =
+    valid && (parsed.plan !== undefined || symbolicCaptureReady)
+      ? advisories > 0
+        ? 'warning'
+        : 'valid'
+      : 'invalid';
+  if (!valid) {
     const firstError = parsed.pipelineDiagnostics.find(({ severity }) => severity === 'error');
     renderProofError(
       firstError === undefined
@@ -1658,6 +1883,25 @@ function handleWorkerMessage(
         : formatSourceDiagnostic(firstError, sourceEditor.getValue()),
     );
     renderTestsBlocked('Fix the circuit source before running its tests.');
+  } else if (parsed.plan === undefined) {
+    if (!symbolicCaptureReady) {
+      const diagnostic = binding?.ok === false ? binding.diagnostics[0] : undefined;
+      const message =
+        diagnostic === undefined
+          ? 'The source produced no executable direct plan or current parameter capture.'
+          : formatSourceDiagnostic(diagnostic, sourceEditor.getValue());
+      renderProofError(message);
+      renderTestsBlocked('A current source parameter capture is required to bind test cases.');
+    } else {
+      renderSymbolicProofWaiting();
+      scheduleTestRender();
+      renderBlueprintPanel(
+        selectBlueprintPanel(
+          { parameters: includeNumericParameters.checked, exported: parsed.blueprintExport },
+          (diagnostic) => formatSourceDiagnostic(diagnostic, sourceEditor.getValue()),
+        ),
+      );
+    }
   } else {
     const previewPlan = parsed.plan;
     const previewResolvedCircuit = parsed.resolvedCircuit;
@@ -1709,6 +1953,9 @@ function handleWorkerBootstrapTimeout(worker: Worker, workerId: number): void {
   ) {
     return;
   }
+  if (testBindingController.snapshot !== undefined || testWorker !== undefined) {
+    cancelTestsForOperation('Compiler Worker was lost while test cases were waiting for bindings.');
+  }
   workerBootstrapTimeout = undefined;
   compilerWorkerProgress.clear();
   worker.terminate();
@@ -1716,6 +1963,7 @@ function handleWorkerBootstrapTimeout(worker: Worker, workerId: number): void {
   parserWorkerId = undefined;
   workerPrototypeIdentity = undefined;
   compilerWorkerScheduler.fail(workerId);
+  testBindingController.clearCompilerRevisions();
   invalidateBlueprintImportPreview('Compiler Worker was lost; convert again after recompilation.');
   const bootstrapFailure = compilerWorkerBootstrapTimeoutReason();
   const rolledBack = rollbackPendingPrototypeProfile(
@@ -1733,6 +1981,12 @@ function handleWorkerBootstrapTimeout(worker: Worker, workerId: number): void {
 function handleWorkerError(event: ErrorEvent, worker: Worker, workerId: number): void {
   if (parserWorker !== worker || !compilerWorkerScheduler.isCurrent(workerId)) return;
   const failedRequest = compilerWorkerScheduler.activeRequest;
+  const failedTestBinding =
+    failedRequest?.kind === 'bind-parameters' &&
+    testBindingController.ownsCompilerRevision(failedRequest.revision);
+  if (testBindingController.snapshot !== undefined || testWorker !== undefined) {
+    cancelTestsForOperation('Compiler Worker was lost while test cases were waiting for bindings.');
+  }
   const wasBooting = compilerWorkerScheduler.phase === 'booting';
   if (workerTimeout !== undefined) clearTimeout(workerTimeout);
   workerTimeout = undefined;
@@ -1744,6 +1998,7 @@ function handleWorkerError(event: ErrorEvent, worker: Worker, workerId: number):
   parserWorkerId = undefined;
   workerPrototypeIdentity = undefined;
   compilerWorkerScheduler.fail(workerId);
+  testBindingController.clearCompilerRevisions();
   const failureMessage = event.message || 'the compiler Worker crashed.';
   const importFailed = failedRequest?.kind === 'import-blueprint';
   if (importFailed) {
@@ -1793,6 +2048,9 @@ function handleWorkerError(event: ErrorEvent, worker: Worker, workerId: number):
     renderProofError(bootstrapFailure);
     renderTestsBlocked('The compiler Worker failed before it became ready.');
     result.textContent = bootstrapFailure;
+  } else if (failedTestBinding) {
+    status.textContent = 'Compiler Worker lost during test binding';
+    status.dataset.state = 'warning';
   } else if (
     failedRequest?.kind === 'bind-parameters' &&
     failedRequest.sourceRevision === currentRevision
@@ -1865,6 +2123,14 @@ function ensureCompilerWorker(): Worker {
 }
 
 function pumpCompilerWorker(): void {
+  if (
+    compilerWorkerScheduler.phase === 'ready' &&
+    compilerWorkerScheduler.activeRequest === undefined &&
+    !compilerWorkerScheduler.hasQueuedRequest &&
+    testBindingController.hasPendingCase
+  ) {
+    dispatchPendingTestBinding();
+  }
   if (!compilerWorkerScheduler.hasQueuedRequest || compilerWorkerScheduler.phase === 'busy') {
     refreshBlueprintImportPanel();
     return;
@@ -1921,6 +2187,9 @@ function pumpCompilerWorker(): void {
       request.kind === 'parse' || request.kind === 'import-blueprint'
         ? compilerWorkerProgress.lastStage(workerId, request.revision)
         : undefined;
+    const testBindingTimeout =
+      request.kind === 'bind-parameters' &&
+      testBindingController.ownsCompilerRevision(request.revision);
     worker.terminate();
     parserWorker = undefined;
     parserWorkerId = undefined;
@@ -1928,7 +2197,19 @@ function pumpCompilerWorker(): void {
     workerTimeout = undefined;
     compilerWorkerProgress.clear();
     compilerWorkerScheduler.fail(workerId);
+    testBindingController.clearCompilerRevisions();
     const timeoutReason = compilerWorkerRequestTimeoutReason(request, timeoutMs, lastStage);
+    if (testBindingTimeout) {
+      cancelTestsForOperation(`Test-case binding timed out: ${timeoutReason}`);
+      parameterSourceRevision = undefined;
+      parameterPanel.setAvailability(
+        false,
+        `${timeoutReason} Recompile source to continue.`,
+        'invalid',
+      );
+      pumpCompilerWorker();
+      return;
+    }
     if (request.kind === 'bind-parameters') {
       if (request.sourceRevision === currentRevision) {
         status.textContent = 'Parameter binding timed out';

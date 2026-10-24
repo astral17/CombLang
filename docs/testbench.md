@@ -125,6 +125,23 @@ CLI parser. `test` does not accept `--parameters`, `--label` or
 via `blueprint export --parameters` is a separate mode. CLI simulator success
 and agreement with concrete JSON are not native Factorio acceptance evidence.
 
+### Browser test cases
+
+The web workbench's existing test editor also accepts the optional third
+argument `{ parameters: [...] }`. When the source has parameter declarations,
+each registered case requests a fresh concrete plan and its matching resolved
+circuit from the retained compiler Worker capture. Cases bind in order; omitted
+values and `[]` both start from the source defaults, while an explicit array is
+a full snapshot. Source execution and test registration each happen once.
+The retained compiler Worker resolves each binding; its detached concrete pair
+is executed only in the dedicated test Worker. This does not replace the global
+preview, construction, parameter drafts or native blueprint export. A valid
+symbolic source without a single public concrete plan can still run these tests;
+the preview remains waiting for values while the native export stays available.
+Test callbacks remain synchronous. The execution watchdog does not count time
+spent awaiting a bounded compiler binding. Automated message/controller tests
+do not establish desktop/mobile browser or Factorio acceptance.
+
 ### Per-case parameter snapshots
 
 The CLI test file can select a snapshot for each case; a host caller can use the
@@ -230,8 +247,10 @@ operands and Decider slots remain unsupported. CLI and host runtime routes
 support per-case snapshots for these slots, including a Signal output combined
 with numeric Arithmetic defaults or overrides. The native `parameter-N` output
 is only a template identity; each test case must provide its own Signal value.
-Browser per-case routing is still pending. This does not add native ingredient
-dependencies, automatic recipe lookup, or a construction-screen binding UI.
+Browser per-case routing is implemented through the existing test editor, while
+real browser and Factorio acceptance remain pending. This does not add native
+ingredient dependencies, automatic recipe lookup, or a construction-screen
+binding UI.
 
 The test callback receives these convenience methods and complete APIs:
 

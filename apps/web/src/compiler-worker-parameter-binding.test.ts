@@ -16,6 +16,7 @@ import type { EntityPrototypeResolver } from '@comblang/runtime/entity-registry'
 import type { BoundSourceCompilationCircuit } from '@comblang/runtime/source-compilation';
 import type { SourceParameterOverride } from '@comblang/runtime/source-parameter-binding';
 import { signal } from '@comblang/factorio';
+import type { Diagnostic } from '@comblang/shared';
 
 import {
   CompilerWorkerParameterBindingError,
@@ -25,7 +26,7 @@ import { CompilerWorkerScheduler } from './compiler-worker-scheduler.js';
 import { createParameterDrafts, parameterDraftOverrides } from './parameter-panel.js';
 import { createSourceCircuitArtifact } from './source-circuit-artifact.js';
 import { SourceSimulationController } from './source-demo.js';
-import { runWebTests } from './web-test-runner.js';
+import { runWebTests, runWebTestsWithExecutionResolver } from './web-test-runner.js';
 import { selectBlueprintPanel } from './blueprint-panel.js';
 import type {
   CompilerWorkerBindRequest,
@@ -146,6 +147,352 @@ function deferred<T>() {
 }
 
 describe('Worker-local source parameter sessions', () => {
+  test('routes cloneable browser cases through independent Worker bindings without changing preview/export', async () => {
+    resetRunCount();
+    const runtime = parameterRuntime();
+    const sameLabelFile = {
+      ...parameterFile,
+      text: parameterFile.text
+        .replace("Param.number('Amount'", "Param.number('Shared'")
+        .replace("Param.signal('Channel'", "Param.signal('Shared'"),
+    };
+    const parsed = structuredClone(
+      await runtime.handle(
+        parseRequest(89, {
+          file: sameLabelFile,
+          parameterBinding: true,
+          blueprintExport: { parameters: true },
+        }),
+      ),
+    );
+    const binding = parsed.parameterBinding;
+    if (
+      binding?.ok !== true ||
+      binding.token === undefined ||
+      parsed.result.plan === undefined ||
+      parsed.result.resolvedCircuit === undefined
+    ) {
+      throw new Error('Expected a concrete preview pair and retained parameter capture.');
+    }
+    const previewBefore = structuredClone({
+      plan: parsed.result.plan,
+      resolvedCircuit: parsed.result.resolvedCircuit,
+      export: parsed.result.blueprintExport,
+      parameters: binding.parameters,
+    });
+    const calls: unknown[] = [];
+    let revision = parsed.revision;
+    const runKey = '__worker_browser_per_case_registration_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const previousRun = globals[runKey];
+    globals[runKey] = 0;
+    try {
+      const run = await runWebTestsWithExecutionResolver(
+        async (parameters) => {
+          calls.push(parameters === undefined ? undefined : structuredClone(parameters));
+          const request: CompilerWorkerBindRequest = {
+            kind: 'bind-parameters',
+            revision: ++revision,
+            sourceRevision: parsed.revision,
+            token: binding.token!,
+            ...(parameters === undefined ? {} : { overrides: parameters }),
+          };
+          const clonedRequest = structuredClone(request);
+          const response: CompilerWorkerBoundResponse = structuredClone(
+            runtime.handleBinding(structuredClone(request)),
+          );
+          expect(request).toEqual(clonedRequest);
+          expect(structuredClone(response)).toEqual(response);
+          if (!response.result.ok) {
+            const diagnostic = response.result.diagnostics[0];
+            const error = new Error(diagnostic?.message ?? 'Parameter binding failed.') as Error & {
+              code?: string;
+              path?: string;
+              span?: Diagnostic['span'];
+            };
+            if (diagnostic !== undefined) {
+              error.name = 'BlueprintParameterError';
+              error.code = diagnostic.code;
+              error.path = /^((?:\$|[A-Za-z])[^:]*): /.exec(diagnostic.message)?.[1] ?? '$';
+              error.span = diagnostic.span;
+            }
+            throw error;
+          }
+          return {
+            plan: response.result.plan,
+            resolvedCircuit: response.result.resolvedCircuit,
+          };
+        },
+        `globalThis.${runKey} += 1;
+const ordinary = Signal('virtual', 'signal-A');
+const rare = Signal('virtual', 'signal-B', 'rare');
+test('source defaults', ({ network, tick, expectSignal }) => {
+  tick();
+  expectSignal(network('output'), ordinary).toBe(5);
+});
+test('explicit empty resets defaults', ({ network, tick, expectSignal }) => {
+  tick();
+  expectSignal(network('output'), ordinary).toBe(5);
+}, { parameters: [] });
+test('quality override uses its own execution', ({ network, session, tick, expectSignal }) => {
+  session.trace(network('output'));
+  tick();
+  expectSignal(network('output'), rare).toBe(9);
+  expectSignal(network('output'), ordinary).toBe(0);
+}, { parameters: [{ id: 1, value: { type: 'virtual', name: 'signal-B', quality: 'rare' } }, { id: 0, value: 9 }] });
+test('invalid snapshot does not run its body', () => { throw new Error('body must not run'); }, { parameters: [{ id: 0, value: 7 }, { id: 0, value: 8 }] });
+test('omitted values restore source defaults', ({ network, tick, expectSignal }) => {
+  tick();
+  expectSignal(network('output'), ordinary).toBe(5);
+});`,
+      );
+
+      expect(run).toMatchObject({
+        passed: 4,
+        failed: 1,
+        results: [
+          { status: 'passed' },
+          { status: 'passed' },
+          { status: 'passed', trace: { targets: [{ kind: 'network' }] } },
+          {
+            status: 'failed',
+            code: 'CP1000',
+            details: { path: expect.any(String), source: expect.any(Object) },
+          },
+          { status: 'passed' },
+        ],
+      });
+      const traced = run.results[2]!;
+      const traceTarget = traced.trace?.targets[0];
+      if (traceTarget?.kind !== 'network') throw new Error('Expected the bound trace target.');
+      expect(traced.traceNetworkNames?.[traceTarget.networkId]).toBe('output');
+      expect(calls).toEqual([
+        undefined,
+        [],
+        [
+          { id: 1, value: { type: 'virtual', name: 'signal-B', quality: 'rare' } },
+          { id: 0, value: 9 },
+        ],
+        [
+          { id: 0, value: 7 },
+          { id: 0, value: 8 },
+        ],
+        undefined,
+      ]);
+      expect(globals[runKey]).toBe(1);
+      expect(runCount()).toBe(1);
+      expect({
+        plan: parsed.result.plan,
+        resolvedCircuit: parsed.result.resolvedCircuit,
+        export: parsed.result.blueprintExport,
+        parameters: binding.parameters,
+      }).toEqual(previewBefore);
+    } finally {
+      if (previousRun === undefined) delete globals[runKey];
+      else globals[runKey] = previousRun;
+    }
+  });
+
+  test('routes symbolic Constant, Arithmetic and Selector cases through cloneable per-case bindings', async () => {
+    const sourceRunsKey = '__worker_symbolic_per_case_source_runs';
+    const defaultGetterKey = '__worker_symbolic_per_case_default_getters';
+    const globals = globalThis as Record<string, unknown>;
+    const oldSourceRuns = globals[sourceRunsKey];
+    const oldDefaultGetterRuns = globals[defaultGetterKey];
+    globals[sourceRunsKey] = 0;
+    globals[defaultGetterKey] = 0;
+    try {
+      const runtime = parameterRuntime();
+      const parsed = structuredClone(
+        await runtime.handle(
+          parseRequest(88, {
+            file: {
+              path: 'worker-symbolic-test.factorio.ts',
+              text: `globalThis.${sourceRunsKey} += 1;
+const defaults = { get automatic() {
+  globalThis.${defaultGetterKey} += 1;
+  return undefined;
+} };
+const amount = Param.number('Shared', defaults.automatic);
+const constantChannel = Param.signal('Shared');
+const arithmeticChannel = Param.signal('Shared');
+const index = Param.signal('Shared');
+const countOutput = Param.signal('Shared');
+const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const constantOutput = new Network();
+const arithmeticOutput = new Network();
+const selectedOutput = new Network();
+const countedOutput = new Network();
+input += Constant({ sections: [{ filters: [{ signal: A, value: 5 }, { signal: index, value: 0 }] }] });
+constantOutput += Constant({ sections: [{ filters: [{ signal: constantChannel, value: amount }] }] });
+arithmeticOutput += Arithmetic({ left: 2, operation: 'add', right: amount, output: arithmeticChannel });
+selectedOutput += Selector({ input, operation: 'select', index });
+countedOutput += Selector({ input, operation: 'count', output: countOutput });`,
+            },
+            parameterBinding: true,
+            blueprintExport: { parameters: true },
+          }),
+        ),
+      );
+      const binding = parsed.parameterBinding;
+      expect(parsed.result.plan).toBeUndefined();
+      expect(parsed.result.resolvedCircuit).toBeUndefined();
+      expect(parsed.result.blueprintExport).toMatchObject({ ok: true });
+      if (binding?.ok !== true || binding.token === undefined) {
+        throw new Error('Expected a retained symbolic source capture.');
+      }
+      expect(binding.parameters).toMatchObject([
+        { id: 0, kind: 'number', label: 'Shared' },
+        { id: 1, kind: 'signal', label: 'Shared' },
+        { id: 2, kind: 'signal', label: 'Shared' },
+        { id: 3, kind: 'signal', label: 'Shared' },
+        { id: 4, kind: 'signal', label: 'Shared' },
+      ]);
+      expect(binding.parameters[0]?.defaultValue).toEqual(expect.any(Number));
+      for (const parameter of binding.parameters.slice(1)) {
+        expect(parameter).not.toHaveProperty('defaultValue');
+      }
+      const automaticDefault = binding.parameters[0]!.defaultValue as number;
+      const exportBefore = structuredClone(parsed.result.blueprintExport);
+      let revision = parsed.revision;
+      const bindCalls: unknown[] = [];
+      const run = await runWebTestsWithExecutionResolver(
+        async (parameters) => {
+          bindCalls.push(parameters === undefined ? undefined : structuredClone(parameters));
+          const request: CompilerWorkerBindRequest = {
+            kind: 'bind-parameters',
+            revision: ++revision,
+            sourceRevision: parsed.revision,
+            token: binding.token!,
+            ...(parameters === undefined ? {} : { overrides: parameters }),
+          };
+          const requestBefore = structuredClone(request);
+          const response: CompilerWorkerBoundResponse = structuredClone(
+            runtime.handleBinding(structuredClone(request)),
+          );
+          expect(request).toEqual(requestBefore);
+          expect(response.revision).toBe(request.revision);
+          if (!response.result.ok) {
+            const diagnostic = response.result.diagnostics[0];
+            const error = new Error(diagnostic?.message ?? 'Parameter binding failed.') as Error & {
+              code?: string;
+              path?: string;
+              span?: Diagnostic['span'];
+            };
+            if (diagnostic !== undefined) {
+              error.name = 'BlueprintParameterError';
+              error.code = diagnostic.code;
+              error.path = /^((?:\$|[A-Za-z])[^:]*): /.exec(diagnostic.message)?.[1] ?? '$';
+              error.span = diagnostic.span;
+            }
+            throw error;
+          }
+          return {
+            plan: response.result.plan,
+            resolvedCircuit: response.result.resolvedCircuit,
+          };
+        },
+        `test('missing bindings fail before body execution', () => { throw new Error('must not run'); });
+test('empty bindings fail before body execution', () => { throw new Error('must not run'); }, { parameters: [] });
+test('invalid binding does not prevent the next case', () => { throw new Error('must not run'); }, { parameters: [{ id: 1, value: Signal('item', 'iron-plate') }, { id: 2, value: Signal('fluid', 'water') }, { id: 3, value: { type: 'virtual', name: 'signal-index', quality: 7 } }, { id: 4, value: Signal('virtual', 'signal-count') }] });
+test('quality-bearing values drive all producer roles', ({ network, session, tick, expectSignal }) => {
+  session.trace(network('arithmeticOutput'));
+  tick(2);
+  expectSignal(network('constantOutput'), Signal('item', 'iron-plate', 'uncommon')).toBe(9);
+  expectSignal(network('arithmeticOutput'), Signal('fluid', 'water', 'rare')).toBe(11);
+  expectSignal(network('selectedOutput'), Signal('virtual', 'signal-A')).toBe(5);
+  expectSignal(network('countedOutput'), Signal('virtual', 'signal-count', 'uncommon')).toBe(1);
+}, { parameters: [{ id: 0, value: 9 }, { id: 1, value: Signal('item', 'iron-plate', 'uncommon') }, { id: 2, value: Signal('fluid', 'water', 'rare') }, { id: 3, value: Signal('virtual', 'signal-index', 'rare') }, { id: 4, value: Signal('virtual', 'signal-count', 'uncommon') }] });
+test('omitted numeric override resets to the automatic default', ({ network, session, tick, expectSignal }) => {
+  session.trace(network('selectedOutput'));
+  tick(2);
+  expectSignal(network('constantOutput'), Signal('item', 'iron-plate', 'uncommon')).toBe(${automaticDefault});
+  expectSignal(network('arithmeticOutput'), Signal('fluid', 'water', 'rare')).toBe(${automaticDefault + 2});
+  expectSignal(network('selectedOutput'), Signal('virtual', 'signal-A')).toBe(5);
+  expectSignal(network('countedOutput'), Signal('virtual', 'signal-count', 'uncommon')).toBe(1);
+}, { parameters: [{ id: 1, value: Signal('item', 'iron-plate', 'uncommon') }, { id: 2, value: Signal('fluid', 'water', 'rare') }, { id: 3, value: Signal('virtual', 'signal-index', 'rare') }, { id: 4, value: Signal('virtual', 'signal-count', 'uncommon') }] });`,
+      );
+
+      expect(run).toMatchObject({
+        passed: 2,
+        failed: 3,
+        results: [
+          {
+            status: 'failed',
+            code: 'CP1002',
+            details: { path: expect.any(String), source: expect.any(Object) },
+          },
+          {
+            status: 'failed',
+            code: 'CP1002',
+            details: { path: expect.any(String), source: expect.any(Object) },
+          },
+          {
+            status: 'failed',
+            code: 'CP1000',
+            details: { path: expect.any(String), source: expect.any(Object) },
+          },
+          {
+            status: 'passed',
+            trace: { targets: [{ kind: 'network' }] },
+            debug: expect.any(Object),
+          },
+          {
+            status: 'passed',
+            trace: { targets: [{ kind: 'network' }] },
+            debug: expect.any(Object),
+          },
+        ],
+      });
+      expect(bindCalls).toEqual([
+        undefined,
+        [],
+        [
+          { id: 1, value: { type: 'item', name: 'iron-plate' } },
+          { id: 2, value: { type: 'fluid', name: 'water' } },
+          { id: 3, value: { type: 'virtual', name: 'signal-index', quality: 7 } },
+          { id: 4, value: { type: 'virtual', name: 'signal-count' } },
+        ],
+        [
+          { id: 0, value: 9 },
+          { id: 1, value: { type: 'item', name: 'iron-plate', quality: 'uncommon' } },
+          { id: 2, value: { type: 'fluid', name: 'water', quality: 'rare' } },
+          { id: 3, value: { type: 'virtual', name: 'signal-index', quality: 'rare' } },
+          { id: 4, value: { type: 'virtual', name: 'signal-count', quality: 'uncommon' } },
+        ],
+        [
+          { id: 1, value: { type: 'item', name: 'iron-plate', quality: 'uncommon' } },
+          { id: 2, value: { type: 'fluid', name: 'water', quality: 'rare' } },
+          { id: 3, value: { type: 'virtual', name: 'signal-index', quality: 'rare' } },
+          { id: 4, value: { type: 'virtual', name: 'signal-count', quality: 'uncommon' } },
+        ],
+      ]);
+      for (const index of [3, 4]) {
+        const result = run.results[index]!;
+        const traceTarget = result.trace?.targets[0];
+        if (traceTarget?.kind !== 'network') throw new Error('Expected a matched network trace.');
+        const expectedName = index === 3 ? 'arithmeticOutput' : 'selectedOutput';
+        expect(result.traceNetworkNames?.[traceTarget.networkId]).toBe(expectedName);
+        expect(
+          result.debug?.scopes[0]?.producers.some((producer) =>
+            producer.outputs.includes(traceTarget.networkId),
+          ),
+        ).toBe(true);
+      }
+      expect(globals[sourceRunsKey]).toBe(1);
+      expect(globals[defaultGetterKey]).toBe(1);
+      expect(parsed.result.blueprintExport).toEqual(exportBefore);
+      expect(parsed.result.plan).toBeUndefined();
+      expect(parsed.result.resolvedCircuit).toBeUndefined();
+    } finally {
+      if (oldSourceRuns === undefined) delete globals[sourceRunsKey];
+      else globals[sourceRunsKey] = oldSourceRuns;
+      if (oldDefaultGetterRuns === undefined) delete globals[defaultGetterKey];
+      else globals[defaultGetterKey] = oldDefaultGetterRuns;
+    }
+  });
+
   test('parameter drafts drive preview, independent tests and concrete JSON through retry and Reset without rerunning source', async () => {
     resetRunCount();
     const runtime = parameterRuntime();

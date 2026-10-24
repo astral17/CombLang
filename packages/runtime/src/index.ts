@@ -24,6 +24,7 @@ export {
   runDirectPlanTests,
   runExecutedDirectPlanTests,
   runResolvedDirectPlanTests,
+  runTestsWithExecutionResolver,
 } from './test-runner.js';
 export type {
   DirectPlanTestFailureKind,

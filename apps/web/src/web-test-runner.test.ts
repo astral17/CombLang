@@ -12,7 +12,7 @@ import {
 } from '@comblang/runtime';
 
 import { compileSource } from './compile-source.js';
-import { runWebTests } from './web-test-runner.js';
+import { runWebTests, runWebTestsWithExecutionResolver } from './web-test-runner.js';
 
 const source = `const A = Signal("virtual", "signal-A");
 const input = new Network();
@@ -310,5 +310,47 @@ test("bad query", ({ execution }) => {
     const target = transported.trace!.targets[0]!;
     if (target.kind !== 'network') throw new Error('Expected a Network trace.');
     expect(transported.debug!.scopes[0]!.producers[0]!.outputs).toContain(target.networkId);
+  });
+
+  it('strictly validates each async plan/resolved-circuit pair and continues after a mismatch', async () => {
+    const compiled = compileSource({ path: 'async-pair.factorio.ts', text: source });
+    const unrelated = compileSource({
+      path: 'async-unrelated.factorio.ts',
+      text: 'const unrelated = new Network();',
+    });
+    if (
+      compiled.plan === undefined ||
+      compiled.resolvedCircuit === undefined ||
+      unrelated.resolvedCircuit === undefined
+    ) {
+      throw new Error('Expected concrete compiled pairs for the async replay test.');
+    }
+    let caseNumber = 0;
+    const run = await runWebTestsWithExecutionResolver(
+      async () => {
+        caseNumber += 1;
+        return {
+          plan: compiled.plan!,
+          resolvedCircuit:
+            caseNumber === 1 ? unrelated.resolvedCircuit! : compiled.resolvedCircuit!,
+        };
+      },
+      `test('swapped pair is rejected', () => {});
+test('matching pair runs', ({ tick }) => { tick(); });`,
+    );
+
+    expect(caseNumber).toBe(2);
+    expect(run).toMatchObject({
+      passed: 1,
+      failed: 1,
+      results: [
+        {
+          status: 'failed',
+          failureKind: 'runtime',
+          message: expect.stringContaining('fingerprint'),
+        },
+        { status: 'passed', trace: { endTick: 1 } },
+      ],
+    });
   });
 });

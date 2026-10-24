@@ -202,7 +202,7 @@ function errorLocation(
   sourceName: string,
   stackLineOffset: number,
 ): { line?: number; column?: number } {
-  if (error instanceof BlueprintParameterError) return {};
+  if (isBlueprintParameterFailure(error)) return {};
   if (!(error instanceof Error) || error.stack === undefined) return {};
   const match = new RegExp(`${regexEscape(sourceName)}:(\\d+):(\\d+)`).exec(error.stack);
   if (match === null) return {};
@@ -222,6 +222,7 @@ function failure(
   trace?: TraceDocument,
 ): DirectPlanTestCaseResult {
   const location = errorLocation(error, sourceName, stackLineOffset);
+  const parameterError = isBlueprintParameterFailure(error) ? error : undefined;
   const common = {
     name,
     status: 'failed' as const,
@@ -253,18 +254,18 @@ function failure(
   return {
     ...common,
     failureKind: 'runtime',
-    ...(error instanceof BlueprintParameterError
+    ...(parameterError !== undefined
       ? {
-          code: error.code,
+          code: parameterError.code,
           details: {
-            path: error.path,
-            ...(error.span === undefined
+            ...(parameterError.path === undefined ? {} : { path: parameterError.path }),
+            ...(parameterError.span === undefined
               ? {}
               : {
                   source: {
-                    fileId: error.span.fileId,
-                    start: error.span.start,
-                    end: error.span.end,
+                    fileId: parameterError.span.fileId,
+                    start: parameterError.span.start,
+                    end: parameterError.span.end,
                   },
                 }),
           },
@@ -273,11 +274,113 @@ function failure(
   };
 }
 
+interface TestExecutionDiagnosticError extends Error {
+  readonly code: string;
+  readonly path?: string;
+  readonly span?: { readonly fileId: string; readonly start: number; readonly end: number };
+}
+
+function isBlueprintParameterFailure(error: unknown): error is TestExecutionDiagnosticError {
+  if (error instanceof BlueprintParameterError) return true;
+  if (
+    !(error instanceof Error) ||
+    (error.name !== 'BlueprintParameterError' && error.name !== 'TestBindingError')
+  ) {
+    return false;
+  }
+  const value = error as Error & {
+    readonly code?: unknown;
+    readonly path?: unknown;
+    readonly span?: unknown;
+  };
+  return (
+    typeof value.code === 'string' &&
+    (value.path === undefined || typeof value.path === 'string') &&
+    (value.span === undefined ||
+      (typeof value.span === 'object' &&
+        value.span !== null &&
+        typeof (value.span as { readonly fileId?: unknown }).fileId === 'string' &&
+        Number.isSafeInteger((value.span as { readonly start?: unknown }).start) &&
+        Number.isSafeInteger((value.span as { readonly end?: unknown }).end)))
+  );
+}
+
 export function runTestsWithExecution(
   getExecution: (caseParameters?: unknown) => ExecutedDirectPlan,
   source: string,
   options: DirectPlanTestRunnerOptions = {},
 ): DirectPlanTestRun {
+  const setup = registerTests(source, options);
+  if ('failure' in setup) return setup.failure;
+  const results = setup.registered.map((registeredTest) => {
+    if (registeredTest.hasMetadataError) {
+      return failure(
+        registeredTest.name,
+        registeredTest.metadataError,
+        setup.sourceName,
+        setup.stackLineOffset,
+      );
+    }
+    let execution: ExecutedDirectPlan;
+    try {
+      execution = getExecution(
+        registeredTest.hasParameters ? registeredTest.parameters : undefined,
+      );
+    } catch (error) {
+      return failure(registeredTest.name, error, setup.sourceName, setup.stackLineOffset);
+    }
+    return runRegisteredTest(registeredTest, execution, setup.sourceName, setup.stackLineOffset);
+  });
+  return aggregateTestResults(results);
+}
+
+/** Runs cases sequentially while asynchronously resolving each case's execution. */
+export async function runTestsWithExecutionResolver(
+  resolveExecution: (caseParameters?: unknown) => Promise<ExecutedDirectPlan>,
+  source: string,
+  options: DirectPlanTestRunnerOptions = {},
+): Promise<DirectPlanTestRun> {
+  const setup = registerTests(source, options);
+  if ('failure' in setup) return setup.failure;
+  const results: DirectPlanTestCaseResult[] = [];
+  for (const registeredTest of setup.registered) {
+    if (registeredTest.hasMetadataError) {
+      results.push(
+        failure(
+          registeredTest.name,
+          registeredTest.metadataError,
+          setup.sourceName,
+          setup.stackLineOffset,
+        ),
+      );
+      continue;
+    }
+    let execution: ExecutedDirectPlan;
+    try {
+      execution = await resolveExecution(
+        registeredTest.hasParameters ? registeredTest.parameters : undefined,
+      );
+    } catch (error) {
+      results.push(failure(registeredTest.name, error, setup.sourceName, setup.stackLineOffset));
+      continue;
+    }
+    results.push(
+      runRegisteredTest(registeredTest, execution, setup.sourceName, setup.stackLineOffset),
+    );
+  }
+  return aggregateTestResults(results);
+}
+
+interface RegisteredTestSetup {
+  readonly registered: readonly RegisteredTest[];
+  readonly sourceName: string;
+  readonly stackLineOffset: number;
+}
+
+function registerTests(
+  source: string,
+  options: DirectPlanTestRunnerOptions,
+): RegisteredTestSetup | { readonly failure: DirectPlanTestRun } {
   const sourceName = options.sourceName ?? 'circuit.test.js';
   const stackLineOffset = options.stackLineOffset ?? 3;
   if (/[\r\n\u2028\u2029]/.test(sourceName)) {
@@ -323,93 +426,82 @@ export function runTestsWithExecution(
     execute(test, Signal);
   } catch (error) {
     return {
-      results: [failure('Test file', error, sourceName, stackLineOffset)],
-      passed: 0,
-      failed: 1,
+      failure: {
+        results: [failure('Test file', error, sourceName, stackLineOffset)],
+        passed: 0,
+        failed: 1,
+      },
     };
   }
+  return { registered, sourceName, stackLineOffset };
+}
 
-  const results = registered.map((registeredTest): DirectPlanTestCaseResult => {
-    if (registeredTest.hasMetadataError) {
-      return failure(
-        registeredTest.name,
-        registeredTest.metadataError,
-        sourceName,
-        stackLineOffset,
-      );
-    }
-    let execution: ExecutedDirectPlan;
-    try {
-      execution = getExecution(
-        registeredTest.hasParameters ? registeredTest.parameters : undefined,
-      );
-    } catch (error) {
-      return failure(registeredTest.name, error, sourceName, stackLineOffset);
-    }
-    const session = execution.createTestSession();
-    const debug = createDebugDocument(execution.debug, execution.circuit.graph);
-    const traceNetworkNames = Object.freeze(
-      Object.fromEntries([
-        ...execution.circuit.ir.networks.map(({ id, name }) => [id, name ?? id] as const),
-        ...execution.debug.scopes
-          .toReversed()
-          .flatMap((scope) =>
-            scope.networks
-              .filter(({ internal, moved }) => !internal && !moved)
-              .map(({ id, name }) => [id, name] as const),
-          ),
-      ]),
-    );
-    try {
-      const api: DirectPlanTestApi = {
-        execution,
-        session,
-        network: (name) => execution.network(name),
-        drive: (network, values) => {
-          session.drive(network, values);
-        },
-        clear: (network) => {
-          session.clear(network);
-        },
-        pulse: (network, values) => {
-          session.pulse(network, values);
-        },
-        tick: (count) => {
-          session.tick(count);
-        },
-        run: (count) => {
-          session.run(count);
-        },
-        expect: (network) => session.expect(network),
-        expectSignal: (network, signal) => session.expectSignal(network, signal),
-      };
-      const returned = registeredTest.body(api);
-      if (returned instanceof Promise) {
-        throw new TypeError('Async tests are not supported yet.');
-      }
-      return {
-        name: registeredTest.name,
-        status: 'passed',
-        trace: session.traces.toJSON(),
-        traceNetworkNames,
-        debug,
-      };
-    } catch (error) {
-      return {
-        ...failure(
-          registeredTest.name,
-          error,
-          sourceName,
-          stackLineOffset,
-          session.traces.toJSON(),
+function runRegisteredTest(
+  registeredTest: RegisteredTest,
+  execution: ExecutedDirectPlan,
+  sourceName: string,
+  stackLineOffset: number,
+): DirectPlanTestCaseResult {
+  const session = execution.createTestSession();
+  const debug = createDebugDocument(execution.debug, execution.circuit.graph);
+  const traceNetworkNames = Object.freeze(
+    Object.fromEntries([
+      ...execution.circuit.ir.networks.map(({ id, name }) => [id, name ?? id] as const),
+      ...execution.debug.scopes
+        .toReversed()
+        .flatMap((scope) =>
+          scope.networks
+            .filter(({ internal, moved }) => !internal && !moved)
+            .map(({ id, name }) => [id, name] as const),
         ),
-        traceNetworkNames,
-        debug,
-      };
-    } finally {
-      session.finish();
+    ]),
+  );
+  try {
+    const api: DirectPlanTestApi = {
+      execution,
+      session,
+      network: (name) => execution.network(name),
+      drive: (network, values) => {
+        session.drive(network, values);
+      },
+      clear: (network) => {
+        session.clear(network);
+      },
+      pulse: (network, values) => {
+        session.pulse(network, values);
+      },
+      tick: (count) => {
+        session.tick(count);
+      },
+      run: (count) => {
+        session.run(count);
+      },
+      expect: (network) => session.expect(network),
+      expectSignal: (network, signal) => session.expectSignal(network, signal),
+    };
+    const returned = registeredTest.body(api);
+    if (returned instanceof Promise) {
+      throw new TypeError('Async tests are not supported yet.');
     }
-  });
+    return {
+      name: registeredTest.name,
+      status: 'passed',
+      trace: session.traces.toJSON(),
+      traceNetworkNames,
+      debug,
+    };
+  } catch (error) {
+    return {
+      ...failure(registeredTest.name, error, sourceName, stackLineOffset, session.traces.toJSON()),
+      traceNetworkNames,
+      debug,
+    };
+  } finally {
+    session.finish();
+  }
+}
+
+function aggregateTestResults(results: readonly DirectPlanTestCaseResult[]): DirectPlanTestRun {
   const passed = results.filter(({ status }) => status === 'passed').length;
   return { results, passed, failed: results.length - passed };
 }
