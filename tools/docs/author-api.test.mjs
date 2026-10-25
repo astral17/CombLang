@@ -167,7 +167,6 @@ describe('author API documentation', () => {
       ({ native: entity }) => entity.name === 'arithmetic-combinator',
     );
     expect(arithmetic?.native.control_behavior.arithmetic_conditions.output_signal).toEqual({
-      type: 'virtual',
       name: 'parameter-0',
     });
     expect(createSourceParameterBindingSession(compilation).parameters[0]).not.toHaveProperty(

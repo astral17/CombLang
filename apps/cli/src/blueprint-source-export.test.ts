@@ -1606,11 +1606,11 @@ countNetwork += Selector({ input, operation: 'count', output: countOutput });`);
     const [selectEntity, countEntity] = result.document.blueprint.entities;
     expect(selectEntity.control_behavior).toMatchObject({
       operation: 'select',
-      index_signal: { type: 'virtual', name: 'parameter-0' },
+      index_signal: { name: 'parameter-0' },
     });
     expect(countEntity.control_behavior).toMatchObject({
       operation: 'count',
-      count_signal: { type: 'virtual', name: 'parameter-1' },
+      count_signal: { name: 'parameter-1' },
     });
 
     log.mockClear();

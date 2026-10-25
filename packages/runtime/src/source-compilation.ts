@@ -1515,9 +1515,7 @@ export function exportSourceCompilationNativeBlueprint(
     ...effectiveSourceParameterBindings(state.source, []),
     ...(state.source.resolvedSignalTemplates?.requiredParameters.flatMap((parameter) => {
       const placeholder = state.source.resolvedSignalTemplates?.placeholderFor(parameter);
-      return placeholder === undefined
-        ? []
-        : [{ parameter, value: signal('virtual', placeholder) }];
+      return placeholder === undefined ? [] : [{ parameter, value: signal('item', placeholder) }];
     }) ?? []),
   ];
   const replacement = bindCapturedSourceConfigurationTemplatesWithRelations(
@@ -1611,8 +1609,7 @@ export function exportSourceCompilationNativeBlueprint(
           }
         | undefined;
       const projectedSignal = behavior?.arithmetic_conditions?.output_signal;
-      const projectedType =
-        projectedSignal?.type ?? (info?.placeholder === undefined ? 'item' : 'virtual');
+      const projectedType = projectedSignal?.type ?? 'item';
       const projectedName = projectedSignal?.name;
       const projectedQuality = projectedSignal?.quality;
       let projectedKey: string | undefined;
@@ -1638,9 +1635,7 @@ export function exportSourceCompilationNativeBlueprint(
       }
       const expectedKey =
         info?.key ??
-        (info?.placeholder === undefined
-          ? undefined
-          : signalKey(signal('virtual', info.placeholder)));
+        (info?.placeholder === undefined ? undefined : signalKey(signal('item', info.placeholder)));
       if (
         info === undefined ||
         expectedKey === undefined ||
@@ -1716,7 +1711,7 @@ export function exportSourceCompilationNativeBlueprint(
         info?.key ??
         (info?.placeholder === undefined
           ? undefined
-          : signalKey({ type: 'virtual', name: info.placeholder }));
+          : signalKey({ type: 'item', name: info.placeholder }));
       if (
         info === undefined ||
         expectedKey === undefined ||
@@ -1921,7 +1916,7 @@ export function exportSourceCompilationNativeBlueprint(
         info?.key ??
         (info?.placeholder === undefined
           ? undefined
-          : signalKey({ type: 'virtual', name: info.placeholder }));
+          : signalKey({ type: 'item', name: info.placeholder }));
       if (info === undefined || projectedKey !== expectedKey) {
         reject(
           occurrence.path,

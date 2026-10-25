@@ -725,6 +725,12 @@ and normal-quality `=` condition. The concrete source default is neither
 persisted as a native placement default nor used to constrain the namespace
 selected when placing the template.
 
+For default-free Signal templates, the private native placeholder uses the
+`item` namespace because the bundled prototype set provides `item:parameter-N`
+identities. Native JSON omits the `type` field for these item Signals. This
+placeholder is an export detail: it does not become a source default or change
+the namespace and quality chosen for local test bindings.
+
 Constant example (requires the selected environment's existing Constant
 provisioning capabilities):
 
@@ -828,7 +834,9 @@ is structural output only; it does not claim Factorio import or placement
 behavior.
 
 The Constant example allocates `parameter-0` through `parameter-2`; the mixed
-examples use `parameter-0` for virtual A. Every matching eligible occurrence is
+examples replace virtual A with the private item placeholder `parameter-0` in
+native output (whose JSON omits the item type). Local binding still uses the
+source's original virtual A default. Every matching eligible occurrence is
 replaced—including ordinary concrete Constant rows, Arithmetic Signal fields,
 Selector `index_signal`/`count_signal` fields, and concrete Decider condition
 and then/else output fields—while counts and unrelated

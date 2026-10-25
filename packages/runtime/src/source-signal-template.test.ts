@@ -61,7 +61,7 @@ function literalConstant(name: string): CombinatorDescriptor {
     kind: 'constant',
     configuration: {
       isOn: true,
-      sections: [{ filters: [{ signal: signal('virtual', name), value: 1 }] }],
+      sections: [{ filters: [{ signal: signal('item', name), value: 1 }] }],
     },
     source,
     instancePath: [],
@@ -119,10 +119,10 @@ describe('source-resolved Selector Signal templates', () => {
 
     expect(context?.requiredParameters).toEqual([index, count]);
     expect(context?.bindingsForSelectorTemplate(select)).toEqual([
-      { parameter: index, value: signal('virtual', 'parameter-0') },
+      { parameter: index, value: signal('item', 'parameter-0') },
     ]);
     expect(context?.bindingsForSelectorTemplate(counted)).toEqual([
-      { parameter: count, value: signal('virtual', 'parameter-1') },
+      { parameter: count, value: signal('item', 'parameter-1') },
     ]);
     expect(context?.placeholderFor(index)).toBe('parameter-0');
     expect(context?.placeholderFor(count)).toBe('parameter-1');
@@ -164,7 +164,7 @@ describe('source-resolved Selector Signal templates', () => {
   test('reserves authored Selector/producer literals and explicit Signal defaults in the shared pool', () => {
     const session = createBlueprintParameterSession();
     const existing = session.signal('Existing', {
-      defaultValue: signal('virtual', 'parameter-0'),
+      defaultValue: signal('item', 'parameter-0'),
       source,
     });
     const required = session.signal('Required', { source });
@@ -230,7 +230,7 @@ describe('source-resolved Arithmetic output Signal templates', () => {
     expect(context?.requiredParameters).toEqual([output]);
     expect(context?.placeholderFor(output)).toBe('parameter-0');
     expect(context?.bindingsForArithmeticTemplate(template)).toEqual([
-      { parameter: output, value: signal('virtual', 'parameter-0') },
+      { parameter: output, value: signal('item', 'parameter-0') },
     ]);
   });
 
@@ -319,7 +319,7 @@ describe('source-resolved Arithmetic output Signal templates', () => {
       },
     );
 
-    const binding = { parameter: shared, value: signal('virtual', 'parameter-0') };
+    const binding = { parameter: shared, value: signal('item', 'parameter-0') };
     expect(context?.requiredParameters).toEqual([shared]);
     expect(context?.bindingsForConstantTemplate(constant)).toEqual([binding]);
     expect(context?.bindingsForArithmeticTemplate(arithmetic)).toEqual([binding]);

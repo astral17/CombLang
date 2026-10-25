@@ -2384,7 +2384,7 @@ deciderOutput += Decider({ condition: input[A] > 0, outputs: [input[A]], elseOut
     });
     expect(blueprint.entities[1]!.control_behavior).toMatchObject({
       operation: 'count',
-      count_signal: { type: 'virtual', name: 'parameter-1' },
+      count_signal: { name: 'parameter-1' },
     });
     expect(blueprint.entities[2]!.control_behavior).toMatchObject({
       decider_conditions: {

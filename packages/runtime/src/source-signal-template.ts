@@ -332,7 +332,7 @@ export function createSourceSignalTemplateContext(
   const bindings = new Map(
     requiredParameters.map((parameter) => [
       parameter,
-      signal('virtual', placeholders.get(parameter)!),
+      signal('item', placeholders.get(parameter)!),
     ]),
   );
   return Object.freeze({

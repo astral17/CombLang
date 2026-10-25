@@ -10,6 +10,8 @@ import type { EntityProfile } from '@comblang/compiler/entity';
 import type { EntityPrototype } from '@comblang/prototypes';
 import { signal, SparseBus } from '@comblang/factorio';
 import { evaluateSelector } from '@comblang/simulator';
+import builtinPrototypeDatabase from '../../prototypes/generated/space-age-2.1.17.json';
+import { loadPrototypeDatabase } from '@comblang/prototypes';
 import { emitNativeBlueprintJson } from '../../compiler/src/native-blueprint-emitter.js';
 import { buildNativeBlueprintFcir } from '../../compiler/src/native-blueprint-projector.js';
 import {
@@ -20,6 +22,10 @@ import { validateNativeBlueprintFcir } from '../../compiler/src/native-blueprint
 import * as sourceApi from './source-compilation.js';
 import type { EntityPrototypeResolver } from './entity-registry.js';
 import { executeResolvedDirectPlan } from './direct-plan.js';
+import {
+  conservativeEntityProvisioningPolicy,
+  EntityProvisioningService,
+} from './entity-provisioning.js';
 
 const options = { label: 'Source parameter export', maxDeciderConditionRows: 1024 };
 
@@ -354,7 +360,7 @@ liveOutput += Arithmetic({ left: 3, operation: 'add', right: 4, output: channel 
     expect(outputs).toEqual([
       { type: 'virtual', name: 'signal-A' },
       { type: 'virtual', name: 'signal-A' },
-      { type: 'virtual', name: 'parameter-0' },
+      { name: 'parameter-0' },
     ]);
 
     const [result] = sourceApi.listSourceCompilationParameters(compilation);
@@ -4730,7 +4736,7 @@ const explicit = Param.signal('Defaulted', defaults.value);
 const required = Param.signal('Required');
 const output = new Network();
 output += Constant({ sections: [{ filters: [
-  { signal: Signal('virtual', 'parameter-0'), value: 3 },
+  { signal: Signal('item', 'parameter-0'), value: 3 },
   { signal: explicit, value: 5 },
   { signal: required, value: 7 }
 ] }] });`);
@@ -4766,7 +4772,7 @@ output += Constant({ sections: [{ filters: [
           sections: [
             {
               filters: [
-                { signal: { type: 'virtual', name: 'parameter-0' }, value: 3 },
+                { signal: { type: 'item', name: 'parameter-0' }, value: 3 },
                 { signal: { type: 'virtual', name: 'signal-default' }, value: 5 },
                 { signal: { type: 'fluid', name: 'water', quality: 'rare' }, value: 7 },
               ],
@@ -5090,9 +5096,88 @@ output += Arithmetic({ left: 2, operation: 'add', right: 5, output: channel });`
     expect(sourceApi.exportSourceCompilationNativeBlueprint(compilation, options)).toEqual(native);
   });
 
+  test('uses bundled item prototypes for every default-free native Signal placeholder role', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = sourceApi.compileSourceProgram(
+      {
+        path: 'bundled-native-signal-placeholders.factorio.ts',
+        text: `const channel = Param.signal('Shared channel');
+const reserved = Signal('item', 'parameter-0');
+const input = new Network();
+const arithmeticOutput = new Network();
+const selected = new Network();
+const counted = new Network();
+input += Constant({ sections: [{ filters: [
+  { signal: reserved, value: 13 },
+  { signal: channel, value: 5 }
+] }] });
+arithmeticOutput += Arithmetic({ left: 1, operation: 'add', right: 2, output: channel });
+selected += Selector({ input, operation: 'select', index: channel });
+counted += Selector({ input, operation: 'count', output: channel });`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.requiredParameterIds).toEqual([0]);
+
+    const native = sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
+    const document = emitNativeBlueprintJson(native).blueprint;
+    expect(native.parameters).toMatchObject([{ id: 'parameter-1', name: 'Shared channel' }]);
+    expect(document.entities.map(({ name }) => name)).toEqual([
+      'constant-combinator',
+      'arithmetic-combinator',
+      'selector-combinator',
+      'selector-combinator',
+    ]);
+    expect(document.entities).toHaveLength(4);
+
+    const constant = document.entities[0]!.control_behavior as {
+      sections: { sections: { filters: { type?: string; name: string; count: number }[] }[] };
+    };
+    const arithmetic = document.entities[1]!.control_behavior as {
+      arithmetic_conditions: { output_signal: { type?: string; name: string } };
+    };
+    const selectorIndex = document.entities[2]!.control_behavior as {
+      index_signal: { type?: string; name: string };
+    };
+    const selectorCount = document.entities[3]!.control_behavior as {
+      count_signal: { type?: string; name: string };
+    };
+    const authoredReserved = constant.sections.sections[0]!.filters[0]!;
+    expect(authoredReserved).toMatchObject({ name: 'parameter-0', count: 13 });
+    expect(authoredReserved.type ?? 'item').toBe('item');
+    expect(prototypes.getItem('parameter-0')).toBeDefined();
+    expect(prototypes.getVirtualSignal('parameter-0')).toBeUndefined();
+
+    const placeholderFields: { type?: string; name: string }[] = [
+      constant.sections.sections[0]!.filters[1]!,
+      arithmetic.arithmetic_conditions.output_signal,
+      selectorIndex.index_signal,
+      selectorCount.count_signal,
+    ];
+    expect(placeholderFields).toHaveLength(4);
+    const invalidVirtualPlaceholder = signal('virtual', 'parameter-1');
+    expect(prototypes.getVirtualSignal(invalidVirtualPlaceholder.name)).toBeUndefined();
+    expect(prototypes.getItem(invalidVirtualPlaceholder.name)).toBeDefined();
+    for (const field of placeholderFields) {
+      expect(field).toMatchObject({ name: 'parameter-1' });
+      expect(field.type ?? 'item').toBe('item');
+      expect(prototypes.getItem(field.name)).toBeDefined();
+      expect(prototypes.getVirtualSignal(field.name)).toBeUndefined();
+    }
+  });
+
   test('shares one reserved placeholder across Constant, Arithmetic, and Selector Signal roles', () => {
     const compilation = compile(`const channel = Param.signal('Shared channel');
-const authored = Signal('virtual', 'parameter-0');
+const authored = Signal('item', 'parameter-0');
 const input = new Network();
 const arithmeticOutput = new Network();
 const selected = new Network();
