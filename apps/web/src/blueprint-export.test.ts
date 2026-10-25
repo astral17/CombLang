@@ -36,7 +36,13 @@ async function parameterHost() {
     'decider-combinator',
     'selector-combinator',
   ] as const;
-  const database = syntheticPrototypeDatabase() as { entities: Array<Record<string, unknown>> };
+  const database = syntheticPrototypeDatabase() as {
+    entities: Array<Record<string, unknown>>;
+    virtualSignals: Array<Record<string, unknown>>;
+  };
+  database.virtualSignals.push(
+    ...['signal-B', 'signal-C'].map((name) => ({ key: `virtual:${name}`, name })),
+  );
   database.entities.push(
     ...families.map((family) => ({
       key: `entity:${family}`,

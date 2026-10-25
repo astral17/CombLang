@@ -35,7 +35,11 @@ async function sourceFile(contents: string): Promise<string> {
 
 async function parameterHost() {
   const families = ['constant-combinator', 'decider-combinator'] as const;
-  const database = syntheticPrototypeDatabase() as { entities: Array<Record<string, unknown>> };
+  const database = syntheticPrototypeDatabase() as {
+    entities: Array<Record<string, unknown>>;
+    virtualSignals: Array<Record<string, unknown>>;
+  };
+  database.virtualSignals.push({ key: 'virtual:signal-B', name: 'signal-B' });
   database.entities.push(
     ...families.map((family) => ({
       key: `entity:${family}`,

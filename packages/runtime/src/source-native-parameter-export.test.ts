@@ -7,11 +7,14 @@ import {
   syntheticZeroPortEntityProfile,
 } from '@comblang/compiler';
 import type { EntityProfile } from '@comblang/compiler/entity';
-import type { EntityPrototype } from '@comblang/prototypes';
 import { signal, SparseBus } from '@comblang/factorio';
 import { evaluateSelector } from '@comblang/simulator';
+import {
+  loadPrototypeDatabase,
+  type EntityPrototype,
+  type PrototypeProvider,
+} from '@comblang/prototypes';
 import builtinPrototypeDatabase from '../../prototypes/generated/space-age-2.1.17.json';
-import { loadPrototypeDatabase } from '@comblang/prototypes';
 import { emitNativeBlueprintJson } from '../../compiler/src/native-blueprint-emitter.js';
 import { buildNativeBlueprintFcir } from '../../compiler/src/native-blueprint-projector.js';
 import {
@@ -84,6 +87,39 @@ function compile(text: string) {
   return compilation;
 }
 
+const nativeEntityHosts = new WeakMap<
+  PrototypeProvider,
+  ReturnType<EntityProvisioningService['provision']>
+>();
+
+function compileWithProvider(text: string, prototypes: PrototypeProvider) {
+  let host = nativeEntityHosts.get(prototypes);
+  if (host === undefined) {
+    host = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    nativeEntityHosts.set(prototypes, host);
+  }
+  const compilation = sourceApi.compileSourceProgram(
+    { path: 'source-native-provider-preflight.factorio.ts', text },
+    {
+      prototypes,
+      trustedEntityReplayContext: host.trustedEntityReplayContext,
+      entityPrototypeResolver: host.entityPrototypeResolver,
+    },
+  );
+  expect(compilation.pipelineDiagnostics).toEqual([]);
+  return compilation;
+}
+
+let bundledPrototypeLoad: ReturnType<typeof loadPrototypeDatabase> | undefined;
+
+function loadBundledPrototypes() {
+  bundledPrototypeLoad ??= loadPrototypeDatabase(builtinPrototypeDatabase);
+  return bundledPrototypeLoad;
+}
+
 function exportFailure(compilation: sourceApi.LocalSourceCompilation): BlueprintParameterError {
   try {
     sourceApi.exportSourceCompilationNativeBlueprint(compilation, options);
@@ -107,6 +143,302 @@ output += Decider({ condition: input[A] > amount, outputs: [input[A]], elseOutpu
 output += Selector({ input, operation: 'select', index: amount });`;
 
 describe('owning source native parameter export', () => {
+  test('rejects an unknown final Signal reference with the retained selected provider', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const compilation = compileWithProvider(
+      `const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: channel, value: 5 },
+  { signal: Signal('virtual', 'profile-missing-signal'), value: 7 }
+] }] });`,
+      prototypes,
+    );
+    const original = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+    expect(compilation).not.toHaveProperty('prototypes');
+    expect(sourceApi.sourceCompilationArtifact(compilation)).not.toHaveProperty('prototypes');
+
+    const error = exportFailure(compilation);
+    expect(error).toMatchObject({
+      code: 'CP1002',
+      path: '$.blueprint.entities[0].control_behavior.sections.sections[0].filters[1]',
+      span: expect.objectContaining({ fileId: compilation.fileId }),
+    });
+    expect(error.message).toContain('virtual:profile-missing-signal');
+    expect(error.message).toContain('not found in selected prototype profile');
+    expect(error.message).toContain(prototypes.identity);
+    expect(error.message).toContain(prototypes.environment.factorioVersion);
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
+    expect(() => sourceApi.bindSourceCompilationCircuit(compilation)).not.toThrow();
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(original);
+  });
+
+  test.each([
+    {
+      role: 'Constant filter',
+      body: `output += Constant({ sections: [{ filters: [
+  { signal: Signal('virtual', 'profile-missing-signal'), value: 5 }
+] }] });`,
+      path: '$.blueprint.entities[0].control_behavior.sections.sections[0].filters[0]',
+    },
+    {
+      role: 'Arithmetic first operand',
+      body: `output += Arithmetic({ left: input[Signal('virtual', 'profile-missing-signal')], operation: 'add', right: 1, output: Signal('item', 'iron-plate') });`,
+      path: '$.blueprint.entities[0].control_behavior.arithmetic_conditions.first_signal',
+    },
+    {
+      role: 'Arithmetic second operand',
+      body: `output += Arithmetic({ left: 1, operation: 'add', right: input[Signal('virtual', 'profile-missing-signal')], output: Signal('item', 'iron-plate') });`,
+      path: '$.blueprint.entities[0].control_behavior.arithmetic_conditions.second_signal',
+    },
+    {
+      role: 'Arithmetic output',
+      body: `output += Arithmetic({ left: 1, operation: 'add', right: 2, output: Signal('virtual', 'profile-missing-signal') });`,
+      path: '$.blueprint.entities[0].control_behavior.arithmetic_conditions.output_signal',
+    },
+    {
+      role: 'Selector index',
+      body: `selected += Selector({ input, operation: 'select', index: Signal('virtual', 'profile-missing-signal') });`,
+      path: '$.blueprint.entities[0].control_behavior.index_signal',
+    },
+    {
+      role: 'Selector count output',
+      body: `counted += Selector({ input, operation: 'count', output: Signal('virtual', 'profile-missing-signal') });`,
+      path: '$.blueprint.entities[0].control_behavior.count_signal',
+    },
+    {
+      role: 'Decider first condition Signal',
+      body: `output += Decider({ condition: input[Signal('virtual', 'profile-missing-signal')] > 0, outputs: [input[Signal('item', 'iron-plate')]] });`,
+      path: '$.blueprint.entities[0].control_behavior.decider_conditions.conditions[0].first_signal',
+    },
+    {
+      role: 'Decider second condition Signal',
+      body: `output += Decider({ condition: input[Signal('item', 'iron-plate')] > input[Signal('virtual', 'profile-missing-signal')], outputs: [input[Signal('item', 'iron-plate')]] });`,
+      path: '$.blueprint.entities[0].control_behavior.decider_conditions.conditions[0].second_signal',
+    },
+    {
+      role: 'Decider output Signal',
+      body: `output += Decider({ condition: input[Signal('item', 'iron-plate')] > 0, outputs: [input[Signal('virtual', 'profile-missing-signal')]] });`,
+      path: '$.blueprint.entities[0].control_behavior.decider_conditions.outputs[0].signal',
+    },
+    {
+      role: 'Decider else-output Signal',
+      body: `output += Decider({ condition: input[Signal('item', 'iron-plate')] > 0, outputs: [input[Signal('item', 'iron-plate')]], elseOutputs: [input[Signal('virtual', 'profile-missing-signal')]] });`,
+      path: '$.blueprint.entities[0].control_behavior.decider_conditions.else_outputs[0].signal',
+    },
+  ])('validates the final $role reference at its native field path', async ({ body, path }) => {
+    const { prototypes } = await loadBundledPrototypes();
+    const compilation = compileWithProvider(
+      `const amount = Param.number('Amount', 5);
+const input = new Network();
+const output = new Network();
+const selected = new Network();
+const counted = new Network();
+${body}
+output += Constant({ sections: [{ filters: [{ signal: Signal('item', 'iron-plate'), value: amount }] }] });`,
+      prototypes,
+    );
+    const error = exportFailure(compilation);
+    expect(error).toMatchObject({
+      code: 'CP1002',
+      path,
+      span: expect.objectContaining({ fileId: compilation.fileId }),
+    });
+    expect(error.message).toContain('virtual:profile-missing-signal');
+    expect(error.message).toContain(prototypes.identity);
+  });
+
+  test('accepts known item, fluid and virtual references across all native Signal roles', async () => {
+    const { prototypes } = await loadBundledPrototypes();
+    const compilation = compileWithProvider(
+      `const amount = Param.number('Amount', 5, { variable: 'amount' });
+const input = new Network();
+const constants = new Network();
+const arithmetic = new Network();
+const selected = new Network();
+const counted = new Network();
+const decision = new Network();
+constants += Constant({ sections: [{ filters: [
+  { signal: Signal('item', 'iron-plate'), value: amount * 2 },
+  { signal: Signal('fluid', 'water'), value: 2 },
+  { signal: Signal('virtual', 'signal-A'), value: 3 }
+] }] });
+arithmetic += Arithmetic({ left: input[Signal('virtual', 'signal-A')], operation: 'add', right: input[Signal('item', 'iron-plate')], output: Signal('fluid', 'water') });
+selected += Selector({ input, operation: 'select', index: Signal('item', 'iron-plate') });
+counted += Selector({ input, operation: 'count', output: Signal('fluid', 'water') });
+decision += Decider({ condition: input[Signal('virtual', 'signal-A')] > input[Signal('item', 'iron-plate')], outputs: [input[Signal('fluid', 'water')]], elseOutputs: [input[Signal('item', 'iron-plate')]] });`,
+      prototypes,
+    );
+    expect(
+      sourceApi.exportSourceCompilationNativeBlueprint(compilation, options).entities,
+    ).toHaveLength(5);
+    expect(() => sourceApi.bindSourceCompilationCircuit(compilation)).not.toThrow();
+  });
+
+  test('checks item, fluid and virtual namespaces against the selected provider', async () => {
+    const { prototypes } = await loadBundledPrototypes();
+    const cases = [
+      { expression: "Signal('profile-missing-item')", expected: 'item:profile-missing-item' },
+      {
+        expression: "Signal('fluid', 'profile-missing-fluid')",
+        expected: 'fluid:profile-missing-fluid',
+      },
+      {
+        expression: "Signal('virtual', 'parameter-0')",
+        expected: 'virtual:parameter-0',
+      },
+    ];
+
+    for (const { expression, expected } of cases) {
+      const source = `const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: ${expression}, value: amount }] }] });`;
+      const compilation = compileWithProvider(source, prototypes);
+      const error = exportFailure(compilation);
+      expect(error).toMatchObject({
+        code: 'CP1002',
+        path: '$.blueprint.entities[0].control_behavior.sections.sections[0].filters[0]',
+        span: expect.objectContaining({ fileId: compilation.fileId }),
+      });
+      expect(error.message).toContain(expected);
+      expect(error.message).toContain(prototypes.identity);
+    }
+  });
+
+  test('keeps structural-only export when no provider is selected', () => {
+    const compilation = compile(`const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: Signal('virtual', 'profile-missing-virtual'), value: amount }] }] });`);
+
+    const document = emitNativeBlueprintJson(
+      sourceApi.exportSourceCompilationNativeBlueprint(compilation, options),
+    );
+    expect(document.blueprint.entities[0]?.control_behavior).toMatchObject({
+      sections: {
+        sections: [{ filters: [{ type: 'virtual', name: 'profile-missing-virtual', count: 5 }] }],
+      },
+    });
+  });
+
+  test('skips only unavailable fluid, virtual-signal and quality checks while retaining item checks', async () => {
+    const { database } = await loadBundledPrototypes();
+    const limited = await loadPrototypeDatabase({
+      ...database,
+      capabilities: {
+        ...database.capabilities,
+        fluids: false,
+        virtualSignals: false,
+        qualities: false,
+      },
+    });
+    const accepted = compileWithProvider(
+      `const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: Signal('fluid', 'profile-missing-fluid'), value: amount },
+  { signal: Signal('virtual', 'profile-missing-virtual'), value: 2 },
+  { signal: Signal('item', 'iron-plate', 'profile-missing-quality'), value: 3 }
+] }] });`,
+      limited.prototypes,
+    );
+    expect(
+      sourceApi.exportSourceCompilationNativeBlueprint(accepted, options).entities,
+    ).toHaveLength(1);
+
+    const rejected = compileWithProvider(
+      `const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: Signal('profile-missing-item'), value: amount }] }] });`,
+      limited.prototypes,
+    );
+    expect(exportFailure(rejected)).toMatchObject({
+      code: 'CP1002',
+      path: '$.blueprint.entities[0].control_behavior.sections.sections[0].filters[0]',
+    });
+  });
+
+  test('validates explicit qualities when selected profile quality data is available', async () => {
+    const { prototypes } = await loadBundledPrototypes();
+    const source = (quality: string) => `const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: Signal('item', 'iron-plate', '${quality}'), value: amount }] }] });`;
+    const valid = compileWithProvider(source('rare'), prototypes);
+    const validDocument = emitNativeBlueprintJson(
+      sourceApi.exportSourceCompilationNativeBlueprint(valid, options),
+    );
+    expect(validDocument.blueprint.entities[0]?.control_behavior).toMatchObject({
+      sections: { sections: [{ filters: [{ quality: 'rare' }] }] },
+    });
+
+    const invalid = compileWithProvider(source('profile-missing-quality'), prototypes);
+    expect(exportFailure(invalid)).toMatchObject({
+      code: 'CP1002',
+      path: '$.blueprint.entities[0].control_behavior.sections.sections[0].filters[0].quality',
+      span: expect.objectContaining({ fileId: invalid.fileId }),
+    });
+    expect(exportFailure(invalid).message).toContain(prototypes.identity);
+  });
+
+  test('accepts a wildcard Signal omitted from the selected profile', async () => {
+    const { database } = await loadBundledPrototypes();
+    const withoutWildcard = await loadPrototypeDatabase({
+      ...database,
+      virtualSignals: database.virtualSignals.filter(({ name }) => name !== 'signal-each'),
+    });
+    const compilation = compileWithProvider(
+      `const amount = Param.number('Amount', 5);
+const input = new Network();
+const output = new Network();
+output += Decider({ condition: Each(input) > amount, outputs: [input[Signal('item', 'iron-plate')]] });`,
+      withoutWildcard.prototypes,
+    );
+
+    expect(
+      sourceApi.exportSourceCompilationNativeBlueprint(compilation, options).entities,
+    ).toHaveLength(1);
+  });
+
+  test('accepts a custom Signal only in the provider profile that defines it', async () => {
+    const { database, prototypes: standard } = await loadBundledPrototypes();
+    const custom = await loadPrototypeDatabase({
+      ...database,
+      environment: {
+        ...database.environment,
+        mods: [...database.environment.mods, { name: 'signal-preflight-fixture', version: '1.0' }],
+      },
+      virtualSignals: [
+        ...database.virtualSignals,
+        {
+          key: 'virtual:profile-only-signal' as (typeof database.virtualSignals)[number]['key'],
+          name: 'profile-only-signal',
+        },
+      ],
+    });
+    const source = `const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: channel, value: amount },
+  { signal: Signal('virtual', 'profile-only-signal'), value: 2 }
+] }] });`;
+
+    const matching = compileWithProvider(source, custom.prototypes);
+    expect(
+      sourceApi.exportSourceCompilationNativeBlueprint(matching, options).entities,
+    ).toHaveLength(1);
+
+    const mismatched = compileWithProvider(source, standard);
+    const error = exportFailure(mismatched);
+    expect(error).toMatchObject({
+      code: 'CP1002',
+      path: '$.blueprint.entities[0].control_behavior.sections.sections[0].filters[1]',
+      span: expect.objectContaining({ fileId: mismatched.fileId }),
+    });
+    expect(error.message).toContain(standard.identity);
+    expect(error.message).toContain(standard.environment.factorioVersion);
+    expect(error.message).not.toContain(custom.prototypes.identity);
+  });
+
   test('exports grouped power formulas while retaining exact physical Constant defaults', () => {
     const compilation = compile(`const A = Signal('virtual', 'signal-A');
 const B = Signal('virtual', 'signal-B');

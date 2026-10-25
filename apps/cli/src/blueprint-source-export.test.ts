@@ -28,7 +28,26 @@ async function parameterHost() {
     'decider-combinator',
     'selector-combinator',
   ] as const;
-  const database = syntheticPrototypeDatabase() as { entities: Array<Record<string, unknown>> };
+  const database = syntheticPrototypeDatabase() as {
+    entities: Array<Record<string, unknown>>;
+    fluids: Array<Record<string, unknown>>;
+    items: Array<Record<string, unknown>>;
+    virtualSignals: Array<Record<string, unknown>>;
+  };
+  database.items.push(
+    ...Array.from({ length: 10 }, (_, index) => ({
+      key: `item:parameter-${index}`,
+      name: `parameter-${index}`,
+      stackSize: 100,
+    })),
+  );
+  database.fluids.push({ key: 'fluid:crude-oil', name: 'crude-oil' });
+  database.virtualSignals.push(
+    ...['signal-B', 'signal-C', 'signal-index'].map((name) => ({
+      key: `virtual:${name}`,
+      name,
+    })),
+  );
   database.entities.push(
     ...families.map((family) => ({
       key: `entity:${family}`,
@@ -1299,6 +1318,40 @@ output += Decider({ condition: input[A] > 0, outputs: [input[A]], elseOutputs: [
       if (previous === undefined) delete globals[key];
       else globals[key] = previous;
     }
+  });
+
+  test('refuses profile-missing Signal references without publishing a partial CLI document', async () => {
+    const { environment } = await parameterHost();
+    const path =
+      await sourceFile(`const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const amount = Param.number('Amount', 5);
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: channel, value: amount },
+  { signal: Signal('virtual', 'profile-missing-signal'), value: 3 }
+] }] });`);
+    const outputPath = join(dirname(path), 'profile-missing-signal.json');
+    const { log, error } = capture();
+
+    expect(
+      await run(
+        ['blueprint', 'export', '--parameters', '--json', '--output', outputPath, path],
+        environment,
+      ),
+    ).toBe(2);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toMatchObject({
+      ok: false,
+      error: {
+        code: 'CP1002',
+        path: '$.blueprint.entities[0].control_behavior.sections.sections[0].filters[1]',
+        span: { start: expect.any(Number), end: expect.any(Number) },
+        message: expect.stringContaining('not found in selected prototype profile'),
+      },
+    });
+    expect(String(log.mock.calls[0]?.[0])).toContain(environment.prototypes!.identity);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).not.toHaveProperty('document');
+    await expect(stat(outputPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(error).not.toHaveBeenCalled();
   });
 
   test('exports an output-only Arithmetic Signal parameter with a numeric formula operand', async () => {

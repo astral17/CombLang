@@ -880,6 +880,28 @@ metadata and was not an independently run game gate. Item/fluid placement and
 selection, Arithmetic or Selector Signal placement, parameterized save/reopen,
 other qualities or native roles, and browser/mobile behavior remain unverified.
 
+A later import/re-export check in Factorio 2.1.23 retained all 11 devices across
+four generated cases after correcting the private placeholder namespace to
+`item`. Complete control behavior, parameter metadata and wires survived,
+including the four direct placeholder roles, rare/uncommon Constant filters,
+concrete Arithmetic output shadowing and numeric formula text. Device positions
+were snapped by the game. This confirms import retention for those cases, not
+formula evaluation, placement, dialog selection or quality substitution.
+
+When the compilation has a selected prototype profile, native parameter export
+also checks the final item, fluid and virtual Signal references in Constant
+filters, Arithmetic operands/outputs, Selector index/count fields, and linked
+Decider conditions and then/else outputs. Supported virtual wildcards are
+recognized without requiring them to appear in the profile. An omitted native
+Signal type is checked as an item; an explicitly supplied quality is checked
+only when the profile includes quality data. If fluid, virtual-signal or quality
+data is unavailable, that specific check is skipped. `CP1002` identifies a
+reference that is not present in the selected profile; this profile-scoped check
+is not a claim that the Signal or quality cannot exist in another mod set or
+Factorio version. Without a selected provider export retains its structural-only
+behavior. The check does not cover arbitrary raw Entity JSON or prove Factorio
+import, placement or runtime acceptance.
+
 Complete metadata example; requires trusted canonical Constant authority:
 
 ```ts

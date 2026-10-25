@@ -2028,6 +2028,89 @@ output += Constant({ sections: [{ filters: [{ signal: A, value: 2 }] }] });`,
     );
   });
 
+  test('reports selected-profile Signal rejection without a Worker document or losing local binding', async () => {
+    const prototypeSource = JSON.stringify(syntheticPrototypeDatabase());
+    const loaded = await prototypeApi.loadPrototypeInputJson(prototypeSource);
+    const database = {
+      schemaVersion: loaded.prototypes.schemaVersion,
+      identity: loaded.prototypes.identity,
+    };
+    const profile: EntityProfile = {
+      ...structuredClone(syntheticZeroPortEntityProfile),
+      ref: {
+        ...syntheticZeroPortEntityProfile.ref,
+        database,
+        prototypeKey: 'entity:constant-combinator' as EntityProfile['ref']['prototypeKey'],
+        profileId: 'profile:worker-provider-constant' as EntityProfile['ref']['profileId'],
+      },
+      prototypeType: 'constant-combinator',
+    };
+    const trustedEntityReplayContext = createTrustedEntityReplayContext({
+      database,
+      source: 'synthetic',
+      evidenceIdentity: 'worker-provider-signal-preflight',
+      policyIdentity: 'worker-provider-signal-preflight',
+      profiles: [profile],
+    });
+    const entityPrototypeResolver: EntityPrototypeResolver = {
+      database,
+      getEntity(nameOrKey) {
+        return nameOrKey === 'entity:constant-combinator' || nameOrKey === 'constant-combinator'
+          ? {
+              key: 'entity:constant-combinator' as EntityPrototype['key'],
+              name: 'constant-combinator',
+              type: 'constant-combinator',
+              tileWidth: 1,
+              tileHeight: 1,
+            }
+          : undefined;
+      },
+    };
+    const runtime = new CompilerWorkerRuntime({
+      resolveEntityReplayContext: () => ({ trustedEntityReplayContext, entityPrototypeResolver }),
+    });
+    const response = await runtime.handle({
+      kind: 'parse',
+      revision: 53,
+      file: {
+        path: 'worker-profile-missing-signal.factorio.ts',
+        text: `const amount = Param.number('Amount', 5);
+const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: channel, value: amount },
+  { signal: Signal('virtual', 'profile-missing-signal'), value: 3 }
+] }] });`,
+      },
+      entityReplayContext: entityReplayContextTransport(trustedEntityReplayContext),
+      parameterBinding: true,
+      blueprintExport: { parameters: true },
+      prototypeProfile: { source: prototypeSource },
+    });
+
+    expect(response.result.pipelineDiagnostics).toEqual([]);
+    expect(response.result.blueprintExport).toMatchObject({
+      ok: false,
+      diagnostics: [
+        {
+          code: 'CP1002',
+          span: expect.objectContaining({ fileId: expect.any(String) }),
+          message: expect.stringContaining('not found in selected prototype profile'),
+        },
+      ],
+    });
+    expect(JSON.stringify(response.result.blueprintExport)).toContain('profile-missing-signal');
+    expect(response.result.blueprintExport).not.toHaveProperty('document');
+    expect(response.result).not.toHaveProperty('prototypes');
+    expect(response.parameterBinding).toMatchObject({ ok: true, token: expect.any(String) });
+    if (response.parameterBinding?.ok !== true || response.parameterBinding.token === undefined) {
+      throw new Error('Expected a local binding session despite profile-scoped export refusal.');
+    }
+    expect(
+      runtime.bindParameters(response.parameterBinding.token, response.revision).plan,
+    ).toBeDefined();
+  });
+
   test('native blueprint export failure does not block the host-local session', async () => {
     const runtime = parameterRuntime();
     const response = await runtime.handle(

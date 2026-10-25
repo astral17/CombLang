@@ -137,12 +137,14 @@ const capturedParametersByCompilation = new WeakMap<
   object,
   {
     readonly source: ExecutedElaborationWithBlueprintParameters;
+    readonly prototypes?: PrototypeProvider;
     readonly execution?: ExecutedDirectPlan;
     readonly plan?: DirectElaborationPlan;
     readonly resolvedCircuit?: ResolvedCircuit;
   }
 >();
 const parameterSourceArtifacts = new WeakSet<object>();
+const nativeSignalWildcards = new Set(['signal-each', 'signal-anything', 'signal-everything']);
 
 export type SourceCompilationStage = 'parse' | 'semantic' | 'transform' | 'execute' | 'lower';
 
@@ -300,6 +302,7 @@ function compileParsedSource(
   if (capturedParameters !== undefined) {
     capturedParametersByCompilation.set(compilation, {
       source: capturedParameters,
+      ...(environment.prototypes === undefined ? {} : { prototypes: environment.prototypes }),
       ...(privateExecution === undefined ? {} : { execution: privateExecution }),
       ...(plan === undefined ? {} : { plan }),
       ...(privateResolvedCircuit === undefined ? {} : { resolvedCircuit: privateResolvedCircuit }),
@@ -2335,6 +2338,119 @@ export function exportSourceCompilationNativeBlueprint(
     parameters: Object.freeze(parameters),
   });
   validateNativeBlueprintFcir(native);
+  const provider = state.prototypes;
+  if (provider !== undefined) {
+    const projectedByNumber = new Map(
+      native.entities.map((entity) => [entity.entityNumber, entity]),
+    );
+    const profile = `selected prototype profile Factorio ${provider.environment.factorioVersion} (${provider.identity})`;
+    const validateSignal = (value: unknown, path: string, source: SourceSpan | undefined): void => {
+      const field = readRecord(value);
+      const name = field?.name;
+      const type = field?.type ?? 'item';
+      if (typeof name !== 'string' || typeof type !== 'string') return;
+      if (type !== 'item' && type !== 'fluid' && type !== 'virtual') return;
+      if (type === 'virtual' && nativeSignalWildcards.has(name)) return;
+
+      const exists =
+        type === 'item'
+          ? provider.getItem(name) !== undefined
+          : type === 'fluid'
+            ? provider.capabilities.fluids
+              ? provider.getFluid(name) !== undefined
+              : undefined
+            : provider.capabilities.virtualSignals
+              ? provider.getVirtualSignal(name) !== undefined
+              : undefined;
+      if (exists === false) {
+        reject(path, `Signal ${type}:${name} was not found in ${profile}.`, source);
+      }
+
+      const quality = field?.quality;
+      if (
+        typeof quality === 'string' &&
+        provider.capabilities.qualities &&
+        provider.getQuality(quality) === undefined
+      ) {
+        reject(
+          `${path}.quality`,
+          `Signal quality ${JSON.stringify(quality)} was not found in ${profile}.`,
+          source,
+        );
+      }
+    };
+
+    for (const [producerIndex, producer] of replacement.circuit.producers.entries()) {
+      const entity = projectedByNumber.get(producerIndex + 1);
+      if (entity === undefined) continue;
+      const source = entity.source ?? producer.provenance.source;
+      const controlPath = `$.blueprint.entities[${entity.entityNumber - 1}].control_behavior`;
+      const behavior = readRecord(entity.native.control_behavior);
+      if (behavior === undefined) continue;
+
+      if (producer.kind === 'constant') {
+        const sections = readRecord(behavior.sections)?.sections;
+        if (!Array.isArray(sections)) continue;
+        for (const [sectionIndex, sectionValue] of sections.entries()) {
+          const filters = readRecord(sectionValue)?.filters;
+          if (!Array.isArray(filters)) continue;
+          for (const [filterIndex, filter] of filters.entries()) {
+            validateSignal(
+              filter,
+              `${controlPath}.sections.sections[${sectionIndex}].filters[${filterIndex}]`,
+              source,
+            );
+          }
+        }
+        continue;
+      }
+
+      if (producer.kind === 'arithmetic') {
+        const arithmetic = readRecord(behavior.arithmetic_conditions);
+        for (const field of ['first_signal', 'second_signal', 'output_signal'] as const) {
+          validateSignal(
+            arithmetic?.[field],
+            `${controlPath}.arithmetic_conditions.${field}`,
+            source,
+          );
+        }
+        continue;
+      }
+
+      if (producer.kind === 'selector') {
+        for (const field of ['index_signal', 'count_signal'] as const) {
+          validateSignal(behavior[field], `${controlPath}.${field}`, source);
+        }
+        continue;
+      }
+
+      const decider = readRecord(behavior.decider_conditions);
+      const conditions = decider?.conditions;
+      if (Array.isArray(conditions)) {
+        for (const [conditionIndex, conditionValue] of conditions.entries()) {
+          const condition = readRecord(conditionValue);
+          for (const field of ['first_signal', 'second_signal'] as const) {
+            validateSignal(
+              condition?.[field],
+              `${controlPath}.decider_conditions.conditions[${conditionIndex}].${field}`,
+              source,
+            );
+          }
+        }
+      }
+      for (const field of ['outputs', 'else_outputs'] as const) {
+        const outputs = decider?.[field];
+        if (!Array.isArray(outputs)) continue;
+        for (const [outputIndex, outputValue] of outputs.entries()) {
+          validateSignal(
+            readRecord(outputValue)?.signal,
+            `${controlPath}.decider_conditions.${field}[${outputIndex}].signal`,
+            source,
+          );
+        }
+      }
+    }
+  }
   return native;
 }
 
