@@ -11,7 +11,10 @@ import { loadPrototypeDatabase } from '../../prototypes/src/provider.js';
 import type { RecipeIngredient, RecipePrototype } from '../../prototypes/src/schema.js';
 import { buildPrototypeIndexes } from '../../prototypes/src/validation.js';
 import { syntheticPrototypeDatabase } from '../../prototypes/src/fixtures.js';
-import { createRecipeIngredientDependencyContext } from './recipe-ingredient-dependencies.js';
+import {
+  createRecipeIngredientDependencyContext,
+  type ResolvedRecipeIngredientDependency,
+} from './recipe-ingredient-dependencies.js';
 
 const source = Object.freeze({
   fileId: sourceFileId('recipe-ingredient-dependencies.test.ts'),
@@ -47,6 +50,13 @@ const chestIngredients: readonly RecipeIngredient[] = [
   { prototype: 'fluid:water', amount: 0.25, temperatureMin: 15, temperatureMax: 25 },
   { prototype: 'item:iron-plate', amount: 3 },
 ];
+
+function selectionOf(result: ResolvedRecipeIngredientDependency) {
+  if (result.status !== 'present') {
+    throw new Error('Expected a present recipe ingredient dependency');
+  }
+  return result.selection;
+}
 
 async function environment(
   options: {
@@ -104,7 +114,7 @@ describe('host recipe ingredient dependencies', () => {
     expect(context.resultFor(dependency)).toBeUndefined();
 
     const resolved = context.resolve([{ parameter, value: signal('item', 'iron-chest') }]);
-    expect(resolved[0]!.selection.ingredient).toBe(
+    expect(selectionOf(resolved[0]!).ingredient).toBe(
       loaded.prototypes.getRecipe('iron-chest')!.ingredients[0],
     );
     expect(inspectBlueprintParameterHandle(parameter, '$.test').defaultValue).toBeUndefined();
@@ -120,7 +130,7 @@ describe('host recipe ingredient dependencies', () => {
 
     const defaults = context.resolve();
     expect(defaults).toHaveLength(1);
-    expect(defaults[0]!.selection).toEqual({
+    expect(selectionOf(defaults[0]!)).toEqual({
       ok: true,
       recipe: 'recipe:iron-chest',
       index: 0,
@@ -130,14 +140,14 @@ describe('host recipe ingredient dependencies', () => {
     expect(context.resultFor(dependency)).toBe(defaults[0]);
 
     const overridden = context.resolve([{ parameter, value: signal('item', 'steel-chest') }]);
-    expect(overridden[0]!.selection).toEqual({
+    expect(selectionOf(overridden[0]!)).toEqual({
       ok: true,
       recipe: 'recipe:steel-chest',
       index: 0,
       ingredient: { prototype: 'item:copper-plate', amount: 4 },
     });
     const reset = context.reset();
-    expect(reset[0]!.selection.ingredient).toBe(
+    expect(selectionOf(reset[0]!).ingredient).toBe(
       loaded.prototypes.getRecipe('iron-chest')!.ingredients[0],
     );
     expect(context.resultFor(dependency)).toBe(reset[0]);
@@ -160,16 +170,18 @@ describe('host recipe ingredient dependencies', () => {
     const resolved = context.resolve();
     const recipeValue = loaded.prototypes.getRecipe('iron-chest')!;
 
-    expect(resolved.map(({ selection }) => selection.ingredient)).toEqual(chestIngredients);
-    expect(resolved.map(({ selection }) => selection.ingredient)).toEqual(recipeValue.ingredients);
-    resolved.forEach(({ selection }, index) => {
-      expect(selection.ingredient).toBe(recipeValue.ingredients[index]);
-    });
-    expect(resolved[0]!.selection.ingredient.prototype).toBe(
-      resolved[2]!.selection.ingredient.prototype,
+    expect(resolved.map((result) => selectionOf(result).ingredient)).toEqual(chestIngredients);
+    expect(resolved.map((result) => selectionOf(result).ingredient)).toEqual(
+      recipeValue.ingredients,
     );
-    expect(resolved[0]!.selection.ingredient.amount).not.toBe(
-      resolved[2]!.selection.ingredient.amount,
+    resolved.forEach((result, index) => {
+      expect(selectionOf(result).ingredient).toBe(recipeValue.ingredients[index]);
+    });
+    expect(selectionOf(resolved[0]!).ingredient.prototype).toBe(
+      selectionOf(resolved[2]!).ingredient.prototype,
+    );
+    expect(selectionOf(resolved[0]!).ingredient.amount).not.toBe(
+      selectionOf(resolved[2]!).ingredient.amount,
     );
     expect(dependencies.map((dependency) => context.resultFor(dependency))).toEqual(resolved);
   });
@@ -206,7 +218,7 @@ describe('host recipe ingredient dependencies', () => {
     expect(resolved[1]!.dependency).toBe(secondDependency);
     expect(context.resultFor(firstDependency)).toBe(resolved[0]);
     expect(context.resultFor(secondDependency)).toBe(resolved[1]);
-    expect(resolved.map(({ selection }) => selection.ingredient.amount)).toEqual([2, 3]);
+    expect(resolved.map((result) => selectionOf(result).ingredient.amount)).toEqual([2, 3]);
   });
 
   test('reports missing recipe capability separately and preserves the committed result', async () => {
@@ -227,7 +239,7 @@ describe('host recipe ingredient dependencies', () => {
       expect.objectContaining({ reason: 'recipes-unavailable', source }),
     );
     expect(good.resolved).toBe(committed);
-    expect(committed[0]!.selection.ingredient).toBe(
+    expect(selectionOf(committed[0]!).ingredient).toBe(
       available.prototypes.getRecipe('iron-chest')!.ingredients[0],
     );
   });
@@ -284,7 +296,7 @@ describe('host recipe ingredient dependencies', () => {
       { parameter: unrelated, value: signal('virtual', 'signal-A') },
     ]);
 
-    expect(first[0]!.selection.ingredient).toEqual(chestIngredients[0]);
+    expect(selectionOf(first[0]!).ingredient).toEqual(chestIngredients[0]);
     expect(() =>
       context.resolve([
         { parameter, value: signal('item', 'steel-chest') },
@@ -298,7 +310,7 @@ describe('host recipe ingredient dependencies', () => {
     expect(context.resultFor(dependency)).toBe(first[0]);
   });
 
-  test('failed override selection leaves old results intact and reset restores defaults', async () => {
+  test('resolves present to absent to present and reset restores defaults', async () => {
     const loaded = await environment();
     const session = createBlueprintParameterSession();
     const parameter = session.signal('Container', {
@@ -309,17 +321,119 @@ describe('host recipe ingredient dependencies', () => {
     const dependency = context.dependency(parameter, 2, source);
     const defaults = context.resolve();
 
-    expect(() =>
-      context.resolve([{ parameter, value: signal('item', 'steel-chest') }]),
-    ).toThrowError(expect.objectContaining({ reason: 'ingredient-out-of-range', source }));
-    expect(context.resolved).toBe(defaults);
-    expect(context.resultFor(dependency)).toBe(defaults[0]);
-    expect(context.resolve()).not.toBe(defaults);
-    expect(context.reset()[0]!.selection.ingredient).toBe(
+    const absent = context.resolve([{ parameter, value: signal('item', 'steel-chest') }]);
+    expect(absent[0]).toEqual({
+      status: 'absent',
+      dependency,
+      source,
+      recipe: 'recipe:steel-chest',
+      index: 2,
+    });
+    expect(context.resultFor(dependency)).toBe(absent[0]);
+    expect(Object.keys(absent[0]!)).not.toContain('selection');
+
+    const presentAgain = context.resolve();
+    expect(presentAgain[0]!.status).toBe('present');
+    expect(selectionOf(presentAgain[0]!).ingredient).toBe(
+      loaded.prototypes.getRecipe('iron-chest')!.ingredients[2],
+    );
+    const reset = context.reset();
+    expect(selectionOf(reset[0]!).ingredient).toBe(
       loaded.prototypes.getRecipe('iron-chest')!.ingredients[2],
     );
     expect(Object.isFrozen(defaults)).toBe(true);
     expect(Object.isFrozen(defaults[0])).toBe(true);
+    expect(Object.isFrozen(absent)).toBe(true);
+    expect(Object.isFrozen(absent[0])).toBe(true);
+    expect(defaults[0]!.status).toBe('present');
+    expect(context.resolved).toBe(reset);
+  });
+
+  test('mixes present and absent dependencies from one root without losing binding identity', async () => {
+    const loaded = await environment();
+    const session = createBlueprintParameterSession();
+    const parameter = session.signal('Container', {
+      defaultValue: signal('item', 'iron-chest'),
+      source,
+    });
+    const context = createRecipeIngredientDependencyContext(session, loaded.prototypes);
+    const presentDependency = context.dependency(parameter, 1, source);
+    const absentDependency = context.dependency(parameter, 9, source);
+
+    const resolved = context.resolve();
+    expect(resolved.map(({ status }) => status)).toEqual(['present', 'absent']);
+    expect(selectionOf(resolved[0]!).ingredient).toBe(
+      loaded.prototypes.getRecipe('iron-chest')!.ingredients[1],
+    );
+    expect(resolved[1]).toEqual({
+      status: 'absent',
+      dependency: absentDependency,
+      source,
+      recipe: 'recipe:iron-chest',
+      index: 9,
+    });
+    expect(context.resultFor(presentDependency)).toBe(resolved[0]);
+    expect(context.resultFor(absentDependency)).toBe(resolved[1]);
+  });
+
+  test('resolves empty recipes and very large safe indices as absence without indexed allocation', async () => {
+    const empty = await environment({ chestIngredients: [] });
+    const session = createBlueprintParameterSession();
+    const parameter = session.signal('Container', {
+      defaultValue: signal('item', 'iron-chest'),
+      source,
+    });
+    const context = createRecipeIngredientDependencyContext(session, empty.prototypes);
+    const emptyDependency = context.dependency(parameter, 0, source);
+    const hugeDependency = context.dependency(parameter, Number.MAX_SAFE_INTEGER, source);
+
+    const resolved = context.resolve();
+    expect(resolved).toEqual([
+      {
+        status: 'absent',
+        dependency: emptyDependency,
+        source,
+        recipe: 'recipe:iron-chest',
+        index: 0,
+      },
+      {
+        status: 'absent',
+        dependency: hugeDependency,
+        source,
+        recipe: 'recipe:iron-chest',
+        index: Number.MAX_SAFE_INTEGER,
+      },
+    ]);
+  });
+
+  test('rolls back a computed absence when a later root has no exact recipe', async () => {
+    const loaded = await environment();
+    const session = createBlueprintParameterSession();
+    const firstRoot = session.signal('First', {
+      defaultValue: signal('item', 'iron-chest'),
+      source,
+    });
+    const laterRoot = session.signal('Later', {
+      defaultValue: signal('item', 'iron-chest'),
+      source,
+    });
+    const context = createRecipeIngredientDependencyContext(session, loaded.prototypes);
+    const firstDependency = context.dependency(firstRoot, 2, source);
+    const laterDependency = context.dependency(laterRoot, 0, source);
+    const committed = context.resolve();
+
+    expect(committed.map(({ status }) => status)).toEqual(['present', 'present']);
+    expect(() =>
+      context.resolve([
+        { parameter: firstRoot, value: signal('item', 'steel-chest') },
+        { parameter: laterRoot, value: signal('item', 'iron-plate') },
+      ]),
+    ).toThrowError(expect.objectContaining({ reason: 'unknown-recipe', source }));
+
+    expect(context.resolved).toBe(committed);
+    expect(context.resultFor(firstDependency)).toBe(committed[0]);
+    expect(context.resultFor(laterDependency)).toBe(committed[1]);
+    expect(committed.map(({ status }) => status)).toEqual(['present', 'present']);
   });
 
   test('keeps contexts and dependency tokens isolated even for equal labels and IDs', async () => {
@@ -343,8 +457,8 @@ describe('host recipe ingredient dependencies', () => {
     const firstToken = first.dependency(firstHandle, 0, source);
     second.dependency(secondHandle, 0, source);
 
-    expect(first.resolve()[0]!.selection.ingredient.prototype).toBe('item:iron-plate');
-    expect(second.resolve()[0]!.selection.ingredient.prototype).toBe('item:copper-plate');
+    expect(selectionOf(first.resolve()[0]!).ingredient.prototype).toBe('item:iron-plate');
+    expect(selectionOf(second.resolve()[0]!).ingredient.prototype).toBe('item:copper-plate');
     expect(() => second.resultFor(firstToken)).toThrowError(
       expect.objectContaining({ code: 'CP1001', path: '$.dependency' }),
     );

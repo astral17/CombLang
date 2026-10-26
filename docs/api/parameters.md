@@ -119,7 +119,34 @@ test(
 
 Default-free Signal parameters in Arithmetic operands or Decider slots remain
 unsupported and fail with located `CP1002`. Browser case controls, broader
-producer slots and ingredient/property dependencies remain pending.
+producer slots and public ingredient/property dependencies remain pending.
+
+#### Recipe ingredient binding groundwork
+
+Host-side groundwork can resolve an existing Signal parameter to the exact
+same-name recipe in a fixed prototype provider and query a local zero-based
+index in that recipe's normalized ingredient array. When the recipe exists but
+the index is outside that array, including an empty ingredient list, host
+resolution records an absent dependency. Invalid indices, missing bindings,
+unavailable recipe data and unknown recipes remain errors. This does not add
+source syntax or public `.ingredient`/`.ingredients` properties, and it is not
+yet connected to source compilation, CLI/Worker/browser binding or native export.
+
+Bounded Factorio 2.1.23 observations show missing IDs are handled by field role:
+Constant filters disappear; a missing Decider left Signal removes that
+condition and can require join adjustment; a missing right Signal is cleared;
+then/else output rows remain while their Signal field is removed; Arithmetic
+and Selector Signal fields are cleared. Devices remain. In a captured mixed
+condition, `A || missing && B` became `A || B`, so filtering the missing
+condition while retaining its old join would be incorrect. These cases do not
+establish a general boolean rewrite or simulate resulting circuit truth/output.
+
+Native concrete ingredient order differed from the bundled normalized local
+array, so a local index must not be assumed to equal a native ingredient index.
+Captured water and missing-ingredient quantity rows retained their original
+numbers; this does not establish a zero fallback, native fluid formula support
+or a quantity bridge. Exact local ingredient amounts and constraints remain
+prototype data, with public/native integration still pending.
 
 #### Default-free Selector Signal slots
 

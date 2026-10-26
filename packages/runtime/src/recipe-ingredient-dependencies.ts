@@ -20,6 +20,7 @@ import {
   selectRecipeIngredientFromRecipe,
   type RecipeIngredientSelection,
 } from '../../prototypes/src/recipe-ingredient-selection.js';
+import type { RecipePrototypeKey } from '../../prototypes/src/schema.js';
 
 declare const dependencyBrand: unique symbol;
 
@@ -33,14 +34,26 @@ export type SuccessfulRecipeIngredientSelection = Extract<
   { readonly ok: true }
 >;
 
-export interface ResolvedRecipeIngredientDependency {
+export interface PresentRecipeIngredientDependency {
+  readonly status: 'present';
   readonly dependency: RecipeIngredientDependency;
   readonly source: SourceSpan;
   readonly selection: SuccessfulRecipeIngredientSelection;
 }
 
+export interface AbsentRecipeIngredientDependency {
+  readonly status: 'absent';
+  readonly dependency: RecipeIngredientDependency;
+  readonly source: SourceSpan;
+  readonly recipe: RecipePrototypeKey;
+  readonly index: number;
+}
+
+export type ResolvedRecipeIngredientDependency =
+  PresentRecipeIngredientDependency | AbsentRecipeIngredientDependency;
+
 export type RecipeIngredientDependencyFailureReason =
-  'recipes-unavailable' | 'unknown-recipe' | 'ingredient-out-of-range';
+  'recipes-unavailable' | 'unknown-recipe' | 'invalid-index';
 
 export class RecipeIngredientDependencyError extends Error {
   readonly reason: RecipeIngredientDependencyFailureReason;
@@ -53,7 +66,7 @@ export class RecipeIngredientDependencyError extends Error {
         ? 'prototype provider does not provide recipe data.'
         : reason === 'unknown-recipe'
           ? 'no recipe has the exact selected Signal name.'
-          : 'the selected recipe has no ingredient at this local index.';
+          : 'the selected local ingredient index is invalid.';
     super(`${path}: ${detail}`);
     this.name = 'RecipeIngredientDependencyError';
     this.reason = reason;
@@ -310,18 +323,27 @@ class RecipeIngredientDependencyContextImpl implements RecipeIngredientDependenc
       }
       const selection = selectRecipeIngredientFromRecipe(recipe, entry.index);
       if (!selection.ok) {
-        const reason =
-          selection.reason === 'ingredient-out-of-range'
-            ? 'ingredient-out-of-range'
-            : selection.reason === 'unknown-recipe'
-              ? 'unknown-recipe'
-              : selection.reason === 'recipes-unavailable'
-                ? 'recipes-unavailable'
-                : 'ingredient-out-of-range';
-        throw new RecipeIngredientDependencyError(reason, `${path}.selection`, entry.source);
+        if (selection.reason === 'ingredient-out-of-range') {
+          next.push(
+            Object.freeze({
+              status: 'absent',
+              dependency: entry.token,
+              source: entry.source,
+              recipe: recipe.key,
+              index: entry.index,
+            }),
+          );
+          continue;
+        }
+        throw new RecipeIngredientDependencyError(
+          selection.reason,
+          `${path}.selection`,
+          entry.source,
+        );
       }
       next.push(
         Object.freeze({
+          status: 'present',
           dependency: entry.token,
           source: entry.source,
           selection,
