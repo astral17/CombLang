@@ -6,7 +6,10 @@ import { describe, expect, test } from 'vitest';
 
 import { createBlueprintNumericExpression } from '../../compiler/src/blueprint-numeric-expression.js';
 import { createArithmeticConfigurationTemplate } from '../../compiler/src/arithmetic-configuration-template.js';
-import { createConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-template.js';
+import {
+  createConstantConfigurationTemplate,
+  inspectConstantConfigurationTemplate,
+} from '../../compiler/src/constant-configuration-template.js';
 import { createDeciderConfigurationTemplate } from '../../compiler/src/decider-configuration-template.js';
 import { createBlueprintParameterSession } from '../../compiler/src/blueprint-parameters.js';
 import { createSelectorConfigurationTemplate } from '../../compiler/src/selector-configuration-template.js';
@@ -61,6 +64,64 @@ describe('producer preinstallation numeric-slot inventory', () => {
 
     expect(producers).toHaveLength(2049);
     expect(collectPreinstallationNumericSlots(session, producers)).toHaveLength(4098);
+  });
+
+  test('accounts repeated parameter expressions per section across a 7071-row template', () => {
+    const session = createBlueprintParameterSession();
+    const target = session.signal('Target', { defaultValue: A });
+    const amount = session.number('Amount', { defaultValue: 2 });
+    const unused = session.number('Unused', { defaultValue: 99 });
+    const expression = createBlueprintNumericExpression(session, {
+      kind: 'binary',
+      operator: 'add',
+      left: { kind: 'parameter', parameter: amount },
+      right: { kind: 'literal', value: 1 },
+    });
+    const sectionSizes = [1000, 1000, 1000, 1000, 1000, 1000, 1000, 71];
+    const input = {
+      sections: sectionSizes.map((filterCount, sectionIndex) => ({
+        active: sectionIndex !== 1,
+        multiplier: 1,
+        filters: Array.from({ length: filterCount }, () => ({ signal: target, value: expression })),
+      })),
+    };
+    const originalFilters = input.sections.map(({ filters }) => filters);
+    const template = createConstantConfigurationTemplate(session, input);
+
+    expect(template.sections.map(({ filters }) => filters.length)).toEqual(sectionSizes);
+    expect(template.sections[7]?.filters[70]?.value).toBe(expression);
+    expect(input.sections.map(({ filters }) => filters)).toEqual(originalFilters);
+    expect(input.sections[7]?.filters[70]?.value).toBe(expression);
+    const usedParameters = inspectConstantConfigurationTemplate(
+      template,
+      '$.template',
+    ).usedParameters;
+    expect(usedParameters).toEqual([target, amount]);
+    expect(usedParameters).not.toContain(unused);
+
+    const firstBinding = bindConstantConfigurationTemplate(template, [
+      { parameter: amount, value: 4 },
+    ]);
+    const rebound = bindConstantConfigurationTemplate(template, [{ parameter: amount, value: 6 }]);
+    expect(firstBinding.sections[7]?.filters[70]).toEqual({ signal: A, value: 5 });
+    expect(rebound.sections[7]?.filters[70]).toEqual({ signal: A, value: 7 });
+    expect(template.sections[7]?.filters[70]?.value).toBe(expression);
+
+    const producer: CombinatorDescriptor = {
+      kind: 'constant',
+      source,
+      instancePath: [],
+      pendingConfiguration: template,
+    };
+    const slots = collectPreinstallationNumericSlots(session, [producer]);
+    const filterSlots = slots.filter(({ role }) => role === 'filter-value');
+    expect(filterSlots).toHaveLength(7071);
+    expect(filterSlots.every(({ root }) => root === expression)).toBe(true);
+    expect(slots.at(-1)).toMatchObject({
+      role: 'filter-value',
+      fieldPath: '$.producers[0].pendingConfiguration.sections[7].filters[70].value',
+      root: expression,
+    });
   });
 
   test('retains the authentic template literal after factory-owned int32 conversion', () => {

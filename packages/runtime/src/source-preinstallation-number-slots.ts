@@ -1,6 +1,7 @@
 import {
   constantConfigurationFromOutputs,
   constantConfigurationLimits,
+  maxConstantConfigurationFiltersPerSection,
   type ConstantConfiguration,
   type SignalId,
 } from '@comblang/factorio';
@@ -251,26 +252,42 @@ function addConstantSections(
 ): void {
   forEachBounded(traversal, sections, path, (section, sectionIndex) => {
     const sectionPath = `${path}[${sectionIndex}]`;
-    pushSlot(
-      traversal,
-      'constant',
-      'multiplier',
-      'finite-number',
-      `${sectionPath}.multiplier`,
-      section.multiplier,
-      1,
-    );
-    forEachBounded(traversal, section.filters, `${sectionPath}.filters`, (filter, filterIndex) =>
+    if (
+      !Array.isArray(section.filters) ||
+      section.filters.length > maxConstantConfigurationFiltersPerSection
+    ) {
+      refuse(
+        `${sectionPath}.filters`,
+        `Constant section exceeds the filter row limit of ${maxConstantConfigurationFiltersPerSection}.`,
+        traversal.source,
+      );
+    }
+    const precedingNodes = traversal.budget.nodes;
+    traversal.budget.nodes = 0;
+    try {
       pushSlot(
         traversal,
         'constant',
-        'filter-value',
-        'int32',
-        `${sectionPath}.filters[${filterIndex}].value`,
-        filter.value,
-        2,
-      ),
-    );
+        'multiplier',
+        'finite-number',
+        `${sectionPath}.multiplier`,
+        section.multiplier,
+        1,
+      );
+      forEachBounded(traversal, section.filters, `${sectionPath}.filters`, (filter, filterIndex) =>
+        pushSlot(
+          traversal,
+          'constant',
+          'filter-value',
+          'int32',
+          `${sectionPath}.filters[${filterIndex}].value`,
+          filter.value,
+          2,
+        ),
+      );
+    } finally {
+      traversal.budget.nodes = precedingNodes;
+    }
   });
 }
 

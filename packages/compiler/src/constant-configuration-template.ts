@@ -2,6 +2,7 @@ import {
   canonicalizeConstantConfiguration,
   ConstantConfigurationError,
   constantConfigurationLimits,
+  maxConstantConfigurationFiltersPerSection,
   signal,
   type ConstantConfiguration,
   type SignalId,
@@ -87,8 +88,9 @@ export interface ConstantRecipeIngredientResolution {
 interface TemplateBudget extends BlueprintParameterDataBudget {
   parameterBytes: number;
   expressionBytes: number;
-  readonly expressionRoots: WeakSet<object>;
+  expressionRoots: WeakSet<object>;
   readonly recipeIngredientRoots: WeakSet<object>;
+  sectionRecipeIngredientRoots: WeakSet<object>;
   readonly recipeIngredientReferences: RegisteredBlueprintRecipeIngredientReference[];
 }
 
@@ -159,9 +161,12 @@ function accountRecipeIngredientReference(
     );
   }
   budget.usedParameters.add(registration.handle);
-  if (budget.recipeIngredientRoots.has(reference.reference)) return;
-  budget.recipeIngredientRoots.add(reference.reference);
-  budget.recipeIngredientReferences.push(reference);
+  if (!budget.recipeIngredientRoots.has(reference.reference)) {
+    budget.recipeIngredientRoots.add(reference.reference);
+    budget.recipeIngredientReferences.push(reference);
+  }
+  if (budget.sectionRecipeIngredientRoots.has(reference.reference)) return;
+  budget.sectionRecipeIngredientRoots.add(reference.reference);
   budget.nodes += 1;
   if (budget.nodes > constantConfigurationLimits.maxNodes) {
     fail(
@@ -316,12 +321,14 @@ export function createConstantConfigurationTemplate(
     expressionBytes: 0,
     expressionRoots: new WeakSet(),
     recipeIngredientRoots: new WeakSet(),
+    sectionRecipeIngredientRoots: new WeakSet(),
     recipeIngredientReferences: [],
   };
   let recipeIngredientPlaceholderOrdinal = 0;
   const root = openBlueprintParameterRecord(value, '$', 0, budget);
   let normalized: ConstantConfiguration;
   let slots: readonly SectionSlots[];
+  let sectionBudgets: { parameterBytes: number; expressionBytes: number }[] = [];
   try {
     assertConstantExactKeys(
       root.value,
@@ -346,7 +353,14 @@ export function createConstantConfigurationTemplate(
     try {
       const preparedSections: Record<string, unknown>[] = [];
       const sectionSlots: SectionSlots[] = [];
+      sectionBudgets = [];
+      const headerNodes = budget.nodes;
       sections.value.forEach((rawSection, sectionIndex) => {
+        budget.nodes = 0;
+        budget.parameterBytes = 0;
+        budget.expressionBytes = 0;
+        budget.expressionRoots = new WeakSet();
+        budget.sectionRecipeIngredientRoots = new WeakSet();
         const sectionPath = `${sectionsPath}[${sectionIndex}]`;
         const section: OpenBlueprintParameterRecord = openBlueprintParameterRecord(
           rawSection,
@@ -401,6 +415,16 @@ export function createConstantConfigurationTemplate(
 
           const filtersPath = `${sectionPath}.filters`;
           const rawFilters = Object.hasOwn(section.value, 'filters') ? section.value.filters : [];
+          if (
+            Array.isArray(rawFilters) &&
+            Object.getPrototypeOf(rawFilters) === Array.prototype &&
+            rawFilters.length > maxConstantConfigurationFiltersPerSection
+          ) {
+            fail(
+              filtersPath,
+              `section exceeds the filter row limit of ${maxConstantConfigurationFiltersPerSection}.`,
+            );
+          }
           const filters = openBlueprintParameterArray(rawFilters, filtersPath, 3, budget);
           try {
             const preparedFilters: Record<string, unknown>[] = [];
@@ -539,7 +563,12 @@ export function createConstantConfigurationTemplate(
         } finally {
           section.release();
         }
+        sectionBudgets.push({
+          parameterBytes: budget.parameterBytes,
+          expressionBytes: budget.expressionBytes,
+        });
       });
+      budget.nodes = headerNodes;
       prepared.sections = preparedSections;
       slots = sectionSlots;
       normalized = canonicalizePrepared(prepared);
@@ -550,12 +579,31 @@ export function createConstantConfigurationTemplate(
     root.release();
   }
 
-  const canonicalBytes = new TextEncoder().encode(JSON.stringify(normalized)).byteLength;
-  if (
-    canonicalBytes + budget.parameterBytes + budget.expressionBytes >
-    constantConfigurationLimits.maxBytes
-  ) {
-    fail('$', `template exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`);
+  const encoder = new TextEncoder();
+  const header = {
+    isOn: normalized.isOn,
+    sections: normalized.sections.map(({ active, group, multiplier }) => ({
+      active,
+      ...(group === undefined ? {} : { group }),
+      multiplier,
+    })),
+  };
+  const headerBytes = encoder.encode(JSON.stringify(header)).byteLength;
+  if (headerBytes > constantConfigurationLimits.maxBytes) {
+    fail('$', `template header exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`);
+  }
+  for (let index = 0; index < normalized.sections.length; index += 1) {
+    const canonicalBytes = encoder.encode(JSON.stringify(normalized.sections[index])).byteLength;
+    const sectionBudget = sectionBudgets[index]!;
+    if (
+      canonicalBytes + sectionBudget.parameterBytes + sectionBudget.expressionBytes >
+      constantConfigurationLimits.maxBytes
+    ) {
+      fail(
+        `$.sections[${index}]`,
+        `template section exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`,
+      );
+    }
   }
   const template = freezeTemplate({
     [templateBrand]: true as const,

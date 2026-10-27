@@ -32,6 +32,9 @@ export const constantConfigurationLimits: ConstantConfigurationLimits = Object.f
   maxBytes: 262144,
 });
 
+/** Supported filter-row capacity for each ordered Constant section. */
+export const maxConstantConfigurationFiltersPerSection = 1000;
+
 export type ConstantConfigurationErrorCode = 'FC1000' | 'FC1001' | 'FC1002' | 'FC1003';
 
 export class ConstantConfigurationError extends Error {
@@ -73,6 +76,10 @@ type DataRecord = Record<string, unknown>;
 interface WalkState {
   readonly seen: WeakSet<object>;
   nodes: number;
+}
+
+interface StringBudget {
+  bytes: number;
 }
 
 function invalid(code: ConstantConfigurationErrorCode, path: string, message: string): never {
@@ -141,7 +148,12 @@ function dataRecord(value: unknown, path: string): DataRecord {
   return output;
 }
 
-function dataArray(value: unknown, path: string): readonly unknown[] {
+function dataArray(
+  value: unknown,
+  path: string,
+  maxLength?: number,
+  maxLengthMessage?: string,
+): readonly unknown[] {
   if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) {
     invalid('FC1001', path, 'expected a plain array.');
   }
@@ -152,6 +164,9 @@ function dataArray(value: unknown, path: string): readonly unknown[] {
   const length = lengthDescriptor.value;
   if (typeof length !== 'number' || !Number.isSafeInteger(length) || length < 0) {
     invalid('FC1001', `${path}.length`, 'array length must be a non-negative safe integer.');
+  }
+  if (maxLength !== undefined && length > maxLength) {
+    invalid('FC1002', path, maxLengthMessage ?? `array exceeds the length limit of ${maxLength}.`);
   }
   for (const key of Reflect.ownKeys(value)) {
     if (typeof key !== 'string') {
@@ -177,6 +192,18 @@ function dataArray(value: unknown, path: string): readonly unknown[] {
   return output;
 }
 
+function accountString(value: string, path: string, budget: StringBudget, label: string): void {
+  const maxBytes = constantConfigurationLimits.maxBytes;
+  if (value.length > maxBytes - budget.bytes) {
+    invalid('FC1002', path, `${label} exceeds the byte limit of ${maxBytes}.`);
+  }
+  const bytes = new TextEncoder().encode(value).byteLength;
+  if (bytes > maxBytes - budget.bytes) {
+    invalid('FC1002', path, `${label} exceeds the byte limit of ${maxBytes}.`);
+  }
+  budget.bytes += bytes;
+}
+
 function exactKeys(record: DataRecord, allowed: readonly string[], path: string): void {
   const allowedSet = new Set(allowed);
   for (const key of Object.keys(record)) {
@@ -196,8 +223,9 @@ function finiteNumber(value: unknown, path: string): number {
   return value;
 }
 
-function groupValue(value: unknown, path: string): string {
+function groupValue(value: unknown, path: string, stringBudget: StringBudget): string {
   if (typeof value !== 'string') invalid('FC1001', path, 'expected a group string.');
+  accountString(value, path, stringBudget, 'Constant section');
   return value;
 }
 
@@ -217,6 +245,7 @@ function canonicalSignal(
   path: string,
   depth: number,
   state: WalkState,
+  stringBudget: StringBudget,
   limits: ConstantConfigurationLimits,
 ): SignalId {
   visit(value, path, depth, state, limits);
@@ -226,12 +255,14 @@ function canonicalSignal(
     if (typeof record.type !== 'string' || !signalTypes.includes(record.type as SignalType)) {
       invalid('FC1001', `${path}.type`, 'expected a valid Signal type.');
     }
+    accountString(record.type, `${path}.type`, stringBudget, 'Constant section');
     if (typeof record.name !== 'string' || record.name.length === 0) {
       invalid('FC1001', `${path}.name`, 'expected a non-empty Signal name.');
     }
     if (record.name.includes('\u0000')) {
       invalid('FC1001', `${path}.name`, 'Signal name cannot contain NUL (U+0000).');
     }
+    accountString(record.name, `${path}.name`, stringBudget, 'Constant section');
     if (
       'quality' in record &&
       (typeof record.quality !== 'string' || record.quality.length === 0)
@@ -240,6 +271,9 @@ function canonicalSignal(
     }
     if ('quality' in record && (record.quality as string).includes('\u0000')) {
       invalid('FC1001', `${path}.quality`, 'Signal quality cannot contain NUL (U+0000).');
+    }
+    if ('quality' in record) {
+      accountString(record.quality as string, `${path}.quality`, stringBudget, 'Constant section');
     }
     if (
       record.type === 'virtual' &&
@@ -270,6 +304,7 @@ function canonicalFilter(
   path: string,
   depth: number,
   state: WalkState,
+  stringBudget: StringBudget,
   limits: ConstantConfigurationLimits,
 ): ConstantConfigurationFilter {
   visit(value, path, depth, state, limits);
@@ -277,7 +312,14 @@ function canonicalFilter(
     const record = dataRecord(value, path);
     exactKeys(record, ['signal', 'value'], path);
     return Object.freeze({
-      signal: canonicalSignal(record.signal, `${path}.signal`, depth + 1, state, limits),
+      signal: canonicalSignal(
+        record.signal,
+        `${path}.signal`,
+        depth + 1,
+        state,
+        stringBudget,
+        limits,
+      ),
       value: circuitValue(record.value, `${path}.value`),
     });
   } finally {
@@ -290,23 +332,41 @@ function canonicalSection(
   path: string,
   depth: number,
   state: WalkState,
+  stringBudget: StringBudget,
   limits: ConstantConfigurationLimits,
 ): ConstantConfigurationSection {
   visit(value, path, depth, state, limits);
   try {
     const record = dataRecord(value, path);
     exactKeys(record, ['active', 'group', 'multiplier', 'filters'], path);
-    const filtersValue = 'filters' in record ? dataArray(record.filters, `${path}.filters`) : [];
+    const filtersValue =
+      'filters' in record
+        ? dataArray(
+            record.filters,
+            `${path}.filters`,
+            maxConstantConfigurationFiltersPerSection,
+            `section exceeds the filter row limit of ${maxConstantConfigurationFiltersPerSection}.`,
+          )
+        : [];
     visit(filtersValue, `${path}.filters`, depth + 1, state, limits);
     try {
       return Object.freeze({
         active: 'active' in record ? booleanValue(record.active, `${path}.active`) : true,
-        ...('group' in record ? { group: groupValue(record.group, `${path}.group`) } : {}),
+        ...('group' in record
+          ? { group: groupValue(record.group, `${path}.group`, stringBudget) }
+          : {}),
         multiplier:
           'multiplier' in record ? finiteNumber(record.multiplier, `${path}.multiplier`) : 1,
         filters: Object.freeze(
           filtersValue.map((filter, index) =>
-            canonicalFilter(filter, `${path}.filters[${index}]`, depth + 2, state, limits),
+            canonicalFilter(
+              filter,
+              `${path}.filters[${index}]`,
+              depth + 2,
+              state,
+              stringBudget,
+              limits,
+            ),
           ),
         ),
       });
@@ -321,27 +381,71 @@ function canonicalSection(
 /** Canonicalizes one bounded ordered Constant semantic configuration. */
 export function canonicalizeConstantConfiguration(
   value: unknown,
-  configuration: ConstantConfigurationLimits = constantConfigurationLimits,
+  configuration?: ConstantConfigurationLimits,
   path = '$',
 ): ConstantConfiguration {
-  const limits = assertLimits(configuration);
+  const wholeInputLimits = configuration === undefined ? undefined : assertLimits(configuration);
+  const limits = wholeInputLimits ?? constantConfigurationLimits;
   const state: WalkState = { seen: new WeakSet(), nodes: 0 };
   visit(value, path, 0, state, limits);
   let canonical: ConstantConfiguration;
   try {
     const record = dataRecord(value, path);
     exactKeys(record, ['isOn', 'sections'], path);
+    const maximumHeaderSections = constantConfigurationLimits.maxNodes - 2;
     const sectionsValue =
-      'sections' in record ? dataArray(record.sections, `${path}.sections`) : [];
+      'sections' in record
+        ? dataArray(
+            record.sections,
+            `${path}.sections`,
+            maximumHeaderSections,
+            `Constant header exceeds the section-array node limit of ${constantConfigurationLimits.maxNodes}.`,
+          )
+        : [];
     visit(sectionsValue, `${path}.sections`, 1, state, limits);
     try {
+      const headerStringBudget: StringBudget = { bytes: 0 };
+      const isOn = 'isOn' in record ? booleanValue(record.isOn, `${path}.isOn`) : true;
+      const canonicalSections: ConstantConfigurationSection[] = [];
+      for (let index = 0; index < sectionsValue.length; index += 1) {
+        const sectionPath = `${path}.sections[${index}]`;
+        const precedingNodes = state.nodes;
+        if (wholeInputLimits === undefined) state.nodes = 0;
+        const stringBudget: StringBudget = { bytes: 0 };
+        let section: ConstantConfigurationSection;
+        try {
+          section = canonicalSection(
+            sectionsValue[index],
+            sectionPath,
+            2,
+            state,
+            stringBudget,
+            limits,
+          );
+        } finally {
+          if (wholeInputLimits === undefined) state.nodes = precedingNodes;
+        }
+        if (section.group !== undefined) {
+          accountString(
+            section.group,
+            `${sectionPath}.group`,
+            headerStringBudget,
+            'Constant header',
+          );
+        }
+        const sectionBytes = new TextEncoder().encode(JSON.stringify(section)).byteLength;
+        if (sectionBytes > constantConfigurationLimits.maxBytes) {
+          invalid(
+            'FC1002',
+            sectionPath,
+            `Constant section exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`,
+          );
+        }
+        canonicalSections.push(section);
+      }
       canonical = Object.freeze({
-        isOn: 'isOn' in record ? booleanValue(record.isOn, `${path}.isOn`) : true,
-        sections: Object.freeze(
-          sectionsValue.map((section, index) =>
-            canonicalSection(section, `${path}.sections[${index}]`, 2, state, limits),
-          ),
-        ),
+        isOn,
+        sections: Object.freeze(canonicalSections),
       });
     } finally {
       leave(sectionsValue, state);
@@ -350,9 +454,31 @@ export function canonicalizeConstantConfiguration(
     leave(value, state);
   }
 
-  const bytes = new TextEncoder().encode(JSON.stringify(canonical)).byteLength;
-  if (bytes > limits.maxBytes) {
-    invalid('FC1002', path, `configuration exceeds the byte limit of ${limits.maxBytes}.`);
+  const header = {
+    isOn: canonical.isOn,
+    sections: canonical.sections.map(({ active, group, multiplier }) => ({
+      active,
+      ...(group === undefined ? {} : { group }),
+      multiplier,
+    })),
+  };
+  const headerBytes = new TextEncoder().encode(JSON.stringify(header)).byteLength;
+  if (headerBytes > constantConfigurationLimits.maxBytes) {
+    invalid(
+      'FC1002',
+      path,
+      `Constant header exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`,
+    );
+  }
+  if (wholeInputLimits !== undefined) {
+    const bytes = new TextEncoder().encode(JSON.stringify(canonical)).byteLength;
+    if (bytes > wholeInputLimits.maxBytes) {
+      invalid(
+        'FC1002',
+        path,
+        `configuration exceeds the byte limit of ${wholeInputLimits.maxBytes}.`,
+      );
+    }
   }
   return canonical;
 }

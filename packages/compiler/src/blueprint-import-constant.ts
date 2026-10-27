@@ -1,6 +1,7 @@
 import {
   canonicalizeConstantConfiguration,
   constantConfigurationLimits,
+  maxConstantConfigurationFiltersPerSection,
   ConstantConfigurationError,
   Signal,
   signalTypes,
@@ -170,15 +171,14 @@ function finiteDouble(value: LosslessJsonValue | undefined): number | undefined 
   return Number.isFinite(number) ? number : undefined;
 }
 
-function checkNodeBudget(sectionCount: number, filterCount: number, path: string): void {
-  // Canonical shape nodes: root + sections array, each section + filters array,
-  // and each filter + Signal object. This bounds allocations before conversion.
-  const nodes = 2 + sectionCount * 2 + filterCount * 2;
+function checkHeaderNodeBudget(sectionCount: number, path: string): void {
+  // Bound root/header allocation separately; filter rows are budgeted per section.
+  const nodes = 2 + sectionCount;
   if (nodes > constantConfigurationLimits.maxNodes) {
     throw new ConstantConfigurationError(
       'FC1002',
       path,
-      `configuration exceeds the node limit of ${constantConfigurationLimits.maxNodes}.`,
+      `Constant header exceeds the node limit of ${constantConfigurationLimits.maxNodes}.`,
     );
   }
 }
@@ -234,10 +234,9 @@ export function decodeBlueprintConstantControlBehavior(
   if (!isArrayNode(sectionRows)) {
     return blocked('Expected a sections array.', sectionRowsPath);
   }
-  checkNodeBudget(sectionRows.items.length, 0, sectionRowsPath);
+  checkHeaderNodeBudget(sectionRows.items.length, sectionRowsPath);
 
   const sections: ConstantConfigurationSection[] = [];
-  let totalFilters = 0;
   for (let sectionIndex = 0; sectionIndex < sectionRows.items.length; sectionIndex += 1) {
     checkAborted(resolved.signal);
     const sectionPath = `${sectionRowsPath}[${sectionIndex}]`;
@@ -289,8 +288,13 @@ export function decodeBlueprintConstantControlBehavior(
     if (filtersValue === undefined)
       return blocked('Required filters array is missing.', filtersPath);
     if (!isArrayNode(filtersValue)) return blocked('Expected a filters array.', filtersPath);
-    totalFilters += filtersValue.items.length;
-    checkNodeBudget(sectionRows.items.length, totalFilters, filtersPath);
+    if (filtersValue.items.length > maxConstantConfigurationFiltersPerSection) {
+      throw new ConstantConfigurationError(
+        'FC1002',
+        filtersPath,
+        `section exceeds the filter row limit of ${maxConstantConfigurationFiltersPerSection}.`,
+      );
+    }
 
     const filters: ConstantConfigurationFilter[] = [];
     for (let filterIndex = 0; filterIndex < filtersValue.items.length; filterIndex += 1) {
@@ -395,11 +399,5 @@ export function decodeBlueprintConstantControlBehavior(
     );
   }
 
-  return complete(
-    canonicalizeConstantConfiguration(
-      { isOn, sections },
-      constantConfigurationLimits,
-      resolved.path,
-    ),
-  );
+  return complete(canonicalizeConstantConfiguration({ isOn, sections }, undefined, resolved.path));
 }

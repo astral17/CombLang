@@ -7,6 +7,7 @@ import {
   type SignalId,
   type SignalType,
 } from '@comblang/factorio';
+import { DEFAULT_BLUEPRINT_CODEC_LIMITS } from '@comblang/blueprint';
 import type { NetworkId } from '@comblang/shared';
 
 import type {
@@ -48,13 +49,18 @@ const utf8Encoder = new TextEncoder();
 
 class BoundedSourceBuilder {
   readonly #parts: string[] = [];
+  readonly #maxBytes: number;
   #bytes = 0;
+
+  constructor(maxBytes = constantConfigurationLimits.maxBytes) {
+    this.#maxBytes = maxBytes;
+  }
 
   append(value: string): void {
     const bytes = utf8Encoder.encode(value).byteLength;
-    if (bytes > constantConfigurationLimits.maxBytes - this.#bytes) {
+    if (bytes > this.#maxBytes - this.#bytes) {
       throw new RangeError(
-        `Generated source expression exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`,
+        `Generated source expression exceeds the byte limit of ${this.#maxBytes}.`,
       );
     }
     this.#parts.push(value);
@@ -62,9 +68,9 @@ class BoundedSourceBuilder {
   }
 
   appendString(value: string): void {
-    if (value.length > constantConfigurationLimits.maxBytes - this.#bytes) {
+    if (value.length > this.#maxBytes - this.#bytes) {
       throw new RangeError(
-        `Generated source expression exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`,
+        `Generated source expression exceeds the byte limit of ${this.#maxBytes}.`,
       );
     }
     this.append(JSON.stringify(value));
@@ -117,53 +123,6 @@ function arrayDataProperty(value: readonly unknown[], index: number): unknown {
   return descriptor !== undefined && 'value' in descriptor ? descriptor.value : undefined;
 }
 
-function preflightConstantConfiguration(value: unknown): void {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) return;
-
-  let nodes = 2; // The canonical root and its sections array.
-  let stringUnits = 0;
-  const addString = (candidate: unknown): void => {
-    if (typeof candidate !== 'string') return;
-    stringUnits += candidate.length;
-    if (stringUnits > constantConfigurationLimits.maxBytes) {
-      throw new RangeError(
-        `Constant configuration input exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`,
-      );
-    }
-  };
-
-  const sections = dataProperty(value, 'sections');
-  if (!Array.isArray(sections) || Object.getPrototypeOf(sections) !== Array.prototype) return;
-  nodes += sections.length * 2;
-  if (nodes > constantConfigurationLimits.maxNodes) {
-    throw new RangeError(
-      `Constant configuration input exceeds the node limit of ${constantConfigurationLimits.maxNodes}.`,
-    );
-  }
-  for (let sectionIndex = 0; sectionIndex < sections.length; sectionIndex += 1) {
-    const section = arrayDataProperty(sections, sectionIndex);
-    if (typeof section !== 'object' || section === null || Array.isArray(section)) continue;
-    addString(dataProperty(section, 'group'));
-    const filters = dataProperty(section, 'filters');
-    if (!Array.isArray(filters) || Object.getPrototypeOf(filters) !== Array.prototype) continue;
-    nodes += filters.length * 2;
-    if (nodes > constantConfigurationLimits.maxNodes) {
-      throw new RangeError(
-        `Constant configuration input exceeds the node limit of ${constantConfigurationLimits.maxNodes}.`,
-      );
-    }
-    for (let filterIndex = 0; filterIndex < filters.length; filterIndex += 1) {
-      const filter = arrayDataProperty(filters, filterIndex);
-      if (typeof filter !== 'object' || filter === null || Array.isArray(filter)) continue;
-      const signal = dataProperty(filter, 'signal');
-      if (typeof signal !== 'object' || signal === null || Array.isArray(signal)) continue;
-      addString(dataProperty(signal, 'type'));
-      addString(dataProperty(signal, 'name'));
-      addString(dataProperty(signal, 'quality'));
-    }
-  }
-}
-
 function appendConstantConfiguration(
   builder: BoundedSourceBuilder,
   configuration: ConstantConfiguration,
@@ -197,9 +156,8 @@ function appendConstantConfiguration(
 
 /** Prints one bounded, literal DSL Constant constructor expression. */
 export function printBlueprintConstantExpression(configuration: ConstantConfiguration): string {
-  preflightConstantConfiguration(configuration);
   const canonical = canonicalizeConstantConfiguration(configuration);
-  const builder = new BoundedSourceBuilder();
+  const builder = new BoundedSourceBuilder(DEFAULT_BLUEPRINT_CODEC_LIMITS.maxEmittedBytes);
   appendConstantConfiguration(builder, canonical);
   return builder.finish();
 }

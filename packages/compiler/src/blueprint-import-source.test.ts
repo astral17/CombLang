@@ -3,6 +3,7 @@ import {
   Signal,
   type ConstantConfiguration,
 } from '@comblang/factorio';
+import { DEFAULT_BLUEPRINT_CODEC_LIMITS } from '@comblang/blueprint';
 import { parseLosslessJson } from '@comblang/blueprint/document';
 import type { NetworkId } from '@comblang/shared';
 import { describe, expect, test } from 'vitest';
@@ -751,7 +752,7 @@ describe('blueprint import source expressions', () => {
     ).toThrow();
   });
 
-  test('counts final UTF-8 source bytes and rejects unsafe Constant input size before canonicalization', () => {
+  test('keeps expression limits for other families and gives Constant the document byte budget', () => {
     const base: ArithmeticProducerConfig = {
       left: { kind: 'constant', value: 0 },
       operation: 'add',
@@ -787,6 +788,27 @@ describe('blueprint import source expressions', () => {
       }),
     ).toThrow(RangeError);
 
+    const largeConstant: ConstantConfiguration = {
+      isOn: true,
+      sections: Array.from({ length: 3 }, (_, sectionIndex) => ({
+        active: sectionIndex !== 1,
+        group: `group-${sectionIndex}`,
+        multiplier: 1,
+        filters: Array.from({ length: 700 }, (_, filterIndex) => ({
+          signal: Signal(
+            'virtual',
+            `section-${sectionIndex}-row-${filterIndex}-${'x'.repeat(130)}`,
+            filterIndex % 2 === 0 ? 'normal' : 'rare',
+          ),
+          value: filterIndex % 3 === 0 ? 0 : filterIndex % 2 === 0 ? filterIndex : -filterIndex,
+        })),
+      })),
+    };
+    const constantSource = printBlueprintConstantExpression(largeConstant);
+    const constantSourceBytes = new TextEncoder().encode(constantSource).byteLength;
+    expect(constantSourceBytes).toBeGreaterThan(constantConfigurationLimits.maxBytes);
+    expect(constantSourceBytes).toBeLessThanOrEqual(DEFAULT_BLUEPRINT_CODEC_LIMITS.maxEmittedBytes);
+
     expect(() =>
       printBlueprintConstantExpression({
         isOn: true,
@@ -803,7 +825,12 @@ describe('blueprint import source expressions', () => {
           },
         ],
       }),
-    ).toThrow(RangeError);
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'FC1002',
+        path: '$.sections[0].filters[0].signal.name',
+      }),
+    );
   });
 
   test('publishes only the dedicated printer subpath, not a compiler barrel export', async () => {

@@ -95,6 +95,15 @@ unattached device reports non-fatal `CL2001`; empty does not mean no hardware.
 | Section `filters`        | `[]`; ordered `{ signal, value }` rows (also accepted CC row forms).                           |
 | Filter `signal`, `value` | Required in a direct row; a current-source Signal or SignalRef string, and safe-integer count. |
 
+CombLang supports up to 1000 filter rows in each Constant section. The default
+semantic validation budgets data and UTF-8 strings per section, with the Constant
+header bounded separately; it does not impose an aggregate filter-row limit across
+sections. This is a CombLang input contract, not a verified Factorio engine
+capacity. Callers that explicitly pass `ConstantConfigurationLimits` retain that
+whole-input resource envelope. Blueprint document import, source generation and
+exchange encoding still use their independent document limits (25,165,824 bytes
+and 1,000,000 JSON nodes by default).
+
 `Constant({})` is an empty exact Constant. The configuration is semantic data,
 not raw Blueprint `control_behavior` or logistic filter JSON. All exact Constants
 require trusted canonical `entity:constant-combinator` authority in the

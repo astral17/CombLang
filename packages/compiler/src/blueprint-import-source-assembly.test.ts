@@ -2,6 +2,7 @@ import { classifyBlueprintDocument } from '@comblang/blueprint/classification';
 import { parseLosslessJson } from '@comblang/blueprint/document';
 import { analyzeBlueprintImport } from '@comblang/blueprint/import-analysis';
 import { sourceFileId } from '@comblang/shared';
+import { constantConfigurationLimits } from '@comblang/factorio';
 import { createTrustedEntityReplayContext } from './entity-replay-context.js';
 import type { EntityProfile, EntityProfileId } from './entity.js';
 import { syntheticZeroPortEntityProfile } from './entity-fixtures.js';
@@ -301,6 +302,47 @@ describe('canonical blueprint full-source assembly', () => {
       generateSource(JSON.stringify({ blueprint }), 'budget.factorio.ts', maxSourceBytes),
     ).toThrow(RangeError);
     expect(printConstant).toHaveBeenCalledTimes(1);
+  });
+
+  test('round-trips a multi-section Constant source larger than one expression budget', () => {
+    const sections = Array.from({ length: 3 }, (_, sectionIndex) => ({
+      index: sectionIndex + 1,
+      active: sectionIndex !== 1,
+      multiplier: 1,
+      filters: Array.from({ length: 700 }, (_, filterIndex) => ({
+        index: filterIndex + 1,
+        name: `section-${sectionIndex}-row-${filterIndex}-${'x'.repeat(130)}`,
+        type: 'virtual',
+        quality: filterIndex % 2 === 0 ? 'normal' : 'rare',
+        comparator: '=',
+        count: filterIndex % 3 === 0 ? 0 : filterIndex % 2 === 0 ? filterIndex : -filterIndex,
+      })),
+    }));
+    const input = JSON.stringify({
+      blueprint: {
+        entities: [
+          constantEntity(1, {
+            extra: { control_behavior: { is_on: true, sections: { sections } } },
+          }),
+        ],
+        wires: [],
+      },
+    });
+    const result = generateSource(input, 'large-constant.factorio.ts');
+    expect(result.state).toBe('complete');
+    if (result.state !== 'complete') throw new Error('Expected the large Constant source.');
+
+    const emittedBytes = new TextEncoder().encode(result.source.text).byteLength;
+    expect(emittedBytes).toBeGreaterThan(constantConfigurationLimits.maxBytes);
+    expect(result.correspondence.entities).toHaveLength(1);
+    expect(result.source.text.match(/const import_entity_1 = Constant\(/g)).toHaveLength(1);
+    expect(() =>
+      generateSource(
+        input,
+        'large-constant-limited.factorio.ts',
+        constantConfigurationLimits.maxBytes,
+      ),
+    ).toThrow(RangeError);
   });
 
   test('assembles mixed Constant, Arithmetic, and Unicode Decider spans with exact topology', () => {

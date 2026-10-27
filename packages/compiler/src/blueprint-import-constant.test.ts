@@ -1,6 +1,8 @@
 import {
   canonicalizeConstantConfiguration,
   ConstantConfigurationError,
+  constantConfigurationLimits,
+  maxConstantConfigurationFiltersPerSection,
   Signal,
 } from '@comblang/factorio';
 import {
@@ -381,8 +383,8 @@ describe('inverse Constant control_behavior conversion', () => {
     expect(result).not.toHaveProperty('context');
   });
 
-  test('uses the existing maxNodes limit for exact and over-bound section/filter trees', () => {
-    const maximumSections = Math.floor((4096 - 2) / 2);
+  test('bounds header sections separately and enforces the row limit per section', () => {
+    const maximumSections = constantConfigurationLimits.maxNodes - 2;
     const atSectionBoundary = new LosslessJsonArray(
       Array.from({ length: maximumSections }, (_, index) =>
         sectionNode(index + 1, new LosslessJsonArray([])),
@@ -401,7 +403,7 @@ describe('inverse Constant control_behavior conversion', () => {
       decodeBlueprintConstantControlBehavior(behaviorNode(overSectionBoundary)),
     );
 
-    const maximumFilters = Math.floor((4096 - 4) / 2);
+    const maximumFilters = maxConstantConfigurationFiltersPerSection;
     const atFilterBoundary = new LosslessJsonArray(
       Array.from({ length: maximumFilters }, (_, index) => filterNode(index + 1)),
     );
@@ -419,6 +421,22 @@ describe('inverse Constant control_behavior conversion', () => {
         behaviorNode(new LosslessJsonArray([sectionNode(1, overFilterBoundary)])),
       ),
     );
+
+    const manySections = new LosslessJsonArray(
+      Array.from({ length: 8 }, (_, sectionIndex) =>
+        sectionNode(
+          sectionIndex + 1,
+          new LosslessJsonArray(
+            Array.from({ length: maximumFilters }, (_, filterIndex) => filterNode(filterIndex + 1)),
+          ),
+        ),
+      ),
+    );
+    const acceptedManySections = decodeBlueprintConstantControlBehavior(behaviorNode(manySections));
+    expect(acceptedManySections.state).toBe('complete');
+    expect(
+      acceptedManySections.configuration?.sections.map(({ filters }) => filters.length),
+    ).toEqual(Array(8).fill(maximumFilters));
   });
 
   test('validates options and checks cancellation before work and inside filter iteration', () => {

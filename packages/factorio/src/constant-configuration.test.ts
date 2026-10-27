@@ -14,6 +14,29 @@ import { signal } from './signal.js';
 const A = signal('virtual', 'signal-A');
 const B = signal('virtual', 'signal-B');
 
+function largeConstantConfiguration(sectionSizes: readonly number[]) {
+  let ordinal = 0;
+  return {
+    isOn: true,
+    sections: sectionSizes.map((filterCount, sectionIndex) => ({
+      active: sectionIndex !== 1,
+      group: `group-${sectionIndex}`,
+      multiplier: 1,
+      filters: Array.from({ length: filterCount }, (_, filterIndex) => {
+        const current = ordinal++;
+        return {
+          signal: signal(
+            'virtual',
+            `section-${sectionIndex}-signal-${filterIndex}`,
+            current % 2 === 0 ? 'normal' : 'rare',
+          ),
+          value: current % 3 === 0 ? 0 : current % 2 === 0 ? current : -current,
+        };
+      }),
+    })),
+  };
+}
+
 describe('Constant configuration semantic core', () => {
   it('applies defaults, normalizes values, preserves order, and freezes the snapshot', () => {
     const configuration = canonicalizeConstantConfiguration({
@@ -284,6 +307,97 @@ describe('Constant configuration semantic core', () => {
       expect.objectContaining<Partial<UnsupportedConstantConfigurationError>>({
         code: 'FC1003',
         reasons: ['non-unit-multiplier', 'group'],
+      }),
+    );
+  });
+
+  it.each([
+    ['three sections of 700 rows', [700, 700, 700]],
+    [
+      'seven sections of 1000 rows plus one section of 71',
+      [1000, 1000, 1000, 1000, 1000, 1000, 1000, 71],
+    ],
+  ])('preserves large section-scoped Constant tables: %s', (_label, sectionSizes) => {
+    const input = largeConstantConfiguration(sectionSizes);
+    const configuration = canonicalizeConstantConfiguration(input);
+
+    expect(configuration.sections.map(({ filters }) => filters.length)).toEqual(sectionSizes);
+    expect(configuration.sections.map(({ group }) => group)).toEqual(
+      sectionSizes.map((_, index) => `group-${index}`),
+    );
+    expect(configuration.sections[0]?.active).toBe(true);
+    expect(configuration.sections[1]?.active).toBe(false);
+    expect(configuration.sections[0]?.filters[0]).toMatchObject({
+      signal: { type: 'virtual', name: 'section-0-signal-0', quality: 'normal' },
+      value: 0,
+    });
+    expect(configuration.sections[0]?.filters[1]).toMatchObject({
+      signal: { type: 'virtual', name: 'section-0-signal-1', quality: 'rare' },
+      value: -1,
+    });
+
+    const allNames = configuration.sections.flatMap(({ filters }) =>
+      filters.map(({ signal: filterSignal }) => filterSignal.name),
+    );
+    expect(new Set(allNames)).toHaveProperty(
+      'size',
+      sectionSizes.reduce((sum, size) => sum + size, 0),
+    );
+    const lastSectionIndex = sectionSizes.length - 1;
+    const lastFilterIndex = sectionSizes[lastSectionIndex]! - 1;
+    expect(configuration.sections[lastSectionIndex]?.filters[lastFilterIndex]).toMatchObject({
+      signal: {
+        name: `section-${lastSectionIndex}-signal-${lastFilterIndex}`,
+        quality: sectionSizes.reduce((sum, size) => sum + size, 0) % 2 === 1 ? 'normal' : 'rare',
+      },
+      value: expect.any(Number),
+    });
+  });
+
+  it('accepts 1000 filter rows in one section and locates the 1001st-row rejection', () => {
+    expect(() =>
+      canonicalizeConstantConfiguration(largeConstantConfiguration([1000])),
+    ).not.toThrow();
+    expect(() =>
+      canonicalizeConstantConfiguration(largeConstantConfiguration([1001])),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'FC1002',
+        path: '$.sections[0].filters',
+        detail: `section exceeds the filter row limit of 1000.`,
+      }),
+    );
+  });
+
+  it('keeps per-section and header string budgets when a wider whole-input budget is explicit', () => {
+    const wideLimits = { maxDepth: 32, maxNodes: 100_000, maxBytes: 1_000_000 };
+    const sectionWithWideStrings = {
+      sections: [
+        {
+          filters: Array.from({ length: 100 }, () => ({
+            signal: signal('virtual', 'x'.repeat(3000)),
+            value: 1,
+          })),
+        },
+      ],
+    };
+    expect(() =>
+      canonicalizeConstantConfiguration(sectionWithWideStrings, wideLimits),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'FC1002',
+        detail: expect.stringContaining('Constant section'),
+      }),
+    );
+
+    const wideHeader = {
+      sections: [{ group: 'a'.repeat(140_000) }, { group: 'b'.repeat(140_000) }],
+    };
+    expect(() => canonicalizeConstantConfiguration(wideHeader, wideLimits)).toThrowError(
+      expect.objectContaining({
+        code: 'FC1002',
+        path: '$.sections[1].group',
+        detail: expect.stringContaining('Constant header'),
       }),
     );
   });
