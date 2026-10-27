@@ -20,9 +20,11 @@ export type RecipeIngredientSelection =
 
 /**
  * Selects one ingredient from a validated, immutable prototype database.
- * Indexes address the normalized ingredient array, not Factorio formula slots.
+ * Indexes address the stored ingredient array. Raw Factorio imports normalize
+ * it to effective game order; already-normalized providers are consumed as-is.
+ * This is not a mapping to native formula slots.
  * The original component retains its exact amount and quality/fluid constraints;
- * entries are never sorted, merged, or inferred from a recipe's products.
+ * the selector never sorts, merges, or infers entries from recipe products.
  */
 export function selectRecipeIngredient(
   database: PrototypeDatabaseV1,

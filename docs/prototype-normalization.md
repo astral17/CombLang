@@ -34,6 +34,23 @@ deterministic locale-free UTF-16 code-unit ordering. Recipe ingredient/product
 row order is significant. Repeated product rows remain in the recipe but do not
 duplicate it in the product index.
 
+### Effective recipe ingredient order
+
+When converting a raw Factorio dump, `sort_item_ingredients` defaults to true.
+The converter sorts item ingredients by the item's group `order_in_recipe`
+(falling back to group `order`), group name, subgroup `order` and name, then item
+`order` and name. Order strings use UTF-8 lexical comparison. Fluids follow the
+items in their authored order. With `sort_item_ingredients: false`, authored
+item order is retained before the fluids. Products are never reordered.
+
+The resulting sequence is stored directly in `RecipePrototype.ingredients` and
+is the sequence consumed by the provider and zero-based source ingredient
+selector. Already-normalized JSON declares its sequence and is not sorted again;
+regenerate profiles converted before this normalizer change to obtain the
+corrected raw Factorio order. A captured Factorio 2.1.23 runtime snapshot matched
+the converter's full comparator for all 662 available recipes. The documented
+false flag behavior was not sampled in that run.
+
 The validator ignores unknown extension fields and preserves supported optional
 facts. Omission, explicit `false`, zero and empty arrays are distinct. Unknown
 facts are not silently replaced with negative claims.

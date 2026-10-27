@@ -4,6 +4,7 @@ import {
   createTrustedEntityReplayContext,
   syntheticZeroPortEntityProfile,
 } from '@comblang/compiler';
+import builtinPrototypeDatabase from '../../prototypes/generated/space-age-2.1.17.json';
 import type { EntityProfile } from '@comblang/compiler/entity';
 import { loadPrototypeDatabase, type PrototypeProvider } from '../../prototypes/src/provider.js';
 import { syntheticPrototypeDatabase } from '../../prototypes/src/fixtures.js';
@@ -92,6 +93,48 @@ function configurationOf(value: ReturnType<typeof bindSourceCompilationCircuit>)
 }
 
 describe('source recipe ingredient references in Constant filters', () => {
+  test('binds slots from the regenerated bundled Factorio-order provider', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const compileSlots = (slots: readonly number[]) => {
+      const filters = slots
+        .map(
+          (index) =>
+            `{ signal: part.ingredient(${index}).signal, value: part.ingredient(${index}).amount }`,
+        )
+        .join(',\n');
+      const compilation = compileSourceProgram(
+        {
+          path: 'recipe-ingredient-bundled-order.factorio.ts',
+          text: `const part = Param.signal('Recipe');
+const output = new Network();
+output += Constant({ sections: [{ filters: [${filters}] }] });`,
+        },
+        sourceHost(prototypes),
+      );
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      const declaration = listSourceCompilationParameters(compilation).find(
+        ({ label }) => label === 'Recipe',
+      );
+      if (declaration === undefined) throw new Error('Missing Recipe parameter.');
+      return (recipeName: string) =>
+        configurationOf(
+          bindSourceCompilationCircuit(compilation, [
+            { parameter: declaration.parameter, value: signal('item', recipeName) },
+          ]),
+        ).sections[0]!.filters;
+    };
+
+    expect(compileSlots([0, 1, 2])('concrete')).toEqual([
+      { signal: signal('item', 'iron-ore'), value: 1 },
+      { signal: signal('item', 'stone-brick'), value: 5 },
+      { signal: signal('fluid', 'water'), value: 100 },
+    ]);
+    expect(compileSlots([0, 1])('plastic-bar')).toEqual([
+      { signal: signal('item', 'coal'), value: 1 },
+      { signal: signal('fluid', 'petroleum-gas'), value: 20 },
+    ]);
+  });
+
   test('accepts a bound count parameter when its ingredient filter is absent', async () => {
     const { prototypes } = await recipeProvider();
     const compilation = compileSourceProgram(

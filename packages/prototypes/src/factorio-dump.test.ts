@@ -90,6 +90,109 @@ function dumpFixture(): unknown {
   };
 }
 
+type RawDumpTable = Record<string, Record<string, unknown>>;
+
+interface RawDumpFixture {
+  [table: string]: RawDumpTable | undefined;
+  capsule: RawDumpTable;
+  fluid: RawDumpTable;
+  item: RawDumpTable;
+  recipe: RawDumpTable;
+}
+
+function ingredientOrderDumpFixture(): RawDumpFixture {
+  const dump = dumpFixture() as RawDumpFixture;
+  dump['item-group'] = {
+    'group-override': {
+      type: 'item-group',
+      name: 'group-override',
+      order: 'z',
+      order_in_recipe: 'a',
+    },
+    'group-fallback': { type: 'item-group', name: 'group-fallback', order: 'b' },
+    'group-alpha': { type: 'item-group', name: 'group-alpha', order_in_recipe: 'c' },
+    'group-beta': { type: 'item-group', name: 'group-beta', order_in_recipe: 'c' },
+    'group-subgroup': { type: 'item-group', name: 'group-subgroup', order_in_recipe: 'd' },
+    'group-item': { type: 'item-group', name: 'group-item', order_in_recipe: 'e' },
+  };
+  dump['item-subgroup'] = {
+    'sub-override': {
+      type: 'item-subgroup',
+      name: 'sub-override',
+      group: 'group-override',
+      order: 'a',
+    },
+    'sub-fallback': {
+      type: 'item-subgroup',
+      name: 'sub-fallback',
+      group: 'group-fallback',
+      order: 'a',
+    },
+    'sub-alpha': { type: 'item-subgroup', name: 'sub-alpha', group: 'group-alpha', order: 'a' },
+    'sub-beta': { type: 'item-subgroup', name: 'sub-beta', group: 'group-beta', order: 'a' },
+    'sub-first': { type: 'item-subgroup', name: 'sub-first', group: 'group-subgroup', order: 'a' },
+    'sub-later': { type: 'item-subgroup', name: 'sub-later', group: 'group-subgroup', order: 'b' },
+    'sub-tie-alpha': {
+      type: 'item-subgroup',
+      name: 'sub-tie-alpha',
+      group: 'group-subgroup',
+      order: 'c',
+    },
+    'sub-tie-zeta': {
+      type: 'item-subgroup',
+      name: 'sub-tie-zeta',
+      group: 'group-subgroup',
+      order: 'c',
+    },
+    'sub-items': { type: 'item-subgroup', name: 'sub-items', group: 'group-item', order: 'a' },
+  };
+  const addItem = (
+    table: string,
+    name: string,
+    subgroup: string,
+    order: string,
+    extra: Record<string, unknown> = {},
+  ) => {
+    dump[table] ??= {};
+    dump[table]![name] = {
+      type: table,
+      name,
+      stack_size: 100,
+      subgroup,
+      order,
+      ...extra,
+    };
+  };
+  addItem('item', 'override-alpha', 'sub-override', 'a');
+  addItem('tool', 'tool-late', 'sub-override', 'z');
+  addItem('item', 'fallback-item', 'sub-fallback', 'a');
+  addItem('item', 'group-alpha-item', 'sub-alpha', 'a');
+  addItem('item', 'group-beta-item', 'sub-beta', 'a');
+  addItem('item', 'subgroup-first-item', 'sub-first', 'z');
+  addItem('item', 'subgroup-later-item', 'sub-later', 'a');
+  addItem('item', 'subgroup-tie-alpha-item', 'sub-tie-alpha', 'z');
+  addItem('item', 'subgroup-tie-zeta-item', 'sub-tie-zeta', 'a');
+  addItem('item', 'item-order-first', 'sub-items', 'a');
+  addItem('item', 'item-name-alpha', 'sub-items', 'x');
+  addItem('item', 'item-name-zeta', 'sub-items', 'x');
+  dump.fluid['petroleum-gas'] = { type: 'fluid', name: 'petroleum-gas' };
+  return dump;
+}
+
+function malformedIngredientOrderDump(mutate: (dump: RawDumpFixture) => void): RawDumpFixture {
+  const dump = dumpFixture() as RawDumpFixture;
+  dump.recipe['iron-plate']!.ingredients = [{ type: 'item', name: 'grenade', amount: 1 }];
+  dump.capsule.grenade!.subgroup = 'sub';
+  dump['item-subgroup'] = {
+    sub: { type: 'item-subgroup', name: 'sub', group: 'group', order: 'a' },
+  };
+  dump['item-group'] = {
+    group: { type: 'item-group', name: 'group', order: 'a' },
+  };
+  mutate(dump);
+  return dump;
+}
+
 describe('Factorio data-raw-dump normalizer', () => {
   test.each(['enabled', 'allow_productivity', 'hidden', 'main_product'])(
     'rejects malformed raw %s instead of silently replacing it',
@@ -692,7 +795,7 @@ describe('Factorio data-raw-dump normalizer', () => {
     const normalized = normalizeFactorioDataDump(dumpFixture(), metadata);
     const { database, prototypes } = await loadPrototypeDatabase(normalized.database);
 
-    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.10');
+    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.11');
     expect(prototypes.item.grenade?.stackSize).toBe(100);
     expect(prototypes.recipe['iron-plate']).toMatchObject({
       categories: ['crafting'],
@@ -1007,5 +1110,212 @@ describe('Factorio data-raw-dump normalizer', () => {
     for (const field of ['affected_by_quality', 'quality_change']) {
       expect(warnings.some(({ path }) => path.includes(field))).toBe(false);
     }
+  });
+
+  test('normalizes item ingredient order by Factorio metadata and keeps fluids, products and rows intact', () => {
+    const dump = ingredientOrderDumpFixture();
+    dump.recipe['iron-plate']!.ingredients = [
+      { type: 'fluid', name: 'water', amount: 100, temperature: 25, fluidbox_index: 0 },
+      { type: 'item', name: 'item-name-zeta', amount: 4 },
+      { type: 'item', name: 'subgroup-tie-zeta-item', amount: 1 },
+      { type: 'item', name: 'group-beta-item', amount: 1 },
+      { type: 'fluid', name: 'petroleum-gas', amount: 20 },
+      { type: 'item', name: 'fallback-item', amount: 1 },
+      {
+        type: 'item',
+        name: 'override-alpha',
+        amount: 2,
+        ignored_by_stats: 1,
+        quality_change: -1,
+        spoil_weight: 0.25,
+      },
+      { type: 'item', name: 'subgroup-later-item', amount: 1 },
+      { type: 'item', name: 'item-order-first', amount: 1 },
+      { type: 'item', name: 'tool-late', amount: 1 },
+      { type: 'item', name: 'subgroup-first-item', amount: 1 },
+      { type: 'item', name: 'group-alpha-item', amount: 1 },
+      { type: 'item', name: 'subgroup-tie-alpha-item', amount: 1 },
+      { type: 'item', name: 'item-name-alpha', amount: 1 },
+    ];
+    dump.recipe['iron-plate']!.results = [
+      { type: 'item', name: 'iron-plate', amount: 1 },
+      { type: 'item', name: 'iron-plate', amount: 2, ignored_by_stats: 1 },
+    ];
+    const before = structuredClone(dump);
+
+    const normalized = normalizeFactorioDataDump(dump, metadata).database.recipes.find(
+      ({ name }) => name === 'iron-plate',
+    )!;
+
+    expect(dump).toEqual(before);
+    expect(normalized.ingredients.map(({ prototype }) => prototype)).toEqual([
+      'item:override-alpha',
+      'item:tool-late',
+      'item:fallback-item',
+      'item:group-alpha-item',
+      'item:group-beta-item',
+      'item:subgroup-first-item',
+      'item:subgroup-later-item',
+      'item:subgroup-tie-alpha-item',
+      'item:subgroup-tie-zeta-item',
+      'item:item-order-first',
+      'item:item-name-alpha',
+      'item:item-name-zeta',
+      'fluid:water',
+      'fluid:petroleum-gas',
+    ]);
+    expect(normalized.ingredients[0]).toEqual({
+      prototype: 'item:override-alpha',
+      amount: 2,
+      ignoredByStats: 1,
+      qualityChange: -1,
+      spoilWeight: 0.25,
+    });
+    expect(normalized.ingredients.slice(-2)).toEqual([
+      { prototype: 'fluid:water', amount: 100, temperature: 25, fluidboxIndex: 0 },
+      { prototype: 'fluid:petroleum-gas', amount: 20 },
+    ]);
+    expect(normalized.products).toEqual([
+      { prototype: 'item:iron-plate', amount: 1 },
+      { prototype: 'item:iron-plate', amount: 2, ignoredByStats: 1 },
+    ]);
+  });
+
+  test('retains authored item order when sorting is false and moves fluids after all items', () => {
+    const dump = ingredientOrderDumpFixture();
+    dump.recipe['iron-plate']!.sort_item_ingredients = false;
+    dump.recipe['iron-plate']!.ingredients = [
+      { type: 'fluid', name: 'petroleum-gas', amount: 20 },
+      { type: 'item', name: 'item-name-zeta', amount: 1 },
+      { type: 'fluid', name: 'water', amount: 10 },
+      { type: 'item', name: 'override-alpha', amount: 1 },
+    ];
+
+    expect(
+      normalizeFactorioDataDump(dump, metadata)
+        .database.recipes.find(({ name }) => name === 'iron-plate')
+        ?.ingredients.map(({ prototype }) => prototype),
+    ).toEqual(['item:item-name-zeta', 'item:override-alpha', 'fluid:petroleum-gas', 'fluid:water']);
+  });
+
+  test('defaults omitted ordering metadata safely and orders UTF-8 strings without changing the global canonical comparator', () => {
+    const minimal = dumpFixture() as RawDumpFixture;
+    minimal.recipe['iron-plate']!.ingredients = [
+      { type: 'item', name: 'iron-plate', amount: 1 },
+      { type: 'item', name: 'grenade', amount: 1 },
+    ];
+    expect(
+      normalizeFactorioDataDump(minimal, metadata)
+        .database.recipes.find(({ name }) => name === 'iron-plate')
+        ?.ingredients.map(({ prototype }) => prototype),
+    ).toEqual(['item:grenade', 'item:iron-plate']);
+
+    const unicode = dumpFixture() as RawDumpFixture;
+    unicode.item['astral-order'] = {
+      type: 'item',
+      name: 'astral-order',
+      stack_size: 100,
+      order: '\u{10000}',
+    };
+    unicode.item['bmp-order'] = {
+      type: 'item',
+      name: 'bmp-order',
+      stack_size: 100,
+      order: '\uE000',
+    };
+    unicode.recipe['iron-plate']!.ingredients = [
+      { type: 'item', name: 'astral-order', amount: 1 },
+      { type: 'item', name: 'bmp-order', amount: 1 },
+    ];
+    expect(
+      normalizeFactorioDataDump(unicode, metadata)
+        .database.recipes.find(({ name }) => name === 'iron-plate')
+        ?.ingredients.map(({ prototype }) => prototype),
+    ).toEqual(['item:bmp-order', 'item:astral-order']);
+  });
+
+  test('keeps empty ingredients empty and rejects malformed used ordering fields at their raw paths', () => {
+    const empty = dumpFixture() as RawDumpFixture;
+    empty.recipe['iron-plate']!.ingredients = {};
+    expect(
+      normalizeFactorioDataDump(empty, metadata).database.recipes.find(
+        ({ name }) => name === 'iron-plate',
+      )?.ingredients,
+    ).toEqual([]);
+
+    const malformed = [
+      [
+        'item.order',
+        'capsule.grenade.order',
+        (dump: RawDumpFixture) => {
+          dump.capsule.grenade!.order = 1;
+        },
+      ],
+      [
+        'item.subgroup',
+        'capsule.grenade.subgroup',
+        (dump: RawDumpFixture) => {
+          dump.capsule.grenade!.subgroup = 1;
+        },
+      ],
+      [
+        'subgroup.order',
+        'item-subgroup.sub.order',
+        (dump: RawDumpFixture) => {
+          dump['item-subgroup']!.sub!.order = false;
+        },
+      ],
+      [
+        'subgroup.group',
+        'item-subgroup.sub.group',
+        (dump: RawDumpFixture) => {
+          dump['item-subgroup']!.sub!.group = 1;
+        },
+      ],
+      [
+        'group.order_in_recipe',
+        'item-group.group.order_in_recipe',
+        (dump: RawDumpFixture) => {
+          dump['item-group']!.group!.order_in_recipe = 1;
+        },
+      ],
+      [
+        'fallback group.order',
+        'item-group.group.order',
+        (dump: RawDumpFixture) => {
+          dump['item-group']!.group!.order = 1;
+        },
+      ],
+    ] as const;
+    for (const [field, path, mutate] of malformed) {
+      const dump = malformedIngredientOrderDump(mutate);
+      expect(() => normalizeFactorioDataDump(dump, metadata), field).toThrowError(
+        expect.objectContaining({ code: 'PD1001', path }),
+      );
+    }
+
+    const invalidFlag = malformedIngredientOrderDump((dump) => {
+      dump.recipe['iron-plate']!.sort_item_ingredients = 1;
+    });
+    expect(() => normalizeFactorioDataDump(invalidFlag, metadata)).toThrowError(
+      expect.objectContaining({ code: 'PD1001', path: 'recipe.iron-plate.sort_item_ingredients' }),
+    );
+  });
+
+  test('does not validate unused ordering metadata or sort item metadata when the raw flag is false', () => {
+    const unused = dumpFixture() as RawDumpFixture;
+    unused.capsule.grenade!.order = 1;
+    unused.recipe['iron-plate']!.ingredients = [{ type: 'item', name: 'iron-plate', amount: 1 }];
+    expect(() => normalizeFactorioDataDump(unused, metadata)).not.toThrow();
+
+    const disabled = dumpFixture() as RawDumpFixture;
+    disabled.capsule.grenade!.order = 1;
+    disabled.recipe['iron-plate']!.sort_item_ingredients = false;
+    disabled.recipe['iron-plate']!.ingredients = [{ type: 'item', name: 'grenade', amount: 1 }];
+    expect(
+      normalizeFactorioDataDump(disabled, metadata).database.recipes.find(
+        ({ name }) => name === 'iron-plate',
+      )?.ingredients,
+    ).toEqual([{ prototype: 'item:grenade', amount: 1 }]);
   });
 });

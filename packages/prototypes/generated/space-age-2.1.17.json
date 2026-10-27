@@ -7414,7 +7414,7 @@
       "space-age"
     ],
     "factorioVersion": "2.1.17",
-    "generatorVersion": "comblang-factorio-data-dump-v1.10",
+    "generatorVersion": "comblang-factorio-data-dump-v1.11",
     "mods": [
       {
         "name": "base",
@@ -11242,16 +11242,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:steel-chest"
-        },
-        {
           "amount": 3,
           "prototype": "item:electronic-circuit"
         },
         {
           "amount": 1,
           "prototype": "item:advanced-circuit"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:steel-chest"
         }
       ],
       "key": "recipe:active-provider-chest",
@@ -11343,15 +11343,15 @@
       "ingredients": [
         {
           "amount": 2,
-          "prototype": "item:electronic-circuit"
-        },
-        {
-          "amount": 2,
           "prototype": "item:plastic-bar"
         },
         {
           "amount": 4,
           "prototype": "item:copper-cable"
+        },
+        {
+          "amount": 2,
+          "prototype": "item:electronic-circuit"
         }
       ],
       "key": "recipe:advanced-circuit",
@@ -11945,8 +11945,8 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:radar"
+          "amount": 8,
+          "prototype": "item:explosives"
         },
         {
           "amount": 1,
@@ -11957,8 +11957,8 @@
           "prototype": "item:tungsten-plate"
         },
         {
-          "amount": 8,
-          "prototype": "item:explosives"
+          "amount": 1,
+          "prototype": "item:radar"
         }
       ],
       "key": "recipe:artillery-shell",
@@ -12019,20 +12019,20 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 60,
-          "prototype": "item:tungsten-plate"
-        },
-        {
-          "amount": 60,
-          "prototype": "item:refined-concrete"
-        },
-        {
           "amount": 40,
           "prototype": "item:iron-gear-wheel"
         },
         {
           "amount": 10,
           "prototype": "item:processing-unit"
+        },
+        {
+          "amount": 60,
+          "prototype": "item:tungsten-plate"
+        },
+        {
+          "amount": 60,
+          "prototype": "item:refined-concrete"
         }
       ],
       "key": "recipe:artillery-turret",
@@ -12093,6 +12093,14 @@
       "hidden": false,
       "ingredients": [
         {
+          "amount": 40,
+          "prototype": "item:iron-gear-wheel"
+        },
+        {
+          "amount": 10,
+          "prototype": "item:processing-unit"
+        },
+        {
           "amount": 60,
           "prototype": "item:engine-unit"
         },
@@ -12103,14 +12111,6 @@
         {
           "amount": 60,
           "prototype": "item:refined-concrete"
-        },
-        {
-          "amount": 40,
-          "prototype": "item:iron-gear-wheel"
-        },
-        {
-          "amount": 10,
-          "prototype": "item:processing-unit"
         }
       ],
       "key": "recipe:artillery-wagon",
@@ -12176,16 +12176,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 3,
-          "prototype": "item:electronic-circuit"
+          "amount": 9,
+          "prototype": "item:iron-plate"
         },
         {
           "amount": 5,
           "prototype": "item:iron-gear-wheel"
         },
         {
-          "amount": 9,
-          "prototype": "item:iron-plate"
+          "amount": 3,
+          "prototype": "item:electronic-circuit"
         }
       ],
       "key": "recipe:assembling-machine-1",
@@ -12245,12 +12245,12 @@
           "prototype": "item:steel-plate"
         },
         {
-          "amount": 3,
-          "prototype": "item:electronic-circuit"
-        },
-        {
           "amount": 5,
           "prototype": "item:iron-gear-wheel"
+        },
+        {
+          "amount": 3,
+          "prototype": "item:electronic-circuit"
         },
         {
           "amount": 1,
@@ -12371,16 +12371,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 20,
-          "prototype": "item:low-density-structure"
+          "amount": 5,
+          "prototype": "item:processing-unit"
         },
         {
           "amount": 8,
           "prototype": "item:electric-engine-unit"
         },
         {
-          "amount": 5,
-          "prototype": "item:processing-unit"
+          "amount": 20,
+          "prototype": "item:low-density-structure"
         }
       ],
       "key": "recipe:asteroid-collector",
@@ -12437,11 +12437,11 @@
       "ingredients": [
         {
           "amount": 10,
-          "prototype": "item:processing-unit"
+          "prototype": "item:explosives"
         },
         {
           "amount": 10,
-          "prototype": "item:explosives"
+          "prototype": "item:processing-unit"
         },
         {
           "amount": 100,
@@ -12627,16 +12627,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 20,
-          "prototype": "fluid:sulfuric-acid"
-        },
-        {
           "amount": 1,
           "prototype": "item:iron-plate"
         },
         {
           "amount": 1,
           "prototype": "item:copper-plate"
+        },
+        {
+          "amount": 20,
+          "prototype": "fluid:sulfuric-acid"
         }
       ],
       "key": "recipe:battery",
@@ -12658,12 +12658,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 5,
-          "prototype": "item:battery"
-        },
-        {
           "amount": 10,
           "prototype": "item:steel-plate"
+        },
+        {
+          "amount": 5,
+          "prototype": "item:battery"
         }
       ],
       "key": "recipe:battery-equipment",
@@ -12714,16 +12714,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 10,
-          "prototype": "item:battery-equipment"
-        },
-        {
           "amount": 15,
           "prototype": "item:processing-unit"
         },
         {
           "amount": 5,
           "prototype": "item:low-density-structure"
+        },
+        {
+          "amount": 10,
+          "prototype": "item:battery-equipment"
         }
       ],
       "key": "recipe:battery-mk2-equipment",
@@ -12779,12 +12779,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 5,
-          "prototype": "item:battery-mk2-equipment"
-        },
-        {
           "amount": 10,
           "prototype": "item:supercapacitor"
+        },
+        {
+          "amount": 5,
+          "prototype": "item:battery-mk2-equipment"
         }
       ],
       "key": "recipe:battery-mk3-equipment",
@@ -12865,20 +12865,20 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 20,
-          "prototype": "item:electronic-circuit"
-        },
-        {
-          "amount": 20,
-          "prototype": "item:advanced-circuit"
-        },
-        {
           "amount": 10,
           "prototype": "item:steel-plate"
         },
         {
           "amount": 10,
           "prototype": "item:copper-cable"
+        },
+        {
+          "amount": 20,
+          "prototype": "item:electronic-circuit"
+        },
+        {
+          "amount": 20,
+          "prototype": "item:advanced-circuit"
         }
       ],
       "key": "recipe:beacon",
@@ -12939,12 +12939,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 5,
-          "prototype": "item:advanced-circuit"
-        },
-        {
           "amount": 10,
           "prototype": "item:steel-plate"
+        },
+        {
+          "amount": 5,
+          "prototype": "item:advanced-circuit"
         }
       ],
       "key": "recipe:belt-immunity-equipment",
@@ -12996,12 +12996,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 8,
-          "prototype": "item:iron-stick"
-        },
-        {
           "amount": 5,
           "prototype": "item:steel-plate"
+        },
+        {
+          "amount": 8,
+          "prototype": "item:iron-stick"
         },
         {
           "amount": 4,
@@ -13061,24 +13061,24 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:electric-mining-drill"
-        },
-        {
-          "amount": 200,
-          "prototype": "fluid:molten-iron"
-        },
-        {
-          "amount": 20,
-          "prototype": "item:tungsten-carbide"
+          "amount": 10,
+          "prototype": "item:advanced-circuit"
         },
         {
           "amount": 10,
           "prototype": "item:electric-engine-unit"
         },
         {
-          "amount": 10,
-          "prototype": "item:advanced-circuit"
+          "amount": 20,
+          "prototype": "item:tungsten-carbide"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:electric-mining-drill"
+        },
+        {
+          "amount": 200,
+          "prototype": "fluid:molten-iron"
         }
       ],
       "key": "recipe:big-mining-drill",
@@ -13140,20 +13140,20 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 5,
-          "prototype": "item:nutrients"
-        },
-        {
-          "amount": 1,
-          "prototype": "item:pentapod-egg"
-        },
-        {
           "amount": 20,
           "prototype": "item:iron-plate"
         },
         {
           "amount": 5,
           "prototype": "item:electronic-circuit"
+        },
+        {
+          "amount": 5,
+          "prototype": "item:nutrients"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:pentapod-egg"
         },
         {
           "amount": 1,
@@ -13276,8 +13276,8 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:lab"
+          "amount": 3,
+          "prototype": "item:uranium-235"
         },
         {
           "amount": 10,
@@ -13288,12 +13288,12 @@
           "prototype": "item:refined-concrete"
         },
         {
-          "amount": 2,
-          "prototype": "item:capture-robot-rocket"
+          "amount": 1,
+          "prototype": "item:lab"
         },
         {
-          "amount": 3,
-          "prototype": "item:uranium-235"
+          "amount": 2,
+          "prototype": "item:capture-robot-rocket"
         }
       ],
       "key": "recipe:biolab",
@@ -13514,12 +13514,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:stone-furnace"
-        },
-        {
           "amount": 4,
           "prototype": "item:pipe"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:stone-furnace"
         }
       ],
       "key": "recipe:boiler",
@@ -13596,16 +13596,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:steel-chest"
-        },
-        {
           "amount": 3,
           "prototype": "item:electronic-circuit"
         },
         {
           "amount": 1,
           "prototype": "item:advanced-circuit"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:steel-chest"
         }
       ],
       "key": "recipe:buffer-chest",
@@ -13818,15 +13818,15 @@
       "ingredients": [
         {
           "amount": 3,
+          "prototype": "item:iron-plate"
+        },
+        {
+          "amount": 3,
           "prototype": "item:iron-gear-wheel"
         },
         {
           "amount": 1,
           "prototype": "item:stone-furnace"
-        },
-        {
-          "amount": 3,
-          "prototype": "item:iron-plate"
         }
       ],
       "key": "recipe:burner-mining-drill",
@@ -13996,16 +13996,16 @@
       "hidden": false,
       "ingredients": [
         {
+          "amount": 15,
+          "prototype": "item:uranium-235"
+        },
+        {
           "amount": 10,
           "prototype": "item:biter-egg"
         },
         {
           "amount": 1,
           "prototype": "item:capture-robot-rocket"
-        },
-        {
-          "amount": 15,
-          "prototype": "item:uranium-235"
         },
         {
           "amount": 100,
@@ -14058,20 +14058,20 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:flying-robot-frame"
-        },
-        {
           "amount": 2,
           "prototype": "item:steel-plate"
         },
         {
-          "amount": 20,
-          "prototype": "item:bioflux"
-        },
-        {
           "amount": 2,
           "prototype": "item:processing-unit"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:flying-robot-frame"
+        },
+        {
+          "amount": 20,
+          "prototype": "item:bioflux"
         }
       ],
       "key": "recipe:capture-robot-rocket",
@@ -14132,16 +14132,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 8,
-          "prototype": "item:engine-unit"
-        },
-        {
           "amount": 20,
           "prototype": "item:iron-plate"
         },
         {
           "amount": 5,
           "prototype": "item:steel-plate"
+        },
+        {
+          "amount": 8,
+          "prototype": "item:engine-unit"
         }
       ],
       "key": "recipe:car",
@@ -14225,12 +14225,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 10,
-          "prototype": "item:yumako-mash"
-        },
-        {
           "amount": 1,
           "prototype": "item:carbon"
+        },
+        {
+          "amount": 10,
+          "prototype": "item:yumako-mash"
         }
       ],
       "key": "recipe:carbon-fiber",
@@ -14409,12 +14409,12 @@
           "prototype": "item:steel-plate"
         },
         {
-          "amount": 20,
-          "prototype": "item:low-density-structure"
-        },
-        {
           "amount": 5,
           "prototype": "item:processing-unit"
+        },
+        {
+          "amount": 20,
+          "prototype": "item:low-density-structure"
         }
       ],
       "key": "recipe:cargo-bay",
@@ -14470,16 +14470,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 200,
-          "prototype": "item:concrete"
-        },
-        {
           "amount": 25,
           "prototype": "item:steel-plate"
         },
         {
           "amount": 10,
           "prototype": "item:processing-unit"
+        },
+        {
+          "amount": 200,
+          "prototype": "item:concrete"
         }
       ],
       "key": "recipe:cargo-landing-pad",
@@ -14535,16 +14535,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 10,
-          "prototype": "item:iron-gear-wheel"
-        },
-        {
           "amount": 20,
           "prototype": "item:iron-plate"
         },
         {
           "amount": 20,
           "prototype": "item:steel-plate"
+        },
+        {
+          "amount": 10,
+          "prototype": "item:iron-gear-wheel"
         }
       ],
       "key": "recipe:cargo-wagon",
@@ -14720,16 +14720,16 @@
       "hidden": false,
       "ingredients": [
         {
+          "amount": 5,
+          "prototype": "item:plastic-bar"
+        },
+        {
           "amount": 80,
           "prototype": "fluid:molten-iron"
         },
         {
           "amount": 250,
           "prototype": "fluid:molten-copper"
-        },
-        {
-          "amount": 5,
-          "prototype": "item:plastic-bar"
         }
       ],
       "key": "recipe:casting-low-density-structure",
@@ -14775,13 +14775,13 @@
       "hidden": false,
       "ingredients": [
         {
+          "amount": 10,
+          "prototype": "item:pipe"
+        },
+        {
           "amount": 50,
           "fluidboxMultiplier": 10,
           "prototype": "fluid:molten-iron"
-        },
-        {
-          "amount": 10,
-          "prototype": "item:pipe"
         }
       ],
       "key": "recipe:casting-pipe-to-ground",
@@ -14827,12 +14827,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 100,
-          "prototype": "item:concrete"
-        },
-        {
           "amount": 50,
           "prototype": "item:steel-plate"
+        },
+        {
+          "amount": 100,
+          "prototype": "item:iron-gear-wheel"
         },
         {
           "amount": 100,
@@ -14840,7 +14840,7 @@
         },
         {
           "amount": 100,
-          "prototype": "item:iron-gear-wheel"
+          "prototype": "item:concrete"
         }
       ],
       "key": "recipe:centrifuge",
@@ -14975,16 +14975,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 2,
-          "prototype": "item:engine-unit"
+          "amount": 1,
+          "prototype": "item:sulfur"
         },
         {
           "amount": 3,
           "prototype": "item:advanced-circuit"
         },
         {
-          "amount": 1,
-          "prototype": "item:sulfur"
+          "amount": 2,
+          "prototype": "item:engine-unit"
         }
       ],
       "key": "recipe:chemical-science-pack",
@@ -15036,16 +15036,16 @@
           "prototype": "item:explosives"
         },
         {
+          "amount": 1,
+          "prototype": "item:barrel"
+        },
+        {
           "amount": 10,
           "prototype": "item:calcite"
         },
         {
           "amount": 1,
           "prototype": "item:grenade"
-        },
-        {
-          "amount": 1,
-          "prototype": "item:barrel"
         }
       ],
       "key": "recipe:cliff-explosives",
@@ -15106,16 +15106,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 7,
-          "prototype": "item:grenade"
+          "amount": 5,
+          "prototype": "item:steel-plate"
         },
         {
           "amount": 5,
           "prototype": "item:explosives"
         },
         {
-          "amount": 5,
-          "prototype": "item:steel-plate"
+          "amount": 7,
+          "prototype": "item:grenade"
         }
       ],
       "key": "recipe:cluster-grenade",
@@ -15239,12 +15239,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 5,
-          "prototype": "item:carbon"
-        },
-        {
           "amount": 1,
           "prototype": "item:sulfur"
+        },
+        {
+          "amount": 5,
+          "prototype": "item:carbon"
         },
         {
           "amount": 10,
@@ -15296,20 +15296,20 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 15,
-          "prototype": "item:steel-plate"
-        },
-        {
-          "amount": 5,
-          "prototype": "item:iron-gear-wheel"
+          "amount": 10,
+          "prototype": "item:wood"
         },
         {
           "amount": 10,
           "prototype": "item:copper-plate"
         },
         {
-          "amount": 10,
-          "prototype": "item:wood"
+          "amount": 15,
+          "prototype": "item:steel-plate"
+        },
+        {
+          "amount": 5,
+          "prototype": "item:iron-gear-wheel"
         }
       ],
       "key": "recipe:combat-shotgun",
@@ -15370,12 +15370,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 5,
-          "prototype": "item:stone-brick"
-        },
-        {
           "amount": 1,
           "prototype": "item:iron-ore"
+        },
+        {
+          "amount": 5,
+          "prototype": "item:stone-brick"
         },
         {
           "amount": 100,
@@ -15401,16 +15401,16 @@
       "hidden": false,
       "ingredients": [
         {
+          "amount": 5,
+          "prototype": "item:stone-brick"
+        },
+        {
           "amount": 20,
           "prototype": "fluid:molten-iron"
         },
         {
           "amount": 100,
           "prototype": "fluid:water"
-        },
-        {
-          "amount": 5,
-          "prototype": "item:stone-brick"
         }
       ],
       "key": "recipe:concrete-from-molten-iron",
@@ -15517,12 +15517,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:flying-robot-frame"
-        },
-        {
           "amount": 2,
           "prototype": "item:electronic-circuit"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:flying-robot-frame"
         }
       ],
       "key": "recipe:construction-robot",
@@ -15808,14 +15808,14 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 50,
-          "ignoredByStats": 50,
-          "prototype": "fluid:crude-oil"
-        },
-        {
           "amount": 1,
           "ignoredByStats": 1,
           "prototype": "item:barrel"
+        },
+        {
+          "amount": 50,
+          "ignoredByStats": 50,
+          "prototype": "fluid:crude-oil"
         }
       ],
       "key": "recipe:crude-oil-barrel",
@@ -15862,16 +15862,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 20,
-          "prototype": "item:low-density-structure"
-        },
-        {
           "amount": 10,
           "prototype": "item:steel-plate"
         },
         {
           "amount": 10,
           "prototype": "item:electric-engine-unit"
+        },
+        {
+          "amount": 20,
+          "prototype": "item:low-density-structure"
         }
       ],
       "key": "recipe:crusher",
@@ -15928,8 +15928,8 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 40,
-          "prototype": "item:refined-concrete"
+          "amount": 20,
+          "prototype": "item:processing-unit"
         },
         {
           "amount": 20,
@@ -15937,11 +15937,11 @@
         },
         {
           "amount": 20,
-          "prototype": "item:processing-unit"
+          "prototype": "item:lithium-plate"
         },
         {
-          "amount": 20,
-          "prototype": "item:lithium-plate"
+          "amount": 40,
+          "prototype": "item:refined-concrete"
         }
       ],
       "key": "recipe:cryogenic-plant",
@@ -16150,7 +16150,7 @@
       "ingredients": [
         {
           "amount": 3,
-          "prototype": "item:piercing-rounds-magazine"
+          "prototype": "item:iron-gear-wheel"
         },
         {
           "amount": 3,
@@ -16158,7 +16158,7 @@
         },
         {
           "amount": 3,
-          "prototype": "item:iron-gear-wheel"
+          "prototype": "item:piercing-rounds-magazine"
         }
       ],
       "key": "recipe:defender-capsule",
@@ -16241,15 +16241,15 @@
       "ingredients": [
         {
           "amount": 4,
-          "prototype": "item:distractor-capsule"
-        },
-        {
-          "amount": 4,
           "prototype": "item:steel-plate"
         },
         {
           "amount": 1,
           "prototype": "item:processing-unit"
+        },
+        {
+          "amount": 4,
+          "prototype": "item:distractor-capsule"
         }
       ],
       "key": "recipe:destroyer-capsule",
@@ -16306,12 +16306,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 5,
-          "prototype": "item:processing-unit"
-        },
-        {
           "amount": 20,
           "prototype": "item:steel-plate"
+        },
+        {
+          "amount": 5,
+          "prototype": "item:processing-unit"
         },
         {
           "amount": 10,
@@ -16427,12 +16427,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 4,
-          "prototype": "item:defender-capsule"
-        },
-        {
           "amount": 3,
           "prototype": "item:advanced-circuit"
+        },
+        {
+          "amount": 4,
+          "prototype": "item:defender-capsule"
         }
       ],
       "key": "recipe:distractor-capsule",
@@ -16485,11 +16485,11 @@
       "ingredients": [
         {
           "amount": 5,
-          "prototype": "item:advanced-circuit"
+          "prototype": "item:electronic-circuit"
         },
         {
           "amount": 5,
-          "prototype": "item:electronic-circuit"
+          "prototype": "item:advanced-circuit"
         }
       ],
       "key": "recipe:efficiency-module",
@@ -16512,16 +16512,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 4,
-          "prototype": "item:efficiency-module"
-        },
-        {
           "amount": 5,
           "prototype": "item:advanced-circuit"
         },
         {
           "amount": 5,
           "prototype": "item:processing-unit"
+        },
+        {
+          "amount": 4,
+          "prototype": "item:efficiency-module"
         }
       ],
       "key": "recipe:efficiency-module-2",
@@ -16578,10 +16578,6 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 4,
-          "prototype": "item:efficiency-module-2"
-        },
-        {
           "amount": 5,
           "prototype": "item:advanced-circuit"
         },
@@ -16592,6 +16588,10 @@
         {
           "amount": 5,
           "prototype": "item:spoilage"
+        },
+        {
+          "amount": 4,
+          "prototype": "item:efficiency-module-2"
         }
       ],
       "key": "recipe:efficiency-module-3",
@@ -16733,16 +16733,16 @@
       "hidden": false,
       "ingredients": [
         {
+          "amount": 2,
+          "prototype": "item:electronic-circuit"
+        },
+        {
           "amount": 1,
           "prototype": "item:engine-unit"
         },
         {
           "amount": 15,
           "prototype": "fluid:lubricant"
-        },
-        {
-          "amount": 2,
-          "prototype": "item:electronic-circuit"
         }
       ],
       "key": "recipe:electric-engine-unit",
@@ -16858,16 +16858,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 3,
-          "prototype": "item:electronic-circuit"
+          "amount": 10,
+          "prototype": "item:iron-plate"
         },
         {
           "amount": 5,
           "prototype": "item:iron-gear-wheel"
         },
         {
-          "amount": 10,
-          "prototype": "item:iron-plate"
+          "amount": 3,
+          "prototype": "item:electronic-circuit"
         }
       ],
       "key": "recipe:electric-mining-drill",
@@ -16955,16 +16955,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 150,
-          "prototype": "item:holmium-plate"
-        },
-        {
           "amount": 50,
           "prototype": "item:steel-plate"
         },
         {
           "amount": 50,
           "prototype": "item:processing-unit"
+        },
+        {
+          "amount": 150,
+          "prototype": "item:holmium-plate"
         },
         {
           "amount": 50,
@@ -17443,12 +17443,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 5,
-          "prototype": "item:advanced-circuit"
-        },
-        {
           "amount": 10,
           "prototype": "item:steel-plate"
+        },
+        {
+          "amount": 5,
+          "prototype": "item:advanced-circuit"
         }
       ],
       "key": "recipe:energy-shield-equipment",
@@ -17499,16 +17499,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 10,
-          "prototype": "item:energy-shield-equipment"
-        },
-        {
           "amount": 5,
           "prototype": "item:processing-unit"
         },
         {
           "amount": 5,
           "prototype": "item:low-density-structure"
+        },
+        {
+          "amount": 10,
+          "prototype": "item:energy-shield-equipment"
         }
       ],
       "key": "recipe:energy-shield-mk2-equipment",
@@ -17629,16 +17629,16 @@
       "hidden": false,
       "ingredients": [
         {
+          "amount": 20,
+          "prototype": "item:steel-plate"
+        },
+        {
           "amount": 10,
           "prototype": "item:processing-unit"
         },
         {
           "amount": 30,
           "prototype": "item:electric-engine-unit"
-        },
-        {
-          "amount": 20,
-          "prototype": "item:steel-plate"
         }
       ],
       "key": "recipe:exoskeleton-equipment",
@@ -17759,12 +17759,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:rocket"
-        },
-        {
           "amount": 2,
           "prototype": "item:explosives"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:rocket"
         }
       ],
       "key": "recipe:explosive-rocket",
@@ -17816,11 +17816,11 @@
       "ingredients": [
         {
           "amount": 1,
-          "prototype": "item:explosive-cannon-shell"
+          "prototype": "item:uranium-238"
         },
         {
           "amount": 1,
-          "prototype": "item:uranium-238"
+          "prototype": "item:explosive-cannon-shell"
         }
       ],
       "key": "recipe:explosive-uranium-cannon-shell",
@@ -17873,11 +17873,11 @@
       "ingredients": [
         {
           "amount": 1,
-          "prototype": "item:sulfur"
+          "prototype": "item:coal"
         },
         {
           "amount": 1,
-          "prototype": "item:coal"
+          "prototype": "item:sulfur"
         },
         {
           "amount": 10,
@@ -17986,16 +17986,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:fast-splitter"
-        },
-        {
           "amount": 10,
           "prototype": "item:iron-gear-wheel"
         },
         {
           "amount": 10,
           "prototype": "item:advanced-circuit"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:fast-splitter"
         },
         {
           "amount": 80,
@@ -18178,11 +18178,11 @@
       "ingredients": [
         {
           "amount": 2,
-          "prototype": "item:electronic-circuit"
+          "prototype": "item:iron-plate"
         },
         {
           "amount": 2,
-          "prototype": "item:iron-plate"
+          "prototype": "item:electronic-circuit"
         },
         {
           "amount": 1,
@@ -18299,16 +18299,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:splitter"
-        },
-        {
           "amount": 10,
           "prototype": "item:iron-gear-wheel"
         },
         {
           "amount": 10,
           "prototype": "item:electronic-circuit"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:splitter"
         }
       ],
       "key": "recipe:fast-splitter",
@@ -18743,12 +18743,12 @@
           "prototype": "item:iron-gear-wheel"
         },
         {
-          "amount": 10,
-          "prototype": "item:pipe"
-        },
-        {
           "amount": 5,
           "prototype": "item:engine-unit"
+        },
+        {
+          "amount": 10,
+          "prototype": "item:pipe"
         }
       ],
       "key": "recipe:flamethrower-turret",
@@ -18809,20 +18809,20 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 10,
-          "prototype": "item:iron-gear-wheel"
-        },
-        {
           "amount": 16,
           "prototype": "item:steel-plate"
         },
         {
-          "amount": 8,
-          "prototype": "item:pipe"
+          "amount": 10,
+          "prototype": "item:iron-gear-wheel"
         },
         {
           "amount": 1,
           "prototype": "item:storage-tank"
+        },
+        {
+          "amount": 8,
+          "prototype": "item:pipe"
         }
       ],
       "key": "recipe:fluid-wagon",
@@ -18883,20 +18883,20 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 50,
-          "prototype": "fluid:fluorine"
-        },
-        {
-          "amount": 50,
-          "prototype": "fluid:ammonia"
-        },
-        {
           "amount": 1,
           "prototype": "item:solid-fuel"
         },
         {
           "amount": 1,
           "prototype": "item:lithium"
+        },
+        {
+          "amount": 50,
+          "prototype": "fluid:fluorine"
+        },
+        {
+          "amount": 50,
+          "prototype": "fluid:ammonia"
         }
       ],
       "key": "recipe:fluoroketone",
@@ -18919,14 +18919,14 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 50,
-          "ignoredByStats": 50,
-          "prototype": "fluid:fluoroketone-cold"
-        },
-        {
           "amount": 1,
           "ignoredByStats": 1,
           "prototype": "item:barrel"
+        },
+        {
+          "amount": 50,
+          "ignoredByStats": 50,
+          "prototype": "fluid:fluoroketone-cold"
         }
       ],
       "key": "recipe:fluoroketone-cold-barrel",
@@ -18999,14 +18999,14 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 50,
-          "ignoredByStats": 50,
-          "prototype": "fluid:fluoroketone-hot"
-        },
-        {
           "amount": 1,
           "ignoredByStats": 1,
           "prototype": "item:barrel"
+        },
+        {
+          "amount": 50,
+          "ignoredByStats": 50,
+          "prototype": "fluid:fluoroketone-hot"
         }
       ],
       "key": "recipe:fluoroketone-hot-barrel",
@@ -19054,19 +19054,19 @@
       "ingredients": [
         {
           "amount": 1,
-          "prototype": "item:electric-engine-unit"
+          "prototype": "item:steel-plate"
         },
         {
           "amount": 2,
           "prototype": "item:battery"
         },
         {
-          "amount": 1,
-          "prototype": "item:steel-plate"
-        },
-        {
           "amount": 3,
           "prototype": "item:electronic-circuit"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:electric-engine-unit"
         }
       ],
       "key": "recipe:flying-robot-frame",
@@ -19127,20 +19127,20 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 4,
-          "prototype": "item:tungsten-plate"
+          "amount": 20,
+          "prototype": "item:stone"
         },
         {
           "amount": 4,
-          "prototype": "item:lithium-plate"
+          "prototype": "item:tungsten-plate"
         },
         {
           "amount": 4,
           "prototype": "item:carbon-fiber"
         },
         {
-          "amount": 20,
-          "prototype": "item:stone"
+          "amount": 4,
+          "prototype": "item:lithium-plate"
         },
         {
           "amount": 20,
@@ -19207,15 +19207,15 @@
       "ingredients": [
         {
           "amount": 50,
-          "prototype": "item:tungsten-carbide"
-        },
-        {
-          "amount": 50,
           "prototype": "item:steel-plate"
         },
         {
           "amount": 30,
           "prototype": "item:electronic-circuit"
+        },
+        {
+          "amount": 50,
+          "prototype": "item:tungsten-carbide"
         },
         {
           "amount": 20,
@@ -19349,12 +19349,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 5,
-          "prototype": "item:lithium-plate"
-        },
-        {
           "amount": 1,
           "prototype": "item:holmium-plate"
+        },
+        {
+          "amount": 5,
+          "prototype": "item:lithium-plate"
         },
         {
           "amount": 100,
@@ -19437,28 +19437,28 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:fission-reactor-equipment"
-        },
-        {
-          "amount": 10,
-          "prototype": "item:fusion-power-cell"
-        },
-        {
           "amount": 250,
           "prototype": "item:tungsten-plate"
-        },
-        {
-          "amount": 100,
-          "prototype": "item:carbon-fiber"
         },
         {
           "amount": 25,
           "prototype": "item:supercapacitor"
         },
         {
+          "amount": 100,
+          "prototype": "item:carbon-fiber"
+        },
+        {
           "amount": 250,
           "prototype": "item:quantum-processor"
+        },
+        {
+          "amount": 10,
+          "prototype": "item:fusion-power-cell"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:fission-reactor-equipment"
         }
       ],
       "key": "recipe:fusion-reactor-equipment",
@@ -19563,16 +19563,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:stone-wall"
-        },
-        {
           "amount": 2,
           "prototype": "item:steel-plate"
         },
         {
           "amount": 2,
           "prototype": "item:electronic-circuit"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:stone-wall"
         }
       ],
       "key": "recipe:gate",
@@ -19628,12 +19628,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 5,
-          "prototype": "item:iron-plate"
-        },
-        {
           "amount": 10,
           "prototype": "item:coal"
+        },
+        {
+          "amount": 5,
+          "prototype": "item:iron-plate"
         }
       ],
       "key": "recipe:grenade",
@@ -19684,16 +19684,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 10,
-          "prototype": "item:iron-gear-wheel"
+          "amount": 20,
+          "prototype": "item:iron-plate"
         },
         {
           "amount": 10,
           "prototype": "item:copper-plate"
         },
         {
-          "amount": 20,
-          "prototype": "item:iron-plate"
+          "amount": 10,
+          "prototype": "item:iron-gear-wheel"
         }
       ],
       "key": "recipe:gun-turret",
@@ -19801,12 +19801,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 10,
-          "prototype": "item:steel-plate"
-        },
-        {
           "amount": 100,
           "prototype": "item:copper-plate"
+        },
+        {
+          "amount": 10,
+          "prototype": "item:steel-plate"
         },
         {
           "amount": 10,
@@ -19866,12 +19866,12 @@
       "hidden": true,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:heat-pipe"
-        },
-        {
           "amount": 5,
           "prototype": "item:electronic-circuit"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:heat-pipe"
         }
       ],
       "key": "recipe:heat-interface",
@@ -19922,12 +19922,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 10,
-          "prototype": "item:steel-plate"
-        },
-        {
           "amount": 20,
           "prototype": "item:copper-plate"
+        },
+        {
+          "amount": 10,
+          "prototype": "item:steel-plate"
         }
       ],
       "key": "recipe:heat-pipe",
@@ -19978,16 +19978,16 @@
       "hidden": false,
       "ingredients": [
         {
+          "amount": 20,
+          "prototype": "item:concrete"
+        },
+        {
           "amount": 2,
           "prototype": "item:boiler"
         },
         {
           "amount": 5,
           "prototype": "item:heat-pipe"
-        },
-        {
-          "amount": 20,
-          "prototype": "item:concrete"
         }
       ],
       "key": "recipe:heating-tower",
@@ -20099,14 +20099,14 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 50,
-          "ignoredByStats": 50,
-          "prototype": "fluid:heavy-oil"
-        },
-        {
           "amount": 1,
           "ignoredByStats": 1,
           "prototype": "item:barrel"
+        },
+        {
+          "amount": 50,
+          "ignoredByStats": 50,
+          "prototype": "fluid:heavy-oil"
         }
       ],
       "key": "recipe:heavy-oil-barrel",
@@ -20258,12 +20258,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 2,
-          "prototype": "item:holmium-ore"
-        },
-        {
           "amount": 1,
           "prototype": "item:stone"
+        },
+        {
+          "amount": 2,
+          "prototype": "item:holmium-ore"
         },
         {
           "amount": 10,
@@ -20313,12 +20313,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 400,
-          "prototype": "fluid:ammonia"
-        },
-        {
           "amount": 50,
           "prototype": "item:ice"
+        },
+        {
+          "amount": 400,
+          "prototype": "fluid:ammonia"
         }
       ],
       "key": "recipe:ice-platform",
@@ -20416,12 +20416,12 @@
       "hidden": true,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:steel-chest"
-        },
-        {
           "amount": 5,
           "prototype": "item:electronic-circuit"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:steel-chest"
         }
       ],
       "key": "recipe:infinity-chest",
@@ -20472,12 +20472,12 @@
       "hidden": true,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:pipe"
-        },
-        {
           "amount": 5,
           "prototype": "item:electronic-circuit"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:pipe"
         }
       ],
       "key": "recipe:infinity-pipe",
@@ -20529,7 +20529,7 @@
       "ingredients": [
         {
           "amount": 1,
-          "prototype": "item:electronic-circuit"
+          "prototype": "item:iron-plate"
         },
         {
           "amount": 1,
@@ -20537,7 +20537,7 @@
         },
         {
           "amount": 1,
-          "prototype": "item:iron-plate"
+          "prototype": "item:electronic-circuit"
         }
       ],
       "key": "recipe:inserter",
@@ -21092,11 +21092,11 @@
       "ingredients": [
         {
           "amount": 10,
-          "prototype": "item:electronic-circuit"
+          "prototype": "item:iron-gear-wheel"
         },
         {
           "amount": 10,
-          "prototype": "item:iron-gear-wheel"
+          "prototype": "item:electronic-circuit"
         },
         {
           "amount": 4,
@@ -21261,20 +21261,20 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:cargo-bay"
-        },
-        {
-          "amount": 4,
-          "prototype": "item:steel-chest"
+          "amount": 8,
+          "prototype": "item:processing-unit"
         },
         {
           "amount": 15,
           "prototype": "item:electric-engine-unit"
         },
         {
-          "amount": 8,
-          "prototype": "item:processing-unit"
+          "amount": 4,
+          "prototype": "item:steel-chest"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:cargo-bay"
         }
       ],
       "key": "recipe:landing-pad-unloading-bay",
@@ -21365,12 +21365,12 @@
           "prototype": "item:steel-plate"
         },
         {
-          "amount": 20,
-          "prototype": "item:electronic-circuit"
-        },
-        {
           "amount": 12,
           "prototype": "item:battery"
+        },
+        {
+          "amount": 20,
+          "prototype": "item:electronic-circuit"
         }
       ],
       "key": "recipe:laser-turret",
@@ -21473,14 +21473,14 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 50,
-          "ignoredByStats": 50,
-          "prototype": "fluid:light-oil"
-        },
-        {
           "amount": 1,
           "ignoredByStats": 1,
           "prototype": "item:barrel"
+        },
+        {
+          "amount": 50,
+          "ignoredByStats": 50,
+          "prototype": "fluid:light-oil"
         }
       ],
       "key": "recipe:light-oil-barrel",
@@ -21555,16 +21555,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:lightning-rod"
-        },
-        {
           "amount": 8,
           "prototype": "item:supercapacitor"
         },
         {
           "amount": 1,
           "prototype": "item:accumulator"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:lightning-rod"
         },
         {
           "amount": 80,
@@ -21625,12 +21625,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 12,
-          "prototype": "item:copper-cable"
-        },
-        {
           "amount": 8,
           "prototype": "item:steel-plate"
+        },
+        {
+          "amount": 12,
+          "prototype": "item:copper-cable"
         },
         {
           "amount": 4,
@@ -21850,11 +21850,7 @@
       "ingredients": [
         {
           "amount": 5,
-          "prototype": "item:inserter"
-        },
-        {
-          "amount": 5,
-          "prototype": "item:electronic-circuit"
+          "prototype": "item:iron-plate"
         },
         {
           "amount": 5,
@@ -21862,11 +21858,15 @@
         },
         {
           "amount": 5,
-          "prototype": "item:iron-plate"
+          "prototype": "item:electronic-circuit"
         },
         {
           "amount": 5,
           "prototype": "item:transport-belt"
+        },
+        {
+          "amount": 5,
+          "prototype": "item:inserter"
         }
       ],
       "key": "recipe:loader",
@@ -21932,16 +21932,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 20,
-          "prototype": "item:engine-unit"
+          "amount": 30,
+          "prototype": "item:steel-plate"
         },
         {
           "amount": 10,
           "prototype": "item:electronic-circuit"
         },
         {
-          "amount": 30,
-          "prototype": "item:steel-plate"
+          "amount": 20,
+          "prototype": "item:engine-unit"
         }
       ],
       "key": "recipe:locomotive",
@@ -21997,12 +21997,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:flying-robot-frame"
-        },
-        {
           "amount": 2,
           "prototype": "item:advanced-circuit"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:flying-robot-frame"
         }
       ],
       "key": "recipe:logistic-robot",
@@ -22054,11 +22054,11 @@
       "ingredients": [
         {
           "amount": 1,
-          "prototype": "item:inserter"
+          "prototype": "item:transport-belt"
         },
         {
           "amount": 1,
-          "prototype": "item:transport-belt"
+          "prototype": "item:inserter"
         }
       ],
       "key": "recipe:logistic-science-pack",
@@ -22107,11 +22107,11 @@
       "ingredients": [
         {
           "amount": 1,
-          "prototype": "item:iron-gear-wheel"
+          "prototype": "item:iron-plate"
         },
         {
           "amount": 1,
-          "prototype": "item:iron-plate"
+          "prototype": "item:iron-gear-wheel"
         },
         {
           "amount": 1,
@@ -22171,12 +22171,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 2,
-          "prototype": "item:steel-plate"
-        },
-        {
           "amount": 20,
           "prototype": "item:copper-plate"
+        },
+        {
+          "amount": 2,
+          "prototype": "item:steel-plate"
         },
         {
           "amount": 5,
@@ -22259,14 +22259,14 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 50,
-          "ignoredByStats": 50,
-          "prototype": "fluid:lubricant"
-        },
-        {
           "amount": 1,
           "ignoredByStats": 1,
           "prototype": "item:barrel"
+        },
+        {
+          "amount": 50,
+          "ignoredByStats": 50,
+          "prototype": "fluid:lubricant"
         }
       ],
       "key": "recipe:lubricant-barrel",
@@ -22313,16 +22313,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:power-armor-mk2"
+          "amount": 100,
+          "prototype": "item:processing-unit"
         },
         {
           "amount": 200,
           "prototype": "item:holmium-plate"
-        },
-        {
-          "amount": 100,
-          "prototype": "item:processing-unit"
         },
         {
           "amount": 50,
@@ -22331,6 +22327,10 @@
         {
           "amount": 50,
           "prototype": "item:supercapacitor"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:power-armor-mk2"
         }
       ],
       "key": "recipe:mech-armor",
@@ -22397,12 +22397,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 4,
-          "prototype": "item:iron-stick"
-        },
-        {
           "amount": 2,
           "prototype": "item:steel-plate"
+        },
+        {
+          "amount": 4,
+          "prototype": "item:iron-stick"
         },
         {
           "amount": 2,
@@ -22677,12 +22677,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 30,
-          "prototype": "item:advanced-circuit"
-        },
-        {
           "amount": 50,
           "prototype": "item:steel-plate"
+        },
+        {
+          "amount": 30,
+          "prototype": "item:advanced-circuit"
         }
       ],
       "key": "recipe:modular-armor",
@@ -22733,12 +22733,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 500,
-          "prototype": "fluid:lava"
-        },
-        {
           "amount": 1,
           "prototype": "item:calcite"
+        },
+        {
+          "amount": 500,
+          "prototype": "fluid:lava"
         }
       ],
       "key": "recipe:molten-copper-from-lava",
@@ -22764,12 +22764,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 500,
-          "prototype": "fluid:lava"
-        },
-        {
           "amount": 1,
           "prototype": "item:calcite"
+        },
+        {
+          "amount": 500,
+          "prototype": "fluid:lava"
         }
       ],
       "key": "recipe:molten-iron-from-lava",
@@ -22795,12 +22795,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 5,
-          "prototype": "item:advanced-circuit"
-        },
-        {
           "amount": 10,
           "prototype": "item:steel-plate"
+        },
+        {
+          "amount": 5,
+          "prototype": "item:advanced-circuit"
         }
       ],
       "key": "recipe:night-vision-equipment",
@@ -22852,11 +22852,11 @@
       "ingredients": [
         {
           "amount": 1,
-          "prototype": "item:uranium-235"
+          "prototype": "item:rocket-fuel"
         },
         {
           "amount": 1,
-          "prototype": "item:rocket-fuel"
+          "prototype": "item:uranium-235"
         }
       ],
       "key": "recipe:nuclear-fuel",
@@ -22931,7 +22931,7 @@
       "ingredients": [
         {
           "amount": 500,
-          "prototype": "item:concrete"
+          "prototype": "item:copper-plate"
         },
         {
           "amount": 500,
@@ -22943,7 +22943,7 @@
         },
         {
           "amount": 500,
-          "prototype": "item:copper-plate"
+          "prototype": "item:concrete"
         }
       ],
       "key": "recipe:nuclear-reactor",
@@ -23147,12 +23147,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 3,
-          "prototype": "item:pipe"
-        },
-        {
           "amount": 2,
           "prototype": "item:iron-gear-wheel"
+        },
+        {
+          "amount": 3,
+          "prototype": "item:pipe"
         }
       ],
       "key": "recipe:offshore-pump",
@@ -23212,15 +23212,15 @@
         },
         {
           "amount": 10,
-          "prototype": "item:stone-brick"
-        },
-        {
-          "amount": 10,
           "prototype": "item:electronic-circuit"
         },
         {
           "amount": 10,
           "prototype": "item:pipe"
+        },
+        {
+          "amount": 10,
+          "prototype": "item:stone-brick"
         }
       ],
       "key": "recipe:oil-refinery",
@@ -23338,20 +23338,20 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 2,
-          "prototype": "item:artificial-jellynut-soil"
-        },
-        {
           "amount": 5,
           "prototype": "item:jellynut-seed"
+        },
+        {
+          "amount": 50,
+          "prototype": "item:spoilage"
         },
         {
           "amount": 10,
           "prototype": "item:biter-egg"
         },
         {
-          "amount": 50,
-          "prototype": "item:spoilage"
+          "amount": 2,
+          "prototype": "item:artificial-jellynut-soil"
         },
         {
           "amount": 100,
@@ -23416,20 +23416,20 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 2,
-          "prototype": "item:artificial-yumako-soil"
-        },
-        {
           "amount": 5,
           "prototype": "item:yumako-seed"
+        },
+        {
+          "amount": 50,
+          "prototype": "item:spoilage"
         },
         {
           "amount": 10,
           "prototype": "item:biter-egg"
         },
         {
-          "amount": 50,
-          "prototype": "item:spoilage"
+          "amount": 2,
+          "prototype": "item:artificial-yumako-soil"
         },
         {
           "amount": 100,
@@ -23725,16 +23725,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:steel-chest"
-        },
-        {
           "amount": 3,
           "prototype": "item:electronic-circuit"
         },
         {
           "amount": 1,
           "prototype": "item:advanced-circuit"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:steel-chest"
         }
       ],
       "key": "recipe:passive-provider-chest",
@@ -23790,13 +23790,13 @@
       "hidden": false,
       "ingredients": [
         {
+          "amount": 30,
+          "prototype": "item:nutrients"
+        },
+        {
           "amount": 1,
           "ignoredByStats": 1,
           "prototype": "item:pentapod-egg"
-        },
-        {
-          "amount": 30,
-          "prototype": "item:nutrients"
         },
         {
           "amount": 60,
@@ -23916,20 +23916,20 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 10,
-          "prototype": "item:advanced-circuit"
-        },
-        {
-          "amount": 40,
-          "prototype": "item:iron-gear-wheel"
-        },
-        {
           "amount": 20,
           "prototype": "item:steel-plate"
         },
         {
           "amount": 45,
           "prototype": "item:battery"
+        },
+        {
+          "amount": 40,
+          "prototype": "item:iron-gear-wheel"
+        },
+        {
+          "amount": 10,
+          "prototype": "item:advanced-circuit"
         }
       ],
       "key": "recipe:personal-roboport-equipment",
@@ -23990,16 +23990,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 5,
-          "prototype": "item:personal-roboport-equipment"
-        },
-        {
           "amount": 50,
           "prototype": "item:processing-unit"
         },
         {
           "amount": 50,
           "prototype": "item:superconductor"
+        },
+        {
+          "amount": 5,
+          "prototype": "item:personal-roboport-equipment"
         }
       ],
       "key": "recipe:personal-roboport-mk2-equipment",
@@ -24055,14 +24055,14 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 50,
-          "ignoredByStats": 50,
-          "prototype": "fluid:petroleum-gas"
-        },
-        {
           "amount": 1,
           "ignoredByStats": 1,
           "prototype": "item:barrel"
+        },
+        {
+          "amount": 50,
+          "ignoredByStats": 50,
+          "prototype": "fluid:petroleum-gas"
         }
       ],
       "key": "recipe:petroleum-gas-barrel",
@@ -24110,7 +24110,7 @@
       "ingredients": [
         {
           "amount": 2,
-          "prototype": "item:firearm-magazine"
+          "prototype": "item:copper-plate"
         },
         {
           "amount": 1,
@@ -24118,7 +24118,7 @@
         },
         {
           "amount": 2,
-          "prototype": "item:copper-plate"
+          "prototype": "item:firearm-magazine"
         }
       ],
       "key": "recipe:piercing-rounds-magazine",
@@ -24175,15 +24175,15 @@
       "ingredients": [
         {
           "amount": 2,
-          "prototype": "item:shotgun-shell"
-        },
-        {
-          "amount": 2,
           "prototype": "item:copper-plate"
         },
         {
           "amount": 1,
           "prototype": "item:steel-plate"
+        },
+        {
+          "amount": 2,
+          "prototype": "item:shotgun-shell"
         }
       ],
       "key": "recipe:piercing-shotgun-shell",
@@ -24286,12 +24286,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 10,
-          "prototype": "item:pipe"
-        },
-        {
           "amount": 5,
           "prototype": "item:iron-plate"
+        },
+        {
+          "amount": 10,
+          "prototype": "item:pipe"
         }
       ],
       "key": "recipe:pipe-to-ground",
@@ -24343,11 +24343,11 @@
       "ingredients": [
         {
           "amount": 5,
-          "prototype": "item:copper-plate"
+          "prototype": "item:iron-plate"
         },
         {
           "amount": 5,
-          "prototype": "item:iron-plate"
+          "prototype": "item:copper-plate"
         }
       ],
       "key": "recipe:pistol",
@@ -24396,12 +24396,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 20,
-          "prototype": "fluid:petroleum-gas"
-        },
-        {
           "amount": 1,
           "prototype": "item:coal"
+        },
+        {
+          "amount": 20,
+          "prototype": "fluid:petroleum-gas"
         }
       ],
       "key": "recipe:plastic-bar",
@@ -24449,16 +24449,16 @@
       "hidden": false,
       "ingredients": [
         {
+          "amount": 10,
+          "prototype": "item:coal"
+        },
+        {
           "amount": 3,
           "prototype": "item:steel-plate"
         },
         {
           "amount": 3,
           "prototype": "item:electronic-circuit"
-        },
-        {
-          "amount": 10,
-          "prototype": "item:coal"
         }
       ],
       "key": "recipe:poison-capsule",
@@ -24515,15 +24515,15 @@
       "ingredients": [
         {
           "amount": 40,
+          "prototype": "item:steel-plate"
+        },
+        {
+          "amount": 40,
           "prototype": "item:processing-unit"
         },
         {
           "amount": 20,
           "prototype": "item:electric-engine-unit"
-        },
-        {
-          "amount": 40,
-          "prototype": "item:steel-plate"
         }
       ],
       "key": "recipe:power-armor",
@@ -24545,14 +24545,6 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 100,
-          "prototype": "item:efficiency-module"
-        },
-        {
-          "amount": 100,
-          "prototype": "item:speed-module"
-        },
-        {
           "amount": 60,
           "prototype": "item:processing-unit"
         },
@@ -24563,6 +24555,14 @@
         {
           "amount": 30,
           "prototype": "item:low-density-structure"
+        },
+        {
+          "amount": 100,
+          "prototype": "item:speed-module"
+        },
+        {
+          "amount": 100,
+          "prototype": "item:efficiency-module"
         }
       ],
       "key": "recipe:power-armor-mk2",
@@ -24788,16 +24788,16 @@
       "hidden": false,
       "ingredients": [
         {
+          "amount": 30,
+          "prototype": "item:rail"
+        },
+        {
           "amount": 1,
           "prototype": "item:electric-furnace"
         },
         {
           "amount": 1,
           "prototype": "item:productivity-module"
-        },
-        {
-          "amount": 30,
-          "prototype": "item:rail"
         }
       ],
       "key": "recipe:production-science-pack",
@@ -24847,11 +24847,11 @@
       "ingredients": [
         {
           "amount": 5,
-          "prototype": "item:advanced-circuit"
+          "prototype": "item:electronic-circuit"
         },
         {
           "amount": 5,
-          "prototype": "item:electronic-circuit"
+          "prototype": "item:advanced-circuit"
         }
       ],
       "key": "recipe:productivity-module",
@@ -24874,16 +24874,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 4,
-          "prototype": "item:productivity-module"
-        },
-        {
           "amount": 5,
           "prototype": "item:advanced-circuit"
         },
         {
           "amount": 5,
           "prototype": "item:processing-unit"
+        },
+        {
+          "amount": 4,
+          "prototype": "item:productivity-module"
         }
       ],
       "key": "recipe:productivity-module-2",
@@ -24940,10 +24940,6 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 4,
-          "prototype": "item:productivity-module-2"
-        },
-        {
           "amount": 5,
           "prototype": "item:advanced-circuit"
         },
@@ -24954,6 +24950,10 @@
         {
           "amount": 1,
           "prototype": "item:biter-egg"
+        },
+        {
+          "amount": 4,
+          "prototype": "item:productivity-module-2"
         }
       ],
       "key": "recipe:productivity-module-3",
@@ -25143,16 +25143,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 25,
-          "prototype": "item:promethium-asteroid-chunk"
+          "amount": 10,
+          "prototype": "item:biter-egg"
         },
         {
           "amount": 1,
           "prototype": "item:quantum-processor"
         },
         {
-          "amount": 10,
-          "prototype": "item:biter-egg"
+          "amount": 25,
+          "prototype": "item:promethium-asteroid-chunk"
         }
       ],
       "key": "recipe:promethium-science-pack",
@@ -25227,11 +25227,11 @@
       "ingredients": [
         {
           "amount": 1,
-          "prototype": "item:engine-unit"
+          "prototype": "item:steel-plate"
         },
         {
           "amount": 1,
-          "prototype": "item:steel-plate"
+          "prototype": "item:engine-unit"
         },
         {
           "amount": 1,
@@ -25394,16 +25394,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 4,
-          "prototype": "item:quality-module"
-        },
-        {
           "amount": 5,
           "prototype": "item:advanced-circuit"
         },
         {
           "amount": 5,
           "prototype": "item:processing-unit"
+        },
+        {
+          "amount": 4,
+          "prototype": "item:quality-module"
         }
       ],
       "key": "recipe:quality-module-2",
@@ -25460,10 +25460,6 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 4,
-          "prototype": "item:quality-module-2"
-        },
-        {
           "amount": 5,
           "prototype": "item:advanced-circuit"
         },
@@ -25474,6 +25470,10 @@
         {
           "amount": 1,
           "prototype": "item:superconductor"
+        },
+        {
+          "amount": 4,
+          "prototype": "item:quality-module-2"
         }
       ],
       "key": "recipe:quality-module-3",
@@ -25564,11 +25564,11 @@
       "ingredients": [
         {
           "amount": 1,
-          "prototype": "item:tungsten-carbide"
+          "prototype": "item:processing-unit"
         },
         {
           "amount": 1,
-          "prototype": "item:processing-unit"
+          "prototype": "item:tungsten-carbide"
         },
         {
           "amount": 1,
@@ -25659,16 +25659,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 5,
-          "prototype": "item:electronic-circuit"
+          "amount": 10,
+          "prototype": "item:iron-plate"
         },
         {
           "amount": 5,
           "prototype": "item:iron-gear-wheel"
         },
         {
-          "amount": 10,
-          "prototype": "item:iron-plate"
+          "amount": 5,
+          "prototype": "item:electronic-circuit"
         }
       ],
       "key": "recipe:radar",
@@ -25729,11 +25729,11 @@
         },
         {
           "amount": 1,
-          "prototype": "item:iron-stick"
+          "prototype": "item:steel-plate"
         },
         {
           "amount": 1,
-          "prototype": "item:steel-plate"
+          "prototype": "item:iron-stick"
         }
       ],
       "key": "recipe:rail",
@@ -25755,12 +25755,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:electronic-circuit"
-        },
-        {
           "amount": 5,
           "prototype": "item:iron-plate"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:electronic-circuit"
         }
       ],
       "key": "recipe:rail-chain-signal",
@@ -25811,16 +25811,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 100,
-          "prototype": "item:refined-concrete"
+          "amount": 10,
+          "prototype": "item:steel-plate"
         },
         {
           "amount": 8,
           "prototype": "item:rail"
         },
         {
-          "amount": 10,
-          "prototype": "item:steel-plate"
+          "amount": 100,
+          "prototype": "item:refined-concrete"
         }
       ],
       "key": "recipe:rail-ramp",
@@ -25910,12 +25910,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:electronic-circuit"
-        },
-        {
           "amount": 5,
           "prototype": "item:iron-plate"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:electronic-circuit"
         }
       ],
       "key": "recipe:rail-signal",
@@ -25966,12 +25966,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 20,
-          "prototype": "item:refined-concrete"
-        },
-        {
           "amount": 10,
           "prototype": "item:steel-plate"
+        },
+        {
+          "amount": 20,
+          "prototype": "item:refined-concrete"
         }
       ],
       "key": "recipe:rail-support",
@@ -26061,12 +26061,12 @@
           "prototype": "item:steel-plate"
         },
         {
-          "amount": 10,
-          "prototype": "item:copper-cable"
-        },
-        {
           "amount": 2,
           "prototype": "item:explosives"
+        },
+        {
+          "amount": 10,
+          "prototype": "item:copper-cable"
         }
       ],
       "key": "recipe:railgun-ammo",
@@ -26156,10 +26156,6 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 100,
-          "prototype": "item:quantum-processor"
-        },
-        {
           "amount": 30,
           "prototype": "item:tungsten-plate"
         },
@@ -26170,6 +26166,10 @@
         {
           "amount": 20,
           "prototype": "item:carbon-fiber"
+        },
+        {
+          "amount": 100,
+          "prototype": "item:quantum-processor"
         },
         {
           "amount": 100,
@@ -26273,16 +26273,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 6,
-          "prototype": "item:processing-unit"
-        },
-        {
           "amount": 20,
           "prototype": "item:steel-plate"
         },
         {
           "amount": 40,
           "prototype": "item:iron-gear-wheel"
+        },
+        {
+          "amount": 6,
+          "prototype": "item:processing-unit"
         },
         {
           "amount": 20,
@@ -26347,16 +26347,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 20,
-          "prototype": "item:concrete"
+          "amount": 1,
+          "prototype": "item:steel-plate"
         },
         {
           "amount": 8,
           "prototype": "item:iron-stick"
         },
         {
-          "amount": 1,
-          "prototype": "item:steel-plate"
+          "amount": 20,
+          "prototype": "item:concrete"
         },
         {
           "amount": 100,
@@ -26474,11 +26474,11 @@
       "ingredients": [
         {
           "amount": 2,
-          "prototype": "item:electronic-circuit"
+          "prototype": "item:iron-gear-wheel"
         },
         {
           "amount": 2,
-          "prototype": "item:iron-gear-wheel"
+          "prototype": "item:electronic-circuit"
         }
       ],
       "key": "recipe:repair-pack",
@@ -26529,16 +26529,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:steel-chest"
-        },
-        {
           "amount": 3,
           "prototype": "item:electronic-circuit"
         },
         {
           "amount": 1,
           "prototype": "item:advanced-circuit"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:steel-chest"
         }
       ],
       "key": "recipe:requester-chest",
@@ -26659,12 +26659,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:explosives"
-        },
-        {
           "amount": 2,
           "prototype": "item:iron-plate"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:explosives"
         }
       ],
       "key": "recipe:rocket",
@@ -26714,16 +26714,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 30,
-          "prototype": "fluid:water"
+          "amount": 2,
+          "prototype": "item:bioflux"
         },
         {
           "amount": 30,
           "prototype": "item:jelly"
         },
         {
-          "amount": 2,
-          "prototype": "item:bioflux"
+          "amount": 30,
+          "prototype": "fluid:water"
         }
       ],
       "key": "recipe:rocket-fuel-from-jelly",
@@ -26898,20 +26898,20 @@
           "prototype": "item:steel-plate"
         },
         {
-          "amount": 1000,
-          "prototype": "item:concrete"
-        },
-        {
-          "amount": 100,
-          "prototype": "item:pipe"
-        },
-        {
           "amount": 200,
           "prototype": "item:processing-unit"
         },
         {
           "amount": 200,
           "prototype": "item:electric-engine-unit"
+        },
+        {
+          "amount": 100,
+          "prototype": "item:pipe"
+        },
+        {
+          "amount": 1000,
+          "prototype": "item:concrete"
         }
       ],
       "key": "recipe:rocket-silo",
@@ -26977,8 +26977,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 4,
-          "prototype": "item:rocket-launcher"
+          "amount": 20,
+          "prototype": "item:steel-plate"
+        },
+        {
+          "amount": 20,
+          "prototype": "item:iron-gear-wheel"
         },
         {
           "amount": 4,
@@ -26989,12 +26993,8 @@
           "prototype": "item:carbon-fiber"
         },
         {
-          "amount": 20,
-          "prototype": "item:steel-plate"
-        },
-        {
-          "amount": 20,
-          "prototype": "item:iron-gear-wheel"
+          "amount": 4,
+          "prototype": "item:rocket-launcher"
         }
       ],
       "key": "recipe:rocket-turret",
@@ -27284,12 +27284,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 15,
-          "prototype": "item:iron-plate"
+          "amount": 5,
+          "prototype": "item:wood"
         },
         {
-          "amount": 5,
-          "prototype": "item:iron-gear-wheel"
+          "amount": 15,
+          "prototype": "item:iron-plate"
         },
         {
           "amount": 10,
@@ -27297,7 +27297,7 @@
         },
         {
           "amount": 5,
-          "prototype": "item:wood"
+          "prototype": "item:iron-gear-wheel"
         }
       ],
       "key": "recipe:shotgun",
@@ -27359,11 +27359,11 @@
       "ingredients": [
         {
           "amount": 2,
-          "prototype": "item:copper-plate"
+          "prototype": "item:iron-plate"
         },
         {
           "amount": 2,
-          "prototype": "item:iron-plate"
+          "prototype": "item:copper-plate"
         }
       ],
       "key": "recipe:shotgun-shell",
@@ -27498,16 +27498,16 @@
       "hidden": false,
       "ingredients": [
         {
+          "amount": 5,
+          "prototype": "item:coal"
+        },
+        {
           "amount": 2,
           "prototype": "item:steel-plate"
         },
         {
           "amount": 2,
           "prototype": "item:electronic-circuit"
-        },
-        {
-          "amount": 5,
-          "prototype": "item:coal"
         }
       ],
       "key": "recipe:slowdown-capsule",
@@ -27621,7 +27621,7 @@
       "ingredients": [
         {
           "amount": 1,
-          "prototype": "item:electronic-circuit"
+          "prototype": "item:iron-plate"
         },
         {
           "amount": 3,
@@ -27629,7 +27629,7 @@
         },
         {
           "amount": 1,
-          "prototype": "item:iron-plate"
+          "prototype": "item:electronic-circuit"
         }
       ],
       "key": "recipe:small-lamp",
@@ -27687,15 +27687,15 @@
       "ingredients": [
         {
           "amount": 5,
+          "prototype": "item:copper-plate"
+        },
+        {
+          "amount": 5,
           "prototype": "item:steel-plate"
         },
         {
           "amount": 15,
           "prototype": "item:electronic-circuit"
-        },
-        {
-          "amount": 5,
-          "prototype": "item:copper-plate"
         }
       ],
       "key": "recipe:solar-panel",
@@ -27717,16 +27717,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:solar-panel"
+          "amount": 5,
+          "prototype": "item:steel-plate"
         },
         {
           "amount": 2,
           "prototype": "item:advanced-circuit"
         },
         {
-          "amount": 5,
-          "prototype": "item:steel-plate"
+          "amount": 1,
+          "prototype": "item:solar-panel"
         }
       ],
       "key": "recipe:solar-panel-equipment",
@@ -28021,16 +28021,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 60,
-          "prototype": "item:space-platform-foundation"
-        },
-        {
           "amount": 20,
           "prototype": "item:steel-plate"
         },
         {
           "amount": 20,
           "prototype": "item:processing-unit"
+        },
+        {
+          "amount": 60,
+          "prototype": "item:space-platform-foundation"
         }
       ],
       "key": "recipe:space-platform-starter-pack",
@@ -28086,16 +28086,16 @@
       "hidden": false,
       "ingredients": [
         {
+          "amount": 1,
+          "prototype": "item:ice"
+        },
+        {
           "amount": 2,
           "prototype": "item:iron-plate"
         },
         {
           "amount": 1,
           "prototype": "item:carbon"
-        },
-        {
-          "amount": 1,
-          "prototype": "item:ice"
         }
       ],
       "key": "recipe:space-science-pack",
@@ -28146,11 +28146,11 @@
       "ingredients": [
         {
           "amount": 5,
-          "prototype": "item:advanced-circuit"
+          "prototype": "item:electronic-circuit"
         },
         {
           "amount": 5,
-          "prototype": "item:electronic-circuit"
+          "prototype": "item:advanced-circuit"
         }
       ],
       "key": "recipe:speed-module",
@@ -28173,16 +28173,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 4,
-          "prototype": "item:speed-module"
-        },
-        {
           "amount": 5,
           "prototype": "item:advanced-circuit"
         },
         {
           "amount": 5,
           "prototype": "item:processing-unit"
+        },
+        {
+          "amount": 4,
+          "prototype": "item:speed-module"
         }
       ],
       "key": "recipe:speed-module-2",
@@ -28239,10 +28239,6 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 4,
-          "prototype": "item:speed-module-2"
-        },
-        {
           "amount": 5,
           "prototype": "item:advanced-circuit"
         },
@@ -28253,6 +28249,10 @@
         {
           "amount": 1,
           "prototype": "item:tungsten-carbide"
+        },
+        {
+          "amount": 4,
+          "prototype": "item:speed-module-2"
         }
       ],
       "key": "recipe:speed-module-3",
@@ -28342,16 +28342,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 4,
-          "prototype": "item:exoskeleton-equipment"
+          "amount": 1,
+          "prototype": "item:raw-fish"
         },
         {
           "amount": 2,
           "prototype": "item:fission-reactor-equipment"
         },
         {
-          "amount": 1,
-          "prototype": "item:rocket-turret"
+          "amount": 4,
+          "prototype": "item:exoskeleton-equipment"
         },
         {
           "amount": 2,
@@ -28359,7 +28359,7 @@
         },
         {
           "amount": 1,
-          "prototype": "item:raw-fish"
+          "prototype": "item:rocket-turret"
         }
       ],
       "key": "recipe:spidertron",
@@ -28427,11 +28427,11 @@
       "ingredients": [
         {
           "amount": 5,
-          "prototype": "item:electronic-circuit"
+          "prototype": "item:iron-plate"
         },
         {
           "amount": 5,
-          "prototype": "item:iron-plate"
+          "prototype": "item:electronic-circuit"
         },
         {
           "amount": 4,
@@ -28518,19 +28518,19 @@
       "ingredients": [
         {
           "amount": 1,
-          "prototype": "item:bulk-inserter"
+          "prototype": "item:processing-unit"
         },
         {
-          "amount": 1,
-          "prototype": "item:processing-unit"
+          "amount": 10,
+          "prototype": "item:jelly"
         },
         {
           "amount": 2,
           "prototype": "item:carbon-fiber"
         },
         {
-          "amount": 10,
-          "prototype": "item:jelly"
+          "amount": 1,
+          "prototype": "item:bulk-inserter"
         }
       ],
       "key": "recipe:stack-inserter",
@@ -28615,16 +28615,16 @@
       "hidden": false,
       "ingredients": [
         {
+          "amount": 10,
+          "prototype": "item:iron-plate"
+        },
+        {
           "amount": 8,
           "prototype": "item:iron-gear-wheel"
         },
         {
           "amount": 5,
           "prototype": "item:pipe"
-        },
-        {
-          "amount": 10,
-          "prototype": "item:iron-plate"
         }
       ],
       "key": "recipe:steam-engine",
@@ -28681,11 +28681,11 @@
       "ingredients": [
         {
           "amount": 50,
-          "prototype": "item:iron-gear-wheel"
+          "prototype": "item:copper-plate"
         },
         {
           "amount": 50,
-          "prototype": "item:copper-plate"
+          "prototype": "item:iron-gear-wheel"
         },
         {
           "amount": 20,
@@ -29066,16 +29066,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:steel-chest"
-        },
-        {
           "amount": 3,
           "prototype": "item:electronic-circuit"
         },
         {
           "amount": 1,
           "prototype": "item:advanced-circuit"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:steel-chest"
         }
       ],
       "key": "recipe:storage-chest",
@@ -29188,7 +29188,7 @@
       "ingredients": [
         {
           "amount": 10,
-          "prototype": "item:iron-gear-wheel"
+          "prototype": "item:iron-plate"
         },
         {
           "amount": 5,
@@ -29196,7 +29196,7 @@
         },
         {
           "amount": 10,
-          "prototype": "item:iron-plate"
+          "prototype": "item:iron-gear-wheel"
         }
       ],
       "key": "recipe:submachine-gun",
@@ -29257,12 +29257,12 @@
           "prototype": "item:steel-plate"
         },
         {
-          "amount": 5,
-          "prototype": "item:advanced-circuit"
-        },
-        {
           "amount": 6,
           "prototype": "item:copper-cable"
+        },
+        {
+          "amount": 5,
+          "prototype": "item:advanced-circuit"
         }
       ],
       "key": "recipe:substation",
@@ -29373,12 +29373,12 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 5,
-          "prototype": "item:sulfur"
-        },
-        {
           "amount": 1,
           "prototype": "item:iron-plate"
+        },
+        {
+          "amount": 5,
+          "prototype": "item:sulfur"
         },
         {
           "amount": 100,
@@ -29404,14 +29404,14 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 50,
-          "ignoredByStats": 50,
-          "prototype": "fluid:sulfuric-acid"
-        },
-        {
           "amount": 1,
           "ignoredByStats": 1,
           "prototype": "item:barrel"
+        },
+        {
+          "amount": 50,
+          "ignoredByStats": 50,
+          "prototype": "fluid:sulfuric-acid"
         }
       ],
       "key": "recipe:sulfuric-acid-barrel",
@@ -29458,20 +29458,20 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 2,
-          "prototype": "item:holmium-plate"
-        },
-        {
-          "amount": 2,
-          "prototype": "item:superconductor"
+          "amount": 1,
+          "prototype": "item:battery"
         },
         {
           "amount": 4,
           "prototype": "item:electronic-circuit"
         },
         {
-          "amount": 1,
-          "prototype": "item:battery"
+          "amount": 2,
+          "prototype": "item:holmium-plate"
+        },
+        {
+          "amount": 2,
+          "prototype": "item:superconductor"
         },
         {
           "amount": 10,
@@ -29537,15 +29537,15 @@
       "ingredients": [
         {
           "amount": 1,
-          "prototype": "item:holmium-plate"
-        },
-        {
-          "amount": 1,
           "prototype": "item:copper-plate"
         },
         {
           "amount": 1,
           "prototype": "item:plastic-bar"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:holmium-plate"
         },
         {
           "amount": 5,
@@ -29597,10 +29597,6 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 32,
-          "prototype": "item:engine-unit"
-        },
-        {
           "amount": 50,
           "prototype": "item:steel-plate"
         },
@@ -29611,6 +29607,10 @@
         {
           "amount": 10,
           "prototype": "item:advanced-circuit"
+        },
+        {
+          "amount": 32,
+          "prototype": "item:engine-unit"
         }
       ],
       "key": "recipe:tank",
@@ -29672,11 +29672,11 @@
       "ingredients": [
         {
           "amount": 1,
-          "prototype": "item:supercapacitor"
+          "prototype": "item:plastic-bar"
         },
         {
           "amount": 1,
-          "prototype": "item:plastic-bar"
+          "prototype": "item:supercapacitor"
         },
         {
           "amount": 10,
@@ -29731,20 +29731,20 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:teslagun"
-        },
-        {
-          "amount": 10,
-          "prototype": "item:supercapacitor"
-        },
-        {
           "amount": 10,
           "prototype": "item:processing-unit"
         },
         {
           "amount": 50,
           "prototype": "item:superconductor"
+        },
+        {
+          "amount": 10,
+          "prototype": "item:supercapacitor"
+        },
+        {
+          "amount": 1,
+          "prototype": "item:teslagun"
         },
         {
           "amount": 500,
@@ -29809,16 +29809,16 @@
       "hidden": false,
       "ingredients": [
         {
+          "amount": 30,
+          "prototype": "item:plastic-bar"
+        },
+        {
           "amount": 10,
           "prototype": "item:holmium-plate"
         },
         {
           "amount": 10,
           "prototype": "item:superconductor"
-        },
-        {
-          "amount": 30,
-          "prototype": "item:plastic-bar"
         },
         {
           "amount": 100,
@@ -30079,20 +30079,20 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 5,
-          "prototype": "item:electronic-circuit"
-        },
-        {
           "amount": 6,
           "prototype": "item:iron-plate"
+        },
+        {
+          "amount": 3,
+          "prototype": "item:steel-plate"
         },
         {
           "amount": 6,
           "prototype": "item:iron-stick"
         },
         {
-          "amount": 3,
-          "prototype": "item:steel-plate"
+          "amount": 5,
+          "prototype": "item:electronic-circuit"
         }
       ],
       "key": "recipe:train-stop",
@@ -30260,16 +30260,16 @@
       "hidden": false,
       "ingredients": [
         {
+          "amount": 1,
+          "prototype": "item:carbon"
+        },
+        {
           "amount": 2,
           "prototype": "item:tungsten-ore"
         },
         {
           "amount": 10,
           "prototype": "fluid:sulfuric-acid"
-        },
-        {
-          "amount": 1,
-          "prototype": "item:carbon"
         }
       ],
       "key": "recipe:tungsten-carbide",
@@ -30452,16 +30452,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 1,
-          "prototype": "item:express-splitter"
+          "amount": 2,
+          "prototype": "item:processing-unit"
         },
         {
           "amount": 15,
           "prototype": "item:tungsten-plate"
         },
         {
-          "amount": 2,
-          "prototype": "item:processing-unit"
+          "amount": 1,
+          "prototype": "item:express-splitter"
         },
         {
           "amount": 80,
@@ -30777,11 +30777,11 @@
       "ingredients": [
         {
           "amount": 1,
-          "prototype": "item:cannon-shell"
+          "prototype": "item:uranium-238"
         },
         {
           "amount": 1,
-          "prototype": "item:uranium-238"
+          "prototype": "item:cannon-shell"
         }
       ],
       "key": "recipe:uranium-cannon-shell",
@@ -30951,11 +30951,11 @@
       "ingredients": [
         {
           "amount": 1,
-          "prototype": "item:piercing-rounds-magazine"
+          "prototype": "item:uranium-238"
         },
         {
           "amount": 1,
-          "prototype": "item:uranium-238"
+          "prototype": "item:piercing-rounds-magazine"
         }
       ],
       "key": "recipe:uranium-rounds-magazine",
@@ -31006,16 +31006,16 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 3,
-          "prototype": "item:low-density-structure"
-        },
-        {
           "amount": 2,
           "prototype": "item:processing-unit"
         },
         {
           "amount": 1,
           "prototype": "item:flying-robot-frame"
+        },
+        {
+          "amount": 3,
+          "prototype": "item:low-density-structure"
         }
       ],
       "key": "recipe:utility-science-pack",
@@ -31063,14 +31063,14 @@
       "hidden": false,
       "ingredients": [
         {
-          "amount": 50,
-          "ignoredByStats": 50,
-          "prototype": "fluid:water"
-        },
-        {
           "amount": 1,
           "ignoredByStats": 1,
           "prototype": "item:barrel"
+        },
+        {
+          "amount": 50,
+          "ignoredByStats": 50,
+          "prototype": "fluid:water"
         }
       ],
       "key": "recipe:water-barrel",

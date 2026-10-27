@@ -104,6 +104,136 @@ function optionalBoolean(value: unknown, path: string): boolean | undefined {
   return value;
 }
 
+interface RawItemOrderingSource {
+  readonly table: string;
+  readonly record: JsonObject;
+}
+
+interface RecipeItemOrdering {
+  readonly groupOrder: string;
+  readonly groupName: string;
+  readonly subgroupOrder: string;
+  readonly subgroupName: string;
+  readonly itemOrder: string;
+  readonly itemName: string;
+}
+
+const orderTextEncoder = new TextEncoder();
+
+function compareOrderStrings(left: string, right: string): number {
+  const leftBytes = orderTextEncoder.encode(left);
+  const rightBytes = orderTextEncoder.encode(right);
+  const sharedLength = Math.min(leftBytes.length, rightBytes.length);
+  for (let index = 0; index < sharedLength; index += 1) {
+    const difference = leftBytes[index]! - rightBytes[index]!;
+    if (difference !== 0) return difference;
+  }
+  return leftBytes.length - rightBytes.length;
+}
+
+function compareRecipeItemOrdering(left: RecipeItemOrdering, right: RecipeItemOrdering): number {
+  return (
+    compareOrderStrings(left.groupOrder, right.groupOrder) ||
+    compareOrderStrings(left.groupName, right.groupName) ||
+    compareOrderStrings(left.subgroupOrder, right.subgroupOrder) ||
+    compareOrderStrings(left.subgroupName, right.subgroupName) ||
+    compareOrderStrings(left.itemOrder, right.itemOrder) ||
+    compareOrderStrings(left.itemName, right.itemName)
+  );
+}
+
+function optionalRawString(record: JsonObject, field: string, path: string): string | undefined {
+  const value = record[field];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') throw new FactorioDumpError(path, 'expected a string.');
+  return value;
+}
+
+function optionalRawRecord(
+  dump: JsonObject,
+  tableName: string,
+  name: string,
+): JsonObject | undefined {
+  const source = dump[tableName];
+  if (source === undefined) return undefined;
+  if (typeof source !== 'object' || source === null || Array.isArray(source)) {
+    throw new FactorioDumpError(
+      tableName,
+      'expected an object table for used item ordering metadata.',
+    );
+  }
+  const value = (source as JsonObject)[name];
+  return value === undefined ? undefined : object(value, `${tableName}.${name}`);
+}
+
+function rawOrderString(record: JsonObject | undefined, field: string, path: string): string {
+  if (record === undefined) return '';
+  return optionalRawString(record, field, path) ?? '';
+}
+
+function recipeItemOrdering(
+  name: string,
+  itemSources: ReadonlyMap<string, RawItemOrderingSource>,
+  dump: JsonObject,
+): RecipeItemOrdering {
+  const source = itemSources.get(name);
+  const itemPath = source === undefined ? `item.${name}` : `${source.table}.${name}`;
+  const itemRecord = source?.record;
+  const subgroupName =
+    itemRecord === undefined
+      ? undefined
+      : optionalRawString(itemRecord, 'subgroup', `${itemPath}.subgroup`);
+  const subgroup =
+    subgroupName === undefined || subgroupName.length === 0
+      ? undefined
+      : optionalRawRecord(dump, 'item-subgroup', subgroupName);
+  const groupName =
+    subgroup === undefined
+      ? undefined
+      : optionalRawString(subgroup, 'group', `item-subgroup.${subgroupName}.group`);
+  const group =
+    groupName === undefined || groupName.length === 0
+      ? undefined
+      : optionalRawRecord(dump, 'item-group', groupName);
+  const groupOrderInRecipe =
+    group === undefined
+      ? undefined
+      : optionalRawString(group, 'order_in_recipe', `item-group.${groupName}.order_in_recipe`);
+
+  return {
+    groupOrder:
+      groupOrderInRecipe ?? rawOrderString(group, 'order', `item-group.${groupName}.order`),
+    groupName: groupName ?? '',
+    subgroupOrder: rawOrderString(subgroup, 'order', `item-subgroup.${subgroupName}.order`),
+    subgroupName: subgroupName ?? '',
+    itemOrder: rawOrderString(itemRecord, 'order', `${itemPath}.order`),
+    itemName: name,
+  };
+}
+
+function orderRecipeIngredients(
+  name: string,
+  record: JsonObject,
+  ingredients: readonly RecipeIngredient[],
+  itemSources: ReadonlyMap<string, RawItemOrderingSource>,
+  dump: JsonObject,
+): readonly RecipeIngredient[] {
+  const sortItems =
+    optionalBoolean(record.sort_item_ingredients, `recipe.${name}.sort_item_ingredients`) ?? true;
+  const items = ingredients.filter(({ prototype }) => prototype.startsWith('item:'));
+  const fluids = ingredients.filter(({ prototype }) => prototype.startsWith('fluid:'));
+  if (!sortItems) return [...items, ...fluids];
+
+  const orderedItems = items
+    .map((ingredient) => ({
+      ingredient,
+      ordering: recipeItemOrdering(ingredient.prototype.slice('item:'.length), itemSources, dump),
+    }))
+    .sort((left, right) => compareRecipeItemOrdering(left.ordering, right.ordering))
+    .map(({ ingredient }) => ingredient);
+  return [...orderedItems, ...fluids];
+}
+
 function optionalNumbers(value: unknown, path: string): readonly number[] | undefined {
   if (value === undefined) return undefined;
   if (Array.isArray(value)) return value.map((entry, index) => finite(entry, `${path}[${index}]`));
@@ -358,6 +488,7 @@ export function normalizeFactorioDataDump(
 ): FactorioDumpNormalization {
   const dump = object(value, '<dump>');
   const warnings: FactorioDumpWarning[] = [];
+  const itemOrderingSources = new Map<string, RawItemOrderingSource>();
 
   const items = Object.entries(dump).flatMap(([table, rawTable]) => {
     if (typeof rawTable !== 'object' || rawTable === null || Array.isArray(rawTable)) return [];
@@ -372,6 +503,7 @@ export function normalizeFactorioDataDump(
           `expected matching name and type ${JSON.stringify(table)}.`,
         );
       }
+      itemOrderingSources.set(name, { table, record });
       return [
         {
           key: `item:${name}` as const,
@@ -432,6 +564,13 @@ export function normalizeFactorioDataDump(
       (component, index) =>
         recipeComponent(component, `recipe.${name}.ingredients[${index}]`, 'ingredient', warnings),
     );
+    const orderedIngredients = orderRecipeIngredients(
+      name,
+      record,
+      ingredients,
+      itemOrderingSources,
+      dump,
+    );
     if (record.main_product !== undefined && typeof record.main_product !== 'string') {
       throw new FactorioDumpError(`recipe.${name}.main_product`, 'expected a string.');
     }
@@ -464,7 +603,7 @@ export function normalizeFactorioDataDump(
         record.energy_required === undefined
           ? 0.5
           : finite(record.energy_required, `recipe.${name}.energy_required`),
-      ingredients,
+      ingredients: orderedIngredients,
       products,
       ...(mainProduct === undefined ? {} : { mainProduct }),
       enabledByDefault: optionalBoolean(record.enabled, `recipe.${name}.enabled`) ?? true,
@@ -516,7 +655,7 @@ export function normalizeFactorioDataDump(
 
   const environment: PrototypeEnvironment = {
     ...metadata,
-    generatorVersion: 'comblang-factorio-data-dump-v1.10',
+    generatorVersion: 'comblang-factorio-data-dump-v1.11',
   };
   const candidate = {
     schemaVersion: 1,

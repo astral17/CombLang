@@ -123,14 +123,14 @@ producer slots and public ingredient/property dependencies remain pending.
 
 #### Recipe ingredient binding groundwork
 
-Host-side groundwork can resolve an existing Signal parameter to the exact
-same-name recipe in a fixed prototype provider and query a local zero-based
-index in that recipe's normalized ingredient array. When the recipe exists but
-the index is outside that array, including an empty ingredient list, host
-resolution records an absent dependency. Invalid indices, missing bindings,
-unavailable recipe data and unknown recipes remain errors. This does not add
-source syntax or public `.ingredient`/`.ingredients` properties, and it is not
-yet connected to source compilation, CLI/Worker/browser binding or native export.
+Source `.ingredient(index).signal` and `.amount` bindings resolve the exact
+same-name recipe from the fixed prototype provider and use its zero-based
+ingredient sequence. Raw Factorio imports normalize that sequence to effective
+game order; already-normalized provider arrays are consumed as stored. When the
+recipe exists but the index is outside its array, including an empty ingredient
+list, host resolution records an absent dependency. Invalid indices, missing
+bindings, unavailable recipe data and unknown recipes remain errors. Local
+source binding is supported; native export still returns a located refusal.
 
 Bounded Factorio 2.1.23 observations show missing IDs are handled by field role:
 Constant filters disappear; a missing Decider left Signal removes that
@@ -141,12 +141,21 @@ condition, `A || missing && B` became `A || B`, so filtering the missing
 condition while retaining its old join would be incorrect. These cases do not
 establish a general boolean rewrite or simulate resulting circuit truth/output.
 
-Native concrete ingredient order differed from the bundled normalized local
-array, so a local index must not be assumed to equal a native ingredient index.
-Captured water and missing-ingredient quantity rows retained their original
-numbers; this does not establish a zero fallback, native fluid formula support
-or a quantity bridge. Exact local ingredient amounts and constraints remain
-prototype data, with public/native integration still pending.
+Factorio's `sort_item_ingredients` defaults to true: raw conversion sorts item
+ingredients by group `order_in_recipe` (falling back to group `order`), group
+name, subgroup order/name, then item order/name using UTF-8 lexical ordering;
+fluids follow in authored order. Explicit false preserves authored item order.
+Already-normalized arrays are not sorted again. A captured Factorio 2.1.23
+runtime snapshot matched normalized ingredient identities and amounts for all
+662 available recipes, and this comparator reproduced all 662 ingredient arrays.
+The explicit false path follows the documented prototype property and was not
+sampled in that game run.
+
+The native checkpoint preserved all ten amount/formula markers in both tested
+placements, but every resulting count was zero, including arithmetic controls.
+That does not show local amounts are zero or establish a native quantity bridge.
+Exact local amounts and constraints remain prototype data; native ingredient and
+formula export remain unsupported pending a separate review.
 
 #### Default-free Selector Signal slots
 
