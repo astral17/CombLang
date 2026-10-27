@@ -1,5 +1,6 @@
 import { constantConfigurationLimits, type SignalId } from '@comblang/factorio';
 import {
+  assertBlueprintParameterFromSession,
   BlueprintParameterError,
   canonicalizeBlueprintNumberParameterMetadata,
   createBlueprintParameterSession,
@@ -10,6 +11,7 @@ import {
   type BlueprintParameterSession,
 } from '../../compiler/src/blueprint-parameters.js';
 import type { SourceSpan } from '@comblang/shared';
+import { createBlueprintRecipeIngredientReference } from '../../compiler/src/blueprint-recipe-ingredient-reference.js';
 
 export interface CapturedBlueprintParameter {
   readonly handle: BlueprintParameterHandle;
@@ -65,6 +67,53 @@ export class BlueprintParameterCapture {
       }),
       source,
     );
+  }
+
+  ingredientReference(handle: unknown, index: unknown, source: SourceSpan): object {
+    this.#assertOpen(source);
+    const registration = assertBlueprintParameterFromSession(
+      this.session,
+      handle,
+      '$.ingredient.parameter',
+    );
+    if (registration.kind !== 'signal') {
+      throw new BlueprintParameterError(
+        'CP1001',
+        '$.ingredient.parameter',
+        `recipe ingredient references require a Signal parameter, received ${registration.kind}.`,
+        source,
+      );
+    }
+    if (!Number.isSafeInteger(index) || (index as number) < 0) {
+      throw new BlueprintParameterError(
+        'CP1000',
+        '$.ingredient.index',
+        'expected a non-negative safe integer local ingredient index.',
+        source,
+      );
+    }
+    const nodes = 3;
+    const bytes = new TextEncoder().encode(
+      JSON.stringify({ index, label: registration.label, source }),
+    ).byteLength;
+    if (nodes > constantConfigurationLimits.maxNodes - this.#nodes) {
+      this.#fail(
+        '$.parameters',
+        `parameter and ingredient-reference capture exceeds the node limit of ${constantConfigurationLimits.maxNodes}.`,
+        source,
+      );
+    }
+    if (bytes > constantConfigurationLimits.maxBytes - this.#bytes) {
+      this.#fail(
+        '$.parameters',
+        `parameter and ingredient-reference capture exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`,
+        source,
+      );
+    }
+    const reference = createBlueprintRecipeIngredientReference(this.session, handle, index, source);
+    this.#nodes += nodes;
+    this.#bytes += bytes;
+    return reference;
   }
 
   seal(): void {

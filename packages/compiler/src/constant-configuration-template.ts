@@ -6,6 +6,7 @@ import {
   type ConstantConfiguration,
   type SignalId,
 } from '@comblang/factorio';
+import type { SourceSpan } from '@comblang/shared';
 
 import {
   assertBlueprintParameterSession,
@@ -32,13 +33,23 @@ import {
   inspectRegisteredBlueprintNumericExpression,
   isRegisteredBlueprintNumericExpression,
 } from './blueprint-numeric-expression-bridge.js';
+import {
+  inspectBlueprintRecipeIngredientReference,
+  type RegisteredBlueprintRecipeIngredientReference,
+} from './blueprint-recipe-ingredient-reference.js';
 
 const templateBrand: unique symbol = Symbol('constant-configuration-template');
 
-export type ConstantTemplateNumberSlot = number | BlueprintNumberParameterHandle;
+export type ConstantTemplateNumberSlot =
+  | number
+  | BlueprintNumberParameterHandle
+  | RegisteredBlueprintRecipeIngredientReference['reference'];
 export type ConstantTemplateMultiplierSlot =
   ConstantTemplateNumberSlot | BlueprintNumericExpression;
-export type ConstantTemplateSignalSlot = SignalId | BlueprintSignalParameterHandle;
+export type ConstantTemplateSignalSlot =
+  | SignalId
+  | BlueprintSignalParameterHandle
+  | RegisteredBlueprintRecipeIngredientReference['reference'];
 
 export interface ConstantConfigurationTemplateFilter {
   readonly signal: ConstantTemplateSignalSlot;
@@ -61,16 +72,29 @@ export interface ConstantConfigurationTemplate {
 export interface ConstantConfigurationTemplateRegistration {
   readonly session: BlueprintParameterSession;
   readonly usedParameters: readonly BlueprintParameterHandle[];
+  readonly recipeIngredientReferences: readonly RegisteredBlueprintRecipeIngredientReference[];
+}
+
+/** Host-resolved leaf material supplied to the compiler without provider knowledge. */
+export interface ConstantRecipeIngredientResolution {
+  readonly parameter: BlueprintSignalParameterHandle;
+  readonly index: number;
+  readonly status: 'absent' | 'present';
+  readonly signal?: SignalId;
+  readonly amount?: number;
 }
 
 interface TemplateBudget extends BlueprintParameterDataBudget {
   parameterBytes: number;
   expressionBytes: number;
   readonly expressionRoots: WeakSet<object>;
+  readonly recipeIngredientRoots: WeakSet<object>;
+  readonly recipeIngredientReferences: RegisteredBlueprintRecipeIngredientReference[];
 }
 
 interface FilterSlots {
-  readonly signal?: BlueprintSignalParameterHandle;
+  readonly signal?:
+    BlueprintSignalParameterHandle | RegisteredBlueprintRecipeIngredientReference['reference'];
   readonly value?: ConstantTemplateNumberSlot | BlueprintNumericExpression;
 }
 
@@ -114,6 +138,50 @@ function accountParameter(
   return slot.handle as BlueprintNumberParameterHandle | BlueprintSignalParameterHandle;
 }
 
+function accountRecipeIngredientReference(
+  reference: RegisteredBlueprintRecipeIngredientReference,
+  path: string,
+  budget: TemplateBudget,
+): void {
+  assertBlueprintParameterSession(reference.session, `${path}.session`);
+  const registration = lookupBlueprintParameterSlot(
+    reference.parameter,
+    'signal',
+    reference.session,
+    `${path}.parameter`,
+  );
+  if (registration === undefined) {
+    throw new BlueprintParameterError(
+      'CP1001',
+      `${path}.parameter`,
+      'recipe ingredient reference has no owning Signal parameter.',
+      reference.source,
+    );
+  }
+  budget.usedParameters.add(registration.handle);
+  if (budget.recipeIngredientRoots.has(reference.reference)) return;
+  budget.recipeIngredientRoots.add(reference.reference);
+  budget.recipeIngredientReferences.push(reference);
+  budget.nodes += 1;
+  if (budget.nodes > constantConfigurationLimits.maxNodes) {
+    fail(
+      path,
+      `template exceeds the node limit of ${constantConfigurationLimits.maxNodes}.`,
+      reference.source,
+    );
+  }
+  budget.parameterBytes += new TextEncoder().encode(
+    JSON.stringify({ index: reference.index, slot: reference.slot, source: reference.source }),
+  ).byteLength;
+  if (budget.parameterBytes > constantConfigurationLimits.maxBytes) {
+    fail(
+      path,
+      `template exceeds the byte limit of ${constantConfigurationLimits.maxBytes}.`,
+      reference.source,
+    );
+  }
+}
+
 function accountExpression(
   expression: BlueprintNumericExpression,
   session: BlueprintParameterSession,
@@ -148,6 +216,15 @@ function accountExpression(
 
 function rejectParameterOutsideSlot(value: unknown, path: string): void {
   rejectNumericExpressionOutsideSlot(value, path);
+  const ingredient = inspectBlueprintRecipeIngredientReference(value);
+  if (ingredient !== undefined) {
+    throw new BlueprintParameterError(
+      'CP1001',
+      path,
+      'recipe ingredient references are allowed only in exact Constant filter signal or value slots.',
+      ingredient.source,
+    );
+  }
   const registration = findBlueprintParameterHandle(value);
   if (registration !== undefined) {
     throw new BlueprintParameterError(
@@ -173,6 +250,7 @@ function isNumericExpressionShaped(value: unknown): boolean {
 }
 
 function rejectNumericExpressionOutsideSlot(value: unknown, path: string): void {
+  if (inspectBlueprintRecipeIngredientReference(value) !== undefined) return;
   if (isRegisteredBlueprintNumericExpression(value) || isNumericExpressionShaped(value)) {
     throw new BlueprintParameterError(
       'CP1001',
@@ -191,6 +269,15 @@ function assertConstantExactKeys(
   const allowed = new Set(keys);
   for (const key of Object.keys(record)) {
     if (!allowed.has(key)) {
+      const ingredient = inspectBlueprintRecipeIngredientReference(record[key]);
+      if (ingredient !== undefined) {
+        throw new BlueprintParameterError(
+          'CP1001',
+          `${path}.${key}`,
+          'recipe ingredient references are allowed only in exact Constant filter signal or value slots.',
+          ingredient.source,
+        );
+      }
       rejectNumericExpressionOutsideSlot(record[key], `${path}.${key}`);
     }
   }
@@ -209,6 +296,7 @@ function canonicalizePrepared(value: unknown): ConstantConfiguration {
 }
 
 function freezeTemplate<T>(value: T): T {
+  if (inspectBlueprintRecipeIngredientReference(value) !== undefined) return value;
   if (value !== null && typeof value === 'object' && !Object.isFrozen(value)) {
     for (const child of Object.values(value as Record<string, unknown>)) freezeTemplate(child);
     Object.freeze(value);
@@ -227,7 +315,10 @@ export function createConstantConfigurationTemplate(
     parameterBytes: 0,
     expressionBytes: 0,
     expressionRoots: new WeakSet(),
+    recipeIngredientRoots: new WeakSet(),
+    recipeIngredientReferences: [],
   };
+  let recipeIngredientPlaceholderOrdinal = 0;
   const root = openBlueprintParameterRecord(value, '$', 0, budget);
   let normalized: ConstantConfiguration;
   let slots: readonly SectionSlots[];
@@ -329,28 +420,77 @@ export function createConstantConfigurationTemplate(
                   unknown
                 >;
                 let signalReference: BlueprintSignalParameterHandle | undefined;
+                let signalIngredientReference:
+                  RegisteredBlueprintRecipeIngredientReference['reference'] | undefined;
                 if (Object.hasOwn(filter.value, 'signal')) {
                   const rawSignal = filter.value.signal;
                   rejectNumericExpressionOutsideSlot(rawSignal, `${filterPath}.signal`);
-                  const reference = accountParameter(
-                    rawSignal,
-                    'signal',
-                    session,
-                    `${filterPath}.signal`,
-                    budget,
-                  );
-                  if (reference !== undefined) {
-                    signalReference = reference as BlueprintSignalParameterHandle;
-                    preparedFilter.signal = signal('virtual', 'signal-template-placeholder');
+                  const ingredient = inspectBlueprintRecipeIngredientReference(rawSignal);
+                  if (ingredient !== undefined) {
+                    if (ingredient.session !== session) {
+                      throw new BlueprintParameterError(
+                        'CP1001',
+                        `${filterPath}.signal`,
+                        'recipe ingredient reference belongs to a different parameter session.',
+                        ingredient.source,
+                      );
+                    }
+                    if (ingredient.slot !== 'signal') {
+                      throw new BlueprintParameterError(
+                        'CP1001',
+                        `${filterPath}.signal`,
+                        'expected the signal field of a recipe ingredient reference.',
+                        ingredient.source,
+                      );
+                    }
+                    accountRecipeIngredientReference(ingredient, `${filterPath}.signal`, budget);
+                    signalIngredientReference = ingredient.reference;
+                    preparedFilter.signal = signal(
+                      'virtual',
+                      `ingredient-template-${recipeIngredientPlaceholderOrdinal++}`,
+                    );
                   } else {
-                    preparedFilter.signal = rawSignal;
+                    const reference = accountParameter(
+                      rawSignal,
+                      'signal',
+                      session,
+                      `${filterPath}.signal`,
+                      budget,
+                    );
+                    if (reference !== undefined) {
+                      signalReference = reference as BlueprintSignalParameterHandle;
+                      preparedFilter.signal = signal('virtual', 'signal-template-placeholder');
+                    } else {
+                      preparedFilter.signal = rawSignal;
+                    }
                   }
                 }
                 let valueReference:
                   ConstantTemplateNumberSlot | BlueprintNumericExpression | undefined;
                 if (Object.hasOwn(filter.value, 'value')) {
                   const rawValue = filter.value.value;
-                  if (isRegisteredBlueprintNumericExpression(rawValue)) {
+                  const ingredient = inspectBlueprintRecipeIngredientReference(rawValue);
+                  if (ingredient !== undefined) {
+                    if (ingredient.session !== session) {
+                      throw new BlueprintParameterError(
+                        'CP1001',
+                        `${filterPath}.value`,
+                        'recipe ingredient reference belongs to a different parameter session.',
+                        ingredient.source,
+                      );
+                    }
+                    if (ingredient.slot !== 'amount') {
+                      throw new BlueprintParameterError(
+                        'CP1001',
+                        `${filterPath}.value`,
+                        'expected the amount field of a recipe ingredient reference.',
+                        ingredient.source,
+                      );
+                    }
+                    accountRecipeIngredientReference(ingredient, `${filterPath}.value`, budget);
+                    valueReference = ingredient.reference;
+                    preparedFilter.value = 0;
+                  } else if (isRegisteredBlueprintNumericExpression(rawValue)) {
                     valueReference = accountExpression(
                       rawValue,
                       session,
@@ -378,6 +518,9 @@ export function createConstantConfigurationTemplate(
                 preparedFilters.push(preparedFilter);
                 filterSlots.push({
                   ...(signalReference === undefined ? {} : { signal: signalReference }),
+                  ...(signalIngredientReference === undefined
+                    ? {}
+                    : { signal: signalIngredientReference }),
                   ...(valueReference === undefined ? {} : { value: valueReference }),
                 });
               } finally {
@@ -435,7 +578,11 @@ export function createConstantConfigurationTemplate(
   });
   templateRegistrations.set(
     template,
-    Object.freeze({ session, usedParameters: Object.freeze([...budget.usedParameters]) }),
+    Object.freeze({
+      session,
+      usedParameters: Object.freeze([...budget.usedParameters]),
+      recipeIngredientReferences: Object.freeze([...budget.recipeIngredientReferences]),
+    }),
   );
   return template;
 }

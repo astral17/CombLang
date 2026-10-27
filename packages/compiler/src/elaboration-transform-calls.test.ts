@@ -42,6 +42,15 @@ function transformCalls(text: string): string {
 }
 
 describe('elaboration call/member transform', () => {
+  test('captures provenance for exact Signal and amount member projections', () => {
+    const code = transformCalls(
+      'const signal = ingredient.signal; const amount = ingredient.amount;',
+    );
+
+    expect(code).toContain('__dsl.property(ingredient, "signal"');
+    expect(code).toContain('__dsl.property(ingredient, "amount"');
+  });
+
   test('forwards numeric and bypassed Signal metadata once and keeps absent metadata void', () => {
     const code =
       transformCalls(`Param.number('N', 1, metadata()); Param.number('Plain', 2); Param.number('Automatic');

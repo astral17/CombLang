@@ -13,8 +13,10 @@ import {
 } from '../../compiler/src/arithmetic-configuration-template.js';
 import {
   inspectConstantConfigurationTemplate,
+  type ConstantRecipeIngredientResolution,
   type ConstantConfigurationTemplate,
 } from '../../compiler/src/constant-configuration-template.js';
+import { inspectBlueprintRecipeIngredientReference } from '../../compiler/src/blueprint-recipe-ingredient-reference.js';
 import {
   inspectDeciderConfigurationTemplate,
   type DeciderConfigurationTemplate,
@@ -41,6 +43,9 @@ export interface SourceSignalTemplateContext {
   bindingsForConstantTemplate(
     template: ConstantConfigurationTemplate,
   ): readonly { readonly parameter: BlueprintParameterHandle; readonly value: SignalId }[];
+  bindingsForRecipeIngredientReferences(
+    template: ConstantConfigurationTemplate,
+  ): readonly ConstantRecipeIngredientResolution[];
   bindingsForSelectorTemplate(
     template: SelectorConfigurationTemplate,
   ): readonly { readonly parameter: BlueprintParameterHandle; readonly value: SignalId }[];
@@ -91,6 +96,7 @@ function collectLiteralSignalNames(
 ): void {
   if (value === null || (typeof value !== 'object' && typeof value !== 'function')) return;
   if (canonicalBlueprintParameterHandle(value) !== undefined) return;
+  if (inspectBlueprintRecipeIngredientReference(value) !== undefined) return;
   if (seen.has(value)) return;
   seen.add(value);
   const candidate = dataSignal(value);
@@ -114,6 +120,7 @@ function collectSignalParameters(
     if (parameter.kind === 'signal') used.add(parameter);
     return;
   }
+  if (inspectBlueprintRecipeIngredientReference(value) !== undefined) return;
   if (seen.has(value)) return;
   seen.add(value);
   for (const descriptor of Object.values(Object.getOwnPropertyDescriptors(value))) {
@@ -151,6 +158,9 @@ export function createSourceSignalTemplateContext(
     }
     for (const parameter of inspected.usedParameters) {
       if (parameter.kind === 'signal') usedSignals.add(parameter);
+    }
+    for (const reference of inspected.recipeIngredientReferences) {
+      directConstantSignalSlots.add(reference.parameter);
     }
     for (const section of capture.template.sections) {
       for (const filter of section.filters) {
@@ -270,7 +280,7 @@ export function createSourceSignalTemplateContext(
     ) {
       fail(
         '$.parameters',
-        `Signal declaration "${registration.label}" without a default is supported only in a direct Constant filter, Selector select-index, Selector count-output, or Arithmetic output Signal slot.`,
+        `Signal declaration "${registration.label}" without a default is supported only in a direct Constant filter signal/ingredient slot, Selector select-index, Selector count-output, or Arithmetic output Signal slot.`,
         registration.source,
       );
     }
@@ -351,6 +361,38 @@ export function createSourceSignalTemplateContext(
           return value === undefined ? [] : [Object.freeze({ parameter, value })];
         }),
       );
+    },
+    bindingsForRecipeIngredientReferences(template: ConstantConfigurationTemplate) {
+      const inspected = inspectConstantConfigurationTemplate(template, '$.constant');
+      if (inspected.session !== session) {
+        fail('$.constant', 'template belongs to a different parameter session.');
+      }
+      const results = new Map<
+        BlueprintParameterHandle,
+        Map<number, ConstantRecipeIngredientResolution>
+      >();
+      let ordinal = 0;
+      for (const reference of inspected.recipeIngredientReferences) {
+        if (!bindings.has(reference.parameter)) continue;
+        let byIndex = results.get(reference.parameter);
+        if (byIndex === undefined) {
+          byIndex = new Map();
+          results.set(reference.parameter, byIndex);
+        }
+        if (!byIndex.has(reference.index)) {
+          byIndex.set(
+            reference.index,
+            Object.freeze({
+              parameter: reference.parameter,
+              index: reference.index,
+              status: 'present',
+              signal: signal('item', `parameter-ingredient-${ordinal++}`),
+              amount: 0,
+            }),
+          );
+        }
+      }
+      return Object.freeze([...results.values()].flatMap((byIndex) => [...byIndex.values()]));
     },
     bindingsForSelectorTemplate(template: SelectorConfigurationTemplate) {
       const inspected = inspectSelectorConfigurationTemplate(template, '$.selector');

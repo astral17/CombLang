@@ -19,6 +19,8 @@ import { inspectArithmeticConfigurationTemplate } from './arithmetic-configurati
 import { isRegisteredBlueprintNumericExpression } from './blueprint-numeric-expression-bridge.js';
 import { bindConstantConfigurationTemplate } from './constant-configuration-binding.js';
 import { inspectConstantConfigurationTemplate } from './constant-configuration-template.js';
+import type { ConstantRecipeIngredientResolution } from './constant-configuration-template.js';
+import { inspectBlueprintRecipeIngredientReference } from './blueprint-recipe-ingredient-reference.js';
 import { bindDeciderConfigurationTemplate } from './decider-configuration-binding.js';
 import { inspectDeciderConfigurationTemplate } from './decider-configuration-template.js';
 import { bindSelectorConfigurationTemplate } from './selector-configuration-binding.js';
@@ -70,13 +72,18 @@ function templateParameters(entry: BlueprintConfigurationSetEntry) {
 function bindEntry(
   entry: BlueprintConfigurationSetEntry,
   bindings: readonly BlueprintParameterBinding[],
+  recipeIngredientResolutions: readonly ConstantRecipeIngredientResolution[],
 ): BoundBlueprintConfiguration {
   switch (entry.kind) {
     case 'constant':
       return freezeConfigurationDataSkippingFrozen({
         key: entry.key,
         kind: entry.kind,
-        config: bindConstantConfigurationTemplate(entry.template, bindings),
+        config: bindConstantConfigurationTemplate(
+          entry.template,
+          bindings,
+          recipeIngredientResolutions,
+        ),
       });
     case 'arithmetic':
       return freezeConfigurationDataSkippingFrozen({
@@ -344,6 +351,12 @@ function templateSlotMatches(templateValue: unknown, concreteValue: unknown): bo
   if (isRegisteredBlueprintNumericExpression(templateValue)) {
     return typeof concreteValue === 'number';
   }
+  const ingredient = inspectBlueprintRecipeIngredientReference(templateValue);
+  if (ingredient !== undefined) {
+    return ingredient.slot === 'signal'
+      ? concreteValue !== null && typeof concreteValue === 'object' && !Array.isArray(concreteValue)
+      : ingredient.slot === 'amount' && typeof concreteValue === 'number';
+  }
   const parameter = findBlueprintParameterHandle(templateValue);
   if (parameter === undefined) return sameConcreteValue(templateValue, concreteValue);
   return parameter.kind === 'number'
@@ -505,17 +518,39 @@ function constantTemplateMatches(
         section.active === concreteSection.active &&
         section.group === concreteSection.group &&
         templateSlotMatches(section.multiplier, concreteSection.multiplier) &&
-        section.filters.length === concreteSection.filters.length &&
-        section.filters.every((filter, filterIndex) => {
-          const concreteFilter = concreteSection.filters[filterIndex]!;
-          return (
-            templateSlotMatches(filter.signal, concreteFilter.signal) &&
-            templateSlotMatches(filter.value, concreteFilter.value)
-          );
-        })
+        constantFilterSequenceMatches(section.filters, concreteSection.filters)
       );
     })
   );
+}
+
+function constantFilterSequenceMatches(
+  templateFilters: ConstantConfigurationTemplate['sections'][number]['filters'],
+  concreteFilters: import('@comblang/factorio').ConstantConfiguration['sections'][number]['filters'],
+): boolean {
+  const memo = new Map<string, boolean>();
+  const match = (templateIndex: number, concreteIndex: number): boolean => {
+    const key = `${templateIndex}:${concreteIndex}`;
+    const cached = memo.get(key);
+    if (cached !== undefined) return cached;
+    if (templateIndex === templateFilters.length) {
+      const result = concreteIndex === concreteFilters.length;
+      memo.set(key, result);
+      return result;
+    }
+    const filter = templateFilters[templateIndex]!;
+    const mayBeAbsent = inspectBlueprintRecipeIngredientReference(filter.signal)?.slot === 'signal';
+    const concrete = concreteFilters[concreteIndex];
+    const consumes =
+      concrete !== undefined &&
+      templateSlotMatches(filter.signal, concrete.signal) &&
+      templateSlotMatches(filter.value, concrete.value) &&
+      match(templateIndex + 1, concreteIndex + 1);
+    const result = consumes || (mayBeAbsent && match(templateIndex + 1, concreteIndex));
+    memo.set(key, result);
+    return result;
+  };
+  return match(0, 0);
 }
 
 function selectorTemplateMatches(
@@ -641,6 +676,7 @@ export function bindAndReplaceBlueprintConfigurationSetInNativeCircuitIr(
   circuit: NativeCircuitIr,
   assignmentsValue: unknown,
   bindingsValue: readonly BlueprintParameterBinding[] = [],
+  recipeIngredientResolutions: readonly ConstantRecipeIngredientResolution[] = [],
 ): BoundBlueprintConfigurationReplacement {
   const validatedCircuit = parseReplacementCircuit(circuit);
   const setRegistration = inspectBlueprintConfigurationSet(setValue, '$.set');
@@ -649,7 +685,11 @@ export function bindAndReplaceBlueprintConfigurationSetInNativeCircuitIr(
     validatedCircuit,
     assignmentsValue,
   );
-  const configurations = bindBlueprintConfigurationSet(setValue, bindingsValue);
+  const configurations = bindBlueprintConfigurationSet(
+    setValue,
+    bindingsValue,
+    recipeIngredientResolutions,
+  );
   const boundByKey = new Map(configurations.map((entry) => [entry.key, entry]));
   const replacementsByProducerId = new Map<string, BoundBlueprintConfiguration>();
   const entityConfigurations = new Map<string, EntityPhysicalConfiguration>();
@@ -723,6 +763,7 @@ export function replaceBlueprintConfigurationSetInNativeCircuitIr(
 export function bindBlueprintConfigurationSet(
   setValue: unknown,
   bindingsValue: readonly BlueprintParameterBinding[] = [],
+  recipeIngredientResolutions: readonly ConstantRecipeIngredientResolution[] = [],
 ): readonly BoundBlueprintConfiguration[] {
   const registration = inspectBlueprintConfigurationSet(setValue, '$.set');
   const parsedBindings = readBlueprintParameterBindings(registration.session, bindingsValue);
@@ -750,7 +791,7 @@ export function bindBlueprintConfigurationSet(
       .filter((binding) => usedParameters.has(binding.parameter))
       .map(({ parameter, value }) => ({ parameter, value }));
     try {
-      bound.push(bindEntry(entry, entryBindings));
+      bound.push(bindEntry(entry, entryBindings, recipeIngredientResolutions));
     } catch (error) {
       prefixEntryError(error, entryIndex);
     }

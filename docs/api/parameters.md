@@ -986,7 +986,62 @@ verify the implemented model, not native formula, replacement or placement behav
 See also [Signal](signal.md), [Decider](decider.md), [Constant](constant.md),
 [Selector](selector.md) and the [embedding parameter APIs](../native-objects-deciders-and-parameters.md#descriptor-based-local-binding).
 
+## Recipe ingredient references in Constant filters
+
+The provisional `ingredient(index)` API derives opaque `.signal` and `.amount`
+slots from an existing Signal parameter. The index is zero-based in the owning
+compilation's normalized prototype-provider recipe array; it is not a Factorio
+formula ingredient index. This source example uses one root declaration and
+places its derived values only in direct exact Constant filter slots:
+
+```typescript
+const recipe = Param.signal('Recipe', Signal('item', 'iron-gear-wheel'));
+const output = new Network();
+output += Constant({
+  sections: [
+    {
+      filters: [
+        {
+          signal: recipe.ingredient(0).signal,
+          value: recipe.ingredient(0).amount,
+        },
+        { signal: Signal('virtual', 'signal-A'), value: 5 },
+        {
+          signal: recipe.ingredient(1).signal,
+          value: recipe.ingredient(1).amount,
+        },
+      ],
+    },
+  ],
+});
+```
+
+Bind the same captured source execution locally through the existing APIs:
+
+```typescript
+const recipeDeclaration = listSourceCompilationParameters(compilation).find(
+  ({ label }) => label === 'Recipe',
+);
+if (recipeDeclaration === undefined) throw new Error('Missing Recipe parameter');
+const bound = bindSourceCompilationCircuit(compilation, [
+  { parameter: recipeDeclaration.parameter, value: Signal('item', 'modded-gear-wheel') },
+]);
+```
+
+If the selected recipe has no ingredient at an index, a filter whose derived
+`.signal` is absent is omitted before its count is evaluated. The device,
+section, neighboring filters and circuit topology remain. If the filter has an
+ordinary present Signal and its derived `.amount` is absent, binding fails with
+located `CP1002`; present amounts must satisfy the exact Constant count domain.
+Only the parent `Recipe` parameter is listed, required or bindable. These
+references are local and do not rerun source; native parameter-template export
+refuses used ingredient references with located `CP1002`. Derived values cannot
+be used with shorthand, arithmetic, coercion, loops over dynamic ingredients,
+other device roles or Factorio `pN_iK` semantics.
+
 ## Local numeric expressions in Arithmetic, Constant and Decider slots
+
+### Local fluent Decider threshold
 
 This complete example binds a local expression through a fluent Decider builder.
 It reuses existing hardware, captures the final branch configuration (including

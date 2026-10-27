@@ -10,7 +10,11 @@ import {
 import * as publicRuntime from './index.js';
 import { canonicalDirectPlan } from './canonical-circuit.js';
 import { tryElaborateDirectPlan } from './direct-plan.js';
-import { compileSourceProgram, sourceCompilationArtifact } from './source-compilation.js';
+import {
+  compileSourceProgram,
+  listSourceCompilationParameters,
+  sourceCompilationArtifact,
+} from './source-compilation.js';
 import { BlueprintParameterCapture } from './blueprint-parameter-capture.js';
 
 function parameterProgram(code: string) {
@@ -24,6 +28,49 @@ function parameterProgram(code: string) {
 }
 
 describe('host-local source parameter capture', () => {
+  test('captures an authenticated ingredient reference without creating another root parameter', () => {
+    const text = `const part = Param.signal('Part');
+const ingredient = part.ingredient(2);
+const signal = ingredient.signal;
+const amount = ingredient.amount;`;
+    const compilation = compileSourceProgram({ path: 'ingredient-reference.factorio.ts', text });
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(listSourceCompilationParameters(compilation)).toMatchObject([
+      { kind: 'signal', label: 'Part' },
+    ]);
+    expect(listSourceCompilationParameters(compilation)[0]).not.toHaveProperty('defaultValue');
+    expect(compilation.requiredParameterIds).toEqual([]);
+    expect(JSON.stringify(sourceCompilationArtifact(compilation))).not.toMatch(
+      /ingredientReference|ingredient-template-placeholder/,
+    );
+  });
+
+  test.each([
+    {
+      text: `const part = Param.signal('Part');\npart.ingredient(-1);`,
+      code: 'CP1000',
+      call: 'part.ingredient(-1)',
+    },
+    {
+      text: `const amount = Param.number('Amount', 1);\namount.ingredient(0);`,
+      code: 'CP1001',
+      call: 'amount.ingredient(0)',
+    },
+  ])('locates rejected ingredient reference call: $call', ({ text, code, call }) => {
+    const compilation = compileSourceProgram({
+      path: 'invalid-ingredient-reference.factorio.ts',
+      text,
+    });
+    const diagnostic = compilation.pipelineDiagnostics.find((entry) => entry.code === code);
+    const start = text.indexOf(call);
+
+    expect(diagnostic).toMatchObject({
+      code,
+      span: { fileId: compilation.fileId, start, end: start + call.length },
+    });
+  });
+
   test('snapshots numeric metadata and never adds it to the concrete plan', () => {
     const result = executeElaborationProgramWithParameters(
       parameterProgram(`

@@ -68,7 +68,9 @@ describe('source numeric expressions in exact Decider thresholds', () => {
       new URL('../../../docs/api/parameters.md', import.meta.url),
       'utf8',
     );
-    const example = documentation.match(/```typescript\r?\n([\s\S]*?)```/)?.[1];
+    const example = documentation.match(
+      /^### Local fluent Decider threshold\r?\n[\s\S]*?```typescript\r?\n([\s\S]*?)```/m,
+    )?.[1];
     if (example === undefined) throw new Error('Expected the complete Decider threshold example.');
     const compilation = compile(example);
     const amount = listSourceCompilationParameters(compilation)[0]!.parameter;

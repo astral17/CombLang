@@ -28,8 +28,10 @@ import {
 import type { BlueprintNumericExpression } from './blueprint-numeric-expression.js';
 import {
   inspectConstantConfigurationTemplate,
+  type ConstantRecipeIngredientResolution,
   type ConstantConfigurationTemplate,
 } from './constant-configuration-template.js';
+import { inspectBlueprintRecipeIngredientReference } from './blueprint-recipe-ingredient-reference.js';
 
 interface SlotSource {
   readonly parameter?: BlueprintParameterHandle;
@@ -49,8 +51,12 @@ function fail(
 export function bindConstantConfigurationTemplate(
   templateValue: unknown,
   bindingsValue: readonly BlueprintParameterBinding[] = [],
+  recipeIngredientResolutions: readonly ConstantRecipeIngredientResolution[] = [],
 ): ConstantConfiguration {
-  const { session } = inspectConstantConfigurationTemplate(templateValue, '$.template');
+  const { session, usedParameters } = inspectConstantConfigurationTemplate(
+    templateValue,
+    '$.template',
+  );
   const template = templateValue as ConstantConfigurationTemplate;
   const bindings = readBlueprintParameterBindings(session, bindingsValue);
   const explicit = new Map<object, unknown>();
@@ -58,8 +64,57 @@ export function bindConstantConfigurationTemplate(
   for (const binding of bindings) {
     explicit.set(binding.parameter, binding.value);
   }
+  const ingredientResolutions = new Map<
+    BlueprintParameterHandle,
+    Map<number, ConstantRecipeIngredientResolution>
+  >();
+  for (const [index, resolution] of recipeIngredientResolutions.entries()) {
+    const owned = assertBlueprintParameterFromSession(
+      session,
+      resolution.parameter,
+      `$.recipeIngredientResolutions[${index}].parameter`,
+    );
+    if (owned.kind !== 'signal') {
+      fail(
+        `$.recipeIngredientResolutions[${index}].parameter`,
+        'recipe ingredient resolutions require a Signal parameter.',
+        owned.source,
+        'CP1001',
+      );
+    }
+    let byIndex = ingredientResolutions.get(resolution.parameter);
+    if (byIndex === undefined) {
+      byIndex = new Map();
+      ingredientResolutions.set(resolution.parameter, byIndex);
+    }
+    if (byIndex.has(resolution.index)) {
+      fail(
+        `$.recipeIngredientResolutions[${index}]`,
+        'duplicate recipe ingredient resolution.',
+        owned.source,
+        'CP1001',
+      );
+    }
+    if (!Number.isSafeInteger(resolution.index) || resolution.index < 0) {
+      fail(
+        `$.recipeIngredientResolutions[${index}].index`,
+        'expected a non-negative safe integer ingredient index.',
+        owned.source,
+      );
+    }
+    if (resolution.status !== 'absent' && resolution.status !== 'present') {
+      fail(
+        `$.recipeIngredientResolutions[${index}].status`,
+        'expected an absent or present recipe ingredient resolution.',
+        owned.source,
+      );
+    }
+    byIndex.set(resolution.index, resolution);
+  }
 
-  const used = new Set<object>();
+  // A missing derived signal omits its filter before resolving the count, but
+  // declarations in that count still belong to the authored template.
+  const used = new Set<object>(usedParameters);
   const slotSources = new Map<string, SlotSource>();
   const concreteSections: Record<string, unknown>[] = [];
 
@@ -146,16 +201,110 @@ export function bindConstantConfigurationTemplate(
       ? resolveNumericExpression(value, path, 'count')
       : (resolve(value, 'number', path, 'count') as number);
 
+  const ingredientResolution = (
+    value: unknown,
+    slot: 'signal' | 'amount',
+    path: string,
+  ):
+    | {
+        readonly reference: NonNullable<
+          ReturnType<typeof inspectBlueprintRecipeIngredientReference>
+        >;
+        readonly resolution: ConstantRecipeIngredientResolution;
+      }
+    | undefined => {
+    const reference = inspectBlueprintRecipeIngredientReference(value);
+    if (reference === undefined) return undefined;
+    if (reference.session !== session) {
+      fail(
+        path,
+        'recipe ingredient reference belongs to a different parameter session.',
+        reference.source,
+        'CP1001',
+      );
+    }
+    if (reference.slot !== slot) {
+      fail(
+        path,
+        `expected the ${slot} field of a recipe ingredient reference.`,
+        reference.source,
+        'CP1001',
+      );
+    }
+    used.add(reference.parameter);
+    const resolution = ingredientResolutions.get(reference.parameter)?.get(reference.index);
+    if (resolution === undefined) {
+      fail(
+        path,
+        'recipe ingredient reference was not resolved for this binding.',
+        reference.source,
+        'CP1002',
+      );
+    }
+    return { reference, resolution };
+  };
+  const omittedFilter = Symbol('omitted recipe ingredient filter');
+  const resolveFilterSignal = (value: unknown, path: string): unknown | typeof omittedFilter => {
+    const ingredient = ingredientResolution(value, 'signal', path);
+    if (ingredient === undefined) return resolve(value, 'signal', path, 'signal');
+    slotSources.set(path, { span: ingredient.reference.source });
+    if (ingredient.resolution.status === 'absent') return omittedFilter;
+    if (ingredient.resolution.signal === undefined) {
+      fail(
+        path,
+        'present recipe ingredient resolution has no Signal.',
+        ingredient.reference.source,
+        'CP1002',
+      );
+    }
+    return canonicalizeBlueprintParameterSignal(
+      ingredient.resolution.signal,
+      path,
+      ingredient.reference.source,
+    );
+  };
+  const resolveIngredientAmount = (value: unknown, path: string): number | undefined => {
+    const ingredient = ingredientResolution(value, 'amount', path);
+    if (ingredient === undefined) return undefined;
+    slotSources.set(path, { span: ingredient.reference.source });
+    if (ingredient.resolution.status === 'absent') {
+      fail(
+        path,
+        'recipe ingredient amount is absent for the selected Signal.',
+        ingredient.reference.source,
+        'CP1002',
+      );
+    }
+    if (ingredient.resolution.amount === undefined) {
+      fail(
+        path,
+        'present recipe ingredient resolution has no amount.',
+        ingredient.reference.source,
+        'CP1002',
+      );
+    }
+    return assertBlueprintParameterNumberValue(
+      ingredient.resolution.amount,
+      path,
+      'safe-integer',
+      ingredient.reference.source,
+      'recipe ingredient amounts used as Constant filter counts must be safe integers.',
+    );
+  };
+
   for (const [sectionIndex, section] of template.sections.entries()) {
     const sectionPath = `$.sections[${sectionIndex}]`;
     const concreteSection: Record<string, unknown> = {
       active: section.active,
       multiplier: resolveMultiplier(section.multiplier, `${sectionPath}.multiplier`),
-      filters: section.filters.map((filter, filterIndex) => {
+      filters: section.filters.flatMap((filter, filterIndex) => {
         const filterPath = `${sectionPath}.filters[${filterIndex}]`;
+        const signalValue = resolveFilterSignal(filter.signal, `${filterPath}.signal`);
+        if (signalValue === omittedFilter) return [];
+        const ingredientAmount = resolveIngredientAmount(filter.value, `${filterPath}.value`);
         return {
-          signal: resolve(filter.signal, 'signal', `${filterPath}.signal`, 'signal'),
-          value: resolveCount(filter.value, `${filterPath}.value`),
+          signal: signalValue,
+          value: ingredientAmount ?? resolveCount(filter.value, `${filterPath}.value`),
         };
       }),
     };

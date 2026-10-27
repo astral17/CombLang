@@ -1,4 +1,4 @@
-import { constantConfigurationLimits, type SignalId } from '@comblang/factorio';
+import { constantConfigurationLimits, signal, type SignalId } from '@comblang/factorio';
 import type { SourceSpan } from '@comblang/shared';
 import type { PrototypeProvider } from '@comblang/prototypes';
 
@@ -15,12 +15,18 @@ import {
   assertBlueprintParameterNumberValue,
   canonicalizeBlueprintParameterSignal,
   readBlueprintParameterBindings,
+  type BlueprintParameterBinding,
 } from '../../compiler/src/blueprint-parameter-validation.js';
 import {
   selectRecipeIngredientFromRecipe,
   type RecipeIngredientSelection,
 } from '../../prototypes/src/recipe-ingredient-selection.js';
 import type { RecipePrototypeKey } from '../../prototypes/src/schema.js';
+import {
+  inspectConstantConfigurationTemplate,
+  type ConstantConfigurationTemplate,
+  type ConstantRecipeIngredientResolution,
+} from '../../compiler/src/constant-configuration-template.js';
 
 declare const dependencyBrand: unique symbol;
 
@@ -377,4 +383,109 @@ export function createRecipeIngredientDependencyContext(
   provider: PrototypeProvider,
 ): RecipeIngredientDependencyContext {
   return new RecipeIngredientDependencyContextImpl(session, provider);
+}
+
+/** Resolves template references through the owning provider without exposing it to compiler code. */
+export function resolveConstantRecipeIngredientReferences(
+  templates: readonly ConstantConfigurationTemplate[],
+  provider: PrototypeProvider | undefined,
+  bindings: readonly BlueprintParameterBinding[] = [],
+  skipParameters: ReadonlySet<BlueprintParameterHandle> = new Set(),
+): readonly ConstantRecipeIngredientResolution[] {
+  const references = templates.flatMap((template) => {
+    const registration = inspectConstantConfigurationTemplate(template, '$.constantTemplate');
+    return registration.recipeIngredientReferences.filter(
+      (reference) => !skipParameters.has(reference.parameter),
+    );
+  });
+  if (references.length === 0) return Object.freeze([]);
+  if (provider === undefined) {
+    const reference = references[0]!;
+    fail(
+      'CP1002',
+      '$.recipeIngredientReferences',
+      'a PrototypeProvider with recipe data is required to resolve this Constant template.',
+      reference.callSource,
+    );
+  }
+
+  const sessions = new Set(references.map(({ session }) => session));
+  if (sessions.size !== 1) {
+    const reference = references[0]!;
+    fail(
+      'CP1001',
+      '$.recipeIngredientReferences',
+      'all recipe ingredient references must belong to one parameter session.',
+      reference.callSource,
+    );
+  }
+  const session = references[0]!.session;
+  const context = createRecipeIngredientDependencyContext(session, provider);
+  const dependencies = new Map<
+    BlueprintSignalParameterHandle,
+    Map<number, RecipeIngredientDependency>
+  >();
+  for (const reference of references) {
+    let byIndex = dependencies.get(reference.parameter);
+    if (byIndex === undefined) {
+      byIndex = new Map();
+      dependencies.set(reference.parameter, byIndex);
+    }
+    if (!byIndex.has(reference.index)) {
+      byIndex.set(
+        reference.index,
+        context.dependency(reference.parameter, reference.index, reference.callSource),
+      );
+    }
+  }
+
+  let resolved: readonly ResolvedRecipeIngredientDependency[];
+  try {
+    resolved = context.resolve(bindings);
+  } catch (error) {
+    if (error instanceof RecipeIngredientDependencyError) {
+      throw new BlueprintParameterError(
+        'CP1002',
+        error.path,
+        error.message.slice(error.path.length + 2),
+        error.source,
+      );
+    }
+    throw error;
+  }
+  const resultByToken = new Map(resolved.map((entry) => [entry.dependency, entry] as const));
+  const output: ConstantRecipeIngredientResolution[] = [];
+  for (const [parameter, byIndex] of dependencies) {
+    for (const [index, token] of byIndex) {
+      const entry = resultByToken.get(token);
+      if (entry === undefined) {
+        fail('CP1002', '$.recipeIngredientReferences', 'recipe dependency did not resolve.');
+      }
+      if (entry.status === 'absent') {
+        output.push(Object.freeze({ parameter, index, status: 'absent' }));
+        continue;
+      }
+      const prototype = entry.selection.ingredient.prototype;
+      const separator = prototype.indexOf(':');
+      const type = prototype.slice(0, separator);
+      if ((type !== 'item' && type !== 'fluid') || separator < 0) {
+        fail(
+          'CP1002',
+          '$.recipeIngredientReferences',
+          'recipe ingredient prototype cannot be represented as a Constant Signal.',
+          entry.source,
+        );
+      }
+      output.push(
+        Object.freeze({
+          parameter,
+          index,
+          status: 'present',
+          signal: signal(type, prototype.slice(separator + 1)),
+          amount: entry.selection.ingredient.amount,
+        }),
+      );
+    }
+  }
+  return Object.freeze(output);
 }

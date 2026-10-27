@@ -86,6 +86,7 @@ import {
   type MeasuredNativeNumericFormula,
 } from './source-native-numeric-formulas.js';
 import type { SourceSpan } from '@comblang/shared';
+import { resolveConstantRecipeIngredientReferences } from './recipe-ingredient-dependencies.js';
 
 export interface SourceCompilationEnvironment {
   /** Normalized project policy applied only to the final returned diagnostics. */
@@ -377,7 +378,9 @@ function concreteSourceParameterBindings(
       registration?.source,
     );
   }
-  return effective;
+  return Object.freeze(
+    validated.map(({ parameter, value }) => Object.freeze({ parameter, value })),
+  );
 }
 
 /** Binds this exact compilation's declarations into a fresh concrete NCIR. */
@@ -392,10 +395,17 @@ export function bindSourceCompilationParameters(
   if (state.execution === undefined) {
     throw new TypeError('Compilation has no canonical execution available for parameter binding.');
   }
+  const effectiveBindings = concreteSourceParameterBindings(state.source, bindings);
+  const recipeIngredientResolutions = resolveConstantRecipeIngredientReferences(
+    state.source.constantTemplates.map(({ template }) => template),
+    state.prototypes,
+    effectiveBindings,
+  );
   return bindCapturedSourceConfigurationTemplates(
     state.source,
     state.execution,
-    concreteSourceParameterBindings(state.source, bindings),
+    effectiveBindings,
+    recipeIngredientResolutions,
   );
 }
 
@@ -1116,6 +1126,13 @@ export function exportSourceCompilationNativeBlueprint(
   state.source.constantTemplates.forEach((capture, captureIndex) => {
     const path = `$.constantTemplates[${captureIndex}]`;
     const registration = inspectConstantConfigurationTemplate(capture.template, path);
+    if (registration.recipeIngredientReferences.length > 0) {
+      reject(
+        `${path}.recipeIngredientReferences`,
+        'native source export does not support locally resolved recipe ingredient references.',
+        registration.recipeIngredientReferences[0]!.callSource,
+      );
+    }
     const accepted = new Set<BlueprintParameterHandle>();
     capture.template.sections.forEach((section, sectionIndex) => {
       const sectionPath = `${path}.sections[${sectionIndex}]`;
@@ -2476,10 +2493,17 @@ export function bindSourceCompilationCircuit(
     throw new TypeError('Compilation has no resolved circuit available for parameter binding.');
   }
 
+  const effectiveBindings = concreteSourceParameterBindings(state.source, bindings);
+  const recipeIngredientResolutions = resolveConstantRecipeIngredientReferences(
+    state.source.constantTemplates.map(({ template }) => template),
+    state.prototypes,
+    effectiveBindings,
+  );
   const replacement = bindCapturedSourceConfigurationTemplatesWithRelations(
     state.source,
     state.execution,
-    concreteSourceParameterBindings(state.source, bindings),
+    effectiveBindings,
+    recipeIngredientResolutions,
   );
   const plan = materializeCapturedPlan(
     state.plan,

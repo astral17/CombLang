@@ -17,6 +17,7 @@ import {
 import {
   createConstantConfigurationTemplate,
   inspectConstantConfigurationTemplate,
+  type ConstantRecipeIngredientResolution,
   type ConstantConfigurationTemplate,
 } from '../../compiler/src/constant-configuration-template.js';
 import {
@@ -366,6 +367,7 @@ function bindExecutedPlanConfigurationSetWithConfigurations(
   capturesValue: unknown,
   bindingsValue: readonly BlueprintParameterBinding[] = [],
   captureIndex?: CaptureRelationIndex,
+  recipeIngredientResolutions: readonly ConstantRecipeIngredientResolution[] = [],
 ) {
   const registration = inspectBlueprintConfigurationSet(setValue, '$.set');
   const index = captureIndex ?? buildCaptureRelationIndex(execution);
@@ -383,6 +385,7 @@ function bindExecutedPlanConfigurationSetWithConfigurations(
     execution.circuit.ir,
     assignments,
     bindingsValue,
+    recipeIngredientResolutions,
   );
 }
 
@@ -626,6 +629,7 @@ function bindCapturedSourceConfigurationTemplatesInternal(
   source: ExecutedElaborationWithBlueprintParameters,
   execution: ExecutedDirectPlan,
   bindingsValue: readonly BlueprintParameterBinding[] = [],
+  recipeIngredientResolutions: readonly ConstantRecipeIngredientResolution[] = [],
 ) {
   if (
     !isDataRecord(source) ||
@@ -1090,6 +1094,7 @@ function bindCapturedSourceConfigurationTemplatesInternal(
     captures.map(({ capture }) => capture),
     bindingsValue,
     captureIndex,
+    recipeIngredientResolutions,
   );
   const capturesById = new Map(captures.map((capture) => [capture.capture.key, capture] as const));
   const captureRelations = bound.configurations.map((configuration) => {
@@ -1118,11 +1123,13 @@ export function bindCapturedSourceConfigurationTemplatesWithRelations(
   source: ExecutedElaborationWithBlueprintParameters,
   execution: ExecutedDirectPlan,
   bindingsValue: readonly BlueprintParameterBinding[] = [],
+  recipeIngredientResolutions: readonly ConstantRecipeIngredientResolution[] = [],
 ) {
   const { bound, captureRelations } = bindCapturedSourceConfigurationTemplatesInternal(
     source,
     execution,
     bindingsValue,
+    recipeIngredientResolutions,
   );
   return Object.freeze({ ...bound, captureRelations });
 }
@@ -1132,8 +1139,14 @@ export function bindCapturedSourceConfigurationTemplatesWithConfigurations(
   source: ExecutedElaborationWithBlueprintParameters,
   execution: ExecutedDirectPlan,
   bindingsValue: readonly BlueprintParameterBinding[] = [],
+  recipeIngredientResolutions: readonly ConstantRecipeIngredientResolution[] = [],
 ) {
-  return bindCapturedSourceConfigurationTemplatesInternal(source, execution, bindingsValue).bound;
+  return bindCapturedSourceConfigurationTemplatesInternal(
+    source,
+    execution,
+    bindingsValue,
+    recipeIngredientResolutions,
+  ).bound;
 }
 
 /** Binds source-captured templates and returns only their concrete NCIR replacement. */
@@ -1141,10 +1154,12 @@ export function bindCapturedSourceConfigurationTemplates(
   source: ExecutedElaborationWithBlueprintParameters,
   execution: ExecutedDirectPlan,
   bindingsValue: readonly BlueprintParameterBinding[] = [],
+  recipeIngredientResolutions: readonly ConstantRecipeIngredientResolution[] = [],
 ) {
   return bindCapturedSourceConfigurationTemplatesWithConfigurations(
     source,
     execution,
     bindingsValue,
+    recipeIngredientResolutions,
   ).circuit;
 }

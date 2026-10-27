@@ -177,10 +177,16 @@ import {
 import { bindDeciderConfigurationTemplate } from '../../compiler/src/decider-configuration-binding.js';
 import { type SelectorConfigurationTemplate } from '../../compiler/src/selector-configuration-template.js';
 import {
+  inspectBlueprintRecipeIngredientReference,
+  projectBlueprintRecipeIngredientReference,
+} from '../../compiler/src/blueprint-recipe-ingredient-reference.js';
+import {
   createBlueprintParameterSourceView,
+  canonicalBlueprintParameterHandle,
   findBlueprintParameterHandle,
   BlueprintParameterError,
   type BlueprintNumberParameterHandle,
+  type BlueprintParameterHandle,
   type BlueprintParameterSession,
   type BlueprintSignalParameterHandle,
 } from '../../compiler/src/blueprint-parameters.js';
@@ -216,6 +222,7 @@ import {
   prepareDeciderComparisonSource,
   type PreparedDeciderComparisonSource,
 } from './decider-comparison-source.js';
+import { resolveConstantRecipeIngredientReferences } from './recipe-ingredient-dependencies.js';
 
 interface RawSpan {
   readonly start: number;
@@ -682,6 +689,7 @@ class ElaborationRecorder {
       readonly branch: 'then' | 'else';
     }
   >();
+  readonly #recipeIngredientMethods = new WeakMap<Function, BlueprintParameterHandle>();
   readonly #ownership = createElaborationOwnershipPolicy((network) => this.#networkState(network));
   readonly #colors = new ElaborationColorConstraints();
   readonly #executionApiFrames: ExecutionApiFrame[] = [];
@@ -785,6 +793,14 @@ class ElaborationRecorder {
     prepareMember: (receiver: unknown, key: PropertyKey, rawSpan: RawSpan): PreparedInvocation => {
       // Resolve the member before evaluating arguments, but leave those arguments in
       // their original lexical environment (not a thunk: eval and yield depend on it).
+      if (key === 'ingredient' && findBlueprintParameterHandle(receiver) !== undefined) {
+        const parameter = canonicalBlueprintParameterHandle(receiver);
+        if (parameter !== undefined) {
+          const callable = (() => undefined) as Function;
+          this.#recipeIngredientMethods.set(callable, parameter);
+          return { callable, receiver };
+        }
+      }
       if (this.#isCircuitDslValue(receiver)) {
         const property = Reflect.ownKeys({ [key]: undefined })[0]!;
         if (property === 'then' || property === 'else') {
@@ -1177,7 +1193,15 @@ class ElaborationRecorder {
                 (parameter) => parameter.kind === 'signal' && parameter.defaultValue === undefined,
               );
               if (!hasRequiredSignal) {
-                configuration = bindConstantConfigurationTemplate(prepared.template);
+                const recipeIngredientBindings = resolveConstantRecipeIngredientReferences(
+                  [prepared.template],
+                  this.#prototypes,
+                );
+                configuration = bindConstantConfigurationTemplate(
+                  prepared.template,
+                  [],
+                  recipeIngredientBindings,
+                );
               }
             } else {
               configuration = bindConstantConfigurationTemplate(prepared.template);
@@ -1188,6 +1212,8 @@ class ElaborationRecorder {
               context,
               this.#parameterCapture?.session,
               '$.configuration',
+              (constantTemplate) =>
+                resolveConstantRecipeIngredientReferences([constantTemplate], this.#prototypes),
             );
             configuration = normalized.configuration;
             template = normalized.template;
@@ -1196,7 +1222,7 @@ class ElaborationRecorder {
           if (error instanceof ConstantConfigurationSourceError) {
             throw new ElaborationExecutionError(
               error.message,
-              this.#span(rawSpan),
+              error.span ?? this.#span(rawSpan),
               'RT2027',
               undefined,
               { cause: error },
@@ -2363,6 +2389,15 @@ class ElaborationRecorder {
       });
     },
     unaryMinus: (value: unknown, rawSpan: RawSpan): unknown => {
+      const ingredientReference = inspectBlueprintRecipeIngredientReference(value);
+      if (ingredientReference !== undefined) {
+        throw new BlueprintParameterError(
+          'CP1001',
+          '$.ingredient.unaryOperand',
+          'recipe ingredient references cannot be used in unary numeric expressions.',
+          this.#span(rawSpan),
+        );
+      }
       const expressionView = findSourceNumericExpressionView(value);
       const parameterLike =
         expressionView === undefined && findBlueprintParameterHandle(value) !== undefined;
@@ -2459,6 +2494,12 @@ class ElaborationRecorder {
       return this.#select(value, signal, rawSpan);
     },
     element: (value: unknown, key: unknown, rawSpan: RawSpan): unknown => {
+      const ingredientLeaf = projectBlueprintRecipeIngredientReference(
+        value,
+        key,
+        this.#span(rawSpan),
+      );
+      if (ingredientLeaf !== undefined) return ingredientLeaf;
       if (this.#isSelected(value)) {
         this.#recordDslCall();
         return this.#selectedMember(value, key);
@@ -2479,6 +2520,27 @@ class ElaborationRecorder {
         throw new TypeError(`Cannot read properties of ${String(value)}.`);
       }
       return (value as Record<PropertyKey, unknown>)[key as PropertyKey];
+    },
+    property: (value: unknown, key: PropertyKey, rawSpan: RawSpan): unknown => {
+      const ingredientReference = inspectBlueprintRecipeIngredientReference(value);
+      if (ingredientReference?.slot !== undefined) {
+        throw new BlueprintParameterError(
+          'CP1001',
+          '$.ingredient.field',
+          'projected recipe ingredient fields cannot be inspected or chained.',
+          this.#span(rawSpan),
+        );
+      }
+      const ingredientLeaf = projectBlueprintRecipeIngredientReference(
+        value,
+        key,
+        this.#span(rawSpan),
+      );
+      if (ingredientLeaf !== undefined) return ingredientLeaf;
+      if (value === null || value === undefined) {
+        throw new TypeError(`Cannot read properties of ${String(value)}.`);
+      }
+      return (value as Record<PropertyKey, unknown>)[key];
     },
     bindOutput: (producer: unknown, values: readonly unknown[], rawSpan: RawSpan): unknown => {
       if (!isRawSpan(rawSpan)) throw new Error('.as(...) is missing provenance.');
@@ -2733,6 +2795,17 @@ class ElaborationRecorder {
       const rawSpan =
         typeof sourceExpressionOrSpan === 'boolean' ? sourceExpressionSpan : sourceExpressionOrSpan;
       if (!isRawSpan(rawSpan)) throw new Error('binary is missing source provenance.');
+      if (
+        inspectBlueprintRecipeIngredientReference(left) !== undefined ||
+        inspectBlueprintRecipeIngredientReference(right) !== undefined
+      ) {
+        throw new BlueprintParameterError(
+          'CP1001',
+          '$.ingredient.binaryOperand',
+          'recipe ingredient references cannot be used in JavaScript or circuit binary expressions.',
+          this.#span(rawSpan),
+        );
+      }
       if (!sourceExpression) {
         return operators.dispatchBinary(operator, left, right, rawSpan, this.#operatorContext);
       }
@@ -3395,6 +3468,31 @@ class ElaborationRecorder {
     rawSpan: RawSpan,
   ): unknown {
     if (typeof callable === 'function') {
+      const ingredientParameter = this.#recipeIngredientMethods.get(callable);
+      if (ingredientParameter !== undefined) {
+        this.#recordDslCall();
+        if (args.length !== 1) {
+          throw new BlueprintParameterError(
+            'CP1000',
+            '$.ingredient.arguments',
+            'ingredient(index) requires exactly one non-spread argument.',
+            this.#span(rawSpan),
+          );
+        }
+        if (this.#parameterCapture === undefined) {
+          throw new BlueprintParameterError(
+            'CP1001',
+            '$.ingredient.session',
+            'recipe ingredient references require their owning source parameter capture.',
+            this.#span(rawSpan),
+          );
+        }
+        return this.#parameterCapture.ingredientReference(
+          ingredientParameter,
+          args[0]!.value,
+          this.#span(rawSpan),
+        );
+      }
       const deciderAlias = this.#deciderMemberAliases.get(callable);
       if (deciderAlias !== undefined) {
         return this.#appendDeciderArguments(
@@ -3817,18 +3915,43 @@ class ElaborationRecorder {
         if (index < 0) {
           throw new Error('Pending Constant installation lost its registration order entry.');
         }
-        const configuration =
-          pending.configuration ??
-          (pending.template === undefined
-            ? undefined
-            : bindConstantConfigurationTemplate(pending.template, [
+        const constantBindings =
+          pending.template === undefined
+            ? []
+            : [
                 ...(this.#resolvedNumberDefaultContext?.bindingsForConstantTemplate(
                   pending.template,
                 ) ?? []),
                 ...(this.#resolvedSignalTemplateContext?.bindingsForConstantTemplate(
                   pending.template,
                 ) ?? []),
-              ]));
+              ];
+        const skippedParameters = new Set(
+          this.#resolvedSignalTemplateContext?.requiredParameters ?? [],
+        );
+        const recipeIngredientBindings =
+          pending.template === undefined
+            ? []
+            : [
+                ...resolveConstantRecipeIngredientReferences(
+                  [pending.template],
+                  this.#prototypes,
+                  [],
+                  skippedParameters,
+                ),
+                ...(this.#resolvedSignalTemplateContext?.bindingsForRecipeIngredientReferences(
+                  pending.template,
+                ) ?? []),
+              ];
+        const configuration =
+          pending.configuration ??
+          (pending.template === undefined
+            ? undefined
+            : bindConstantConfigurationTemplate(
+                pending.template,
+                constantBindings,
+                recipeIngredientBindings,
+              ));
         if (configuration === undefined) {
           throw new Error('Pending Constant installation has no resolved configuration.');
         }
@@ -5545,6 +5668,15 @@ class ElaborationRecorder {
     if (this.#isCircuitDslValue(value)) {
       throw new Error('Circuit arithmetic currently requires a Network or numeric operand.');
     }
+    const ingredientReference = inspectBlueprintRecipeIngredientReference(value);
+    if (ingredientReference !== undefined) {
+      throw new BlueprintParameterError(
+        'CP1001',
+        path,
+        'recipe ingredient references cannot be used in numeric expressions.',
+        ingredientReference.source,
+      );
+    }
     const expressionView = findSourceNumericExpressionView(value);
     if (expressionView !== undefined) {
       if (this.#parameterCapture?.session !== expressionView.session) {
@@ -5583,6 +5715,15 @@ class ElaborationRecorder {
 
   #rejectParameterControlValue(value: unknown, rawSpan: RawSpan): void {
     this.#rejectDerivedNumericExpression(value, rawSpan);
+    const ingredientReference = inspectBlueprintRecipeIngredientReference(value);
+    if (ingredientReference !== undefined) {
+      throw new BlueprintParameterError(
+        'CP1001',
+        '$.ingredient.controlValue',
+        'recipe ingredient references cannot be used as JavaScript control-flow values.',
+        this.#span(rawSpan),
+      );
+    }
     const declaration = findBlueprintParameterHandle(value);
     if (declaration === undefined) return;
     throw new ElaborationExecutionError(

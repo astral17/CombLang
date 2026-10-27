@@ -32,6 +32,24 @@ function isWriteTarget(node: ts.ElementAccessExpression): boolean {
   return ts.isDeleteExpression(parent);
 }
 
+function isPropertyWriteTarget(node: ts.PropertyAccessExpression): boolean {
+  const parent = node.parent;
+  if (ts.isBinaryExpression(parent) && parent.left === node) {
+    return (
+      parent.operatorToken.kind >= ts.SyntaxKind.FirstAssignment &&
+      parent.operatorToken.kind <= ts.SyntaxKind.LastAssignment
+    );
+  }
+  if (
+    (ts.isPrefixUnaryExpression(parent) || ts.isPostfixUnaryExpression(parent)) &&
+    (parent.operator === ts.SyntaxKind.PlusPlusToken ||
+      parent.operator === ts.SyntaxKind.MinusMinusToken)
+  ) {
+    return true;
+  }
+  return ts.isDeleteExpression(parent);
+}
+
 /** Rewrites the call/member family while preserving JavaScript evaluation order. */
 export function transformCallOrElementNode(
   node: ts.Node,
@@ -285,6 +303,21 @@ export function transformCallOrElementNode(
     (node.name.text === 'then' || node.name.text === 'else')
   ) {
     return context.dslCall('member', [
+      ts.visitNode(node.expression, visit) as ts.Expression,
+      factory.createStringLiteral(node.name.text),
+      context.spanLiteral(node),
+    ]);
+  }
+
+  if (
+    ts.isPropertyAccessExpression(node) &&
+    (node.name.text === 'signal' || node.name.text === 'amount') &&
+    !ts.isPropertyAccessChain(node) &&
+    !ts.isPrivateIdentifier(node.name) &&
+    node.expression.kind !== ts.SyntaxKind.SuperKeyword &&
+    !isPropertyWriteTarget(node)
+  ) {
+    return context.dslCall('property', [
       ts.visitNode(node.expression, visit) as ts.Expression,
       factory.createStringLiteral(node.name.text),
       context.spanLiteral(node),

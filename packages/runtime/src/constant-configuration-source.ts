@@ -8,9 +8,12 @@ import {
 } from '../../compiler/src/blueprint-parameters.js';
 import { lookupBlueprintParameterSlot } from '../../compiler/src/blueprint-parameter-validation.js';
 import type { BlueprintNumericExpression } from '../../compiler/src/blueprint-numeric-expression.js';
+import { inspectBlueprintRecipeIngredientReference } from '../../compiler/src/blueprint-recipe-ingredient-reference.js';
 import { bindConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-binding.js';
 import {
   createConstantConfigurationTemplate,
+  inspectConstantConfigurationTemplate,
+  type ConstantRecipeIngredientResolution,
   type ConstantConfigurationTemplate,
 } from '../../compiler/src/constant-configuration-template.js';
 
@@ -31,6 +34,7 @@ interface NormalizedConstantFilters {
     readonly value: unknown;
   }[];
   readonly hasParameterSlots: boolean;
+  readonly hasRecipeIngredientReferences: boolean;
 }
 
 /** Runtime-facing source normalizer for the exact Constant({ isOn, sections }) form. */
@@ -40,14 +44,15 @@ export class ConstantConfigurationSourceError extends TypeError {
   constructor(
     readonly path: string,
     message: string,
+    readonly span?: import('@comblang/shared').SourceSpan,
   ) {
     super(`${path}: ${message}`);
     this.name = 'ConstantConfigurationSourceError';
   }
 }
 
-function fail(path: string, message: string): never {
-  throw new ConstantConfigurationSourceError(path, message);
+function fail(path: string, message: string, span?: import('@comblang/shared').SourceSpan): never {
+  throw new ConstantConfigurationSourceError(path, message, span);
 }
 
 function normalizeSignalValues(
@@ -178,6 +183,14 @@ function rejectUnsupportedSymbolicValue(
   path: string,
   session: BlueprintParameterSession | undefined,
 ): void {
+  const ingredient = inspectBlueprintRecipeIngredientReference(value);
+  if (ingredient !== undefined) {
+    fail(
+      path,
+      'recipe ingredient references are allowed only in direct Constant filter signal and value slots.',
+      ingredient.source,
+    );
+  }
   const expressionView = findSourceNumericExpressionView(value);
   if (expressionView !== undefined) {
     fail(
@@ -223,11 +236,13 @@ function normalizeFilters(
     return {
       filters: Object.freeze(filters),
       hasParameterSlots: false,
+      hasRecipeIngredientReferences: false,
     };
   }
 
   const filters: { readonly signal: unknown; readonly value: unknown }[] = [];
   let hasParameterSlots = false;
+  let hasRecipeIngredientReferences = false;
   directRows.forEach((candidate, index) => {
     const rowPath = `${path}[${index}]`;
     const isDirectRow = isDirectFilterCandidate(candidate);
@@ -250,10 +265,27 @@ function normalizeFilters(
 
     let rawSignal: unknown = row.signal;
     let signalSlot: BlueprintSignalParameterHandle | undefined;
+    const signalIngredient = inspectBlueprintRecipeIngredientReference(rawSignal);
     const rawCount = row.value;
     let numberSlot: BlueprintNumberParameterHandle | BlueprintNumericExpression | undefined;
+    const amountIngredient = inspectBlueprintRecipeIngredientReference(rawCount);
     try {
-      if (session !== undefined) {
+      if (signalIngredient !== undefined) {
+        if (session === undefined || signalIngredient.session !== session) {
+          fail(
+            `${rowPath}.signal`,
+            'recipe ingredient reference requires its owning parameter session.',
+            signalIngredient.source,
+          );
+        }
+        if (signalIngredient.slot !== 'signal') {
+          fail(
+            `${rowPath}.signal`,
+            'expected the signal field of a recipe ingredient reference.',
+            signalIngredient.source,
+          );
+        }
+      } else if (session !== undefined) {
         const slot = lookupBlueprintParameterSlot(
           rawSignal,
           'signal',
@@ -266,7 +298,22 @@ function normalizeFilters(
       }
 
       const expressionView = findSourceNumericExpressionView(rawCount);
-      if (expressionView !== undefined) {
+      if (amountIngredient !== undefined) {
+        if (session === undefined || amountIngredient.session !== session) {
+          fail(
+            `${rowPath}.value`,
+            'recipe ingredient reference requires its owning parameter session.',
+            amountIngredient.source,
+          );
+        }
+        if (amountIngredient.slot !== 'amount') {
+          fail(
+            `${rowPath}.value`,
+            'expected the amount field of a recipe ingredient reference.',
+            amountIngredient.source,
+          );
+        }
+      } else if (expressionView !== undefined) {
         if (session === undefined) {
           fail(
             `${rowPath}.value`,
@@ -302,15 +349,25 @@ function normalizeFilters(
       }
       throw error;
     }
-    const signal =
-      signalSlot ?? snapshotSignal(normalizeSignalKey(rawSignal, context, `${rowPath}.signal`));
-    const count = numberSlot ?? normalizeSignalCount(rawCount, `${rowPath}.value`);
+    const signal = signalIngredient
+      ? rawSignal
+      : (signalSlot ?? snapshotSignal(normalizeSignalKey(rawSignal, context, `${rowPath}.signal`)));
+    const count = amountIngredient
+      ? rawCount
+      : (numberSlot ?? normalizeSignalCount(rawCount, `${rowPath}.value`));
     filters.push(Object.freeze({ signal, value: count }));
-    hasParameterSlots ||= signalSlot !== undefined || numberSlot !== undefined;
+    hasRecipeIngredientReferences ||=
+      signalIngredient !== undefined || amountIngredient !== undefined;
+    hasParameterSlots ||=
+      signalSlot !== undefined ||
+      numberSlot !== undefined ||
+      signalIngredient !== undefined ||
+      amountIngredient !== undefined;
   });
   return {
     filters: Object.freeze(filters),
     hasParameterSlots,
+    hasRecipeIngredientReferences,
   };
 }
 
@@ -327,6 +384,7 @@ export interface PreparedConstantConfigurationSource {
 interface NormalizedConstantSourceData {
   readonly value: Record<string, unknown>;
   readonly hasParameterSlots: boolean;
+  readonly hasRecipeIngredientReferences: boolean;
   readonly expressionPaths: readonly string[];
 }
 
@@ -340,6 +398,7 @@ function normalizeSourceData(
   const sectionsValue =
     'sections' in record ? ownDataArray(record.sections, `${path}.sections`) : [];
   let hasParameterSlots = false;
+  let hasRecipeIngredientReferences = false;
   const expressionPaths: string[] = [];
   const sections = sectionsValue.map((section, index) => {
     const sectionPath = `${path}.sections[${index}]`;
@@ -401,6 +460,7 @@ function normalizeSourceData(
       );
       normalizedSection.filters = normalizedFilters.filters;
       hasParameterSlots ||= normalizedFilters.hasParameterSlots;
+      hasRecipeIngredientReferences ||= normalizedFilters.hasRecipeIngredientReferences;
     }
     for (const key of Object.keys(source)) {
       if (!['active', 'group', 'multiplier', 'filters'].includes(key)) {
@@ -422,6 +482,7 @@ function normalizeSourceData(
       ...(Object.hasOwn(record, 'sections') ? { sections } : {}),
     },
     hasParameterSlots,
+    hasRecipeIngredientReferences,
     // Binder paths are rooted at the template, not at its containing source field.
     expressionPaths: Object.freeze(
       expressionPaths.map((slotPath) => `$${slotPath.slice(path.length)}`),
@@ -444,9 +505,13 @@ function rethrowParameterError(
       ? error.message.slice(error.path.length + 2)
       : error.message;
     const sourcePath = [...expressionPaths]
-      .filter((slotPath) => error.path.startsWith(`${slotPath}.`))
+      .filter((slotPath) => error.path === slotPath || error.path.startsWith(`${slotPath}.`))
       .sort((left, right) => right.length - left.length)[0];
-    fail(withSourcePath(path, sourcePath ?? error.path), message);
+    fail(
+      withSourcePath(path, sourcePath ?? error.path),
+      message,
+      sourcePath === undefined ? error.span : undefined,
+    );
   }
   throw error;
 }
@@ -481,6 +546,9 @@ export function normalizeConstantConfigurationSourceWithParameters(
   context: ConstantConfigurationSourceContext,
   session: BlueprintParameterSession | undefined,
   path = '$',
+  resolveRecipeIngredientReferences?: (
+    template: ConstantConfigurationTemplate,
+  ) => readonly ConstantRecipeIngredientResolution[],
 ): NormalizedConstantConfigurationSource {
   const normalized = normalizeSourceData(value, context, session, path);
   if (session === undefined) {
@@ -493,9 +561,12 @@ export function normalizeConstantConfigurationSourceWithParameters(
   } catch (error) {
     rethrowParameterError(error, path);
   }
+  const recipeIngredientResolutions = normalized.hasRecipeIngredientReferences
+    ? (resolveRecipeIngredientReferences?.(template) ?? [])
+    : [];
   let configuration: ConstantConfiguration;
   try {
-    configuration = bindConstantConfigurationTemplate(template);
+    configuration = bindConstantConfigurationTemplate(template, [], recipeIngredientResolutions);
   } catch (error) {
     rethrowParameterError(error, path, normalized.expressionPaths);
   }
