@@ -26,6 +26,13 @@ const dumpSource = JSON.stringify({
   'virtual-signal': {
     'signal-A': { type: 'virtual-signal', name: 'signal-A' },
   },
+  lab: {
+    lab: {
+      type: 'lab',
+      name: 'lab',
+      circuit_connector: { points: { wire: { red: [1, 2], green: [3, 4] } } },
+    },
+  },
 });
 
 const metadataSource = JSON.stringify({
@@ -52,6 +59,7 @@ describe('generated prototype assets', () => {
     const loaded = await loadPrototypeAsset(first.databaseJson, first.manifestJson);
     expect(loaded.prototypes.identity).toBe(first.manifest.databaseIdentity);
     expect(loaded.prototypes.item.plate).toMatchObject({ name: 'plate', stackSize: 100 });
+    expect(loaded.prototypes.entity.lab?.circuitConnectorTopology).toBe('single-shared');
   });
 
   test.each([

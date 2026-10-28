@@ -169,6 +169,16 @@ projection uses explicit `tile_width`/`tile_height` per axis and then the pinned
 API's collision-box fallback. It never substitutes a selection box. A recognized
 Entity without enough dimension data stays in the database with no footprint.
 
+The optional `circuitConnectorTopology: "single-shared"` fact is emitted only
+for assembling machines, containers and labs when the raw connector definition
+has actual red and green wire points in every declared orientation. Assembler
+orientation tuples include the optional flipped tuple; container lists follow
+`direction_count` (default 1); labs use one definition. Missing or incomplete
+evidence is omitted and therefore remains unknown. This fact describes one
+physical connector with shared red/green lanes; it does not assign input/output
+roles, enabled modes, callable projections, connector IDs or machine simulation.
+It does not make an Entity callable at runtime.
+
 Raw `blueprintEligible` is true only for `player-creation` without
 `not-blueprintable`. Absent raw flags have an empty-set default and produce
 false. A normalized record omitting the derived fact remains unknown; only

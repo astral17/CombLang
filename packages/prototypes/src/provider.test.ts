@@ -271,6 +271,40 @@ describe('PrototypeDatabase v1', () => {
     );
   });
 
+  test('validates shared connector topology as an optional semantic Entity fact', async () => {
+    const legacy = mutableFixture();
+    delete legacy.entities[0]!.circuitConnectorTopology;
+    const entityName = String(legacy.entities[0]!.name);
+    const loadedLegacy = await loadPrototypeDatabase(legacy);
+    expect(loadedLegacy.prototypes.entity[entityName]).not.toHaveProperty(
+      'circuitConnectorTopology',
+    );
+
+    const withTopology = mutableFixture();
+    withTopology.entities[0]!.circuitConnectorTopology = 'single-shared';
+    const topologyEntityName = String(withTopology.entities[0]!.name);
+    const loadedWithTopology = await loadPrototypeDatabase(withTopology);
+    expect(loadedWithTopology.prototypes.entity[topologyEntityName]?.circuitConnectorTopology).toBe(
+      'single-shared',
+    );
+    expect(Object.isFrozen(loadedWithTopology.prototypes.entity[topologyEntityName])).toBe(true);
+    expect(loadedWithTopology.prototypes.identity).not.toBe(loadedLegacy.prototypes.identity);
+    expect(
+      JSON.parse(JSON.stringify(loadedWithTopology.database)).entities[0].circuitConnectorTopology,
+    ).toBe('single-shared');
+
+    for (const value of [null, true, 'unknown', 'multiple'] as const) {
+      const invalid = mutableFixture();
+      invalid.entities[0]!.circuitConnectorTopology = value;
+      expect(() => validatePrototypeDatabase(invalid)).toThrowError(
+        expect.objectContaining({
+          code: 'PT1001',
+          path: 'entities[0].circuitConnectorTopology',
+        }),
+      );
+    }
+  });
+
   test('builds deterministic multi-recipe product indexes without duplicate rows', () => {
     const database = validatePrototypeDatabase(mutableFixture());
     const duplicateProductRecipe: RecipePrototype = Object.freeze({

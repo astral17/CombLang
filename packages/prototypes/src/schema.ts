@@ -205,6 +205,8 @@ export interface EntityPrototype {
   readonly type: string;
   /** True only when raw flags prove player blueprint creation is allowed; omission is unknown. */
   readonly blueprintEligible?: boolean;
+  /** One physical circuit connector has shared red/green lanes; omission is unknown. */
+  readonly circuitConnectorTopology?: 'single-shared';
   /** Omission means the raw source did not provide an ordinary placement footprint. */
   readonly tileWidth?: number;
   readonly tileHeight?: number;

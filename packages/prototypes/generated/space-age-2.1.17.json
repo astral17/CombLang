@@ -338,6 +338,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "crafting": {
         "categories": [
           "advanced-crafting",
@@ -367,6 +368,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "crafting": {
         "categories": [
           "advanced-crafting",
@@ -397,6 +399,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "crafting": {
         "categories": [
           "advanced-crafting",
@@ -1351,6 +1354,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "crafting": {
         "categories": [
           "organic"
@@ -1391,6 +1395,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:biolab",
       "name": "biolab",
       "tileHeight": 5,
@@ -1471,6 +1476,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:blue-chest",
       "name": "blue-chest",
       "tileHeight": 1,
@@ -1527,6 +1533,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:bottomless-chest",
       "name": "bottomless-chest",
       "tileHeight": 1,
@@ -1835,6 +1842,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "crafting": {
         "categories": [
           "centrifuging"
@@ -1908,6 +1916,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "crafting": {
         "categories": [
           "chemistry"
@@ -2052,6 +2061,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:crash-site-chest-1",
       "name": "crash-site-chest-1",
       "tileHeight": 1,
@@ -2060,6 +2070,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:crash-site-chest-2",
       "name": "crash-site-chest-2",
       "tileHeight": 1,
@@ -2196,6 +2207,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "crafting": {
         "categories": [
           "crushing"
@@ -2218,6 +2230,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "crafting": {
         "categories": [
           "cryogenics"
@@ -2606,6 +2619,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "crafting": {
         "categories": [
           "electromagnetics"
@@ -3062,6 +3076,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "crafting": {
         "categories": [
           "metallurgy"
@@ -3610,6 +3625,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:iron-chest",
       "name": "iron-chest",
       "tileHeight": 1,
@@ -3684,6 +3700,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:lab",
       "name": "lab",
       "tileHeight": 3,
@@ -4822,6 +4839,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "crafting": {
         "categories": [
           "oil-processing"
@@ -5382,6 +5400,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:red-chest",
       "name": "red-chest",
       "tileHeight": 1,
@@ -6542,6 +6561,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:steel-chest",
       "name": "steel-chest",
       "tileHeight": 1,
@@ -7360,6 +7380,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:wooden-chest",
       "name": "wooden-chest",
       "tileHeight": 1,
@@ -7414,7 +7435,7 @@
       "space-age"
     ],
     "factorioVersion": "2.1.17",
-    "generatorVersion": "comblang-factorio-data-dump-v1.11",
+    "generatorVersion": "comblang-factorio-data-dump-v1.12",
     "mods": [
       {
         "name": "base",

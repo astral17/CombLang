@@ -481,6 +481,135 @@ function blueprintEligibility(record: JsonObject, path: string): boolean | undef
   return flags.has('player-creation') && !flags.has('not-blueprintable');
 }
 
+interface OwnDataField {
+  readonly present: boolean;
+  readonly value: unknown;
+}
+
+function ownDataField(value: object, field: string, path: string): OwnDataField {
+  const descriptor = Object.getOwnPropertyDescriptor(value, field);
+  if (descriptor === undefined) return { present: false, value: undefined };
+  if (!Object.prototype.hasOwnProperty.call(descriptor, 'value')) {
+    throw new FactorioDumpError(path, 'accessor properties are not supported.');
+  }
+  return { present: true, value: descriptor.value };
+}
+
+function tupleEntries(value: unknown, length: number, path: string): readonly unknown[] {
+  if (!Array.isArray(value)) throw new FactorioDumpError(path, 'expected an array.');
+  const lengthField = ownDataField(value, 'length', `${path}.length`);
+  if (!lengthField.present || lengthField.value !== length) {
+    throw new FactorioDumpError(path, `expected exactly ${length} entries.`);
+  }
+  return Array.from({ length }, (_, index) => {
+    const entry = ownDataField(value, String(index), `${path}[${index}]`);
+    if (!entry.present)
+      throw new FactorioDumpError(`${path}[${index}]`, 'expected an array entry.');
+    return entry.value;
+  });
+}
+
+function wirePoint(value: unknown, path: string): void {
+  if (!Array.isArray(value)) throw new FactorioDumpError(path, 'expected a two-coordinate vector.');
+  const lengthField = ownDataField(value, 'length', path);
+  if (!lengthField.present || lengthField.value !== 2) {
+    throw new FactorioDumpError(path, 'expected a two-coordinate vector.');
+  }
+  for (const index of [0, 1]) {
+    const coordinate = ownDataField(value, String(index), `${path}[${index}]`);
+    if (!coordinate.present) {
+      throw new FactorioDumpError(`${path}[${index}]`, 'expected a finite number.');
+    }
+    finite(coordinate.value, `${path}[${index}]`);
+  }
+}
+
+function hasRedGreenWirePoints(value: unknown, path: string): boolean {
+  if (value === undefined) return false;
+  const connector = object(value, path);
+  const pointsField = ownDataField(connector, 'points', `${path}.points`);
+  if (!pointsField.present || pointsField.value === undefined) return false;
+  const points = object(pointsField.value, `${path}.points`);
+  const wireField = ownDataField(points, 'wire', `${path}.points.wire`);
+  if (!wireField.present || wireField.value === undefined) return false;
+  const wire = object(wireField.value, `${path}.points.wire`);
+  const red = ownDataField(wire, 'red', `${path}.points.wire.red`);
+  const green = ownDataField(wire, 'green', `${path}.points.wire.green`);
+  if (red.present && red.value !== undefined) {
+    wirePoint(red.value, `${path}.points.wire.red`);
+  }
+  if (green.present && green.value !== undefined) {
+    wirePoint(green.value, `${path}.points.wire.green`);
+  }
+  return red.present && red.value !== undefined && green.present && green.value !== undefined;
+}
+
+function connectorOrientationsComplete(entries: readonly unknown[], path: string): boolean {
+  let complete = true;
+  entries.forEach((entry, index) => {
+    if (!hasRedGreenWirePoints(entry, `${path}[${index}]`)) complete = false;
+  });
+  return complete;
+}
+
+function circuitConnectorTopology(
+  type: string,
+  record: JsonObject,
+  path: string,
+): EntityPrototype['circuitConnectorTopology'] {
+  if (type === 'assembling-machine') {
+    const connectorField = ownDataField(record, 'circuit_connector', `${path}.circuit_connector`);
+    const flippedField = ownDataField(
+      record,
+      'circuit_connector_flipped',
+      `${path}.circuit_connector_flipped`,
+    );
+    const connectorPresent = connectorField.present && connectorField.value !== undefined;
+    const flippedPresent = flippedField.present && flippedField.value !== undefined;
+    const connectorComplete = connectorPresent
+      ? connectorOrientationsComplete(
+          tupleEntries(connectorField.value, 4, `${path}.circuit_connector`),
+          `${path}.circuit_connector`,
+        )
+      : false;
+    const flippedComplete = flippedPresent
+      ? connectorOrientationsComplete(
+          tupleEntries(flippedField.value, 4, `${path}.circuit_connector_flipped`),
+          `${path}.circuit_connector_flipped`,
+        )
+      : true;
+    return connectorComplete && flippedComplete ? 'single-shared' : undefined;
+  }
+
+  if (type !== 'container' && type !== 'lab') return undefined;
+  const connectorField = ownDataField(record, 'circuit_connector', `${path}.circuit_connector`);
+  if (!connectorField.present || connectorField.value === undefined) return undefined;
+
+  if (type === 'container') {
+    const directionCountField = ownDataField(record, 'direction_count', `${path}.direction_count`);
+    const directionCount =
+      !directionCountField.present || directionCountField.value === undefined
+        ? 1
+        : finite(directionCountField.value, `${path}.direction_count`);
+    if (![1, 2, 4].includes(directionCount)) {
+      throw new FactorioDumpError(`${path}.direction_count`, 'expected one of 1, 2, or 4.');
+    }
+    return connectorOrientationsComplete(
+      tupleEntries(connectorField.value, directionCount, `${path}.circuit_connector`),
+      `${path}.circuit_connector`,
+    )
+      ? 'single-shared'
+      : undefined;
+  }
+
+  if (type === 'lab') {
+    return hasRedGreenWirePoints(connectorField.value, `${path}.circuit_connector`)
+      ? 'single-shared'
+      : undefined;
+  }
+  return undefined;
+}
+
 /** Converts Factorio's native data-raw-dump JSON shape into the validated v1 subset. */
 export function normalizeFactorioDataDump(
   value: unknown,
@@ -628,6 +757,7 @@ export function normalizeFactorioDataDump(
       }
       const size = dimensions(record, `${table}.${name}`);
       const blueprintEligible = blueprintEligibility(record, `${table}.${name}`);
+      const topology = circuitConnectorTopology(table, record, `${table}.${name}`);
       const categories = Array.isArray(record.crafting_categories)
         ? record.crafting_categories.map((category, index) =>
             nonEmptyString(category, `${table}.${name}.crafting_categories[${index}]`),
@@ -638,6 +768,7 @@ export function normalizeFactorioDataDump(
         name,
         type: table,
         ...(blueprintEligible === undefined ? {} : { blueprintEligible }),
+        ...(topology === undefined ? {} : { circuitConnectorTopology: topology }),
         ...(size === undefined ? {} : { tileWidth: size[0], tileHeight: size[1] }),
         ...(categories === undefined
           ? {}
@@ -655,7 +786,7 @@ export function normalizeFactorioDataDump(
 
   const environment: PrototypeEnvironment = {
     ...metadata,
-    generatorVersion: 'comblang-factorio-data-dump-v1.11',
+    generatorVersion: 'comblang-factorio-data-dump-v1.12',
   };
   const candidate = {
     schemaVersion: 1,

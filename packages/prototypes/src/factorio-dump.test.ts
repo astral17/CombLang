@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, test, vi } from 'vitest';
 
 import { normalizeFactorioDataDump } from './factorio-dump.js';
 import { loadPrototypeDatabase } from './provider.js';
@@ -89,6 +89,12 @@ function dumpFixture(): unknown {
     },
   };
 }
+
+function wireConnector(): Record<string, unknown> {
+  return { points: { wire: { red: [1, 2], green: [3, 4] } } };
+}
+
+type MutableRawDump = Record<string, Record<string, Record<string, unknown>>>;
 
 type RawDumpTable = Record<string, Record<string, unknown>>;
 
@@ -194,6 +200,211 @@ function malformedIngredientOrderDump(mutate: (dump: RawDumpFixture) => void): R
 }
 
 describe('Factorio data-raw-dump normalizer', () => {
+  test('normalizes only complete reviewed connector shapes across orientations', () => {
+    const dump = dumpFixture() as MutableRawDump;
+    const orientations = () => Array.from({ length: 4 }, wireConnector);
+    dump['assembling-machine']!.assembler!.circuit_connector = orientations();
+    dump['assembling-machine']!.assembler!.circuit_connector_flipped = orientations();
+    dump.container = {
+      'iron-chest': {
+        type: 'container',
+        name: 'iron-chest',
+        circuit_connector: [wireConnector()],
+      },
+      'directional-container': {
+        type: 'container',
+        name: 'directional-container',
+        direction_count: 2,
+        circuit_connector: [wireConnector(), wireConnector()],
+      },
+    };
+    dump.lab = {
+      lab: { type: 'lab', name: 'lab', circuit_connector: wireConnector() },
+    };
+    dump['arithmetic-combinator'] = {
+      combinator: {
+        type: 'arithmetic-combinator',
+        name: 'combinator',
+        circuit_connector: orientations(),
+      },
+    };
+
+    const entities = normalizeFactorioDataDump(dump, metadata).database.entities;
+    for (const name of ['assembler', 'iron-chest', 'directional-container', 'lab']) {
+      expect(entities.find((entity) => entity.name === name)?.circuitConnectorTopology).toBe(
+        'single-shared',
+      );
+    }
+    expect(entities.find((entity) => entity.name === 'combinator')).not.toHaveProperty(
+      'circuitConnectorTopology',
+    );
+  });
+
+  test('leaves connector topology unknown when points or any declared orientation are incomplete', () => {
+    const dump = dumpFixture() as MutableRawDump;
+    const assembler = dump['assembling-machine']!.assembler!;
+    assembler.circuit_connector = Array.from({ length: 4 }, wireConnector);
+    (assembler.circuit_connector as Record<string, unknown>[])[2] = {
+      points: { wire: { red: [1, 2] } },
+    };
+    assembler.circuit_connector_flipped = Array.from({ length: 4 }, wireConnector);
+    (assembler.circuit_connector_flipped as Record<string, unknown>[])[3] = {
+      points: { wire: { red: [1, 2] } },
+    };
+    dump.container = {
+      'missing-points': {
+        type: 'container',
+        name: 'missing-points',
+        circuit_connector: [{}],
+      },
+      'red-only': {
+        type: 'container',
+        name: 'red-only',
+        circuit_connector: [{ points: { wire: { red: [1, 2] } } }],
+      },
+      'shadow-only': {
+        type: 'container',
+        name: 'shadow-only',
+        circuit_connector: [{ points: { shadow: { red: [1, 2], green: [3, 4] } } }],
+      },
+    };
+    dump['assembling-machine']!['no-connector'] = {
+      type: 'assembling-machine',
+      name: 'no-connector',
+      flags: ['player-creation'],
+      circuit_wire_max_distance: 99,
+      read_contents: true,
+    };
+    dump.lab = { lab: { type: 'lab', name: 'lab', circuit_connector: {} } };
+    dump['arithmetic-combinator'] = {
+      combinator: {
+        type: 'arithmetic-combinator',
+        name: 'combinator',
+        circuit_connector: Array.from({ length: 4 }, wireConnector),
+      },
+    };
+
+    const entities = normalizeFactorioDataDump(dump, metadata).database.entities;
+    for (const name of [
+      'assembler',
+      'no-connector',
+      'missing-points',
+      'red-only',
+      'shadow-only',
+      'lab',
+      'combinator',
+    ]) {
+      expect(entities.find((entity) => entity.name === name)).not.toHaveProperty(
+        'circuitConnectorTopology',
+      );
+    }
+  });
+
+  test.each([
+    [
+      'assembler orientation count',
+      (dump: MutableRawDump) => {
+        dump['assembling-machine']!.assembler!.circuit_connector = [wireConnector()];
+      },
+      'assembling-machine.assembler.circuit_connector',
+    ],
+    [
+      'container orientation count',
+      (dump: MutableRawDump) => {
+        dump.container = {
+          chest: {
+            type: 'container',
+            name: 'chest',
+            direction_count: 2,
+            circuit_connector: [wireConnector()],
+          },
+        };
+      },
+      'container.chest.circuit_connector',
+    ],
+    [
+      'container direction count',
+      (dump: MutableRawDump) => {
+        dump.container = {
+          chest: {
+            type: 'container',
+            name: 'chest',
+            direction_count: 3,
+            circuit_connector: [wireConnector()],
+          },
+        };
+      },
+      'container.chest.direction_count',
+    ],
+    [
+      'wire point length',
+      (dump: MutableRawDump) => {
+        dump.lab = {
+          lab: {
+            type: 'lab',
+            name: 'lab',
+            circuit_connector: { points: { wire: { red: [1], green: [3, 4] } } },
+          },
+        };
+      },
+      'lab.lab.circuit_connector.points.wire.red',
+    ],
+    [
+      'non-finite wire coordinate',
+      (dump: MutableRawDump) => {
+        dump.lab = {
+          lab: {
+            type: 'lab',
+            name: 'lab',
+            circuit_connector: { points: { wire: { red: [1, 2], green: [3, Infinity] } } },
+          },
+        };
+      },
+      'lab.lab.circuit_connector.points.wire.green[1]',
+    ],
+  ])('rejects malformed %s with its raw field path', (_label, mutate, path) => {
+    const dump = dumpFixture() as MutableRawDump;
+    mutate(dump);
+    expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
+      expect.objectContaining({ code: 'PD1001', path }),
+    );
+  });
+
+  test('rejects connector accessors without invoking their getters', () => {
+    const dump = dumpFixture() as MutableRawDump;
+    const getter = vi.fn(() => wireConnector());
+    Object.defineProperty(dump['assembling-machine']!.assembler!, 'circuit_connector', {
+      enumerable: true,
+      get: getter,
+    });
+
+    expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
+      expect.objectContaining({
+        code: 'PD1001',
+        path: 'assembling-machine.assembler.circuit_connector',
+      }),
+    );
+    expect(getter).not.toHaveBeenCalled();
+
+    const nestedDump = dumpFixture() as MutableRawDump;
+    const nestedGetter = vi.fn(() => ({ wire: { red: [1, 2], green: [3, 4] } }));
+    const connector: Record<string, unknown> = {};
+    Object.defineProperty(connector, 'points', { enumerable: true, get: nestedGetter });
+    nestedDump['assembling-machine']!.assembler!.circuit_connector = [
+      connector,
+      wireConnector(),
+      wireConnector(),
+      wireConnector(),
+    ];
+    expect(() => normalizeFactorioDataDump(nestedDump, metadata)).toThrowError(
+      expect.objectContaining({
+        code: 'PD1001',
+        path: 'assembling-machine.assembler.circuit_connector[0].points',
+      }),
+    );
+    expect(nestedGetter).not.toHaveBeenCalled();
+  });
+
   test.each(['enabled', 'allow_productivity', 'hidden', 'main_product'])(
     'rejects malformed raw %s instead of silently replacing it',
     (field) => {
@@ -795,7 +1006,7 @@ describe('Factorio data-raw-dump normalizer', () => {
     const normalized = normalizeFactorioDataDump(dumpFixture(), metadata);
     const { database, prototypes } = await loadPrototypeDatabase(normalized.database);
 
-    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.11');
+    expect(database.environment.generatorVersion).toBe('comblang-factorio-data-dump-v1.12');
     expect(prototypes.item.grenade?.stackSize).toBe(100);
     expect(prototypes.recipe['iron-plate']).toMatchObject({
       categories: ['crafting'],

@@ -552,6 +552,16 @@ function parseEntities(
     const input = object(entry, path);
     const name = string(input.name, `${path}.name`);
     const blueprintEligible = optionalBoolean(input.blueprintEligible, `${path}.blueprintEligible`);
+    const circuitConnectorTopology =
+      input.circuitConnectorTopology === undefined
+        ? undefined
+        : input.circuitConnectorTopology === 'single-shared'
+          ? input.circuitConnectorTopology
+          : invalid(
+              'PT1001',
+              `${path}.circuitConnectorTopology`,
+              'expected the literal "single-shared".',
+            );
     const tileWidth = optionalPositiveInteger(input.tileWidth, `${path}.tileWidth`);
     const tileHeight = optionalPositiveInteger(input.tileHeight, `${path}.tileHeight`);
     if ((tileWidth === undefined) !== (tileHeight === undefined)) {
@@ -578,6 +588,7 @@ function parseEntities(
       name,
       type: string(input.type, `${path}.type`),
       ...(blueprintEligible === undefined ? {} : { blueprintEligible }),
+      ...(circuitConnectorTopology === undefined ? {} : { circuitConnectorTopology }),
       ...(tileWidth === undefined ? {} : { tileWidth }),
       ...(tileHeight === undefined ? {} : { tileHeight }),
       ...(circuit === undefined ? {} : { circuit }),
