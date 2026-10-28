@@ -962,13 +962,13 @@ Attach(input);`);
     else expect(provider.entityCircuitCapabilities('entity:lab')).toBe(lab.circuit);
   });
 
-  test.each([0, 1, 2])(
+  test.each([0, 1, 2, 3])(
     'compiles literal Entity example %i without pretending it is a simulator device',
     async (index) => {
-      expect(blocks('entity')).toHaveLength(3);
+      expect(blocks('entity')).toHaveLength(4);
       const compilation = compile(
         blocks('entity')[index],
-        index === 2 ? syntheticHost : await bundled,
+        index === 3 ? syntheticHost : await bundled,
       );
       expect(compilation.plan.entities).toHaveLength(1);
       expect(compilation.plan.producers).toEqual([]);
@@ -989,16 +989,31 @@ Attach(input);`);
       },
     });
     expect(checked.plan.entities[0].connectorBindings).toEqual([]);
-    const fallback = environment.trustedEntityReplayContext.profiles.find(
+    const labProfile = environment.trustedEntityReplayContext.profiles.find(
       ({ ref }) => ref.prototypeKey === 'entity:lab',
     );
-    expect(fallback).toMatchObject({
-      connectors: [],
+    expect(labProfile).toMatchObject({
+      connectorStructure: 'complete',
+      connectors: [
+        {
+          key: 'circuit',
+          direction: 'bidirectional',
+        },
+      ],
+      sharedCallConnector: 'circuit',
       features: [],
       defaultReadProjection: null,
-      connectorStructure: 'unknown',
     });
-    expect(fallback).not.toHaveProperty('callProjection');
+    expect(
+      labProfile.connectors[0].lanes.map(({ color, nativeEndpoint }) => ({
+        color,
+        nativeConnector: nativeEndpoint.nativeConnector,
+      })),
+    ).toEqual([
+      { color: 'green', nativeConnector: 1 },
+      { color: 'red', nativeConnector: 1 },
+    ]);
+    expect(labProfile).not.toHaveProperty('callProjection');
     const raw = compile(blocks('entity')[1], environment);
     expect(generateBlueprintJson(raw.resolvedCircuit.ir).blueprint.entities[0]).toMatchObject({
       name: 'lab',
@@ -1015,13 +1030,11 @@ Attach(input);`);
     expect(compilation.resolvedCircuit).toBeUndefined();
   });
   test.each([
-    [0, 'lab(new Network());', 'RT2027'],
-    [0, "lab.port('shared', 'shared-red');", 'RT2031'],
     [0, 'const read = lab + 0;', 'RT2032'],
     [1, "Entity('lab', { raw: { name: 'another-entity' } });", 'RT2027'],
     [1, "Entity('lab', { control_behavior: { read_contents: 'yes' } });", 'RT2027'],
   ])(
-    'does not infer capabilities or semantic escape for Entity example %i: %s',
+    'does not infer read or configuration capabilities for Entity example %i: %s',
     async (index, suffix, code) => {
       const compilation = result(`${blocks('entity')[index]}\n${suffix}`, await bundled);
       expect(compilation.pipelineDiagnostics).toEqual([
@@ -1030,8 +1043,29 @@ Attach(input);`);
       expect(compilation.resolvedCircuit).toBeUndefined();
     },
   );
-  test('pins the actual synthetic callable endpoints, one construction/call and legal output reuse', () => {
+  test('compiles the provider shared-call Entity example through final physical projection', async () => {
     const source = blocks('entity')[2];
+    const compilation = compile(source, await bundled);
+    expect(compilation.plan.entities[0]?.sharedConnectorAttachments).toMatchObject([
+      { connector: 'circuit', network: 'input', direction: 'input' },
+      { connector: 'circuit', network: 'output', direction: 'output' },
+    ]);
+    expect(compilation.resolvedCircuit.ir.entities).toHaveLength(1);
+    expect(compilation.resolvedCircuit.ir.entities[0]?.prototypeName).toBe('assembling-machine-3');
+    expect(compilation.resolvedCircuit.ir.entities[0]?.connectorBindings).toHaveLength(2);
+    expect(
+      new Set(
+        compilation.resolvedCircuit.ir.entities[0]?.connectorBindings.map(
+          ({ endpoint }) => endpoint.color,
+        ),
+      ),
+    ).toEqual(new Set(['red', 'green']));
+    expect(generateBlueprintJson(compilation.resolvedCircuit.ir).blueprint.entities).toHaveLength(
+      1,
+    );
+  });
+  test('pins the actual synthetic callable endpoints, one construction/call and legal output reuse', () => {
+    const source = blocks('entity')[3];
     expect(source.match(/\bEntity\(/g)).toHaveLength(1);
     expect(source.match(/machine\(input\)/g)).toHaveLength(1);
     const compilation = compile(source, syntheticHost);
@@ -1075,12 +1109,12 @@ Attach(input);`);
     'const other = new Network(); other += machine;',
   ])('keeps callable restrictions: %s', (suffix) => {
     const code = 'RT2030';
-    expect(result(`${blocks('entity')[2]}\n${suffix}`, syntheticHost).pipelineDiagnostics).toEqual([
+    expect(result(`${blocks('entity')[3]}\n${suffix}`, syntheticHost).pipelineDiagnostics).toEqual([
       expect.objectContaining({ code, severity: 'error' }),
     ]);
   });
   test('rejects the documented repeated call with an identical input at the second invocation', () => {
-    const text = `${blocks('entity')[2]}\nmachine(input);`;
+    const text = `${blocks('entity')[3]}\nmachine(input);`;
     const first = text.indexOf('machine(input)');
     const second = text.lastIndexOf('machine(input)');
     expect(result(text, syntheticHost).pipelineDiagnostics).toEqual([

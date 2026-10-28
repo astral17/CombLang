@@ -5,6 +5,7 @@ import type {
   EntityProfileRef,
   EntityProvenance,
   EntityPlanRecord,
+  EntityPlanSharedConnectorAttachment,
 } from '@comblang/compiler/entity';
 import type { EntityPlacement } from '@comblang/compiler/ir';
 import {
@@ -321,6 +322,43 @@ export class EntityRegistry {
     const updated = Object.freeze({
       ...current,
       connectorBindings: Object.freeze([...bindings]),
+    });
+    this.#canonicalRecords.set(entity.id, updated);
+    this.#allRecords[current.ordinal - 1] = updated;
+  }
+
+  /** Replaces unresolved automatic attachments without assigning a physical lane. */
+  replaceSharedConnectorAttachments(
+    value: unknown,
+    attachments: readonly EntityPlanSharedConnectorAttachment[],
+  ): void {
+    const entity = this.alias(value);
+    const current = this.record(entity);
+    const roleKeys = attachments.map(
+      ({ connector, network, direction }) => `${connector}/${network}/${direction}`,
+    );
+    if (new Set(roleKeys).size !== roleKeys.length) {
+      invalid(
+        'EN1000',
+        '$.sharedConnectorAttachments',
+        'an Entity Network role cannot be attached twice.',
+      );
+    }
+    for (const [index, attachment] of attachments.entries()) {
+      if (!Number.isSafeInteger(attachment.generation) || attachment.generation < 0) {
+        invalid(
+          'EN1000',
+          `$.sharedConnectorAttachments[${index}].generation`,
+          'expected a non-negative safe integer.',
+        );
+      }
+    }
+    const { sharedConnectorAttachments: _previous, ...base } = current;
+    const updated = Object.freeze({
+      ...base,
+      ...(attachments.length === 0
+        ? {}
+        : { sharedConnectorAttachments: Object.freeze([...attachments]) }),
     });
     this.#canonicalRecords.set(entity.id, updated);
     this.#allRecords[current.ordinal - 1] = updated;

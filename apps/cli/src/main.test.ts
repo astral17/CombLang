@@ -23,6 +23,7 @@ import {
   conservativeEntityProvisioningPolicy,
   EntityProvisioningService,
 } from '@comblang/runtime/entity-provisioning';
+import builtinPrototypeDatabase from '../../../packages/prototypes/generated/space-age-2.1.17.json';
 
 import { run } from './main.js';
 
@@ -304,6 +305,29 @@ output += gate;`,
       diagnostics: [],
       producerCount: 0,
     });
+  });
+
+  test('exports a real shared-call Entity through the selected CLI provider', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const path = await sourceFile(`const input = new Network();
+const output = new Network();
+const machine = Entity('assembling-machine-3');
+const alias = machine;
+output += alias(input);
+output += machine;`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    expect(await run(['blueprint', 'export', '--json', path], { prototypes })).toBe(0);
+    const response = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(response).toMatchObject({
+      ok: true,
+      document: {
+        blueprint: { entities: [{ name: 'assembling-machine-3' }] },
+      },
+    });
+    expect(response.document.blueprint.entities).toHaveLength(1);
+    expect(error).not.toHaveBeenCalled();
   });
 
   test('rejects a host-bound Entity context for a different selected provider before execution', async () => {

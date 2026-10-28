@@ -22,6 +22,8 @@ import {
 
 import { CompilerWorkerRuntime, handleCompilerWorkerRequest } from './compiler-worker-request.js';
 import type { CompilerWorkerProgressStage, CompilerWorkerRequest } from './worker-protocol.js';
+import builtinPrototypeManifest from '../../../packages/prototypes/generated/space-age-2.1.17.json.manifest.json';
+import builtinPrototypeDatabaseSource from '../../../packages/prototypes/generated/space-age-2.1.17.json?raw';
 
 const file = {
   path: 'main.factorio.ts',
@@ -966,6 +968,45 @@ short.at(1, 2);`,
     expect(ordinary.result.plan).toMatchObject({ entities: [] });
     expect(ordinary.result.plan).not.toHaveProperty('version');
     expect(ordinary.result.resolvedCircuit?.format).toBe('comblang-resolved-circuit');
+  });
+
+  test('compiles and exports a provider shared-call Entity through the Worker request path', async () => {
+    const runtime = new CompilerWorkerRuntime();
+    const response = await runtime.handle({
+      kind: 'parse',
+      revision: 75,
+      file: {
+        path: 'worker-shared-entity-call.factorio.ts',
+        text: `const input = new Network();
+const output = new Network();
+const machine = Entity('assembling-machine-3');
+output += machine(input);`,
+      },
+      prototypeProfile: {
+        kind: 'builtin',
+        source: builtinPrototypeDatabaseSource,
+        assetManifest: JSON.stringify(builtinPrototypeManifest),
+        expectedIdentity: builtinPrototypeManifest.databaseIdentity,
+      },
+    });
+
+    expect(response.result.compilerDiagnostics).toEqual([]);
+    expect(response.result.plan?.entities[0]?.sharedConnectorAttachments).toMatchObject([
+      { connector: 'circuit', network: 'input', direction: 'input' },
+      { connector: 'circuit', network: 'output', direction: 'output' },
+    ]);
+    const ir = response.result.resolvedCircuit?.ir;
+    expect(ir?.entities).toHaveLength(1);
+    expect(ir?.entities[0]?.prototypeName).toBe('assembling-machine-3');
+    expect(ir?.entities[0]?.connectorBindings).toHaveLength(2);
+    expect(
+      new Set(ir?.entities[0]?.connectorBindings.map(({ endpoint }) => endpoint.color)),
+    ).toEqual(new Set(['red', 'green']));
+    expect(
+      ir?.entities[0]?.connectorBindings.every(({ nativeConnector }) => nativeConnector === 1),
+    ).toBe(true);
+    expect(generateBlueprintJson(ir!).blueprint.entities).toHaveLength(1);
+    expect(structuredClone(response)).toEqual(response);
   });
 
   test('provisions a selected provider when routing kind is omitted, including warm identity use', async () => {

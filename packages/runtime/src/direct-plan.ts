@@ -359,7 +359,9 @@ function executeDirectPlan(
   inputPlan: DirectElaborationPlan,
   resolvedNetworks?: (
     networks: ReadonlyMap<string, NetworkHandle>,
+    circuit: ElaboratedCircuit,
   ) => readonly EntityPhysicalRecord[] | void,
+  beforeElaborate?: (networks: ReadonlyMap<string, NetworkHandle>, runtime: DslRuntime) => void,
 ): ExecutedDirectPlan {
   const validation = validateDirectPlanEnvelope(inputPlan);
   if (validation.value === undefined) {
@@ -621,8 +623,9 @@ function executeDirectPlan(
       }),
     );
   }
+  beforeElaborate?.(networks, runtime);
   const circuit = runtime.elaborate();
-  const debugEntities = resolvedNetworks?.(networks);
+  const debugEntities = resolvedNetworks?.(networks, circuit);
   const debug = DebugIndex.fromDirectPlan(
     plan,
     circuit,
@@ -927,6 +930,49 @@ export interface EntityDirectPlanExecutionResult {
   readonly diagnostics: readonly Diagnostic[];
 }
 
+function registerEntitySharedConnectorConstraints(
+  records: readonly EntityPlanRecord[],
+  networks: ReadonlyMap<string, NetworkHandle>,
+  runtime: DslRuntime,
+): void {
+  for (const record of records) {
+    const groups = new Map<string, { readonly names: Set<string>; readonly source: SourceSpan }>();
+    for (const attachment of record.sharedConnectorAttachments ?? []) {
+      const group = groups.get(attachment.connector) ?? {
+        names: new Set<string>(),
+        source: attachment.provenance.source,
+      };
+      group.names.add(attachment.network);
+      groups.set(attachment.connector, group);
+    }
+    if (groups.size === 0) continue;
+    for (const binding of record.connectorBindings) {
+      if (binding.network === undefined) continue;
+      const group = groups.get(binding.endpoint.connector);
+      if (group !== undefined) group.names.add(binding.network);
+    }
+    for (const [connector, group] of groups) {
+      const handles = [...group.names].map((name) => {
+        const handle = networks.get(name);
+        if (handle === undefined) {
+          throw new RuntimeDiagnosticError({
+            code: 'RT1099',
+            severity: 'error',
+            message: `Internal Entity shared connector Network mapping is missing: ${name}.`,
+            span: group.source,
+          });
+        }
+        return handle;
+      });
+      runtime.constrainConnectorNetworks(
+        handles,
+        `Entity ${record.id} connector ${connector}`,
+        group.source,
+      );
+    }
+  }
+}
+
 /** Executes a validated canonical Entity plan before returning physical data. */
 function executeEntityPlan(
   plan: DirectElaborationPlan,
@@ -965,7 +1011,7 @@ function executeEntityPlan(
         ...(planDebugInstances === undefined ? {} : { debugInstances: planDebugInstances }),
         networks,
       },
-      (resolved) => {
+      (resolved, solvedCircuit) => {
         const ids = new Map<string, NetworkId>();
         for (const [name, network] of resolved) {
           ids.set(name, network.id);
@@ -976,24 +1022,31 @@ function executeEntityPlan(
             .filter((producer) => producer.entityId !== undefined)
             .map((producer) => [producer.entityId!, producer] as const),
         );
-        physicalEntities = lowerPreparedEntityRecords(preparedEntities, resolved).map((entity) => {
-          const planned = planEntities.find((candidate) => candidate.id === entity.id);
-          const producer = producers.get(entity.id);
-          if (
-            planned?.configuration !== undefined &&
-            planned.configuration.mode !== 'raw' &&
-            planned.configuration.mode !== 'typed' &&
-            producer !== undefined
-          ) {
-            return Object.freeze({
-              ...entity,
-              configuration: physicalConfigurationForLinkedProducer(producer, ids),
-            });
-          }
-          return entity;
-        });
+        const colors = new Map(
+          solvedCircuit.ir.networks.map(({ id, color }) => [id, color] as const),
+        );
+        physicalEntities = lowerPreparedEntityRecords(preparedEntities, resolved, colors).map(
+          (entity) => {
+            const planned = planEntities.find((candidate) => candidate.id === entity.id);
+            const producer = producers.get(entity.id);
+            if (
+              planned?.configuration !== undefined &&
+              planned.configuration.mode !== 'raw' &&
+              planned.configuration.mode !== 'typed' &&
+              producer !== undefined
+            ) {
+              return Object.freeze({
+                ...entity,
+                configuration: physicalConfigurationForLinkedProducer(producer, ids),
+              });
+            }
+            return entity;
+          },
+        );
         return physicalEntities;
       },
+      (resolved, runtime) =>
+        registerEntitySharedConnectorConstraints(planEntities, resolved, runtime),
     );
     const circuit: ElaboratedEntityCircuit = Object.freeze({
       ...execution.circuit,
@@ -1178,6 +1231,7 @@ function validateResolvedEntityMapping(
   plan: DirectElaborationPlan,
   physicalEntities: readonly EntityPhysicalRecord[],
   networks: ReadonlyMap<string, NetworkHandle>,
+  networkColors: ReadonlyMap<NetworkId, 'red' | 'green'>,
 ): void {
   const planEntities = plan.entities;
   assertResolvedMapping(Array.isArray(planEntities), 'plan Entity list is missing.');
@@ -1199,7 +1253,8 @@ function validateResolvedEntityMapping(
       `Entity ${id} identity or provenance differs.`,
     );
     assertResolvedMapping(
-      planned.connectorBindings.length === physical.connectorBindings.length,
+      planned.connectorBindings.length + (planned.sharedConnectorAttachments?.length ?? 0) ===
+        physical.connectorBindings.length,
       `Entity ${id} connector count differs.`,
     );
     const physicalBindings = new Map(
@@ -1239,6 +1294,25 @@ function validateResolvedEntityMapping(
         );
       }
     }
+    for (const attachment of planned.sharedConnectorAttachments ?? []) {
+      const handle = networks.get(attachment.network);
+      assertResolvedMapping(handle !== undefined, `Entity ${id} references an unknown Network.`);
+      const color = networkColors.get(handle.id);
+      assertResolvedMapping(color !== undefined, `Entity ${id} Network color is missing.`);
+      const matches = physical.connectorBindings.filter(
+        (candidate) =>
+          candidate.endpoint.connector === attachment.connector &&
+          candidate.endpoint.color === color &&
+          candidate.network === handle.id &&
+          candidate.generation === attachment.generation &&
+          candidate.direction === attachment.direction &&
+          stableData(candidate.provenance) === stableData(attachment.provenance),
+      );
+      assertResolvedMapping(
+        matches.length === 1,
+        `Entity ${id} shared connector attachment is missing or ambiguous.`,
+      );
+    }
   }
 }
 
@@ -1268,16 +1342,27 @@ export function executeResolvedDirectPlan(
     entities: [],
     debugInstances: inputPlan.debugInstances ?? [],
   };
-  const replay = executeDirectPlan(replayPlan, (networks) => {
-    declaredNetworks = networks;
-    return hydrated.ir.entities;
-  });
+  const replay = executeDirectPlan(
+    replayPlan,
+    (networks) => {
+      declaredNetworks = networks;
+      return hydrated.ir.entities;
+    },
+    (networks, runtime) => {
+      registerEntitySharedConnectorConstraints(planEntities, networks, runtime);
+    },
+  );
   if (declaredNetworks === undefined) throw new Error('Resolved Network mapping was not created.');
 
   const producers = preserveEntityProducerMetadata(inputPlan, replay.circuit.ir.producers);
   assertSamePhysicalRows(replay.circuit.ir.networks, hydrated.ir.networks, 'Network');
   assertSamePhysicalRows(producers, hydrated.ir.producers, 'Producer');
-  validateResolvedEntityMapping(inputPlan, hydrated.ir.entities, declaredNetworks);
+  validateResolvedEntityMapping(
+    inputPlan,
+    hydrated.ir.entities,
+    declaredNetworks,
+    new Map(hydrated.ir.networks.map(({ id, color }) => [id, color] as const)),
+  );
 
   const graph: ElaborationGraph = Object.freeze({
     ...replay.circuit.graph,

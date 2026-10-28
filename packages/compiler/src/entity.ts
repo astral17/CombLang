@@ -140,6 +140,8 @@ export interface EntityProfile {
   readonly configurationRules: readonly EntityConfigurationRule[];
   readonly defaultReadProjection: EntityDefaultReadProjection | null;
   readonly callProjection?: EntityCallProjection;
+  /** Authorizes automatic input/output attachments on one shared bidirectional connector. */
+  readonly sharedCallConnector?: EntityConnectorKey;
   readonly synthetic: boolean;
 }
 
@@ -200,6 +202,15 @@ export interface EntityConnectorBindingBase {
 /** Transport binding whose optional Network reference names a Direct Plan declaration. */
 export interface EntityPlanConnectorBinding extends EntityConnectorBindingBase {
   readonly network?: EntityPlanNetworkName;
+}
+
+/** Logical attachment that is assigned a lane only after Network colors are solved. */
+export interface EntityPlanSharedConnectorAttachment {
+  readonly connector: EntityConnectorKey;
+  readonly network: EntityPlanNetworkName;
+  readonly generation: number;
+  readonly direction: 'input' | 'output';
+  readonly provenance: EntityConnectorBindingProvenance;
 }
 
 /** Lowered graph binding whose optional Network reference is an allocated physical ID. */
@@ -278,6 +289,7 @@ export type EntityPlanConfiguration =
 export interface EntityPlanRecord extends EntityRecordBase {
   readonly configuration?: EntityPlanConfiguration;
   readonly connectorBindings: readonly EntityPlanConnectorBinding[];
+  readonly sharedConnectorAttachments?: readonly EntityPlanSharedConnectorAttachment[];
 }
 
 export interface EntityPhysicalTypedConfiguration {

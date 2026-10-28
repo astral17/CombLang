@@ -15,6 +15,14 @@ function jsonCopy(value: unknown): any {
   return JSON.parse(JSON.stringify(value));
 }
 
+function sharedCallProfileInput(): any {
+  const input = jsonCopy(syntheticSharedTwoColorEntityProfile);
+  delete input.callProjection;
+  input.defaultReadProjection = null;
+  input.sharedCallConnector = 'shared';
+  return input;
+}
+
 describe('Entity capability profile boundary', () => {
   test('canonicalizes equivalent connector, lane, feature, and evidence order', () => {
     const input = jsonCopy(syntheticSharedTwoColorEntityProfile);
@@ -103,6 +111,47 @@ describe('Entity capability profile boundary', () => {
     explicitUndefined.callProjection = undefined;
     expect(() => canonicalizeEntityProfile(explicitUndefined)).toThrowError(
       expect.objectContaining({ code: 'EP1001', path: '$.callProjection' }),
+    );
+  });
+
+  test('authorizes only a complete bidirectional shared connector and hashes the authority', () => {
+    const input = sharedCallProfileInput();
+    const canonical = canonicalizeEntityProfile(input);
+
+    expect(canonical.sharedCallConnector).toBe('shared');
+    expect(canonical).not.toHaveProperty('callProjection');
+    expect(canonicalEntityProfileJson(canonical)).not.toBe(
+      canonicalEntityProfileJson(syntheticSharedTwoColorEntityProfile),
+    );
+
+    const fixedAndShared = sharedCallProfileInput();
+    fixedAndShared.callProjection = jsonCopy(syntheticSharedTwoColorEntityProfile.callProjection);
+    expect(() => canonicalizeEntityProfile(fixedAndShared)).toThrowError(
+      expect.objectContaining({ code: 'EP1000', path: '$' }),
+    );
+
+    const oneWay = sharedCallProfileInput();
+    oneWay.connectors[0].direction = 'input';
+    expect(() => canonicalizeEntityProfile(oneWay)).toThrowError(
+      expect.objectContaining({ code: 'EP1002', path: '$.sharedCallConnector' }),
+    );
+
+    const extraLane = sharedCallProfileInput();
+    extraLane.connectors[0].lanes.push({ key: 'shared-extra', color: 'red' });
+    expect(() => canonicalizeEntityProfile(extraLane)).toThrowError(
+      expect.objectContaining({ code: 'EP1002', path: '$.sharedCallConnector' }),
+    );
+
+    const missingMapping = sharedCallProfileInput();
+    delete missingMapping.connectors[0].lanes[1].nativeEndpoint;
+    expect(() => canonicalizeEntityProfile(missingMapping)).toThrowError(
+      expect.objectContaining({ code: 'EP1002', path: '$.sharedCallConnector' }),
+    );
+
+    const unknownStructure = sharedCallProfileInput();
+    unknownStructure.connectorStructure = 'unknown';
+    expect(() => canonicalizeEntityProfile(unknownStructure)).toThrowError(
+      expect.objectContaining({ code: 'EP1002', path: '$.sharedCallConnector' }),
     );
   });
 

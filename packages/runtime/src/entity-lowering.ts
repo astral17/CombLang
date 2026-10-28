@@ -1,4 +1,5 @@
 import type { EntityPlanRecord, EntityPhysicalRecord } from '@comblang/compiler/entity';
+import type { NetworkId } from '@comblang/shared';
 import {
   EntityConfigurationError,
   resolveEntityPhysicalConfiguration,
@@ -26,6 +27,11 @@ interface PreparedEntityRecord {
   readonly record: EntityPlanRecord;
   readonly prototypeName: string;
   readonly nativeConnectors: readonly (number | undefined)[];
+  readonly sharedConnectorLanes?: readonly {
+    readonly key: import('@comblang/compiler/entity').EntityLaneKey;
+    readonly color: 'red' | 'green';
+    readonly nativeConnector: number;
+  }[];
   readonly physicalConfiguration: EntityPhysicalRecord['configuration'];
 }
 
@@ -93,10 +99,62 @@ export function prepareEntityRecords(
       }
       return native.nativeConnector;
     });
+    const sharedConnectorLanes =
+      profile.sharedCallConnector === undefined
+        ? undefined
+        : (() => {
+            const connector = profile.connectors.find(
+              ({ key }) => key === profile.sharedCallConnector,
+            );
+            if (
+              connector === undefined ||
+              connector.direction !== 'bidirectional' ||
+              connector.lanes.length !== 2
+            ) {
+              fail('Shared Entity connector profile is incomplete.', source);
+            }
+            if (
+              (record.sharedConnectorAttachments ?? []).some(
+                (attachment) => attachment.connector !== connector.key,
+              )
+            ) {
+              fail(
+                'Entity plan attachment is not authorized by its shared connector profile.',
+                source,
+              );
+            }
+            return Object.freeze(
+              connector.lanes.map((lane) => {
+                const native = lane.nativeEndpoint;
+                if (
+                  native === undefined ||
+                  native.endpoint.connector !== connector.key ||
+                  native.endpoint.lane !== lane.key ||
+                  native.endpoint.color !== lane.color ||
+                  !Number.isSafeInteger(native.nativeConnector) ||
+                  native.nativeConnector < 1
+                ) {
+                  fail('Shared Entity connector lane requires a matching native endpoint.', source);
+                }
+                return Object.freeze({
+                  key: lane.key,
+                  color: lane.color,
+                  nativeConnector: native.nativeConnector,
+                });
+              }),
+            );
+          })();
+    if (
+      profile.sharedCallConnector === undefined &&
+      (record.sharedConnectorAttachments?.length ?? 0) > 0
+    ) {
+      fail('Entity profile does not authorize shared connector attachments.', source);
+    }
     return Object.freeze({
       record,
       prototypeName: key.slice('entity:'.length),
       nativeConnectors: Object.freeze(nativeConnectors),
+      ...(sharedConnectorLanes === undefined ? {} : { sharedConnectorLanes }),
       physicalConfiguration,
     });
   });
@@ -107,42 +165,121 @@ export function prepareEntityRecords(
 export function lowerPreparedEntityRecords(
   prepared: PreparedEntityRecords,
   networks: ReadonlyMap<string, NetworkHandle>,
+  colors?: ReadonlyMap<NetworkId, 'red' | 'green'>,
 ): readonly EntityPhysicalRecord[] {
   return Object.freeze(
-    prepared.records.map(({ record, prototypeName, nativeConnectors, physicalConfiguration }) => {
-      const connectorBindings = record.connectorBindings.map((binding, index) => {
-        const { network: name, ...rest } = binding;
-        if (name === undefined) return { ...rest };
-        const handle = networks.get(name);
-        if (!handle) {
-          throw new RuntimeDiagnosticError({
-            code: 'RT1099',
-            severity: 'error',
-            message: `Internal Entity Network mapping is missing: ${name}.`,
-            span: binding.provenance.source,
-          });
+    prepared.records.map(
+      ({
+        record,
+        prototypeName,
+        nativeConnectors,
+        sharedConnectorLanes,
+        physicalConfiguration,
+      }) => {
+        const { sharedConnectorAttachments: _pendingAttachments, ...physicalRecord } = record;
+        const fixedBindings = record.connectorBindings.map((binding, index) => {
+          const { network: name, ...rest } = binding;
+          if (name === undefined) return { ...rest };
+          const handle = networks.get(name);
+          if (!handle) {
+            throw new RuntimeDiagnosticError({
+              code: 'RT1099',
+              severity: 'error',
+              message: `Internal Entity Network mapping is missing: ${name}.`,
+              span: binding.provenance.source,
+            });
+          }
+          const nativeConnector = nativeConnectors[index];
+          if (nativeConnector === undefined) {
+            throw new RuntimeDiagnosticError({
+              code: 'RT1099',
+              severity: 'error',
+              message: 'Internal Entity native connector mapping is missing.',
+              span: binding.provenance.source,
+            });
+          }
+          return { ...rest, network: handle.id, nativeConnector };
+        });
+        const sharedBindings = (record.sharedConnectorAttachments ?? []).map((attachment) => {
+          const handle = networks.get(attachment.network);
+          if (handle === undefined) {
+            throw new RuntimeDiagnosticError({
+              code: 'RT1099',
+              severity: 'error',
+              message: `Internal Entity Network mapping is missing: ${attachment.network}.`,
+              span: attachment.provenance.source,
+            });
+          }
+          const color = colors?.get(handle.id);
+          if (color === undefined) {
+            fail(
+              'Solved Network color is missing for shared Entity attachment.',
+              attachment.provenance.source,
+            );
+          }
+          const lane = sharedConnectorLanes?.find((candidate) => candidate.color === color);
+          if (lane === undefined) {
+            fail(
+              'Shared Entity connector has no lane for the solved Network color.',
+              attachment.provenance.source,
+            );
+          }
+          return {
+            endpoint: {
+              connector: attachment.connector,
+              lane: lane.key,
+              color,
+            },
+            network: handle.id,
+            nativeConnector: lane.nativeConnector,
+            generation: attachment.generation,
+            direction: attachment.direction,
+            provenance: attachment.provenance,
+          };
+        });
+        const connectorBindings: EntityPhysicalRecord['connectorBindings'][number][] = [
+          ...fixedBindings,
+          ...sharedBindings,
+        ];
+        const ownersByEndpoint = new Map<
+          string,
+          EntityPhysicalRecord['connectorBindings'][number][]
+        >();
+        for (const binding of connectorBindings) {
+          const key = `${binding.endpoint.connector}/${binding.endpoint.lane}/${binding.endpoint.color}`;
+          const owners = ownersByEndpoint.get(key) ?? [];
+          if (owners.length > 0) {
+            const first = owners[0]!;
+            if (
+              owners.length !== 1 ||
+              first.network === undefined ||
+              binding.network === undefined ||
+              first.network !== binding.network ||
+              first.generation !== binding.generation ||
+              first.direction === binding.direction
+            ) {
+              fail(
+                'Entity connector endpoint has conflicting or duplicate owners.',
+                binding.provenance.source,
+              );
+            }
+          }
+          owners.push(binding);
+          ownersByEndpoint.set(key, owners);
         }
-        const nativeConnector = nativeConnectors[index];
-        if (nativeConnector === undefined) {
-          throw new RuntimeDiagnosticError({
-            code: 'RT1099',
-            severity: 'error',
-            message: 'Internal Entity native connector mapping is missing.',
-            span: binding.provenance.source,
-          });
-        }
-        return { ...rest, network: handle.id, nativeConnector };
-      });
-      // Detach nested transport data before freezing so callers retain ownership of their input.
-      return freeze(
-        structuredClone({
-          ...record,
-          ...(physicalConfiguration === undefined ? {} : { configuration: physicalConfiguration }),
-          prototypeName,
-          connectorBindings,
-        }),
-      ) as EntityPhysicalRecord;
-    }),
+        // Detach nested transport data before freezing so callers retain ownership of their input.
+        return freeze(
+          structuredClone({
+            ...physicalRecord,
+            ...(physicalConfiguration === undefined
+              ? {}
+              : { configuration: physicalConfiguration }),
+            prototypeName,
+            connectorBindings,
+          }),
+        ) as EntityPhysicalRecord;
+      },
+    ),
   );
 }
 
@@ -151,6 +288,7 @@ export function lowerEntityRecords(
   records: readonly EntityPlanRecord[],
   context: TrustedEntityReplayContext,
   resolveNetwork: (name: string) => NetworkHandle | undefined,
+  colors?: ReadonlyMap<NetworkId, 'red' | 'green'>,
 ): readonly EntityPhysicalRecord[] {
   const prepared = prepareEntityRecords(records, context);
   const networks = new Map<string, NetworkHandle>();
@@ -162,6 +300,16 @@ export function lowerEntityRecords(
         fail(`Unknown Entity Network declaration: ${binding.network}.`, binding.provenance.source);
       networks.set(binding.network, handle);
     }
+    for (const attachment of record.sharedConnectorAttachments ?? []) {
+      if (networks.has(attachment.network)) continue;
+      const handle = resolveNetwork(attachment.network);
+      if (!handle)
+        fail(
+          `Unknown Entity Network declaration: ${attachment.network}.`,
+          attachment.provenance.source,
+        );
+      networks.set(attachment.network, handle);
+    }
   }
-  return lowerPreparedEntityRecords(prepared, networks);
+  return lowerPreparedEntityRecords(prepared, networks, colors);
 }

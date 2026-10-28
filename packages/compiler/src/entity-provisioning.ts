@@ -1,4 +1,10 @@
-import type { EntityDatabaseRef, EntityProfile, EntityProfileId } from './entity.js';
+import type {
+  EntityConnectorKey,
+  EntityDatabaseRef,
+  EntityLaneKey,
+  EntityProfile,
+  EntityProfileId,
+} from './entity.js';
 import { canonicalizeEntityProfile } from './entity-profile.js';
 
 /** The normalized fields needed to decide whether a record can name a blueprint Entity. */
@@ -8,6 +14,8 @@ export interface BlueprintEntityPrototypeRecord {
   readonly type: string;
   /** Explicit normalized native fact; omission is not construction authority. */
   readonly blueprintEligible?: boolean;
+  /** Normalized provider topology fact; omission carries no connector authority. */
+  readonly circuitConnectorTopology?: 'single-shared';
 }
 
 export type EntityProvisioningErrorCode = 'EPV1000' | 'EPV1001' | 'EPV1002';
@@ -79,6 +87,14 @@ export function normalizeBlueprintEntityPrototype(
   if (blueprintEligible !== undefined && typeof blueprintEligible !== 'boolean') {
     invalid('EPV1000', `${path}.blueprintEligible`, 'expected a boolean when present.');
   }
+  const circuitConnectorTopology = record.circuitConnectorTopology;
+  if (circuitConnectorTopology !== undefined && circuitConnectorTopology !== 'single-shared') {
+    invalid(
+      'EPV1000',
+      `${path}.circuitConnectorTopology`,
+      'expected the literal "single-shared" when present.',
+    );
+  }
   if (key !== `entity:${name}`) {
     invalid(
       'EPV1002',
@@ -101,6 +117,7 @@ export function normalizeBlueprintEntityPrototype(
     name,
     type,
     ...(blueprintEligible === undefined ? {} : { blueprintEligible }),
+    ...(circuitConnectorTopology === undefined ? {} : { circuitConnectorTopology }),
   });
 }
 
@@ -149,6 +166,10 @@ export function createEntityFallbackProfile(
       'Entity construction requires an explicit blueprint-eligible fact.',
     );
   }
+  const shared = normalized.circuitConnectorTopology === 'single-shared';
+  const connector = 'circuit' as EntityConnectorKey;
+  const red = 'red' as EntityLaneKey;
+  const green = 'green' as EntityLaneKey;
   return canonicalizeEntityProfile({
     ref: {
       prototypeKey: normalized.key,
@@ -156,11 +177,37 @@ export function createEntityFallbackProfile(
       profileId: fallbackProfileId(normalized.key),
     },
     prototypeType: normalized.type,
-    connectors: [],
-    connectorStructure: 'unknown',
+    connectors: shared
+      ? [
+          {
+            key: connector,
+            direction: 'bidirectional',
+            lanes: [
+              {
+                key: red,
+                color: 'red',
+                nativeEndpoint: {
+                  endpoint: { connector, lane: red, color: 'red' },
+                  nativeConnector: 1,
+                },
+              },
+              {
+                key: green,
+                color: 'green',
+                nativeEndpoint: {
+                  endpoint: { connector, lane: green, color: 'green' },
+                  nativeConnector: 1,
+                },
+              },
+            ],
+          },
+        ]
+      : [],
+    connectorStructure: shared ? 'complete' : 'unknown',
     features: [],
     configurationRules: [],
     defaultReadProjection: null,
+    ...(shared ? { sharedCallConnector: connector } : {}),
     synthetic: false,
   });
 }

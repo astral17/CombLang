@@ -5,8 +5,9 @@
 One nominal physical game Entity with source-linked configuration and placement.
 An Entity is not automatically a Combinator, readable Network or simulator device.
 Select a prototype environment before construction. Its conservative profiles
-allow blueprint-eligible prototypes to be constructed and placed; connectors,
-typed configuration and callable/read projections need an explicit matching profile.
+allow blueprint-eligible prototypes to be constructed and placed. Most provider
+profiles retain unknown connector topology; a normalized `single-shared` fact
+enables the bounded shared-call wiring described below.
 
 ## Signatures
 
@@ -59,8 +60,9 @@ Only an explicit profile rule maps it to a native field. It adds no Decider or t
 
 Complete source; requires the bundled Space Age 2.1.17 provider and its conservative
 Entity provisioning (available through the selected workbench/CLI environment).
-This is **export-only structural configuration**: no Lab research simulation,
-connectors, read projection or callable behavior is supplied.
+This is **export-only structural configuration**: it does not simulate Lab
+research or provide a default-readable projection. The bundled provider separately
+supplies the documented shared circuit connector and its one-argument call form.
 
 ```ts
 const prototype = prototypes.entity['lab'];
@@ -77,7 +79,9 @@ if (!Object.is(placed, lab)) throw new Error('placement changed identity');
 
 One Lab Entity, zero producers. Blueprint output has position `(10, -2)`,
 direction 8 and the stated `control_behavior`; its SignalID is ordinary detached
-Blueprint data. Placement does not certify collisions, reach or game validity.
+Blueprint data. Its provider profile also permits the shared circuit call below;
+that call does not simulate research. Placement does not certify collisions,
+reach or game validity.
 
 ## Raw configuration example
 
@@ -103,23 +107,43 @@ creating a logical Network when that endpoint has not yet been bound. It does
 not create a combinator or permanently bind a second incompatible owner.
 Network access still follows ownership/capability rules.
 
-A callable profile declares one input and one output endpoint. `entity(input)`
-accepts exactly **one** readable Network (or primary Combinator output), binds
-the input, and returns the same Entity. `output += entity` binds the declared
-output. Only one successful invocation is allowed per physical Entity, including
-through aliases, containers and returned views. A second call reports `RT2030`
-at that invocation with a related location for the first, even with the same
-Network. A failed first call does not consume the allowance or leave binding
-changes; JavaScript argument evaluation is not undone. Reuse the returned handle
-for outputs. A compatible manual input `.bind` does not consume the call allowance.
-Explicit identical `.bind` operations are idempotent; a different Network/direction
-on the same endpoint conflicts. Reuse the same output handle, not another Entity
-construction. A second independent output is not implicitly a free lane.
+A fixed callable profile may still declare one input and one output endpoint.
+For provider prototypes whose normalized topology is `single-shared`, provisioning
+instead declares one bidirectional connector with red and green lanes and authorizes
+shared calls. The bundled provider currently supplies that fact for
+`assembling-machine-3`, `iron-chest`, and `lab`:
+
+```ts
+const input = new Network();
+const output = new Network();
+const machine = Entity('assembling-machine-3');
+output += machine(input);
+```
+
+The call accepts exactly **one** readable Network (or primary Combinator output),
+records it as an input attachment and returns the same Entity. `output += entity`
+records a writable output attachment. Both attachments stay logical until the
+existing color solver selects the physical red/green lanes. Two distinct Networks
+must use opposite colors; the same Network on both roles occupies one lane and
+retains both roles. The exporter emits one physical Entity and no hidden
+combinator. This does not add a readable default projection, multiple arguments,
+or machine crafting/output simulation.
+
+Only one successful invocation is allowed per physical Entity, including through
+aliases, containers and returned views. A second call reports `RT2030` at that
+invocation with a related location for the first, even with the same Network. A
+failed first call does not consume the allowance or leave attachment changes;
+JavaScript argument evaluation is not undone. Reuse the returned handle for
+outputs. Repeating an output attachment to the same Network is idempotent. A
+second independent output is allowed only while the shared connector still fits
+its two physical wires; Networks are never implicitly merged.
 
 Using an Entity as an arithmetic input or readonly Network argument requires an
 unambiguous declared default read projection. That projection is not necessarily
 the callable output, and neither is inferred from the prototype's circuit flags.
-Select an explicit `.port` when appropriate. A fallback Lab has neither form.
+Select an explicit `.port` when appropriate. Shared-call provisioning does not
+select the input as a read projection. A fallback without a `single-shared` fact
+remains non-callable and has no connector profile.
 
 ## Explicit profile example
 

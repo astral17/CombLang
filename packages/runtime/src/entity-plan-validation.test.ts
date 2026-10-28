@@ -5,6 +5,7 @@ import {
   createTrustedEntityReplayContext,
   type TrustedEntityReplayContext,
 } from '@comblang/compiler/entity-replay-context';
+import { canonicalizeEntityProfile } from '@comblang/compiler/entity-profile';
 import {
   syntheticSharedTwoColorEntityProfile,
   syntheticZeroPortEntityProfile,
@@ -49,6 +50,14 @@ function entityFor(profile: EntityProfile = syntheticZeroPortEntityProfile): Ent
     },
     ordinal: 1,
   };
+}
+
+function sharedCallProfile(): EntityProfile {
+  const profile = jsonCopy(syntheticSharedTwoColorEntityProfile) as Record<string, any>;
+  delete profile.callProjection;
+  profile.defaultReadProjection = null;
+  profile.sharedCallConnector = 'shared';
+  return canonicalizeEntityProfile(profile);
 }
 
 function jsonCopy(value: unknown): any {
@@ -165,6 +174,88 @@ describe('canonical Entity plan validation', () => {
       },
     ];
     expect(validatePlan(plan, context).diagnostics).toEqual([]);
+  });
+
+  test('validates and canonicalizes shared connector attachments against profile and Network authority', () => {
+    const profile = sharedCallProfile();
+    const context = contextFor(profile);
+    const provenance = {
+      source: sourceSpan(sourceFileId('entity.ts'), 2, 3),
+      instancePath: ['Entity:1'],
+      operationOrdinal: 1,
+    };
+    const entity: EntityPlanRecord = {
+      ...entityFor(profile),
+      sharedConnectorAttachments: [
+        {
+          connector: 'shared' as EntityConnectorKey,
+          network: 'output',
+          generation: 0,
+          direction: 'output',
+          provenance: { ...provenance, operationOrdinal: 2 },
+        },
+        {
+          connector: 'shared' as EntityConnectorKey,
+          network: 'input',
+          generation: 0,
+          direction: 'input',
+          provenance,
+        },
+      ],
+    };
+    const plan = jsonCopy(planFor(context, entity));
+    plan.networks = ['input', 'output'].map((name) => ({
+      name,
+      generation: 0,
+      source: sourceSpan(sourceFileId('entity.ts'), 0, 1),
+      instancePath: [],
+    }));
+
+    const result = validatePlan(plan, context);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.value?.plan.entities[0]?.sharedConnectorAttachments).toEqual([
+      {
+        connector: 'shared',
+        network: 'input',
+        generation: 0,
+        direction: 'input',
+        provenance,
+      },
+      {
+        connector: 'shared',
+        network: 'output',
+        generation: 0,
+        direction: 'output',
+        provenance: { ...provenance, operationOrdinal: 2 },
+      },
+    ]);
+
+    const unauthorized = contextFor(syntheticSharedTwoColorEntityProfile);
+    const unauthorizedPlan = jsonCopy(
+      planFor(unauthorized, {
+        ...entityFor(syntheticSharedTwoColorEntityProfile),
+        sharedConnectorAttachments: entity.sharedConnectorAttachments!,
+      }),
+    );
+    unauthorizedPlan.networks = plan.networks;
+    expect(validatePlan(unauthorizedPlan, unauthorized).diagnostics[0]).toMatchObject({
+      code: 'RT3002',
+      message: expect.stringContaining('shared-call connector'),
+    });
+
+    const staleGeneration = jsonCopy(plan);
+    staleGeneration.entities[0]!.sharedConnectorAttachments[0]!.generation = 1;
+    expect(validatePlan(staleGeneration, context).diagnostics[0]).toMatchObject({
+      code: 'RT3002',
+      message: expect.stringContaining('stale'),
+    });
+
+    const unknownField = jsonCopy(plan);
+    unknownField.entities[0]!.sharedConnectorAttachments[0]!.unexpected = true;
+    expect(validatePlan(unknownField, context).diagnostics[0]).toMatchObject({
+      code: 'RT3000',
+      message: expect.stringContaining('unexpected'),
+    });
   });
 
   test('canonicalizes typed configuration during replay validation', () => {

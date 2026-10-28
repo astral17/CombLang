@@ -11,6 +11,7 @@ import {
   resolveEntityReplayProfile,
   type TrustedEntityReplayContext,
 } from './entity-replay-context.js';
+import { canonicalizeEntityProfile } from './entity-profile.js';
 import {
   syntheticSharedTwoColorEntityProfile,
   syntheticZeroPortEntityProfile,
@@ -24,6 +25,17 @@ function context(profiles = [syntheticZeroPortEntityProfile]): TrustedEntityRepl
     policyIdentity: 'comblang-entity-policy-v1',
     profiles,
   });
+}
+
+function sharedCallProfile() {
+  const profile = JSON.parse(JSON.stringify(syntheticSharedTwoColorEntityProfile)) as Record<
+    string,
+    any
+  >;
+  delete profile.callProjection;
+  profile.defaultReadProjection = null;
+  profile.sharedCallConnector = 'shared';
+  return canonicalizeEntityProfile(profile);
 }
 
 describe('trusted Entity replay context', () => {
@@ -59,6 +71,14 @@ describe('trusted Entity replay context', () => {
         trusted,
       ),
     ).toThrowError(expect.objectContaining({ code: 'ER1001', path: '$.prototypeKey' }));
+  });
+
+  test('includes shared-call connector authority in the trusted profile-set identity', () => {
+    const original = context([syntheticSharedTwoColorEntityProfile]);
+    const sharedCall = context([sharedCallProfile()]);
+
+    expect(sharedCall.profileSetIdentity).not.toBe(original.profileSetIdentity);
+    expect(sharedCall.profiles[0]).toHaveProperty('sharedCallConnector', 'shared');
   });
 
   test('rejects database, profile-set, evidence, and policy mismatches', () => {

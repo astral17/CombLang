@@ -24,6 +24,7 @@ import type {
   EntityNativeSingleCondition,
   EntityPlanDebugInstance,
   EntityPlanDebugValue,
+  EntityPlanSharedConnectorAttachment,
   EntityProfile,
   EntityProfileRef,
   EntitySelectorConfiguration,
@@ -502,8 +503,14 @@ interface TopologySnapshot {
   readonly entityAuthoritiesLength: number;
   readonly entityFacets: readonly {
     readonly authority: EntityAuthorityView;
+    readonly owner: EntityAuthorityView['owner'];
+    readonly retiredAt?: SourceSpan;
     readonly facets: ReadonlyMap<string, EntityFacetAuthority>;
     readonly bindings: ReturnType<EntityRegistry['record']>['connectorBindings'];
+    readonly sharedAttachments: readonly EntitySharedAttachmentAuthority[];
+    readonly sharedConnectorAttachments: ReturnType<
+      EntityRegistry['record']
+    >['sharedConnectorAttachments'];
   }[];
   readonly entityOperationOrdinal: number;
   readonly entityInvocations: ReadonlyMap<EntityValue['id'], SourceSpan>;
@@ -521,11 +528,21 @@ interface EntityFacetAuthority {
   locallyOwned: boolean;
 }
 
+interface EntitySharedAttachmentAuthority {
+  readonly connector: EntityPlanSharedConnectorAttachment['connector'];
+  readonly direction: 'input' | 'output';
+  readonly provenance: EntityConnectorBindingProvenance;
+  readonly source: SourceSpan;
+  network: NetworkValue;
+  locallyOwned: boolean;
+}
+
 interface EntityAuthorityView {
   readonly entity: EntityValue;
   owner: symbol | 'top-level' | 'retired';
   retiredAt?: SourceSpan;
   readonly facets: Map<string, EntityFacetAuthority>;
+  readonly sharedAttachments: EntitySharedAttachmentAuthority[];
 }
 
 interface LinkedConstantAssociation {
@@ -3092,6 +3109,25 @@ class ElaborationRecorder {
         for (const facet of authority.facets.values()) {
           this.#assertReadableNetworkAt(facet.network, facet.source, 'Entity facet');
         }
+        for (const attachment of authority.sharedAttachments) {
+          const state = this.#networkState(attachment.network);
+          if (state.ownership.consumedAt === undefined) {
+            this.#assertReadableNetworkAt(
+              attachment.network,
+              attachment.source,
+              'Entity connector attachment',
+            );
+          } else if (
+            attachment.network.generation !== state.ownership.generation ||
+            !this.#networkTransfers.some(({ source }) => source === attachment.network.name)
+          ) {
+            this.#assertReadableNetworkAt(
+              attachment.network,
+              attachment.source,
+              'Entity connector attachment',
+            );
+          }
+        }
       }
       const entities = this.#entityRegistry?.records() ?? [];
       const canonicalEntities = entities.map((entity) => {
@@ -3617,7 +3653,7 @@ class ElaborationRecorder {
           [{ message: 'The first Entity invocation originates here.', span: firstInvocation }],
         );
       }
-      if (profile.callProjection === undefined) {
+      if (profile.callProjection === undefined && profile.sharedCallConnector === undefined) {
         throw new ElaborationExecutionError(
           `Entity profile ${JSON.stringify(profile.ref.prototypeKey)} has no callable projection.`,
           source,
@@ -3640,14 +3676,23 @@ class ElaborationRecorder {
           'RT2015',
         );
       }
-      const result = this.#bindEntity(
-        entity,
-        profile.callProjection.input.connector,
-        profile.callProjection.input.lane,
-        readable,
-        'input',
-        rawSpan,
-      );
+      const result =
+        profile.sharedCallConnector === undefined
+          ? this.#bindEntity(
+              entity,
+              profile.callProjection!.input.connector,
+              profile.callProjection!.input.lane,
+              readable,
+              'input',
+              rawSpan,
+            )
+          : this.#attachSharedEntity(
+              entity,
+              profile.sharedCallConnector,
+              readable,
+              'input',
+              rawSpan,
+            );
       this.#entityInvocations.set(entity.id, source);
       return result;
     });
@@ -3682,6 +3727,29 @@ class ElaborationRecorder {
   #bindEntityOutput(destination: unknown, entity: EntityValue, rawSpan: RawSpan): EntityValue {
     const source = this.#span(rawSpan);
     const profile = this.#entityProfile(entity, source);
+    if (profile.sharedCallConnector !== undefined) {
+      return this.#withTopologyTransaction(rawSpan, () => {
+        const network = this.#resolveWritableNetwork(
+          destination,
+          rawSpan,
+          'Entity output destination',
+        );
+        if (network === undefined) {
+          throw new ElaborationExecutionError(
+            'Callable Entity output requires a writable Network destination.',
+            source,
+            'RT2015',
+          );
+        }
+        return this.#attachSharedEntity(
+          entity,
+          profile.sharedCallConnector!,
+          network,
+          'output',
+          rawSpan,
+        );
+      });
+    }
     if (profile.callProjection === undefined) {
       throw new ElaborationExecutionError(
         `Entity profile ${JSON.stringify(profile.ref.prototypeKey)} has no callable projection.`,
@@ -3705,6 +3773,96 @@ class ElaborationRecorder {
       'output',
       rawSpan,
     );
+  }
+
+  #attachSharedEntity(
+    value: unknown,
+    connectorKey: EntityPlanSharedConnectorAttachment['connector'],
+    network: NetworkValue,
+    direction: 'input' | 'output',
+    rawSpan: RawSpan,
+  ): EntityValue {
+    this.#recordDslCall();
+    if (!isRawSpan(rawSpan)) throw new Error('t.attachSharedEntity(...) is missing provenance.');
+    const source = this.#span(rawSpan);
+    const authority = this.#entityAuthority(value, source);
+    const profile = this.#entityProfile(authority.entity, source);
+    const connector = profile.connectors.find(({ key }) => key === connectorKey);
+    if (
+      profile.sharedCallConnector !== connectorKey ||
+      connector === undefined ||
+      connector.direction !== 'bidirectional'
+    ) {
+      throw new ElaborationExecutionError(
+        'Entity profile does not authorize this shared connector attachment.',
+        source,
+        'RT2031',
+      );
+    }
+    if (direction === 'output') {
+      this.#assertWritableNetwork(network, rawSpan, 'Entity output binding Network');
+    }
+    this.#assertReadableNetworkAt(network, source, 'Entity binding Network');
+    const state = this.#networkState(network);
+    const ownership = state.ownership;
+    const existing = authority.sharedAttachments.find(
+      (attachment) =>
+        attachment.connector === connectorKey &&
+        attachment.direction === direction &&
+        this.#networkState(attachment.network).ownership === ownership,
+    );
+    if (existing !== undefined) {
+      if (existing.network.generation !== network.generation) {
+        throw new ElaborationExecutionError(
+          'Entity connector attachment uses a stale Network generation.',
+          source,
+          'RT2012',
+          [{ message: 'The existing Entity attachment originates here.', span: existing.source }],
+        );
+      }
+      return authority.entity;
+    }
+    if (direction === 'input') {
+      const previousInput = authority.sharedAttachments.find(
+        (attachment) => attachment.connector === connectorKey && attachment.direction === 'input',
+      );
+      if (previousInput !== undefined) {
+        throw new ElaborationExecutionError(
+          'A shared-call Entity connector accepts only one input Network.',
+          source,
+          'RT2030',
+          [{ message: 'The first Entity input originates here.', span: previousInput.source }],
+        );
+      }
+    }
+    const frame = this.#currentFunctionFrame();
+    const locallyOwned =
+      frame !== undefined &&
+      ownership.owner === frame.owner &&
+      network.capability !== 'readonly' &&
+      network.capability !== 'ref';
+    const attachmentNetwork = locallyOwned
+      ? network
+      : this.#networkValue(
+          {
+            kind: 'network',
+            name: network.name,
+            declaration: network.declaration,
+            capability: 'ref',
+            generation: network.generation,
+          },
+          { ownership, ...(state.borrow === undefined ? {} : { borrow: state.borrow }) },
+        );
+    authority.sharedAttachments.push({
+      connector: connectorKey,
+      direction,
+      provenance: this.#entityBindingProvenance(rawSpan),
+      source,
+      network: attachmentNetwork,
+      locallyOwned,
+    });
+    this.#syncEntitySharedAttachments(authority);
+    return authority.entity;
   }
 
   #debugValue(
@@ -5160,8 +5318,13 @@ class ElaborationRecorder {
       entityAuthoritiesLength: this.#entityAuthorityList.length,
       entityFacets: this.#entityAuthorityList.map((authority) => ({
         authority,
+        owner: authority.owner,
+        ...(authority.retiredAt === undefined ? {} : { retiredAt: authority.retiredAt }),
         facets: new Map([...authority.facets].map(([key, facet]) => [key, { ...facet }])),
         bindings: this.#entityRegistry!.record(authority.entity).connectorBindings,
+        sharedAttachments: authority.sharedAttachments.map((attachment) => ({ ...attachment })),
+        sharedConnectorAttachments: this.#entityRegistry!.record(authority.entity)
+          .sharedConnectorAttachments,
       })),
       entityOperationOrdinal: this.#entityOperationOrdinal,
       entityInvocations: new Map(this.#entityInvocations),
@@ -5216,11 +5379,23 @@ class ElaborationRecorder {
       this.#entityRegistry.restore(snapshot.entityRegistry);
     }
     this.#entityRevision = snapshot.entityRevision;
+    for (const authority of this.#entityAuthorityList.slice(snapshot.entityAuthoritiesLength)) {
+      authority.owner = 'retired';
+    }
     this.#entityAuthorityList.length = snapshot.entityAuthoritiesLength;
     for (const saved of snapshot.entityFacets) {
+      saved.authority.owner = saved.owner;
+      if (saved.retiredAt === undefined) delete saved.authority.retiredAt;
+      else saved.authority.retiredAt = saved.retiredAt;
       saved.authority.facets.clear();
       for (const [key, facet] of saved.facets) saved.authority.facets.set(key, facet);
+      saved.authority.sharedAttachments.splice(0, saved.authority.sharedAttachments.length);
+      saved.authority.sharedAttachments.push(...saved.sharedAttachments);
       this.#entityRegistry!.replaceConnectorBindings(saved.authority.entity, saved.bindings);
+      this.#entityRegistry!.replaceSharedConnectorAttachments(
+        saved.authority.entity,
+        saved.sharedConnectorAttachments ?? [],
+      );
     }
     this.#entityOperationOrdinal = snapshot.entityOperationOrdinal;
     this.#entityInvocations.clear();
@@ -5465,6 +5640,30 @@ class ElaborationRecorder {
         this.#ownership.assertReadable(facet.network, source, 'Entity connection');
       }
     }
+    for (const attachment of authority.sharedAttachments) {
+      if (attachment.locallyOwned && attachment.network.capability === 'ref') {
+        throw new ElaborationExecutionError(
+          'A borrowed Entity connector attachment cannot escape its function.',
+          source,
+          'RT2017',
+          [{ message: 'Entity connector attached here.', span: attachment.source }],
+        );
+      }
+      if (attachment.locallyOwned)
+        this.#ownership.assertReturnable(attachment.network, source, frame);
+      else {
+        const state = this.#networkState(attachment.network);
+        if (state.borrow !== undefined) {
+          throw new ElaborationExecutionError(
+            'A borrowed Entity connector cannot escape its function.',
+            source,
+            'RT2017',
+            [{ message: 'Entity connector borrowed here.', span: state.borrow.source }],
+          );
+        }
+        this.#ownership.assertReadable(attachment.network, source, 'Entity connector');
+      }
+    }
   }
 
   #returnEntity(
@@ -5483,10 +5682,20 @@ class ElaborationRecorder {
       entity: returnedEntity,
       owner: this.#parentFunctionFrame()?.owner ?? 'top-level',
       facets: new Map(),
+      sharedAttachments: [],
+    };
+    const returnedNetworks = new Map<NetworkOwnershipState, NetworkValue>();
+    const returnConnectionNetwork = (network: NetworkValue): NetworkValue => {
+      const ownership = this.#networkState(network).ownership;
+      const existing = returnedNetworks.get(ownership);
+      if (existing !== undefined) return existing;
+      const returned = this.#returnOwnedNetwork(network, rawSpan, false, false);
+      returnedNetworks.set(ownership, returned);
+      return returned;
     };
     for (const facet of authority.facets.values()) {
       const network = facet.locallyOwned
-        ? this.#returnOwnedNetwork(facet.network, rawSpan, false, false)
+        ? returnConnectionNetwork(facet.network)
         : this.#networkValue(
             {
               kind: 'network',
@@ -5502,11 +5711,27 @@ class ElaborationRecorder {
         network,
       });
     }
+    for (const attachment of authority.sharedAttachments) {
+      const network = attachment.locallyOwned
+        ? returnConnectionNetwork(attachment.network)
+        : this.#networkValue(
+            {
+              kind: 'network',
+              name: attachment.network.name,
+              declaration: attachment.network.declaration,
+              capability: 'readonly',
+              generation: attachment.network.generation,
+            },
+            { ownership: this.#networkState(attachment.network).ownership },
+          );
+      returnedAuthority.sharedAttachments.push({ ...attachment, network });
+    }
     authority.owner = 'retired';
     authority.retiredAt = source;
     this.#entityAuthorities.set(returnedEntity, returnedAuthority);
     this.#entityAuthorityList.push(returnedAuthority);
     this.#syncEntityBindings(returnedAuthority);
+    this.#syncEntitySharedAttachments(returnedAuthority);
     return returnedEntity;
   }
 
@@ -6562,6 +6787,7 @@ class ElaborationRecorder {
         entity,
         owner: this.#currentFunctionFrame()?.owner ?? 'top-level',
         facets: new Map(),
+        sharedAttachments: [],
       } satisfies EntityAuthorityView;
       this.#entityAuthorities.set(entity, authority);
       this.#entityAuthorityList.push(authority);
@@ -7045,6 +7271,19 @@ class ElaborationRecorder {
       authority.entity,
       [...authority.facets.values()].map(({ endpoint, network, direction, provenance }) => ({
         endpoint,
+        network: network.name,
+        generation: network.generation,
+        direction,
+        provenance,
+      })),
+    );
+  }
+
+  #syncEntitySharedAttachments(authority: EntityAuthorityView): void {
+    this.#entityRegistry?.replaceSharedConnectorAttachments(
+      authority.entity,
+      authority.sharedAttachments.map(({ connector, network, direction, provenance }) => ({
+        connector,
         network: network.name,
         generation: network.generation,
         direction,

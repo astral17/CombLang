@@ -10,7 +10,7 @@ import {
 import { compileSourceProgram } from './source-compilation.js';
 
 describe('Lab Entity support boundary', () => {
-  test('provisions only a structural fallback and accepts a documented checked Blueprint fragment', async () => {
+  test('provisions the bundled shared connector and accepts a checked Blueprint fragment', async () => {
     const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
     const lab = prototypes.getEntity('lab');
     expect(lab).toMatchObject({
@@ -27,15 +27,30 @@ describe('Lab Entity support boundary', () => {
     );
     const profile = provisioned.profiles.find(({ ref }) => ref.prototypeKey === 'entity:lab');
     expect(profile).toMatchObject({
-      connectorStructure: 'unknown',
-      connectors: [],
+      connectorStructure: 'complete',
+      connectors: [
+        {
+          key: 'circuit',
+          direction: 'bidirectional',
+        },
+      ],
+      sharedCallConnector: 'circuit',
       features: [],
       configurationRules: [],
       defaultReadProjection: null,
       synthetic: false,
     });
+    expect(
+      profile?.connectors[0]?.lanes.map(({ color, nativeEndpoint }) => ({
+        color,
+        nativeConnector: nativeEndpoint?.nativeConnector,
+      })),
+    ).toEqual([
+      { color: 'green', nativeConnector: 1 },
+      { color: 'red', nativeConnector: 1 },
+    ]);
     expect(profile).not.toHaveProperty('callProjection');
-    if (profile === undefined) throw new Error('Expected an eligible Lab fallback profile.');
+    if (profile === undefined) throw new Error('Expected the provisioned Lab profile.');
 
     const compilation = compileSourceProgram(
       {
@@ -73,7 +88,7 @@ describe('Lab Entity support boundary', () => {
     ).toEqual({ status: 'valid', structuralStatus: 'documented' });
   });
 
-  test('does not make the fallback Lab callable or grant computation features', async () => {
+  test('allows the provider call without adding a read projection or research simulation', async () => {
     const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
     const provisioned = new EntityProvisioningService().provision(
       prototypes,
@@ -81,10 +96,11 @@ describe('Lab Entity support boundary', () => {
     );
     const compilation = compileSourceProgram(
       {
-        path: 'lab-fallback-capability.factorio.ts',
+        path: 'lab-shared-call.factorio.ts',
         text: `const input = new Network();
+const output = new Network();
 const lab = Entity('entity:lab');
-lab(input);`,
+output += lab(input);`,
       },
       {
         prototypes,
@@ -93,14 +109,26 @@ lab(input);`,
       },
     );
 
-    expect(compilation.pipelineDiagnostics).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: 'RT2027',
-          message: expect.stringContaining('has no callable projection'),
-        }),
-      ]),
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.resolvedCircuit?.ir.entities).toHaveLength(1);
+    expect(compilation.resolvedCircuit?.ir.entities[0]?.prototypeName).toBe('lab');
+    expect(compilation.resolvedCircuit?.ir.entities[0]?.connectorBindings).toHaveLength(2);
+
+    const read = compileSourceProgram(
+      {
+        path: 'lab-read-without-projection.factorio.ts',
+        text: `const lab = Entity('entity:lab');
+const input = lab + 0;`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
     );
-    expect(compilation.resolvedCircuit).toBeUndefined();
+    expect(read.pipelineDiagnostics).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: 'RT2032' })]),
+    );
+    expect(read.resolvedCircuit).toBeUndefined();
   });
 });

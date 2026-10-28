@@ -56,8 +56,9 @@ ordinary bare string key remains item shorthand.
 
 The current public Entity surface is intentionally small. When a built-in or
 imported provider is selected, the Worker/CLI derives a trusted replay context
-and a conservative zero-port fallback profile only for each prototype whose
-normalized `blueprintEligible` fact is explicitly true:
+and a conservative profile only for each prototype whose normalized
+`blueprintEligible` fact is explicitly true. Unless the provider also carries a
+reviewed normalized connector-topology fact, this profile has unknown topology:
 
 ```ts
 // In a host embedding with a matching reviewed profile:
@@ -69,12 +70,15 @@ machine.bind('circuit', 'red', input, 'input');
 const redPort = machine.port('circuit', 'red');
 ```
 
-The fallback profile is enough for `Entity(...)` construction and `.at(...)`
-placement, including the `assembling-machine-3` example. It deliberately has no
-connectors, call projection, configuration rules, or native behavior. A
-matching reviewed profile (or clearly labelled synthetic fixture) is still
-required for `port`, `bind`, and callable Entities. An omitted `blueprintEligible`
-fact in legacy normalized input is unknown and does not authorize construction.
+Unknown-topology profiles support `Entity(...)` construction and `.at(...)`
+placement. They have no connectors, call authority, configuration rules or
+native behavior. The bundled provider additionally carries a normalized
+`single-shared` fact for `assembling-machine-3`, `iron-chest`, and `lab`. Those
+prototypes receive one bidirectional red/green connector profile and support the
+single-argument call below. Other profiles still need matching reviewed authority
+for `port`, `bind`, or fixed-lane callable behavior. An omitted
+`blueprintEligible` fact in legacy normalized input is unknown and does not
+authorize construction.
 
 The two-argument configuration has three disjoint forms:
 
@@ -291,15 +295,31 @@ Producer or simulator semantics. The exact select/count simulator and readable
 Blueprint output are deterministic CombLang model/preview surfaces, not native
 Factorio conformance. See [Entity pipeline](entity-pipeline.md).
 
+For a provider-backed prototype with normalized `single-shared` topology, the
+ordinary call form keeps Network identity and direction logical until the
+existing color solver selects the shared red/green lane:
+
+```ts
+const input = new Network();
+const output = new Network();
+const machine = Entity('assembling-machine-3');
+output += machine(input);
+```
+
+This creates one physical Entity. Distinct input/output Networks use opposite
+wire colors; naming the same Network for both roles preserves both roles on one
+lane. No `.bind` call, hidden combinator, or default-readable input projection is
+added. This does not simulate crafting, recipes, or machine output, and it does
+not add multi-argument calls.
+
 `machine.port(connector, lane)` selects an explicit connector lane. The exact
 four-argument `machine.bind(connector, lane, network, direction)` form binds
 that lane to an existing Network, with `direction` equal to `input` or
 `output`. Both operations preserve source spans, physical Entity identity, and
 Network ownership validation. `entity.at(x, y, direction?)` accepts finite
 numeric coordinates and an integer direction from `0` through `15`, mutates
-the existing physical record, and returns the same live Entity view. The
-callable form is implemented for a trusted profile that declares an explicit
-input/output `callProjection`:
+the existing physical record, and returns the same live Entity view. Fixed-lane
+host profiles may declare an explicit input/output `callProjection`:
 
 ```ts
 const input = new Network();
@@ -318,7 +338,7 @@ A failed first call leaves its allowance available and rolls back call binding
 changes, not JavaScript argument evaluation. Reuse the returned handle for
 outputs. Explicit identical `.bind` and same-output attachment remain idempotent;
 a compatible manual input binding does not consume the call allowance. Conflicts,
-stale handles, profiles without a call projection, and invalid destinations are
+stale handles, profiles without either callable authority, and invalid destinations are
 source-aware errors. Ordinary objects and structural lookalikes keep normal
 JavaScript call behavior. Native import/export conformance remains separate
 from the implemented structural and simulator contracts.

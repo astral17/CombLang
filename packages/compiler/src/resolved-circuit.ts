@@ -839,11 +839,30 @@ function entity(
   const bindings = dataArray(record.connectorBindings, `${path}.connectorBindings`).map(
     (entry, index) => binding(entry, `${path}.connectorBindings[${index}]`, networkIds),
   );
-  const endpointKeys = bindings.map(
-    ({ endpoint: item }) => `${item.connector}/${item.lane}/${item.color}`,
-  );
-  if (new Set(endpointKeys).size !== endpointKeys.length)
-    invalid(`${path}.connectorBindings`, 'connector endpoint is repeated.');
+  const bindingsByEndpoint = new Map<string, (typeof bindings)[number][]>();
+  for (const [index, candidate] of bindings.entries()) {
+    const endpointKey = `${candidate.endpoint.connector}/${candidate.endpoint.lane}/${candidate.endpoint.color}`;
+    const previous = bindingsByEndpoint.get(endpointKey) ?? [];
+    if (previous.length > 0) {
+      const first = previous[0]!;
+      if (
+        previous.length !== 1 ||
+        first.network === undefined ||
+        candidate.network === undefined ||
+        first.network !== candidate.network ||
+        first.nativeConnector !== candidate.nativeConnector ||
+        first.generation !== candidate.generation ||
+        first.direction === candidate.direction
+      ) {
+        invalid(
+          `${path}.connectorBindings[${index}]`,
+          'connector endpoint has conflicting or duplicate owners.',
+        );
+      }
+    }
+    previous.push(candidate);
+    bindingsByEndpoint.set(endpointKey, previous);
+  }
   return Object.freeze({
     id: text(record.id, `${path}.id`) as EntityPhysicalRecord['id'],
     profile: profileRef,

@@ -424,6 +424,41 @@ function parseCallProjection(
   return Object.freeze({ input, output });
 }
 
+function parseSharedCallConnector(
+  value: unknown,
+  path: string,
+  connectors: ReadonlyMap<EntityConnectorKey, EntityConnectorProfile>,
+): EntityConnectorKey {
+  const key = stableIdentifier(value, path) as EntityConnectorKey;
+  const connector = connectors.get(key);
+  if (connector === undefined) invalid('EP1002', path, 'unknown shared-call connector key.');
+  if (connector.direction !== 'bidirectional') {
+    invalid('EP1002', path, 'shared-call connector must be bidirectional.');
+  }
+  if (
+    connector.lanes.length !== 2 ||
+    connector.lanes.filter(({ color: laneColor }) => laneColor === 'red').length !== 1 ||
+    connector.lanes.filter(({ color: laneColor }) => laneColor === 'green').length !== 1
+  ) {
+    invalid(
+      'EP1002',
+      path,
+      'shared-call connector must declare exactly one red and one green lane.',
+    );
+  }
+  const missingNativeLane = connector.lanes.find(
+    ({ nativeEndpoint }) => nativeEndpoint === undefined,
+  );
+  if (missingNativeLane !== undefined) {
+    invalid(
+      'EP1002',
+      path,
+      `shared-call lane ${JSON.stringify(missingNativeLane.key)} needs a native endpoint mapping.`,
+    );
+  }
+  return key;
+}
+
 function parseEvidence(value: unknown, path: string): EntityEvidenceState {
   const record = dataRecord(value, path);
   const status = stringValue(record.status, `${path}.status`);
@@ -466,6 +501,7 @@ export function canonicalizeEntityProfile(value: unknown): EntityProfile {
       'configurationRules',
       'defaultReadProjection',
       'callProjection',
+      'sharedCallConnector',
       'synthetic',
     ],
     '$',
@@ -556,6 +592,20 @@ export function canonicalizeEntityProfile(value: unknown): EntityProfile {
     'callProjection' in record
       ? parseCallProjection(record.callProjection, '$.callProjection', connectorMap)
       : undefined;
+  const sharedCallConnector =
+    'sharedCallConnector' in record
+      ? parseSharedCallConnector(record.sharedCallConnector, '$.sharedCallConnector', connectorMap)
+      : undefined;
+  if (sharedCallConnector !== undefined && structure !== 'complete') {
+    invalid(
+      'EP1002',
+      '$.sharedCallConnector',
+      'shared-call connector requires complete connector structure.',
+    );
+  }
+  if (callProjection !== undefined && sharedCallConnector !== undefined) {
+    invalid('EP1000', '$', 'callProjection and sharedCallConnector are mutually exclusive.');
+  }
 
   return deepFreeze({
     ref: parsedRef,
@@ -568,6 +618,7 @@ export function canonicalizeEntityProfile(value: unknown): EntityProfile {
     ),
     defaultReadProjection,
     ...(callProjection === undefined ? {} : { callProjection }),
+    ...(sharedCallConnector === undefined ? {} : { sharedCallConnector }),
     synthetic,
   });
 }

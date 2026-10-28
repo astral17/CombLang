@@ -440,6 +440,11 @@ export class DslRuntime {
     readonly right: NetworkId;
     readonly source?: SourceSpan;
   }[] = [];
+  readonly #connectorConstraints: {
+    readonly networks: readonly NetworkId[];
+    readonly label: string;
+    readonly source?: SourceSpan;
+  }[] = [];
   readonly #networkHandles = new WeakSet<object>();
   readonly #producerHandles = new WeakSet<object>();
 
@@ -496,6 +501,22 @@ export class DslRuntime {
       left,
       right,
       ...(options.source === undefined ? {} : { source: options.source }),
+    });
+  }
+
+  /** Registers a physical connector's logical Networks with the existing color solver. */
+  constrainConnectorNetworks(
+    networks: readonly NetworkHandle[],
+    label: string,
+    source?: SourceSpan,
+  ): void {
+    if (typeof label !== 'string' || label.length === 0) {
+      runtimeFailure('RT1001', 'Connector constraint label must be a non-empty string.', source);
+    }
+    this.#connectorConstraints.push({
+      networks: Object.freeze(unique(networks.map((network) => this.#networkId(network)))),
+      label,
+      ...(source === undefined ? {} : { source }),
     });
   }
 
@@ -861,6 +882,9 @@ export class DslRuntime {
         `Output of ${producer.id}`,
         producer.provenance.source,
       );
+    }
+    for (const constraint of this.#connectorConstraints) {
+      constrainConnector(constraint.networks, constraint.label, constraint.source);
     }
 
     try {

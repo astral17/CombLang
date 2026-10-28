@@ -9,6 +9,7 @@ import type {
   EntityProfileRef,
   EntityPlanConfiguration,
   EntityPlanRecord,
+  EntityPlanSharedConnectorAttachment,
 } from '@comblang/compiler/entity';
 import type { DirectPlanNetwork } from '@comblang/compiler/direct-plan-schema';
 import {
@@ -409,6 +410,80 @@ function parseBindings(
   );
 }
 
+function parseSharedConnectorAttachments(
+  value: unknown,
+  path: string,
+  networkNames: ReadonlySet<string>,
+  networkDeclarations: ReadonlyMap<string, NetworkDeclaration>,
+  transferredSources: ReadonlySet<string>,
+  profile: ReturnType<typeof resolveEntityReplayProfile>,
+): readonly EntityPlanSharedConnectorAttachment[] {
+  const attachments = dataArray(value, path).map((entry, index) => {
+    const attachmentPath = `${path}[${index}]`;
+    const record = dataRecord(entry, attachmentPath);
+    exactKeys(
+      record,
+      ['connector', 'network', 'generation', 'direction', 'provenance'],
+      attachmentPath,
+    );
+    const connector = text(record.connector, `${attachmentPath}.connector`) as EntityConnectorKey;
+    if (profile.sharedCallConnector !== connector) {
+      invalid(
+        'RT3002',
+        `${attachmentPath}.connector`,
+        'profile does not authorize this shared-call connector.',
+      );
+    }
+    const network = text(record.network, `${attachmentPath}.network`);
+    if (!networkNames.has(network)) {
+      invalid('RT3002', `${attachmentPath}.network`, 'connector references an unknown Network.');
+    }
+    const declaration = networkDeclarations.get(network);
+    if (declaration?.consumedAt !== undefined && !transferredSources.has(network)) {
+      invalid(
+        'RT3002',
+        `${attachmentPath}.network`,
+        'connector references a consumed Network generation.',
+      );
+    }
+    const generation = nonNegative(record.generation, `${attachmentPath}.generation`);
+    const expectedGeneration = declaration?.generation ?? 0;
+    if (generation !== expectedGeneration) {
+      invalid(
+        'RT3002',
+        `${attachmentPath}.generation`,
+        `Network generation ${generation} is stale; expected ${expectedGeneration}.`,
+      );
+    }
+    if (record.direction !== 'input' && record.direction !== 'output') {
+      invalid('RT3000', `${attachmentPath}.direction`, 'expected input or output.');
+    }
+    return Object.freeze({
+      connector,
+      network,
+      generation,
+      direction: record.direction,
+      provenance: parseBindingProvenance(record.provenance, `${attachmentPath}.provenance`),
+    });
+  });
+  const roleKeys = attachments.map(
+    ({ connector, network, direction }) => `${connector}/${network}/${direction}`,
+  );
+  if (new Set(roleKeys).size !== roleKeys.length) {
+    invalid('RT3003', path, 'shared connector attachment is repeated for the same Network role.');
+  }
+  if (attachments.filter(({ direction }) => direction === 'input').length > 1) {
+    invalid('RT3003', path, 'a shared-call connector may have only one input attachment.');
+  }
+  return Object.freeze(
+    [...attachments].sort((left, right) => {
+      const leftKey = `${left.connector}/${left.direction}/${left.network}`;
+      const rightKey = `${right.connector}/${right.direction}/${right.network}`;
+      return leftKey < rightKey ? -1 : leftKey > rightKey ? 1 : 0;
+    }),
+  );
+}
+
 function runtimeSignalHandleRecord(value: unknown, path: string): DataRecord | undefined {
   if (value === null || typeof value !== 'object' || !Object.isFrozen(value)) return undefined;
   const keys = Reflect.ownKeys(value);
@@ -776,11 +851,21 @@ function parseEntity(
   networks: readonly EntityPlanNetwork[],
   networkNames: ReadonlySet<string>,
   networkDeclarations: ReadonlyMap<string, NetworkDeclaration>,
+  transferredSources: ReadonlySet<string>,
 ): EntityPlanRecord {
   const record = dataRecord(value, path);
   exactKeys(
     record,
-    ['id', 'profile', 'configuration', 'connectorBindings', 'placement', 'provenance', 'ordinal'],
+    [
+      'id',
+      'profile',
+      'configuration',
+      'connectorBindings',
+      'sharedConnectorAttachments',
+      'placement',
+      'provenance',
+      'ordinal',
+    ],
     path,
   );
   const profile = parseProfileRef(record.profile, `${path}.profile`, context);
@@ -822,11 +907,23 @@ function parseEntity(
     networkDeclarations,
     profile.profile,
   );
+  const sharedConnectorAttachments =
+    'sharedConnectorAttachments' in record
+      ? parseSharedConnectorAttachments(
+          record.sharedConnectorAttachments,
+          `${path}.sharedConnectorAttachments`,
+          networkNames,
+          networkDeclarations,
+          transferredSources,
+          profile.profile,
+        )
+      : undefined;
   return Object.freeze({
     id: text(record.id, `${path}.id`) as EntityId,
     profile: profile.ref,
     ...(configuration === undefined ? {} : { configuration }),
     connectorBindings,
+    ...(sharedConnectorAttachments === undefined ? {} : { sharedConnectorAttachments }),
     ...(placement === undefined ? {} : { placement }),
     provenance,
     ordinal: positive(record.ordinal, `${path}.ordinal`),
@@ -1100,6 +1197,9 @@ function validateValue(value: unknown, context: TrustedEntityReplayContext): Val
       },
     ]),
   );
+  const transferredSources = new Set(
+    (envelope.value.plan.networkTransfers ?? []).map(({ source }) => source),
+  );
   const entities = dataArray(record.entities, '$.entities').map((entry, index) =>
     parseEntity(
       entry,
@@ -1108,6 +1208,7 @@ function validateValue(value: unknown, context: TrustedEntityReplayContext): Val
       networks,
       networkNames,
       networkDeclarations,
+      transferredSources,
     ),
   );
   const ids = entities.map(({ id }) => id);

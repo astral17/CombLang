@@ -92,4 +92,39 @@ describe('host Entity provisioning service', () => {
       'entity:spark-explosion',
     );
   });
+
+  test('provisions shared-call authority only for actual normalized topology facts', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(prototypes, policy);
+    for (const name of ['assembling-machine-3', 'iron-chest', 'lab']) {
+      const profile = provisioned.profiles.find(({ ref }) => ref.prototypeKey === `entity:${name}`);
+      expect(profile).toMatchObject({
+        connectorStructure: 'complete',
+        sharedCallConnector: 'circuit',
+        defaultReadProjection: null,
+        synthetic: false,
+        connectors: [
+          {
+            direction: 'bidirectional',
+            lanes: [
+              { color: 'green', nativeEndpoint: { nativeConnector: 1 } },
+              { color: 'red', nativeEndpoint: { nativeConnector: 1 } },
+            ],
+          },
+        ],
+      });
+      expect(profile).not.toHaveProperty('callProjection');
+    }
+
+    const { prototypes: unknownProvider } = await loadPrototypeDatabase(
+      syntheticPrototypeDatabase(),
+    );
+    const unknown = new EntityProvisioningService().provision(unknownProvider, policy);
+    expect(
+      unknown.profiles.find(({ ref }) => ref.prototypeKey === 'entity:assembling-machine-3'),
+    ).toMatchObject({ connectorStructure: 'unknown', connectors: [] });
+    expect(
+      unknown.profiles.find(({ ref }) => ref.prototypeKey === 'entity:assembling-machine-3'),
+    ).not.toHaveProperty('sharedCallConnector');
+  });
 });

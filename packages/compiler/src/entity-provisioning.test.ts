@@ -73,6 +73,49 @@ describe('Entity construction provisioning contract', () => {
     expect(Object.isFrozen(first.ref)).toBe(true);
   });
 
+  test('provisions only the normalized single-shared fact as a complete callable profile', () => {
+    const profile = createEntityFallbackProfile(
+      { ...assemblingMachine, circuitConnectorTopology: 'single-shared' },
+      database,
+    );
+
+    expect(profile.connectorStructure).toBe('complete');
+    expect(profile.connectors).toEqual([
+      {
+        key: 'circuit',
+        direction: 'bidirectional',
+        lanes: [
+          {
+            key: 'green',
+            color: 'green',
+            nativeEndpoint: {
+              endpoint: { connector: 'circuit', lane: 'green', color: 'green' },
+              nativeConnector: 1,
+            },
+          },
+          {
+            key: 'red',
+            color: 'red',
+            nativeEndpoint: {
+              endpoint: { connector: 'circuit', lane: 'red', color: 'red' },
+              nativeConnector: 1,
+            },
+          },
+        ],
+      },
+    ]);
+    expect(profile.sharedCallConnector).toBe('circuit');
+    expect(profile.defaultReadProjection).toBeNull();
+    expect(profile).not.toHaveProperty('callProjection');
+    expect(profile.synthetic).toBe(false);
+    expect(
+      normalizeBlueprintEntityPrototype({
+        ...assemblingMachine,
+        circuitConnectorTopology: 'single-shared',
+      }).circuitConnectorTopology,
+    ).toBe('single-shared');
+  });
+
   test('keeps unknown structure distinct from a complete verified empty profile', () => {
     expect(syntheticZeroPortEntityProfile.connectorStructure).toBe('complete');
     const fallback = createEntityFallbackProfile(assemblingMachine, database);
@@ -141,6 +184,17 @@ describe('Entity construction provisioning contract', () => {
       }),
     ).toThrowError(expect.objectContaining({ code: 'EPV1001', path: '$.prototype.key' }));
     expect(() => normalizeBlueprintEntityPrototype(null)).toThrowError(EntityProvisioningError);
+  });
+
+  test('rejects unsupported normalized connector topology values', () => {
+    expect(() =>
+      normalizeBlueprintEntityPrototype({
+        ...assemblingMachine,
+        circuitConnectorTopology: 'two-connectors',
+      }),
+    ).toThrowError(
+      expect.objectContaining({ code: 'EPV1000', path: '$.prototype.circuitConnectorTopology' }),
+    );
   });
 
   test('rejects duplicate Entity records instead of producing ambiguous profiles', () => {
