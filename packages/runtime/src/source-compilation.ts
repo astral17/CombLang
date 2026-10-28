@@ -57,9 +57,11 @@ import {
   canonicalBlueprintParameterHandle,
   type BlueprintParameterHandle,
   type BlueprintParameterKind,
+  type BlueprintSignalParameterHandle,
   type BlueprintNumberParameterMetadata,
 } from '../../compiler/src/blueprint-parameters.js';
 import { inspectConstantConfigurationTemplate } from '../../compiler/src/constant-configuration-template.js';
+import { inspectBlueprintRecipeIngredientReference } from '../../compiler/src/blueprint-recipe-ingredient-reference.js';
 import { inspectArithmeticConfigurationTemplate } from '../../compiler/src/arithmetic-configuration-template.js';
 import {
   inspectDeciderConfigurationTemplate,
@@ -87,6 +89,10 @@ import {
 } from './source-native-numeric-formulas.js';
 import type { SourceSpan } from '@comblang/shared';
 import { resolveConstantRecipeIngredientReferences } from './recipe-ingredient-dependencies.js';
+import {
+  createNativeIngredientSignalExport,
+  type NativeIngredientSignalUse,
+} from './source-native-ingredient-export.js';
 
 export interface SourceCompilationEnvironment {
   /** Normalized project policy applied only to the final returned diagnostics. */
@@ -735,6 +741,13 @@ export function exportSourceCompilationNativeBlueprint(
         filterIndex: number;
         parameter: BlueprintParameterHandle;
       }
+    | {
+        kind: 'constant-ingredient-signal';
+        sectionIndex: number;
+        filterIndex: number;
+        parameter: BlueprintSignalParameterHandle;
+        ingredientIndex: number;
+      }
     | { kind: 'arithmetic-signal-output'; parameter: BlueprintParameterHandle }
     | { kind: 'arithmetic-operand'; side: 'first' | 'second'; parameter: BlueprintParameterHandle }
     | {
@@ -1126,13 +1139,17 @@ export function exportSourceCompilationNativeBlueprint(
   state.source.constantTemplates.forEach((capture, captureIndex) => {
     const path = `$.constantTemplates[${captureIndex}]`;
     const registration = inspectConstantConfigurationTemplate(capture.template, path);
-    if (registration.recipeIngredientReferences.length > 0) {
+    const amountReference = registration.recipeIngredientReferences.find(
+      (reference) => reference.slot === 'amount',
+    );
+    if (amountReference !== undefined) {
       reject(
         `${path}.recipeIngredientReferences`,
-        'native source export does not support locally resolved recipe ingredient references.',
-        registration.recipeIngredientReferences[0]!.callSource,
+        'native source export does not support recipe ingredient amounts.',
+        amountReference.source,
       );
     }
+    const collectedIngredientReferences = new Set<object>();
     const accepted = new Set<BlueprintParameterHandle>();
     capture.template.sections.forEach((section, sectionIndex) => {
       const sectionPath = `${path}.sections[${sectionIndex}]`;
@@ -1145,37 +1162,65 @@ export function exportSourceCompilationNativeBlueprint(
       }
       section.filters.forEach((filter, filterIndex) => {
         const filterPath = `${sectionPath}.filters[${filterIndex}]`;
-        const signalParameter = canonicalBlueprintParameterHandle(filter.signal);
-        if (signalParameter !== undefined) {
-          if (signalParameter.kind !== 'signal' || !signalInfoByParameter.has(signalParameter)) {
+        const ingredientReference = inspectBlueprintRecipeIngredientReference(filter.signal);
+        if (ingredientReference !== undefined) {
+          if (
+            ingredientReference.slot !== 'signal' ||
+            ingredientReference.session !== registration.session ||
+            !signalInfoByParameter.has(ingredientReference.parameter)
+          ) {
             reject(
               `${filterPath}.signal`,
-              'native source export supports only declared Signal parameters in Constant filter slots.',
-              capture.source,
+              'native source export supports only authenticated declared Signal ingredient references in exact Constant filter slots.',
+              ingredientReference.source,
             );
           }
-          accepted.add(signalParameter);
-          used.add(signalParameter);
+          collectedIngredientReferences.add(ingredientReference.reference);
+          accepted.add(ingredientReference.parameter);
+          used.add(ingredientReference.parameter);
           occurrences.push({
-            kind: 'constant-signal',
+            kind: 'constant-ingredient-signal',
             captureId: capture.captureId,
             sectionIndex,
             filterIndex,
-            parameter: signalParameter,
+            parameter: ingredientReference.parameter,
+            ingredientIndex: ingredientReference.index,
             path: `${filterPath}.signal`,
-            source: capture.source,
+            source: ingredientReference.source,
           });
         } else {
-          const concreteSignal = filter.signal as SignalId;
-          const key = signalKey(concreteSignal);
-          reservedSignalPlaceholderNames.add(concreteSignal.name);
-          for (const sameName of signalInfoByOriginalName.get(concreteSignal.name) ?? []) {
-            if (sameName.key !== key) {
+          const signalParameter = canonicalBlueprintParameterHandle(filter.signal);
+          if (signalParameter !== undefined) {
+            if (signalParameter.kind !== 'signal' || !signalInfoByParameter.has(signalParameter)) {
               reject(
-                `$.parameters[${declarations.indexOf(sameName.declaration)}].defaultValue`,
-                `Constant filter signal ${JSON.stringify(concreteSignal.name)} has a different namespace or quality from the declared Signal default.`,
-                sameName.declaration.source,
+                `${filterPath}.signal`,
+                'native source export supports only declared Signal parameters in Constant filter slots.',
+                capture.source,
               );
+            }
+            accepted.add(signalParameter);
+            used.add(signalParameter);
+            occurrences.push({
+              kind: 'constant-signal',
+              captureId: capture.captureId,
+              sectionIndex,
+              filterIndex,
+              parameter: signalParameter,
+              path: `${filterPath}.signal`,
+              source: capture.source,
+            });
+          } else {
+            const concreteSignal = filter.signal as SignalId;
+            const key = signalKey(concreteSignal);
+            reservedSignalPlaceholderNames.add(concreteSignal.name);
+            for (const sameName of signalInfoByOriginalName.get(concreteSignal.name) ?? []) {
+              if (sameName.key !== key) {
+                reject(
+                  `$.parameters[${declarations.indexOf(sameName.declaration)}].defaultValue`,
+                  `Constant filter signal ${JSON.stringify(concreteSignal.name)} has a different namespace or quality from the declared Signal default.`,
+                  sameName.declaration.source,
+                );
+              }
             }
           }
         }
@@ -1251,6 +1296,17 @@ export function exportSourceCompilationNativeBlueprint(
         });
       });
     });
+    const unprojectedIngredientReference = registration.recipeIngredientReferences.find(
+      (reference) =>
+        reference.slot === 'signal' && !collectedIngredientReferences.has(reference.reference),
+    );
+    if (unprojectedIngredientReference !== undefined) {
+      reject(
+        path,
+        'native source export supports ingredient Signal references only in exact Constant filter Signal slots.',
+        unprojectedIngredientReference.source,
+      );
+    }
     if (registration.usedParameters.some((parameter) => !accepted.has(parameter))) {
       reject(
         path,
@@ -1480,6 +1536,38 @@ export function exportSourceCompilationNativeBlueprint(
     });
   });
 
+  const nativeIngredientSignalUses: NativeIngredientSignalUse[] = occurrences.flatMap(
+    (occurrence) =>
+      occurrence.kind === 'constant-ingredient-signal'
+        ? [
+            {
+              parameter: occurrence.parameter,
+              index: occurrence.ingredientIndex,
+              path: occurrence.path,
+              source: occurrence.source,
+            },
+          ]
+        : [],
+  );
+  const nativeIngredientExport = createNativeIngredientSignalExport(
+    nativeIngredientSignalUses,
+    declarations.flatMap((declaration) =>
+      declaration.kind === 'signal'
+        ? [
+            {
+              parameter: declaration.parameter as BlueprintSignalParameterHandle,
+              placeholder: allocatedSignalNames.get(declaration.parameter) ?? '',
+            },
+          ]
+        : [],
+    ),
+    reservedSignalPlaceholderNames,
+  );
+  const ingredientBackedSignalParameters = new Set<BlueprintParameterHandle>(
+    nativeIngredientSignalUses.map(({ parameter }) => parameter),
+  );
+  parameters.push(...nativeIngredientExport.parameters);
+
   if (measuredNativeNumericFormulas.length > 0) {
     const firstFormula = pendingNativeNumericFormulas[0]!;
     const formulaByOriginal = new Map<number, MeasuredNativeNumericFormula>();
@@ -1542,11 +1630,81 @@ export function exportSourceCompilationNativeBlueprint(
     state.source,
     state.execution,
     nativeBindings,
+    nativeIngredientExport.resolutions,
   );
   const projected = buildNativeBlueprintFcir(replacement.circuit, options);
   const relations = new Map(
     replacement.captureRelations.map((relation) => [relation.captureId, relation]),
   );
+  const directSignalParameterByNativeSlot = new Map<
+    string,
+    {
+      readonly parameter: BlueprintSignalParameterHandle;
+      readonly path: string;
+      readonly source: SourceSpan;
+    }
+  >();
+  const directSignalParameterProducerIndexes = new Set<number>();
+  const registerDirectSignalParameter = (
+    producerIndex: number,
+    slot: string,
+    parameter: BlueprintParameterHandle,
+    path: string,
+    source: SourceSpan,
+  ): void => {
+    if (parameter.kind !== 'signal') {
+      reject(path, 'native exact Signal slot resolved to a non-Signal parameter.', source);
+    }
+    const key = `${producerIndex}:${slot}`;
+    const previous = directSignalParameterByNativeSlot.get(key);
+    if (previous !== undefined && previous.parameter !== parameter) {
+      reject(
+        path,
+        'multiple declared Signal parameters resolve to the same authenticated native slot.',
+        source,
+      );
+    }
+    directSignalParameterByNativeSlot.set(key, { parameter, path, source });
+    directSignalParameterProducerIndexes.add(producerIndex);
+  };
+  for (const occurrence of occurrences) {
+    let slot: string | undefined;
+    let expectedRelation: 'constant' | 'arithmetic' | 'selector' | undefined;
+    let parameter: BlueprintParameterHandle | undefined;
+    if (occurrence.kind === 'constant-signal') {
+      slot = `constant:${occurrence.sectionIndex}:${occurrence.filterIndex}`;
+      expectedRelation = 'constant';
+      parameter = occurrence.parameter;
+    } else if (occurrence.kind === 'arithmetic-signal-output') {
+      slot = 'arithmetic:output_signal';
+      expectedRelation = 'arithmetic';
+      parameter = occurrence.parameter;
+    } else if (occurrence.kind === 'selector-index-signal') {
+      slot = 'selector:index_signal';
+      expectedRelation = 'selector';
+      parameter = occurrence.parameter;
+    } else if (occurrence.kind === 'selector-count-output') {
+      slot = 'selector:count_signal';
+      expectedRelation = 'selector';
+      parameter = occurrence.parameter;
+    }
+    if (slot === undefined || expectedRelation === undefined || parameter === undefined) continue;
+    const relation = relations.get(occurrence.captureId);
+    if (relation?.kind !== expectedRelation) {
+      reject(
+        occurrence.path,
+        'direct Signal slot has no matching authenticated producer relation.',
+        occurrence.source,
+      );
+    }
+    registerDirectSignalParameter(
+      relation.producerIndex,
+      slot,
+      parameter,
+      occurrence.path,
+      occurrence.source,
+    );
+  }
   const boundArithmeticOutputProducerIndexes = new Set<number>();
   for (const captureId of state.source.boundArithmeticOutputCaptureIds) {
     const relation = relations.get(captureId);
@@ -1582,6 +1740,36 @@ export function exportSourceCompilationNativeBlueprint(
       return undefined;
     }
   };
+  const exactSignalReplacement = (
+    parameter: BlueprintSignalParameterHandle,
+    value: unknown,
+    slotDescription: string,
+    path: string,
+    source: SourceSpan,
+  ): Record<string, unknown> | undefined => {
+    const info = signalInfoByParameter.get(parameter);
+    const placeholder = allocatedSignalNames.get(parameter);
+    if (info === undefined || placeholder === undefined) {
+      reject(path, `marked ${slotDescription} Signal has no allocated native parameter.`, source);
+    }
+    const actualKey = nativeSignalKey(value);
+    const expectedKey = info.key ?? signalKey(signal('item', placeholder));
+    if (actualKey !== expectedKey) {
+      reject(
+        path,
+        `marked ${slotDescription} Signal did not survive authenticated native projection in its exact slot.`,
+        source,
+      );
+    }
+    if (actualKey === signalKey(signal('item', placeholder))) return undefined;
+    const signalField = readRecord(value);
+    if (signalField === undefined) {
+      reject(path, `marked ${slotDescription} Signal is missing from native projection.`, source);
+    }
+    const preservedFields = { ...signalField };
+    delete preservedFields.type;
+    return Object.freeze({ ...preservedFields, name: placeholder });
+  };
   type Comparison = Extract<LogicalDeciderCondition, { kind: 'compare' }>;
   const deciderRowIndices = new Map<number, Map<Comparison, number[]>>();
   for (const occurrence of occurrences) {
@@ -1589,7 +1777,8 @@ export function exportSourceCompilationNativeBlueprint(
     const family =
       occurrence.kind === 'constant-count' ||
       occurrence.kind === 'constant-count-expression' ||
-      occurrence.kind === 'constant-signal'
+      occurrence.kind === 'constant-signal' ||
+      occurrence.kind === 'constant-ingredient-signal'
         ? 'constant'
         : occurrence.kind === 'arithmetic-operand' ||
             occurrence.kind === 'arithmetic-operand-expression' ||
@@ -1946,6 +2135,23 @@ export function exportSourceCompilationNativeBlueprint(
       }
       continue;
     }
+    if (occurrence.kind === 'constant-ingredient-signal') {
+      const childPlaceholder = nativeIngredientExport.placeholderFor(
+        occurrence.parameter,
+        occurrence.ingredientIndex,
+      );
+      if (
+        childPlaceholder === undefined ||
+        nativeSignalKey(filter) !== signalKey(signal('item', childPlaceholder))
+      ) {
+        reject(
+          occurrence.path,
+          'marked Constant ingredient Signal did not survive authenticated native projection in its exact filter slot.',
+          occurrence.source,
+        );
+      }
+      continue;
+    }
     if (occurrence.kind === 'constant-count-expression') {
       if (filter.count !== occurrence.measured.defaultValue) {
         reject(
@@ -1966,6 +2172,7 @@ export function exportSourceCompilationNativeBlueprint(
   }
   const replacementsByOriginal = new Map<string, string>();
   for (const [parameter, info] of signalInfoByParameter) {
+    if (ingredientBackedSignalParameters.has(parameter)) continue;
     if (info.key === undefined) continue;
     const placeholder = allocatedSignalNames.get(parameter);
     if (placeholder === undefined) {
@@ -1979,7 +2186,12 @@ export function exportSourceCompilationNativeBlueprint(
   }
   const patchedByNumber = new Map<number, (typeof projected.entities)[number]['native']>();
   for (const [producerIndex, producer] of replacement.circuit.producers.entries()) {
-    if (replacementsByOriginal.size === 0) continue;
+    if (
+      replacementsByOriginal.size === 0 &&
+      !directSignalParameterProducerIndexes.has(producerIndex)
+    ) {
+      continue;
+    }
     const entityNumber = producerIndex + 1;
     const entity = entities.get(entityNumber);
     if (producer.kind === 'arithmetic') {
@@ -2015,11 +2227,27 @@ export function exportSourceCompilationNativeBlueprint(
         } catch {
           continue;
         }
-        const placeholder = replacementsByOriginal.get(key);
-        if (placeholder === undefined || signalField === undefined) continue;
-        const preservedFields = { ...signalField };
-        delete preservedFields.type;
-        nextArithmetic[field] = Object.freeze({ ...preservedFields, name: placeholder });
+        const exactParameter = directSignalParameterByNativeSlot.get(
+          `${producerIndex}:arithmetic:${field}`,
+        );
+        let replacement: Record<string, unknown> | undefined;
+        if (exactParameter !== undefined) {
+          replacement = exactSignalReplacement(
+            exactParameter.parameter,
+            signalField,
+            `Arithmetic ${field}`,
+            exactParameter.path,
+            exactParameter.source,
+          );
+        } else {
+          const placeholder = replacementsByOriginal.get(key);
+          if (placeholder === undefined || signalField === undefined) continue;
+          const preservedFields = { ...signalField };
+          delete preservedFields.type;
+          replacement = Object.freeze({ ...preservedFields, name: placeholder });
+        }
+        if (replacement === undefined) continue;
+        nextArithmetic[field] = replacement;
         arithmeticChanged = true;
       }
       if (arithmeticChanged) {
@@ -2204,13 +2432,29 @@ export function exportSourceCompilationNativeBlueprint(
       const field = producer.config.operation === 'select' ? 'index_signal' : 'count_signal';
       const signalField = readRecord(behavior[field]);
       const key = nativeSignalKey(signalField);
-      const placeholder = key === undefined ? undefined : replacementsByOriginal.get(key);
-      if (signalField === undefined || placeholder === undefined) continue;
-      const preservedFields = { ...signalField };
-      delete preservedFields.type;
+      const exactParameter = directSignalParameterByNativeSlot.get(
+        `${producerIndex}:selector:${field}`,
+      );
+      let replacement: Record<string, unknown> | undefined;
+      if (exactParameter !== undefined) {
+        replacement = exactSignalReplacement(
+          exactParameter.parameter,
+          signalField,
+          `Selector ${field}`,
+          exactParameter.path,
+          exactParameter.source,
+        );
+      } else {
+        const placeholder = key === undefined ? undefined : replacementsByOriginal.get(key);
+        if (signalField === undefined || placeholder === undefined) continue;
+        const preservedFields = { ...signalField };
+        delete preservedFields.type;
+        replacement = Object.freeze({ ...preservedFields, name: placeholder });
+      }
+      if (replacement === undefined) continue;
       const nextBehavior = Object.freeze({
         ...behavior,
-        [field]: Object.freeze({ ...preservedFields, name: placeholder }),
+        [field]: replacement,
       }) as unknown as NativeBlueprintJsonObject;
       patchedByNumber.set(
         entityNumber,
@@ -2232,17 +2476,20 @@ export function exportSourceCompilationNativeBlueprint(
     const nativeSections = sectionsRecord?.sections;
     if (!Array.isArray(nativeSections)) continue;
     let entityChanged = false;
-    const nextSections = nativeSections.map((sectionValue) => {
+    const nextSections = nativeSections.map((sectionValue, sectionIndex) => {
       const section = readRecord(sectionValue);
       const filtersValue = section?.filters;
       if (!Array.isArray(filtersValue)) return sectionValue;
       let sectionChanged = false;
-      const nextFilters = filtersValue.map((filterValue) => {
+      const nextFilters = filtersValue.map((filterValue, filterIndex) => {
         const filter = readRecord(filterValue);
         const name = filter?.name;
         const type = filter?.type ?? 'item';
         const quality = filter?.quality;
         if (typeof name !== 'string' || typeof type !== 'string') return filterValue;
+        const exactParameter = directSignalParameterByNativeSlot.get(
+          `${producerIndex}:constant:${sectionIndex}:${filterIndex}`,
+        );
         let key: string;
         try {
           key = signalKey({
@@ -2253,8 +2500,22 @@ export function exportSourceCompilationNativeBlueprint(
         } catch {
           return filterValue;
         }
-        const placeholder = replacementsByOriginal.get(key);
-        if (placeholder === undefined || filter === undefined) return filterValue;
+        if (filter === undefined) return filterValue;
+        if (exactParameter !== undefined) {
+          const replacement = exactSignalReplacement(
+            exactParameter.parameter,
+            filter,
+            'Constant filter',
+            exactParameter.path,
+            exactParameter.source,
+          );
+          if (replacement === undefined) return filterValue;
+          sectionChanged = true;
+          return replacement;
+        }
+        let placeholder: string | undefined;
+        placeholder = replacementsByOriginal.get(key);
+        if (placeholder === undefined) return filterValue;
         const preservedFields = { ...filter };
         delete preservedFields.type;
         sectionChanged = true;
@@ -2357,6 +2618,9 @@ export function exportSourceCompilationNativeBlueprint(
   validateNativeBlueprintFcir(native);
   const provider = state.prototypes;
   if (provider !== undefined) {
+    const allocatedNativeSignalNames = new Set(
+      parameters.flatMap((parameter) => (parameter.type === 'id' ? [parameter.id] : [])),
+    );
     const projectedByNumber = new Map(
       native.entities.map((entity) => [entity.entityNumber, entity]),
     );
@@ -2367,6 +2631,7 @@ export function exportSourceCompilationNativeBlueprint(
       const type = field?.type ?? 'item';
       if (typeof name !== 'string' || typeof type !== 'string') return;
       if (type !== 'item' && type !== 'fluid' && type !== 'virtual') return;
+      if (type === 'item' && allocatedNativeSignalNames.has(name)) return;
       if (type === 'virtual' && nativeSignalWildcards.has(name)) return;
 
       const exists =

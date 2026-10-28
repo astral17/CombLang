@@ -1,4 +1,10 @@
 import { readFileSync } from 'node:fs';
+import {
+  decodeBlueprintExchange,
+  encodeBlueprintExchange,
+  parseLosslessJson,
+  stringifyLosslessJson,
+} from '@comblang/blueprint';
 import { signal } from '@comblang/factorio';
 import {
   createTrustedEntityReplayContext,
@@ -13,6 +19,7 @@ import type {
   PrototypeDatabaseV1,
   RecipeIngredient,
 } from '../../prototypes/src/schema.js';
+import { emitNativeBlueprintJson } from '../../compiler/src/native-blueprint-emitter.js';
 import { describe, expect, test } from 'vitest';
 
 import {
@@ -24,6 +31,10 @@ import {
   sourceCompilationArtifact,
 } from './source-compilation.js';
 import type { EntityPrototypeResolver } from './entity-registry.js';
+import {
+  EntityProvisioningService,
+  conservativeEntityProvisioningPolicy,
+} from './entity-provisioning.js';
 
 async function recipeProvider(options: { readonly fractionalWater?: boolean } = {}) {
   const base = syntheticPrototypeDatabase() as PrototypeDatabaseV1;
@@ -200,6 +211,44 @@ output += Constant({ sections: [{ filters: [
     ]);
   });
 
+  test('executes the documented native ingredient Signal export example', async () => {
+    const page = readFileSync(new URL('../../../docs/api/parameters.md', import.meta.url), 'utf8');
+    const source = page.match(
+      /^## Native ingredient Signal export\r?\n[\s\S]*?```typescript\r?\n([\s\S]*?)```/m,
+    )?.[1];
+    if (source === undefined) throw new Error('Missing native ingredient Signal example.');
+    const { prototypes } = await recipeProvider();
+    const compilation = compileSourceProgram(
+      { path: 'documented-native-ingredient.factorio.ts', text: source },
+      sourceHost(prototypes),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const native = exportSourceCompilationNativeBlueprint(compilation, {
+      label: 'Documented native ingredient export',
+      maxDeciderConditionRows: 1024,
+    });
+    expect(native.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Recipe',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      {
+        type: 'id',
+        id: 'parameter-1',
+        'ingredient-of': 'parameter-0',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    const behavior = native.entities[0]!.native.control_behavior as {
+      sections: { sections: readonly { filters: readonly Record<string, unknown>[] }[] };
+    };
+    expect(behavior.sections.sections[0]!.filters).toMatchObject([
+      { name: 'parameter-1', count: 2 },
+    ]);
+  });
+
   test('re-resolves the exact recipe per binding, omits absent rows and preserves topology', async () => {
     const { prototypes } = await recipeProvider();
     const host = sourceHost(prototypes);
@@ -266,14 +315,14 @@ output += Constant({ sections: [{ filters: [
     expect(executions).toBe(1);
   });
 
-  test('keeps a default-free root required once and hides all private ingredient placeholders', async () => {
+  test('exports a default-free parent root and its derived ingredient Signal', async () => {
     const { prototypes } = await recipeProvider();
     const host = sourceHost(prototypes);
     const text = `const part = Param.signal('Recipe');
 const output = new Network();
 output += Constant({ sections: [{ filters: [{
   signal: part.ingredient(0).signal,
-  value: part.ingredient(0).amount
+  value: 3
 }] }] });`;
     const compilation = compileSourceProgram(
       { path: 'recipe-ingredient-required.factorio.ts', text },
@@ -293,23 +342,478 @@ output += Constant({ sections: [{ filters: [{
           { parameter: declaration!.parameter, value: signal('item', 'iron-gear-wheel') },
         ]),
       ).sections[0]!.filters,
-    ).toEqual([{ signal: signal('item', 'iron-plate'), value: 2 }]);
-    const exportReference = text.indexOf('part.ingredient(0)');
-    expect(() =>
+    ).toEqual([{ signal: signal('item', 'iron-plate'), value: 3 }]);
+    const beforeExport = sourceCompilationArtifact(compilation);
+    const native = exportSourceCompilationNativeBlueprint(compilation, {
+      label: 'Recipe ingredient native export',
+      maxDeciderConditionRows: 1024,
+    });
+    expect(native.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Recipe',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      {
+        type: 'id',
+        id: 'parameter-1',
+        'ingredient-of': 'parameter-0',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    const behavior = native.entities[0]!.native.control_behavior as {
+      sections: { sections: readonly { filters: readonly unknown[] }[] };
+    };
+    expect(behavior.sections.sections[0]!.filters).toEqual([
+      { index: 1, name: 'parameter-1', quality: 'normal', comparator: '=', count: 3 },
+    ]);
+    expect(sourceCompilationArtifact(compilation)).toEqual(beforeExport);
+    expect(JSON.stringify(native)).not.toMatch(/parameter-ingredient|ingredient-template-/);
+  });
+
+  test('retains sparse derived rows when a defaulted parent has no local ingredient at that index', async () => {
+    const { prototypes } = await recipeProvider();
+    const compilation = compileSourceProgram(
+      {
+        path: 'recipe-ingredient-native-sparse.factorio.ts',
+        text: `const part = Param.signal('Recipe', Signal('item', 'iron-gear-wheel'));
+const output = new Network();
+output += Constant({ sections: [{ filters: [{
+  signal: part.ingredient(2).signal,
+  value: 7
+}] }] });`,
+      },
+      sourceHost(prototypes),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(configurationOf(bindSourceCompilationCircuit(compilation)).sections[0]!.filters).toEqual(
+      [],
+    );
+
+    const native = exportSourceCompilationNativeBlueprint(compilation, {
+      label: 'Sparse recipe ingredient native export',
+      maxDeciderConditionRows: 1024,
+    });
+    expect(native.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Recipe',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      ...[1, 2, 3].map((id) => ({
+        type: 'id' as const,
+        id: `parameter-${id}`,
+        'ingredient-of': 'parameter-0',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      })),
+    ]);
+    const behavior = native.entities[0]!.native.control_behavior as {
+      sections: { sections: readonly { filters: readonly unknown[] }[] };
+    };
+    expect(behavior.sections.sections[0]!.filters).toEqual([
+      { index: 1, name: 'parameter-3', quality: 'normal', comparator: '=', count: 7 },
+    ]);
+    const nativeJson = emitNativeBlueprintJson(native);
+    const expectedDocument = parseLosslessJson(JSON.stringify(nativeJson));
+    const exchange = await encodeBlueprintExchange(expectedDocument);
+    const decoded = await decodeBlueprintExchange(exchange);
+    expect(stringifyLosslessJson(decoded)).toBe(stringifyLosslessJson(expectedDocument));
+  });
+
+  test('deduplicates repeated derived uses while keeping independent parent chains', async () => {
+    const { prototypes } = await recipeProvider();
+    const compilation = compileSourceProgram(
+      {
+        path: 'recipe-ingredient-native-parents.factorio.ts',
+        text: `const first = Param.signal('First');
+const second = Param.signal('Second');
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: first.ingredient(0).signal, value: 1 }] }] });
+output += Constant({ sections: [{ filters: [{ signal: first.ingredient(0).signal, value: 2 }] }] });
+output += Constant({ sections: [{ filters: [{ signal: second.ingredient(0).signal, value: 3 }] }] });`,
+      },
+      sourceHost(prototypes),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+
+    const artifactBefore = sourceCompilationArtifact(compilation);
+    const native = exportSourceCompilationNativeBlueprint(compilation, {
+      label: 'Multiple recipe ingredient native export',
+      maxDeciderConditionRows: 1024,
+    });
+    expect(native.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'First',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      {
+        type: 'id',
+        id: 'parameter-1',
+        name: 'Second',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      {
+        type: 'id',
+        id: 'parameter-2',
+        'ingredient-of': 'parameter-0',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      {
+        type: 'id',
+        id: 'parameter-3',
+        'ingredient-of': 'parameter-1',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    const filters = native.entities.map((entity) => {
+      const behavior = entity.native.control_behavior as {
+        sections: { sections: readonly { filters: readonly unknown[] }[] };
+      };
+      return behavior.sections.sections[0]!.filters;
+    });
+    expect(filters).toEqual([
+      [{ index: 1, name: 'parameter-2', quality: 'normal', comparator: '=', count: 1 }],
+      [{ index: 1, name: 'parameter-2', quality: 'normal', comparator: '=', count: 2 }],
+      [{ index: 1, name: 'parameter-3', quality: 'normal', comparator: '=', count: 3 }],
+    ]);
+    const [first, second] = listSourceCompilationParameters(compilation);
+    const sameRecipeBinding = bindSourceCompilationCircuit(compilation, [
+      { parameter: first!.parameter, value: signal('item', 'iron-gear-wheel') },
+      { parameter: second!.parameter, value: signal('item', 'iron-gear-wheel') },
+    ]);
+    expect(
+      sameRecipeBinding.plan.producers
+        .filter(({ kind }) => kind === 'constant')
+        .map((producer) =>
+          producer.kind === 'constant' ? producer.configuration?.sections[0]?.filters : undefined,
+        ),
+    ).toEqual([
+      [{ signal: signal('item', 'iron-plate'), value: 1 }],
+      [{ signal: signal('item', 'iron-plate'), value: 2 }],
+      [{ signal: signal('item', 'iron-plate'), value: 3 }],
+    ]);
+    expect(
       exportSourceCompilationNativeBlueprint(compilation, {
-        label: 'Recipe ingredient local binding',
+        label: 'Multiple recipe ingredient native export',
+        maxDeciderConditionRows: 1024,
+      }),
+    ).toEqual(native);
+    expect(sourceCompilationArtifact(compilation)).toEqual(artifactBefore);
+  });
+
+  test('keeps direct and derived slots distinct from a matching concrete Signal', async () => {
+    const { prototypes } = await recipeProvider();
+    const compilation = compileSourceProgram(
+      {
+        path: 'recipe-ingredient-native-direct-and-derived.factorio.ts',
+        text: `const part = Param.signal('Recipe', Signal('item', 'iron-gear-wheel'));
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: part, value: 1 },
+  { signal: part.ingredient(0).signal, value: 2 },
+  { signal: Signal('item', 'iron-gear-wheel'), value: 3 }
+] }] });`,
+      },
+      sourceHost(prototypes),
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const native = exportSourceCompilationNativeBlueprint(compilation, {
+      label: 'Direct and derived recipe ingredient native export',
+      maxDeciderConditionRows: 1024,
+    });
+    expect(native.parameters).toMatchObject([
+      { type: 'id', id: 'parameter-0', name: 'Recipe' },
+      { type: 'id', id: 'parameter-1', 'ingredient-of': 'parameter-0' },
+    ]);
+    const behavior = native.entities[0]!.native.control_behavior as {
+      sections: { sections: readonly { filters: readonly Record<string, unknown>[] }[] };
+    };
+    expect(behavior.sections.sections[0]!.filters.map(({ name }) => name)).toEqual([
+      'parameter-0',
+      'parameter-1',
+      'iron-gear-wheel',
+    ]);
+  });
+
+  test('keeps unrelated concrete Decider Signals when a recipe root is used only by an ingredient', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const environment = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'ingredient-concrete-decider.factorio.ts',
+        text: `const recipe = Param.signal('Recipe', Signal('item', 'iron-gear-wheel'));
+const input = new Network();
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: recipe.ingredient(0).signal, value: 2 }
+] }] });
+const gear = Signal('item', 'iron-gear-wheel');
+output += IF(input[gear] > input[gear], [input[gear]], { fallback: input[gear] });
+const arithmeticOutput = new Network();
+arithmeticOutput += Arithmetic({ left: input[gear], operation: 'add', right: input[gear], output: gear });
+const selected = new Network();
+selected += Selector({ input, operation: 'select', index: gear });
+const counted = new Network();
+counted += Selector({ input, operation: 'count', output: gear });`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: environment.trustedEntityReplayContext,
+        entityPrototypeResolver: environment.entityPrototypeResolver,
+      },
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const native = exportSourceCompilationNativeBlueprint(compilation, {
+      label: 'Ingredient with concrete Decider',
+      maxDeciderConditionRows: 1024,
+    });
+    const decider = native.entities.find(
+      ({ native: value }) => value.name === 'decider-combinator',
+    );
+    const behavior = decider?.native.control_behavior as {
+      decider_conditions: {
+        conditions: readonly {
+          first_signal: { name: string };
+          second_signal: { name: string };
+        }[];
+        outputs: readonly { signal: { name: string } }[];
+        else_outputs: readonly { signal: { name: string } }[];
+      };
+    };
+    expect(behavior.decider_conditions.conditions[0]?.first_signal.name).toBe('iron-gear-wheel');
+    expect(behavior.decider_conditions.conditions[0]?.second_signal.name).toBe('iron-gear-wheel');
+    expect(behavior.decider_conditions.outputs[0]?.signal.name).toBe('iron-gear-wheel');
+    expect(behavior.decider_conditions.else_outputs[0]?.signal.name).toBe('iron-gear-wheel');
+
+    const arithmetic = native.entities.find(
+      ({ native: value }) => value.name === 'arithmetic-combinator',
+    );
+    const arithmeticBehavior = arithmetic?.native.control_behavior as {
+      arithmetic_conditions: {
+        first_signal: { name: string };
+        second_signal: { name: string };
+        output_signal: { name: string };
+      };
+    };
+    expect(arithmeticBehavior.arithmetic_conditions).toMatchObject({
+      first_signal: { name: 'iron-gear-wheel' },
+      second_signal: { name: 'iron-gear-wheel' },
+      output_signal: { name: 'iron-gear-wheel' },
+    });
+
+    const selectors = native.entities.filter(
+      ({ native: value }) => value.name === 'selector-combinator',
+    );
+    expect(selectors.map(({ native: value }) => value.control_behavior)).toMatchObject([
+      { index_signal: { name: 'iron-gear-wheel' } },
+      { count_signal: { name: 'iron-gear-wheel' } },
+    ]);
+  });
+
+  test('rebinds mixed direct and derived slots by parameter identity', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const provisioned = new EntityProvisioningService().provision(
+      prototypes,
+      conservativeEntityProvisioningPolicy,
+    );
+    const compilation = compileSourceProgram(
+      {
+        path: 'ingredient-mixed-direct-identities.factorio.ts',
+        text: `const first = Param.signal('First recipe', Signal('item', 'iron-gear-wheel'));
+const second = Param.signal('Second recipe', Signal('item', 'iron-plate'));
+const input = new Network();
+const constants = new Network();
+constants += Constant({ sections: [{ filters: [
+  { signal: first.ingredient(0).signal, value: 2 },
+  { signal: second.ingredient(0).signal, value: 3 },
+  { signal: Signal('item', 'iron-gear-wheel'), value: 4 }
+] }] });
+const arithmeticOutput = new Network();
+arithmeticOutput += Arithmetic({ left: 1, operation: 'add', right: 2, output: first });
+const selected = new Network();
+selected += Selector({ input, operation: 'select', index: second });
+const counted = new Network();
+counted += Selector({ input, operation: 'count', output: first });`,
+      },
+      {
+        prototypes,
+        trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+        entityPrototypeResolver: provisioned.entityPrototypeResolver,
+      },
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+
+    const native = exportSourceCompilationNativeBlueprint(compilation, {
+      label: 'Mixed direct and derived ingredient Signal export',
+      maxDeciderConditionRows: 1024,
+    });
+    expect(native.parameters).toMatchObject([
+      { type: 'id', id: 'parameter-0', name: 'First recipe' },
+      { type: 'id', id: 'parameter-1', name: 'Second recipe' },
+      { type: 'id', id: 'parameter-2', 'ingredient-of': 'parameter-0' },
+      { type: 'id', id: 'parameter-3', 'ingredient-of': 'parameter-1' },
+    ]);
+    const constant = native.entities.find(
+      ({ native: value }) => value.name === 'constant-combinator',
+    );
+    const constantBehavior = constant?.native.control_behavior as {
+      sections: { sections: readonly { filters: readonly { name: string }[] }[] };
+    };
+    expect(constantBehavior.sections.sections[0]?.filters.map(({ name }) => name)).toEqual([
+      'parameter-2',
+      'parameter-3',
+      'iron-gear-wheel',
+    ]);
+    const arithmetic = native.entities.find(
+      ({ native: value }) => value.name === 'arithmetic-combinator',
+    );
+    const arithmeticBehavior = arithmetic?.native.control_behavior as {
+      arithmetic_conditions: { output_signal: { name: string } };
+    };
+    expect(arithmeticBehavior.arithmetic_conditions.output_signal.name).toBe('parameter-0');
+    const selectors = native.entities.filter(
+      ({ native: value }) => value.name === 'selector-combinator',
+    );
+    expect(selectors.map(({ native: value }) => value.control_behavior)).toMatchObject([
+      { index_signal: { name: 'parameter-1' } },
+      { count_signal: { name: 'parameter-0' } },
+    ]);
+  });
+
+  test('uses only the remaining reserved placeholder pool and bounds sparse and huge indices', async () => {
+    const { prototypes } = await recipeProvider();
+    const provisionedHost = sourceHost(prototypes);
+    const structuralHost = {
+      trustedEntityReplayContext: provisionedHost.trustedEntityReplayContext,
+      entityPrototypeResolver: provisionedHost.entityPrototypeResolver,
+    };
+    const fillers = Array.from({ length: 6 }, (_, index) => {
+      const name = `parameter-${index + 4}`;
+      return `{ signal: Signal('item', '${name}'), value: ${index + 1} }`;
+    }).join(',\n');
+    const exactBudgetSource = `const part = Param.signal('Recipe');
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: part.ingredient(2).signal, value: 5 },
+  ${fillers}
+] }] });`;
+    const exactBudget = compileSourceProgram(
+      { path: 'recipe-ingredient-native-budget.factorio.ts', text: exactBudgetSource },
+      structuralHost,
+    );
+    expect(exactBudget.pipelineDiagnostics).toEqual([]);
+    const full = exportSourceCompilationNativeBlueprint(exactBudget, {
+      label: 'Bounded recipe ingredient native export',
+      maxDeciderConditionRows: 1024,
+    });
+    expect(full.parameters?.map((parameter) => parameter.type === 'id' && parameter.id)).toEqual([
+      'parameter-0',
+      'parameter-1',
+      'parameter-2',
+      'parameter-3',
+    ]);
+    const fullBehavior = full.entities[0]!.native.control_behavior as {
+      sections: { sections: readonly { filters: readonly Record<string, unknown>[] }[] };
+    };
+    expect(fullBehavior.sections.sections[0]!.filters.slice(0, 1)).toMatchObject([
+      { name: 'parameter-3', count: 5 },
+    ]);
+    expect(fullBehavior.sections.sections[0]!.filters.slice(1).map(({ name }) => name)).toEqual(
+      Array.from({ length: 6 }, (_, index) => `parameter-${index + 4}`),
+    );
+
+    const overflowSource = exactBudgetSource.replace(
+      '  { signal: part.ingredient(2).signal, value: 5 },',
+      "  { signal: part.ingredient(2).signal, value: 5 },\n  { signal: Signal('item', 'parameter-3'), value: 0 },",
+    );
+    const overflow = compileSourceProgram(
+      { path: 'recipe-ingredient-native-overflow.factorio.ts', text: overflowSource },
+      structuralHost,
+    );
+    const overflowReference = overflowSource.indexOf('part.ingredient(2)');
+    expect(() =>
+      exportSourceCompilationNativeBlueprint(overflow, {
+        label: 'Overflow recipe ingredient native export',
         maxDeciderConditionRows: 1024,
       }),
     ).toThrowError(
       expect.objectContaining({
         code: 'CP1002',
         span: {
-          fileId: compilation.fileId,
-          start: exportReference,
-          end: exportReference + 'part.ingredient(0)'.length,
+          fileId: overflow.fileId,
+          start: overflowReference,
+          end: overflowReference + 'part.ingredient(2).signal'.length,
         },
       }),
     );
+
+    const fullPool = compileSourceProgram(
+      {
+        path: 'recipe-ingredient-native-full-pool.factorio.ts',
+        text: `const part = Param.signal('Recipe');
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: part.ingredient(8).signal, value: 9 }] }] });`,
+      },
+      structuralHost,
+    );
+    expect(
+      exportSourceCompilationNativeBlueprint(fullPool, {
+        label: 'Full recipe ingredient native pool',
+        maxDeciderConditionRows: 1024,
+      }).parameters,
+    ).toHaveLength(10);
+
+    const hugeSource = `const part = Param.signal('Recipe');
+const output = new Network();
+output += Constant({ sections: [{ filters: [{ signal: part.ingredient(9007199254740991).signal, value: 1 }] }] });`;
+    const huge = compileSourceProgram(
+      { path: 'recipe-ingredient-native-huge-index.factorio.ts', text: hugeSource },
+      structuralHost,
+    );
+    const artifactBefore = sourceCompilationArtifact(huge);
+    const hugeReference = hugeSource.indexOf('part.ingredient(9007199254740991)');
+    expect(() =>
+      exportSourceCompilationNativeBlueprint(huge, {
+        label: 'Huge recipe ingredient native index',
+        maxDeciderConditionRows: 1024,
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1002',
+        span: {
+          fileId: huge.fileId,
+          start: hugeReference,
+          end: hugeReference + 'part.ingredient(9007199254740991).signal'.length,
+        },
+      }),
+    );
+    expect(sourceCompilationArtifact(huge)).toEqual(artifactBefore);
+  });
+
+  test('rejects an ingredient Signal outside an exact Constant filter Signal slot', () => {
+    const text = `const recipe = Param.signal('Recipe');
+const input = new Network();
+const output = new Network();
+output += Selector({ input, operation: 'count', output: recipe.ingredient(0).signal });`;
+    const compilation = compileSourceProgram({
+      path: 'recipe-ingredient-native-unsupported-role.factorio.ts',
+      text,
+    });
+    expect(compilation.pipelineDiagnostics[0]).toMatchObject({
+      code: 'RT2027',
+      span: {
+        fileId: compilation.fileId,
+        start: text.indexOf('recipe.ingredient(0).signal'),
+        end: text.indexOf('recipe.ingredient(0).signal') + 'recipe.ingredient(0).signal'.length,
+      },
+    });
   });
 
   test('reports an absent surviving amount, unknown recipe and fractional fluid amount at source use', async () => {
@@ -326,6 +830,22 @@ output += Constant({ sections: [{ filters: [{
       host,
     );
     expect(absentCompilation.pipelineDiagnostics).toEqual([]);
+    expect(() =>
+      exportSourceCompilationNativeBlueprint(absentCompilation, {
+        label: 'Unsupported ingredient amount native export',
+        maxDeciderConditionRows: 1024,
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CP1002',
+        span: {
+          fileId: absentCompilation.fileId,
+          start: missingAmount.indexOf('part.ingredient(1).amount'),
+          end:
+            missingAmount.indexOf('part.ingredient(1).amount') + 'part.ingredient(1).amount'.length,
+        },
+      }),
+    );
     const amountParameter = listSourceCompilationParameters(absentCompilation)[0]!.parameter;
     expect(() =>
       bindSourceCompilationCircuit(absentCompilation, [

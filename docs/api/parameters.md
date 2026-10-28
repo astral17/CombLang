@@ -1044,9 +1044,62 @@ ordinary present Signal and its derived `.amount` is absent, binding fails with
 located `CP1002`; present amounts must satisfy the exact Constant count domain.
 Only the parent `Recipe` parameter is listed, required or bindable. These
 references are local and do not rerun source; native parameter-template export
-refuses used ingredient references with located `CP1002`. Derived values cannot
+supports only `.signal` in an exact Constant filter Signal slot; any used
+`.amount` still produces a located native-export `CP1002`. Derived values cannot
 be used with shorthand, arithmetic, coercion, loops over dynamic ingredients,
-other device roles or Factorio `pN_iK` semantics.
+other device roles or Factorio `pN_iK` formulas.
+
+## Native ingredient Signal export
+
+Native source export can bind an authentic derived `.signal` to Factorio's
+`ingredient-of` parameter metadata while keeping the parent as the only source
+parameter:
+
+```typescript
+const recipe = Param.signal('Recipe');
+const output = new Network();
+output += Constant({
+  sections: [
+    {
+      filters: [{ signal: recipe.ingredient(0).signal, value: 2 }],
+    },
+  ],
+});
+```
+
+The generated `blueprint.parameters` contains the parent ID row and a derived
+row like this:
+
+```text
+[
+  {
+    "type": "id",
+    "id": "parameter-0",
+    "name": "Recipe",
+    "quality-condition": { "quality": "normal", "comparator": "=" }
+  },
+  {
+    "type": "id",
+    "id": "parameter-1",
+    "ingredient-of": "parameter-0",
+    "quality-condition": { "quality": "normal", "comparator": "=" }
+  }
+]
+```
+
+The Constant filter references the child ID (`parameter-1`). For a sparse use
+such as index 2, metadata rows for indices 0 and 1 are emitted first as well;
+they consume the same bounded `parameter-0` through `parameter-9` pool, but add
+no source declarations, physical devices, or independently bindable overrides.
+The native placeholders use the item namespace even when the selected ingredient
+is a fluid. Parent defaults and explicit bindings must satisfy the existing
+normal-quality native Signal restrictions.
+
+The `.amount` value remains available to local binding but is never lowered to a
+native amount formula. The native checkpoint observed unused preceding rows on
+initial import and placement in Factorio 2.1.23; it did not verify preservation
+after arbitrary edits, save, and reopen. Generated output and codec round trips
+are structural evidence, not a new in-game acceptance claim.
 
 ## Local numeric expressions in Arithmetic, Constant and Decider slots
 

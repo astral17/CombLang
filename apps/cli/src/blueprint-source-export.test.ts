@@ -469,6 +469,55 @@ output += Constant({ sections: [{ filters: [
     }
   });
 
+  test('exports derived ingredient Signal metadata through the shared native source exporter', async () => {
+    const { environment } = await parameterHost();
+    const key = '__comblang_cli_ingredient_export_runs';
+    const globals = globalThis as Record<string, unknown>;
+    const previous = globals[key];
+    globals[key] = 0;
+    const source = `globalThis.${key} += 1;
+const recipe = Param.signal('Recipe');
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: recipe.ingredient(0).signal, value: 2 }
+] }] });`;
+    const path = await sourceFile(source);
+    const compile = vi.spyOn(sourceApi, 'compileSourceProgram');
+    const nativeExport = vi.spyOn(sourceApi, 'exportSourceCompilationNativeBlueprint');
+    const { log, error } = capture();
+    try {
+      expect(await run(['blueprint', 'export', '--parameters', '--json', path], environment)).toBe(
+        0,
+      );
+      expect(error).not.toHaveBeenCalled();
+      expect(compile).toHaveBeenCalledTimes(1);
+      expect(nativeExport).toHaveBeenCalledTimes(1);
+      expect(nativeExport.mock.calls[0]?.[0]).toBe(compile.mock.results[0]?.value);
+      expect(globals[key]).toBe(1);
+      const document = JSON.parse(String(log.mock.calls[0]?.[0])).document;
+      expect(document.blueprint.parameters).toEqual([
+        {
+          type: 'id',
+          id: 'parameter-0',
+          name: 'Recipe',
+          'quality-condition': { quality: 'normal', comparator: '=' },
+        },
+        {
+          type: 'id',
+          id: 'parameter-1',
+          'ingredient-of': 'parameter-0',
+          'quality-condition': { quality: 'normal', comparator: '=' },
+        },
+      ]);
+      expect(
+        document.blueprint.entities[0].control_behavior.sections.sections[0].filters,
+      ).toMatchObject([{ name: 'parameter-1', count: 2 }]);
+    } finally {
+      if (previous === undefined) delete globals[key];
+      else globals[key] = previous;
+    }
+  });
+
   test('exports parameter overrides from one concrete bound pair and keeps the default export intact', async () => {
     const { environment } = await parameterHost();
     const key = '__comblang_cli_override_export_runs';

@@ -147,6 +147,54 @@ function deferred<T>() {
 }
 
 describe('Worker-local source parameter sessions', () => {
+  test('exports derived ingredient Signal metadata through the owning Worker compilation', async () => {
+    const runtime = parameterRuntime();
+    const parsed = structuredClone(
+      await runtime.handle(
+        parseRequest(88, {
+          file: {
+            path: 'worker-native-ingredient.factorio.ts',
+            text: `const recipe = Param.signal('Recipe');
+const output = new Network();
+output += Constant({ sections: [{ filters: [
+  { signal: recipe.ingredient(0).signal, value: 2 }
+] }] });`,
+          },
+          parameterBinding: true,
+          blueprintExport: { parameters: true },
+        }),
+      ),
+    );
+    if (parsed.kind !== 'parsed') throw new Error('Expected a Worker parse response.');
+    expect(parsed.result.pipelineDiagnostics).toEqual([]);
+    expect(parsed.parameterBinding).toMatchObject({
+      ok: true,
+      parameters: [{ kind: 'signal', label: 'Recipe' }],
+    });
+    const exported = parsed.result.blueprintExport;
+    if (!exported?.ok) throw new Error(JSON.stringify(exported));
+    expect(exported.document.blueprint.parameters).toEqual([
+      {
+        type: 'id',
+        id: 'parameter-0',
+        name: 'Recipe',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+      {
+        type: 'id',
+        id: 'parameter-1',
+        'ingredient-of': 'parameter-0',
+        'quality-condition': { quality: 'normal', comparator: '=' },
+      },
+    ]);
+    const behavior = exported.document.blueprint.entities[0]!.control_behavior as {
+      sections: { sections: readonly { filters: readonly Record<string, unknown>[] }[] };
+    };
+    expect(behavior.sections.sections[0]!.filters).toMatchObject([
+      { name: 'parameter-1', count: 2 },
+    ]);
+  });
+
   test('routes cloneable browser cases through independent Worker bindings without changing preview/export', async () => {
     resetRunCount();
     const runtime = parameterRuntime();
