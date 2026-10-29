@@ -76,18 +76,22 @@ describe('PrototypeDatabase v1', () => {
       'gun-turret',
       'railgun-turret',
       'flamethrower-turret',
+      'proxy-container',
+      'power-switch',
+      'small-electric-pole',
+      'big-electric-pole',
+      'medium-electric-pole',
+      'substation',
     ];
     for (const name of supported) {
       expect(prototypes.getEntity(name)?.circuitConnectorTopology, name).toBe('single-shared');
     }
 
     for (const name of [
-      'proxy-container',
+      'pipe',
       'infinity-pipe',
       'rail-signal',
       'rail-chain-signal',
-      'power-switch',
-      'big-electric-pole',
       'loader-1x1',
       'cargo-pod-container',
     ]) {

@@ -1061,6 +1061,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:big-electric-pole",
       "name": "big-electric-pole",
       "tileHeight": 2,
@@ -4519,6 +4520,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:medium-electric-pole",
       "name": "medium-electric-pole",
       "tileHeight": 1,
@@ -5122,6 +5124,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:power-switch",
       "name": "power-switch",
       "tileHeight": 2,
@@ -5197,6 +5200,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:proxy-container",
       "name": "proxy-container",
       "tileHeight": 1,
@@ -6121,6 +6125,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:small-electric-pole",
       "name": "small-electric-pole",
       "tileHeight": 1,
@@ -6793,6 +6798,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:substation",
       "name": "substation",
       "tileHeight": 2,

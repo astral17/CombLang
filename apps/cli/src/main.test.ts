@@ -357,6 +357,35 @@ b += x;`);
     expect(error).not.toHaveBeenCalled();
   });
 
+  test('exports a shared big electric pole as one circuit-only Entity', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const path = await sourceFile(`const A = Signal('virtual', 'signal-A');
+const input = CC(1 * A);
+const output = CC(2 * A);
+const pole = Entity('big-electric-pole').at(4, 5, 8);
+pole(input);
+output += pole;`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    expect(await run(['blueprint', 'export', '--json', path], { prototypes })).toBe(0);
+    const response = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(response.ok).toBe(true);
+    const blueprint = response.document.blueprint;
+    expect(blueprint.entities).toHaveLength(3);
+    const poleEntity = blueprint.entities.find(
+      ({ name }: { name: string }) => name === 'big-electric-pole',
+    );
+    expect(poleEntity).toMatchObject({
+      name: 'big-electric-pole',
+      position: { x: 4, y: 5 },
+      direction: 8,
+    });
+    expect(poleEntity).not.toHaveProperty('connections');
+    expect(blueprint.wires).toHaveLength(2);
+    expect(error).not.toHaveBeenCalled();
+  });
+
   test('exports a shared Entity lazy output through the selected CLI provider', async () => {
     const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
     const path = await sourceFile(`const input = new Network();

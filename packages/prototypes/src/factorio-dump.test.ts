@@ -94,6 +94,13 @@ function wireConnector(): Record<string, unknown> {
   return { points: { wire: { red: [1, 2], green: [3, 4] } } };
 }
 
+function wireConnectionPoint(): Record<string, unknown> {
+  return {
+    wire: { red: [1, 2], green: [3, 4] },
+    shadow: { red: [5, 6], green: [7, 8] },
+  };
+}
+
 type MutableRawDump = Record<string, Record<string, Record<string, unknown>>>;
 
 type RawDumpTable = Record<string, Record<string, unknown>>;
@@ -470,15 +477,8 @@ describe('Factorio data-raw-dump normalizer', () => {
     }
   });
 
-  test('keeps version-discrepant and semantically distinct connector shapes unknown', () => {
+  test('keeps unresolved pipe and rail-signal connector shapes unknown', () => {
     const dump = dumpFixture() as MutableRawDump;
-    dump['proxy-container'] = {
-      'proxy-sample': {
-        type: 'proxy-container',
-        name: 'proxy-sample',
-        circuit_connector: wireConnector(),
-      },
-    };
     dump['infinity-pipe'] = {
       'infinity-pipe-sample': {
         type: 'infinity-pipe',
@@ -495,11 +495,284 @@ describe('Factorio data-raw-dump normalizer', () => {
     };
 
     const entities = normalizeFactorioDataDump(dump, metadata).database.entities;
-    for (const name of ['proxy-sample', 'infinity-pipe-sample', 'rail-signal-sample']) {
+    for (const name of ['infinity-pipe-sample', 'rail-signal-sample']) {
       expect(entities.find((entity) => entity.name === name)).not.toHaveProperty(
         'circuitConnectorTopology',
       );
     }
+  });
+
+  test.each([
+    ['single definition', wireConnector(), undefined],
+    ['one direction', [wireConnector()], undefined],
+    ['two directions', [wireConnector(), wireConnector()], 2],
+    ['four directions', Array.from({ length: 4 }, wireConnector), 4],
+  ] as const)(
+    'normalizes ProxyContainerPrototype %s without name or version guessing',
+    (_shape, circuit_connector, direction_count) => {
+      const dump = dumpFixture() as MutableRawDump;
+      const name = 'custom-proxy';
+      dump['proxy-container'] = {
+        [name]: {
+          type: 'proxy-container',
+          name,
+          circuit_connector,
+          ...(direction_count === undefined ? {} : { direction_count }),
+        },
+      };
+
+      const entity = normalizeFactorioDataDump(dump, metadata).database.entities.find(
+        (candidate) => candidate.name === name,
+      );
+      expect(entity?.circuitConnectorTopology).toBe('single-shared');
+    },
+  );
+
+  test.each([
+    ['wrong direction count', [wireConnector(), wireConnector()], 1, 'circuit_connector'],
+    [
+      'unsupported direction count',
+      [wireConnector(), wireConnector(), wireConnector()],
+      3,
+      'direction_count',
+    ],
+  ] as const)(
+    'rejects malformed ProxyContainerPrototype array shape: %s',
+    (_label, circuit_connector, direction_count, field) => {
+      const dump = dumpFixture() as MutableRawDump;
+      dump['proxy-container'] = {
+        proxy: {
+          type: 'proxy-container',
+          name: 'proxy',
+          circuit_connector,
+          direction_count,
+        },
+      };
+
+      expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
+        expect.objectContaining({
+          code: 'PD1001',
+          path: 'proxy-container.proxy.' + field,
+        }),
+      );
+    },
+  );
+
+  test.each([
+    ['missing connector', {}],
+    ['missing wire points', { circuit_connector: {} }],
+    ['missing green lane', { circuit_connector: { points: { wire: { red: [1, 2] } } } }],
+    [
+      'shadow points only',
+      { circuit_connector: { points: { shadow: { red: [1, 2], green: [3, 4] } } } },
+    ],
+  ] as const)('leaves ProxyContainerPrototype unknown with %s', (_label, fields) => {
+    const dump = dumpFixture() as MutableRawDump;
+    dump['proxy-container'] = {
+      'incomplete-proxy': {
+        type: 'proxy-container',
+        name: 'incomplete-proxy',
+        ...fields,
+      },
+    };
+
+    const entity = normalizeFactorioDataDump(dump, metadata).database.entities.find(
+      (candidate) => candidate.name === 'incomplete-proxy',
+    );
+    expect(entity).not.toHaveProperty('circuitConnectorTopology');
+  });
+
+  test('derives power-switch topology only from its direct circuit connection point', () => {
+    const dump = dumpFixture() as MutableRawDump;
+    dump['power-switch'] = {
+      'custom-power-switch': {
+        type: 'power-switch',
+        name: 'custom-power-switch',
+        circuit_wire_connection_point: wireConnectionPoint(),
+        left_wire_connection_point: { wire: { copper: [9, 10] } },
+        right_wire_connection_point: { wire: { copper: [11, 12] } },
+      },
+    };
+
+    const entity = normalizeFactorioDataDump(dump, metadata).database.entities.find(
+      (candidate) => candidate.name === 'custom-power-switch',
+    );
+    expect(entity?.circuitConnectorTopology).toBe('single-shared');
+  });
+
+  test.each([
+    [
+      'no circuit point despite copper endpoints',
+      {
+        left_wire_connection_point: { wire: { copper: [1, 2] } },
+        right_wire_connection_point: { wire: { copper: [3, 4] } },
+      },
+    ],
+    [
+      'shadow-only circuit point',
+      {
+        circuit_wire_connection_point: { shadow: { red: [1, 2], green: [3, 4] } },
+      },
+    ],
+    [
+      'red-only circuit point',
+      {
+        circuit_wire_connection_point: { wire: { red: [1, 2] } },
+      },
+    ],
+    [
+      'green-only circuit point',
+      {
+        circuit_wire_connection_point: { wire: { green: [3, 4] } },
+      },
+    ],
+  ] as const)('leaves power-switch topology unknown with %s', (_label, fields) => {
+    const dump = dumpFixture() as MutableRawDump;
+    dump['power-switch'] = {
+      'incomplete-switch': { type: 'power-switch', name: 'incomplete-switch', ...fields },
+    };
+
+    const entity = normalizeFactorioDataDump(dump, metadata).database.entities.find(
+      (candidate) => candidate.name === 'incomplete-switch',
+    );
+    expect(entity).not.toHaveProperty('circuitConnectorTopology');
+  });
+
+  test.each([
+    ['short red vector', [1], 'power-switch.bad-switch.circuit_wire_connection_point.wire.red'],
+    [
+      'non-finite green coordinate',
+      [3, Number.POSITIVE_INFINITY],
+      'power-switch.bad-switch.circuit_wire_connection_point.wire.green[1]',
+    ],
+  ] as const)('rejects malformed power-switch circuit point: %s', (_label, vector, path) => {
+    const dump = dumpFixture() as MutableRawDump;
+    dump['power-switch'] = {
+      'bad-switch': {
+        type: 'power-switch',
+        name: 'bad-switch',
+        circuit_wire_connection_point: {
+          wire: { red: [1, 2], green: [3, 4] },
+        },
+      },
+    };
+    const point = dump['power-switch']['bad-switch']!.circuit_wire_connection_point as {
+      wire: { red: unknown; green: unknown };
+    };
+    if (path.endsWith('.red')) point.wire.red = vector;
+    else point.wire.green = vector;
+
+    expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
+      expect.objectContaining({ code: 'PD1001', path }),
+    );
+  });
+
+  test.each([1, 3])('normalizes electric-pole connection_points with %i entries', (count) => {
+    const dump = dumpFixture() as MutableRawDump;
+    const name = 'custom-pole';
+    dump['electric-pole'] = {
+      [name]: {
+        type: 'electric-pole',
+        name,
+        connection_points: Array.from({ length: count }, wireConnectionPoint),
+      },
+    };
+
+    const entity = normalizeFactorioDataDump(dump, metadata).database.entities.find(
+      (candidate) => candidate.name === name,
+    );
+    expect(entity?.circuitConnectorTopology).toBe('single-shared');
+  });
+
+  test.each([
+    ['absent array', {}],
+    ['empty array', { connection_points: [] }],
+    ['non-array points', { connection_points: wireConnectionPoint() }],
+    [
+      'sparse array',
+      { connection_points: Object.assign(new Array(2), { 1: wireConnectionPoint() }) },
+    ],
+  ] as const)('rejects malformed electric-pole connection_points: %s', (_label, fields) => {
+    const dump = dumpFixture() as MutableRawDump;
+    dump['electric-pole'] = {
+      'bad-pole': { type: 'electric-pole', name: 'bad-pole', ...fields },
+    };
+
+    if (_label === 'absent array') {
+      const entity = normalizeFactorioDataDump(dump, metadata).database.entities.find(
+        (candidate) => candidate.name === 'bad-pole',
+      );
+      expect(entity).not.toHaveProperty('circuitConnectorTopology');
+      return;
+    }
+
+    expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
+      expect.objectContaining({
+        code: 'PD1001',
+        path:
+          _label === 'sparse array'
+            ? 'electric-pole.bad-pole.connection_points[0]'
+            : 'electric-pole.bad-pole.connection_points',
+      }),
+    );
+  });
+
+  test.each([
+    ['red-only entry', [wireConnectionPoint(), { wire: { red: [1, 2] } }]],
+    ['shadow-only entry', [{ shadow: { red: [1, 2], green: [3, 4] } }]],
+    ['copper-only entry', [{ wire: { copper: [1, 2] } }]],
+  ] as const)('leaves electric-pole topology unknown with a %s', (_label, connection_points) => {
+    const dump = dumpFixture() as MutableRawDump;
+    dump['electric-pole'] = {
+      'incomplete-pole': {
+        type: 'electric-pole',
+        name: 'incomplete-pole',
+        connection_points,
+      },
+    };
+
+    const entity = normalizeFactorioDataDump(dump, metadata).database.entities.find(
+      (candidate) => candidate.name === 'incomplete-pole',
+    );
+    expect(entity).not.toHaveProperty('circuitConnectorTopology');
+  });
+
+  test('validates later pole orientations after incomplete circuit evidence', () => {
+    const dump = dumpFixture() as MutableRawDump;
+    dump['electric-pole'] = {
+      'mixed-pole': {
+        type: 'electric-pole',
+        name: 'mixed-pole',
+        connection_points: [
+          { wire: { red: [1, 2] } },
+          { wire: { red: [1, 2], green: [3, Number.NaN] } },
+        ],
+      },
+    };
+    expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
+      expect.objectContaining({
+        code: 'PD1001',
+        path: 'electric-pole.mixed-pole.connection_points[1].wire.green[1]',
+      }),
+    );
+  });
+
+  test('reports malformed electric-pole coordinates with their direct wire path', () => {
+    const dump = dumpFixture() as MutableRawDump;
+    dump['electric-pole'] = {
+      'bad-coordinate-pole': {
+        type: 'electric-pole',
+        name: 'bad-coordinate-pole',
+        connection_points: [{ wire: { red: [1, 2], green: [3, Number.NaN] } }],
+      },
+    };
+
+    expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
+      expect.objectContaining({
+        code: 'PD1001',
+        path: 'electric-pole.bad-coordinate-pole.connection_points[0].wire.green[1]',
+      }),
+    );
   });
 
   test.each([

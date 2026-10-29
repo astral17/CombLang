@@ -528,24 +528,31 @@ function wirePoint(value: unknown, path: string): void {
   }
 }
 
+function hasRedGreenWirePositions(value: unknown, path: string): boolean {
+  const wire = object(value, path);
+  const red = ownDataField(wire, 'red', path + '.red');
+  const green = ownDataField(wire, 'green', path + '.green');
+  if (red.present && red.value !== undefined) wirePoint(red.value, path + '.red');
+  if (green.present && green.value !== undefined) wirePoint(green.value, path + '.green');
+  return red.present && red.value !== undefined && green.present && green.value !== undefined;
+}
+
 function hasRedGreenWirePoints(value: unknown, path: string): boolean {
   if (value === undefined) return false;
   const connector = object(value, path);
-  const pointsField = ownDataField(connector, 'points', `${path}.points`);
+  const pointsField = ownDataField(connector, 'points', path + '.points');
   if (!pointsField.present || pointsField.value === undefined) return false;
-  const points = object(pointsField.value, `${path}.points`);
-  const wireField = ownDataField(points, 'wire', `${path}.points.wire`);
+  const points = object(pointsField.value, path + '.points');
+  const wireField = ownDataField(points, 'wire', path + '.points.wire');
   if (!wireField.present || wireField.value === undefined) return false;
-  const wire = object(wireField.value, `${path}.points.wire`);
-  const red = ownDataField(wire, 'red', `${path}.points.wire.red`);
-  const green = ownDataField(wire, 'green', `${path}.points.wire.green`);
-  if (red.present && red.value !== undefined) {
-    wirePoint(red.value, `${path}.points.wire.red`);
-  }
-  if (green.present && green.value !== undefined) {
-    wirePoint(green.value, `${path}.points.wire.green`);
-  }
-  return red.present && red.value !== undefined && green.present && green.value !== undefined;
+  return hasRedGreenWirePositions(wireField.value, path + '.points.wire');
+}
+
+function hasRedGreenWireConnectionPoint(value: unknown, path: string): boolean {
+  const connectionPoint = object(value, path);
+  const wireField = ownDataField(connectionPoint, 'wire', path + '.wire');
+  if (!wireField.present || wireField.value === undefined) return false;
+  return hasRedGreenWirePositions(wireField.value, path + '.wire');
 }
 
 function connectorOrientationsComplete(entries: readonly unknown[], path: string): boolean {
@@ -554,6 +561,46 @@ function connectorOrientationsComplete(entries: readonly unknown[], path: string
     if (!hasRedGreenWirePoints(entry, `${path}[${index}]`)) complete = false;
   });
   return complete;
+}
+
+function directionalConnectorOrientationsComplete(
+  record: JsonObject,
+  connector: unknown,
+  path: string,
+): boolean {
+  const directionCountField = ownDataField(record, 'direction_count', path + '.direction_count');
+  const directionCount =
+    !directionCountField.present || directionCountField.value === undefined
+      ? 1
+      : finite(directionCountField.value, path + '.direction_count');
+  if (![1, 2, 4].includes(directionCount)) {
+    throw new FactorioDumpError(path + '.direction_count', 'expected one of 1, 2, or 4.');
+  }
+  return connectorOrientationsComplete(
+    tupleEntries(connector, directionCount, path + '.circuit_connector'),
+    path + '.circuit_connector',
+  );
+}
+
+function nonEmptyDenseArrayEntries(value: unknown, path: string): readonly unknown[] {
+  if (!Array.isArray(value)) {
+    throw new FactorioDumpError(path, 'expected a non-empty array.');
+  }
+  const lengthField = ownDataField(value, 'length', path + '.length');
+  if (
+    !lengthField.present ||
+    typeof lengthField.value !== 'number' ||
+    !Number.isInteger(lengthField.value) ||
+    lengthField.value < 1
+  ) {
+    throw new FactorioDumpError(path, 'expected a non-empty array.');
+  }
+  return Array.from({ length: lengthField.value }, (_, index) => {
+    const entryPath = path + '[' + index + ']';
+    const entry = ownDataField(value, String(index), entryPath);
+    if (!entry.present) throw new FactorioDumpError(entryPath, 'expected an array entry.');
+    return entry.value;
+  });
 }
 
 const SINGLE_CIRCUIT_CONNECTOR_TYPES = new Set([
@@ -654,21 +701,23 @@ function circuitConnectorTopology(
     return connectorComplete && flippedComplete ? 'single-shared' : undefined;
   }
 
+  if (type === 'proxy-container') {
+    const connectorField = ownDataField(record, 'circuit_connector', path + '.circuit_connector');
+    if (!connectorField.present || connectorField.value === undefined) return undefined;
+    if (Array.isArray(connectorField.value)) {
+      return directionalConnectorOrientationsComplete(record, connectorField.value, path)
+        ? 'single-shared'
+        : undefined;
+    }
+    return hasRedGreenWirePoints(connectorField.value, path + '.circuit_connector')
+      ? 'single-shared'
+      : undefined;
+  }
+
   if (DIRECTIONAL_CONTAINER_TYPES.has(type)) {
     const connectorField = ownDataField(record, 'circuit_connector', `${path}.circuit_connector`);
     if (!connectorField.present || connectorField.value === undefined) return undefined;
-    const directionCountField = ownDataField(record, 'direction_count', `${path}.direction_count`);
-    const directionCount =
-      !directionCountField.present || directionCountField.value === undefined
-        ? 1
-        : finite(directionCountField.value, `${path}.direction_count`);
-    if (![1, 2, 4].includes(directionCount)) {
-      throw new FactorioDumpError(`${path}.direction_count`, 'expected one of 1, 2, or 4.');
-    }
-    return connectorOrientationsComplete(
-      tupleEntries(connectorField.value, directionCount, `${path}.circuit_connector`),
-      `${path}.circuit_connector`,
-    )
+    return directionalConnectorOrientationsComplete(record, connectorField.value, path)
       ? 'single-shared'
       : undefined;
   }
@@ -683,6 +732,42 @@ function circuitConnectorTopology(
     )
       ? 'single-shared'
       : undefined;
+  }
+
+  if (type === 'power-switch') {
+    const circuitPointField = ownDataField(
+      record,
+      'circuit_wire_connection_point',
+      path + '.circuit_wire_connection_point',
+    );
+    if (!circuitPointField.present || circuitPointField.value === undefined) return undefined;
+    return hasRedGreenWireConnectionPoint(
+      circuitPointField.value,
+      path + '.circuit_wire_connection_point',
+    )
+      ? 'single-shared'
+      : undefined;
+  }
+
+  if (type === 'electric-pole') {
+    const connectionPointsField = ownDataField(
+      record,
+      'connection_points',
+      path + '.connection_points',
+    );
+    if (!connectionPointsField.present || connectionPointsField.value === undefined)
+      return undefined;
+    const points = nonEmptyDenseArrayEntries(
+      connectionPointsField.value,
+      path + '.connection_points',
+    );
+    let complete = true;
+    points.forEach((point, index) => {
+      if (!hasRedGreenWireConnectionPoint(point, path + '.connection_points[' + index + ']')) {
+        complete = false;
+      }
+    });
+    return complete ? 'single-shared' : undefined;
   }
 
   if (TURRET_TYPES.has(type)) {

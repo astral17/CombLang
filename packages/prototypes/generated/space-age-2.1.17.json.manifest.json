@@ -1,5 +1,5 @@
 {
-  "databaseIdentity": "comblang-prototypes-v1-sha256:77649e4f35b032ce298923794996a2f0a766e006c04c595aa0b0f7f50453cbe1",
+  "databaseIdentity": "comblang-prototypes-v1-sha256:16de04157b309b4cb6bdac11e39aee1a0aa29ee4265459f5c676b60f6a312c0d",
   "databaseSchemaVersion": 1,
   "generatorVersion": "comblang-prototype-asset-v1",
   "input": {
@@ -8,6 +8,6 @@
   },
   "kind": "comblang-prototype-database-asset",
   "normalizedGeneratorVersion": "comblang-factorio-data-dump-v1.12",
-  "outputSha256": "sha256:50308e69a14fc53f1d1b439ae452cdff5bb88edc93f78fe93b93fdd356396cf3",
+  "outputSha256": "sha256:e6f6b4dc1d42b430f47c834074b5828cfd81c85fc91284fecf33868a8990491f",
   "schemaVersion": 1
 }

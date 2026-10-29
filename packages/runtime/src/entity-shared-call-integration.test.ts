@@ -144,6 +144,126 @@ describe('provider-backed shared Entity calls', () => {
     },
   );
 
+  test.each([
+    'proxy-container',
+    'power-switch',
+    'small-electric-pole',
+    'big-electric-pole',
+    'medium-electric-pole',
+    'substation',
+  ])('exports newly supported %s with one Entity and two circuit wires', async (name) => {
+    const source = [
+      "const A = Signal('virtual', 'signal-A');",
+      'const input = CC(1 * A);',
+      'const output = CC(2 * A);',
+      `const device = Entity('${name}').at(4, 5, 8);`,
+      'device(input);',
+      'output += device;',
+    ].join('\n');
+    const { compilation } = await compileBundledSource(
+      `provider-shared-connector-${name}.factorio.ts`,
+      source,
+    );
+
+    expect(compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error')).toEqual(
+      [],
+    );
+    const ir = compilation.resolvedCircuit!.ir;
+    expect(ir.entities).toHaveLength(3);
+    const devices = ir.entities.filter(({ prototypeName }) => prototypeName === name);
+    expect(devices).toHaveLength(1);
+    expect(devices[0]?.connectorBindings.map(({ direction }) => direction).sort()).toEqual([
+      'input',
+      'output',
+    ]);
+
+    const blueprint = generateBlueprintJson(ir).blueprint;
+    expect(blueprint.entities).toHaveLength(3);
+    expect(blueprint.wires).toHaveLength(2);
+    const exportedDevice = blueprint.entities.find(
+      ({ name: prototypeName }) => prototypeName === name,
+    );
+    expect(exportedDevice).toMatchObject({ name, position: { x: 4, y: 5 }, direction: 8 });
+    expect(exportedDevice).not.toHaveProperty('connections');
+    const entityNumber = exportedDevice?.entity_number;
+    const nativeConnectorIds = blueprint.wires.flatMap(([from, fromConnector, to, toConnector]) =>
+      from === entityNumber ? [fromConnector] : to === entityNumber ? [toConnector] : [],
+    );
+    expect(nativeConnectorIds.sort()).toEqual([1, 2]);
+  });
+
+  test.each([
+    'proxy-container',
+    'power-switch',
+    'small-electric-pole',
+    'big-electric-pole',
+    'medium-electric-pole',
+    'substation',
+  ])('allows input-only use for newly supported %s', async (name) => {
+    const source = [
+      "const A = Signal('virtual', 'signal-A');",
+      'const input = CC(1 * A);',
+      `const device = Entity('${name}');`,
+      'device(input);',
+    ].join('\n');
+    const { compilation } = await compileBundledSource(
+      `provider-input-only-connector-${name}.factorio.ts`,
+      source,
+    );
+
+    expect(compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error')).toEqual(
+      [],
+    );
+    const blueprint = generateBlueprintJson(compilation.resolvedCircuit!.ir).blueprint;
+    expect(blueprint.entities).toHaveLength(2);
+    const exportedDevice = blueprint.entities.find(
+      ({ name: prototypeName }) => prototypeName === name,
+    );
+    expect(exportedDevice).toBeDefined();
+    expect(exportedDevice).not.toHaveProperty('connections');
+    expect(blueprint.wires).toHaveLength(1);
+    expect(blueprint.wires[0]).toContain(exportedDevice?.entity_number);
+  });
+
+  test('keeps power-switch shared lanes subject to the existing color solver', async () => {
+    const source = [
+      'const input = new Network<R>();',
+      "const machine = Entity('power-switch');",
+      'machine(input);',
+      'const output: Network<R> = machine;',
+      'const doubled = output * 2;',
+      'const sink = new Network();',
+      'sink += doubled;',
+    ].join('\n');
+    const { compilation } = await compileBundledSource(
+      'provider-shared-power-switch-color-conflict.factorio.ts',
+      source,
+    );
+
+    expect(compilation.pipelineDiagnostics).toContainEqual(
+      expect.objectContaining({ code: 'RT2010', severity: 'error' }),
+    );
+  });
+
+  test('keeps electric-pole attachments subject to the existing two-wire capacity', async () => {
+    const source = [
+      'const input = new Network();',
+      'const unrelated = new Network();',
+      "const machine = Entity('big-electric-pole');",
+      'machine(input);',
+      'const output: Network = machine;',
+      'unrelated += machine;',
+    ].join('\n');
+    const { compilation } = await compileBundledSource(
+      'provider-shared-pole-third-network.factorio.ts',
+      source,
+    );
+
+    expect(compilation.pipelineDiagnostics).toContainEqual(
+      expect.objectContaining({ code: 'RT2009', severity: 'error' }),
+    );
+  });
+
   test.each(['small-lamp', 'express-transport-belt', 'inserter'])(
     'allows the input-only consumer path for %s',
     async (name) => {
