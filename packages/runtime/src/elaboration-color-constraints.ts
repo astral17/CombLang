@@ -49,7 +49,11 @@ function combinatorInputNames(combinator: CombinatorDescriptor): readonly string
   const addOutput = (
     output: Extract<DirectPlanProducer, { kind: 'decider' }>['output'] | PendingDeciderOutput,
   ) => {
-    if (output.kind !== 'parameter-signal-constant' && 'refKind' in output) addRef(output);
+    if (output.kind === 'wildcard-constant') {
+      if (output.input !== undefined) addRef(output.input);
+    } else if (output.kind !== 'parameter-signal-constant' && 'refKind' in output) {
+      addRef(output);
+    }
   };
 
   if (combinator.kind === 'arithmetic') {

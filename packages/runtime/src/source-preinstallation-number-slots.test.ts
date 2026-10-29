@@ -254,6 +254,11 @@ describe('producer preinstallation numeric-slot inventory', () => {
     const session = createBlueprintParameterSession();
     const firstOutput = { kind: 'signal-constant', signal: A, value: 41 };
     const secondOutput = { kind: 'each-constant', value: 42 };
+    const thirdOutput = {
+      kind: 'wildcard-constant',
+      wildcard: 'anything',
+      value: 40,
+    };
     const elseOutput = { kind: 'signal-constant', signal: A, value: 43 };
     const producers = [
       {
@@ -324,7 +329,7 @@ describe('producer preinstallation numeric-slot inventory', () => {
           ],
         },
         output: firstOutput,
-        outputs: [firstOutput, secondOutput],
+        outputs: [firstOutput, secondOutput, thirdOutput],
         elseOutputs: [elseOutput],
       },
       {
@@ -437,6 +442,7 @@ describe('producer preinstallation numeric-slot inventory', () => {
       ],
       [3, 'decider', 'output-value', 'int32', '$.producers[3].outputs[0].value', 41],
       [3, 'decider', 'output-value', 'int32', '$.producers[3].outputs[1].value', 42],
+      [3, 'decider', 'output-value', 'int32', '$.producers[3].outputs[2].value', 40],
       [3, 'decider', 'output-value', 'int32', '$.producers[3].elseOutputs[0].value', 43],
       [4, 'decider', 'output-value', 'int32', '$.producers[4].output.value', 44],
       [5, 'decider', 'condition-threshold', 'int32', '$.producers[5].condition.constant', 45],

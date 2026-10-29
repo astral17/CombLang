@@ -35,6 +35,8 @@ JavaScript loop/if/ternary test is an error, not a runtime branch on signal coun
 | `2 * A`                           | Emit constant count 2 to A when that branch applies; no multiplication device. |
 | `input` or `Each(input)`          | Each output in supported condition contexts.                                   |
 | `2 * EACH`                        | Constant count per active Each candidate.                                      |
+| `7 * ANYTHING`                    | Constant count for the selected Anything candidate on the default input wires. |
+| `7 * EVERYTHING`                  | Constant count for each candidate on the default red + green input wires.      |
 | `Any(input)` / `All(input)`       | Anything/Everything output, subject to condition compatibility.                |
 | Nested arrays or ordinary objects | Flatten values in iteration order; keys are not output Signals.                |
 
@@ -47,8 +49,12 @@ Bare Network conditions mean Each. With Each, a concrete copy output redirects
 each candidate's count into that Signal, rather than reading that selected Signal
 once. Anything/Everything on the left exclude the concrete right-operand Signal
 from their candidate set; Each does not. Quantifier output combinations are
-restricted: for example Anything/Everything conditions cannot emit Each, and
-Anything/Everything cannot have a constant-count wildcard row. See the
+restricted: for example Anything/Everything conditions cannot emit Each.
+`count * ANYTHING` and `count * EVERYTHING` are unqualified constant-count rows
+on the default red + green input wires; `Anything(input)` and
+`Everything(input)` are copy rows with explicit input selections. A constant
+Anything output remains available with an Each condition; an Everything output
+remains invalid with an Each condition. See the
 [selection compatibility reference](../language-reference.md#network-selections).
 
 ## Exact configuration and hardware
@@ -114,7 +120,10 @@ supports these rows, including rows appended after attaching a fluent builder.
 An omitted numeric default uses the source-wide automatic allocator; its
 supported-family coverage rules are documented in the [Param API](parameters.md).
 Derived numeric output-count expressions are not accepted by the source
-compiler; these rows do not support native formula expressions.
+compiler; these rows do not support native formula expressions. Anything and
+Everything constant rows accept ordinary compile-time numeric counts, including
+computed counts. Numeric parameter handles and derived parameter expressions
+remain outside the wildcard output-slot matrix.
 
 ## Parameterized EACH output counts
 

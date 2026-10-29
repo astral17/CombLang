@@ -634,6 +634,14 @@ function planDeciderOutputShape(value: unknown, path: string): void {
     exactKeys(record, ['kind', 'value'], path);
     return;
   }
+  if (record.kind === 'wildcard-constant') {
+    exactKeys(record, ['kind', 'wildcard', 'value', 'input'], path);
+    if (record.wildcard !== 'anything' && record.wildcard !== 'everything') {
+      invalid('RT3003', `${path}.wildcard`, 'unknown Decider wildcard.');
+    }
+    if (Object.hasOwn(record, 'input')) planNetworkRefShape(record.input, `${path}.input`);
+    return;
+  }
   if (record.kind === 'signal-constant') {
     exactKeys(record, ['kind', 'signal', 'value'], path);
     planSignalShape(record.signal, `${path}.signal`);

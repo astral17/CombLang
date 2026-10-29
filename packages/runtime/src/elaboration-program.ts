@@ -4463,7 +4463,9 @@ class ElaborationRecorder {
       for (const { outputs, origins } of branches) {
         for (const [index, output] of outputs.entries()) {
           const eachOutput = output.kind === 'each';
-          const everythingOutput = output.kind === 'wildcard' && output.wildcard === 'everything';
+          const everythingOutput =
+            (output.kind === 'wildcard-constant' && output.wildcard === 'everything') ||
+            (output.kind === 'wildcard' && output.wildcard === 'everything');
           const origin = origins?.[index];
           const diagnosticSource = origin?.source ?? descriptor.source;
           const related = [
@@ -6658,7 +6660,15 @@ class ElaborationRecorder {
       if (output.signal.value === 'each') {
         return { kind: 'each-constant', value: output.value };
       }
-      throw new Error('Only an Each wildcard can have a Decider constant output.');
+      if (output.signal.value === 'anything' || output.signal.value === 'everything') {
+        return {
+          kind: 'wildcard-constant',
+          wildcard: output.signal.value,
+          value: output.value,
+          ...(output.input === undefined ? {} : { input: reference(output.input) }),
+        };
+      }
+      throw new Error('Unknown wildcard Decider constant output.');
     }
     if (output.input === undefined) {
       throw new Error('A Decider copy output has no validated input topology.');
@@ -6683,14 +6693,29 @@ class ElaborationRecorder {
       };
     }
     const input =
-      'refKind' in output
-        ? output.refKind === 'single'
-          ? { refKind: 'single' as const, network: output.network as NetworkId }
-          : {
-              refKind: 'pair' as const,
-              networks: [output.networks[0] as NetworkId, output.networks[1] as NetworkId] as const,
-            }
-        : undefined;
+      output.kind === 'wildcard-constant'
+        ? output.input === undefined
+          ? undefined
+          : output.input.refKind === 'single'
+            ? { refKind: 'single' as const, network: output.input.network as NetworkId }
+            : {
+                refKind: 'pair' as const,
+                networks: [
+                  output.input.networks[0] as NetworkId,
+                  output.input.networks[1] as NetworkId,
+                ] as const,
+              }
+        : 'refKind' in output
+          ? output.refKind === 'single'
+            ? { refKind: 'single' as const, network: output.network as NetworkId }
+            : {
+                refKind: 'pair' as const,
+                networks: [
+                  output.networks[0] as NetworkId,
+                  output.networks[1] as NetworkId,
+                ] as const,
+              }
+          : undefined;
     const signal =
       output.kind === 'signal' || output.kind === 'signal-constant'
         ? { kind: 'signal' as const, signal: this.#signalSnapshot(output.signal) }
@@ -6701,8 +6726,17 @@ class ElaborationRecorder {
                 ? ('each' as const)
                 : output.wildcard,
           };
-    if (output.kind === 'signal-constant' || output.kind === 'each-constant') {
-      return { mode: 'constant', signal, value: output.value };
+    if (
+      output.kind === 'signal-constant' ||
+      output.kind === 'each-constant' ||
+      output.kind === 'wildcard-constant'
+    ) {
+      return {
+        mode: 'constant',
+        signal,
+        value: output.value,
+        ...(input === undefined ? {} : { input }),
+      };
     }
     return { mode: 'copy', signal, ...(input === undefined ? {} : { input }) };
   }
@@ -8292,10 +8326,12 @@ class ElaborationRecorder {
       return { kind: 'signal-constant', signal: output.signal, value: output.value };
     }
     if (this.#isWildcardCount(output)) {
-      if (output.wildcard !== 'each') {
-        throw new Error('Only EACH supports a constant-count decider output.');
-      }
-      return { kind: 'each-constant', value: output.value };
+      if (output.wildcard === 'each') return { kind: 'each-constant', value: output.value };
+      return {
+        kind: 'wildcard-constant',
+        wildcard: output.wildcard,
+        value: output.value,
+      };
     }
     if (this.#isSelected(output)) {
       this.#assertReadableValue(output, rawSpan);

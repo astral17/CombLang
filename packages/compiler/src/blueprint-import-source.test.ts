@@ -363,6 +363,8 @@ describe('blueprint import source expressions', () => {
           value: -4,
         },
         { mode: 'constant', signal: { kind: 'wildcard', value: 'each' }, value: 2 },
+        { mode: 'constant', signal: { kind: 'wildcard', value: 'anything' }, value: 5 },
+        { mode: 'constant', signal: { kind: 'wildcard', value: 'everything' }, value: 7 },
       ],
       elseOutputs: [
         {
@@ -375,7 +377,7 @@ describe('blueprint import source expressions', () => {
     const condition = configuration.condition;
     if (condition.kind !== 'compare') throw new Error('Expected a comparison condition.');
     expect(printBlueprintDeciderExpression(configuration, [red, green])).toBe(
-      'Decider({condition:(import_network_1[Signal("virtual","signal-A")] >= 1),outputs:[pair(import_network_1,import_network_2)[Signal("fluid","water","rare")],Everything(import_network_2),(-4 * Signal("item","iron-plate")),(2 * EACH)],elseOutputs:[import_network_1[Signal("virtual","signal-out","legendary")]]})',
+      'Decider({condition:(import_network_1[Signal("virtual","signal-A")] >= 1),outputs:[pair(import_network_1,import_network_2)[Signal("fluid","water","rare")],Everything(import_network_2),(-4 * Signal("item","iron-plate")),(2 * EACH),(5 * ANYTHING),(7 * EVERYTHING)],elseOutputs:[import_network_1[Signal("virtual","signal-out","legendary")]]})',
     );
     expect(
       printBlueprintDeciderExpression(
@@ -405,8 +407,12 @@ describe('blueprint import source expressions', () => {
         value: 1,
         input: { refKind: 'single', network: red },
       },
-      { mode: 'constant', signal: { kind: 'wildcard', value: 'anything' }, value: 1 },
-      { mode: 'constant', signal: { kind: 'wildcard', value: 'everything' }, value: 1 },
+      {
+        mode: 'constant',
+        signal: { kind: 'wildcard', value: 'everything' },
+        value: 1,
+        input: { refKind: 'single', network: red },
+      },
       {
         mode: 'constant',
         signal: { kind: 'signal', signal: Signal('item', 'iron-plate') },

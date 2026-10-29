@@ -484,11 +484,15 @@ const one: Network = IF(input > 0, Anything(input));
 const all: Network = IF(Anything(input) > 0, Everything(input));
 ```
 
-`Anything` deterministically selects one matching signal. `Everything` copies the selected bus and cannot be combined with an `Each` condition. Explicit wildcard outputs cannot be rebound with `destination[SIGNAL]`; invalid physical combinations are rejected before a circuit is produced.
+The local simulator selects an `Anything` candidate according to its configured
+Signal ordering; Factorio's native choice order remains unverified. `Everything`
+copies the selected bus and cannot be combined with an `Each` condition. Explicit
+wildcard outputs cannot be rebound with `destination[SIGNAL]`; invalid physical
+combinations are rejected before a circuit is produced.
 
 `Any` is an exact source alias of `Anything`, and `All` is an alias of `Everything`. Their element-access spellings are `ANY` and `ALL`. The aliases do not change selection order, topology, or generated hardware.
 
-An `Anything` or `Everything` condition must currently emit a specific signal, for example `IF(Anything(input) > 0, input[A])`. Native `Each` output requires an `Each` condition and is rejected for quantifier conditions.
+An `Anything` or `Everything` condition can emit a specific signal, for example `IF(Anything(input) > 0, input[A])`, or a compatible Anything/Everything output, including supported constant-count rows. A constant-count Anything output is compatible with an `Each` condition; an Everything output is not. Native `Each` output requires an `Each` condition and is rejected for quantifier conditions.
 
 ## Arithmetic combinators
 
@@ -612,6 +616,13 @@ runtime validates the final descriptor, so dynamically computed rows receive
 the same native compatibility checks as literal rows. A cyclic container,
 array hole, custom or symbol container field, accessor, or unsupported leaf
 fails atomically before a producer or Entity is allocated.
+
+Constant-count wildcard rows are written `count * ANYTHING` or
+`count * EVERYTHING` and read the default red and green input wires.
+`Anything(input)` and `Everything(input)` remain copied-count rows with their
+explicit selected input. `count * Anything(input)` and
+`count * Everything(input)` are rejected: qualified selections cannot be
+arithmetic operands.
 
 With trusted canonical `entity:decider-combinator` authority, exact `Decider`
 and provider-backed ergonomic `IF`/`when` share one physical linked Decider

@@ -248,6 +248,76 @@ const fixtures: readonly { readonly label: string; readonly behavior: NativeBeha
       },
     },
   },
+  {
+    label: 'ordered Anything and Everything constant/copy rows with ELSE',
+    behavior: {
+      decider_conditions: {
+        conditions: [
+          {
+            first_signal: { type: 'virtual', name: 'signal-A' },
+            first_signal_networks: { red: true, green: true },
+            comparator: '>',
+            constant: 0,
+            compare_type: 'and',
+          },
+        ],
+        outputs: [
+          {
+            signal: { type: 'virtual', name: 'signal-anything' },
+            copy_count_from_input: false,
+            constant: 4,
+          },
+          {
+            signal: { type: 'virtual', name: 'signal-anything' },
+            copy_count_from_input: true,
+            networks: { red: true, green: true },
+          },
+          {
+            signal: { type: 'virtual', name: 'signal-everything' },
+            copy_count_from_input: false,
+            constant: 7,
+          },
+          {
+            signal: { type: 'virtual', name: 'signal-everything' },
+            copy_count_from_input: true,
+            networks: { red: true, green: false },
+          },
+          {
+            signal: { type: 'virtual', name: 'signal-everything' },
+            copy_count_from_input: true,
+            networks: { red: false, green: true },
+          },
+        ],
+        else_outputs: [
+          {
+            signal: { type: 'virtual', name: 'signal-anything' },
+            copy_count_from_input: false,
+            constant: -2,
+          },
+          {
+            signal: { type: 'virtual', name: 'signal-anything' },
+            copy_count_from_input: true,
+            networks: { red: false, green: true },
+          },
+          {
+            signal: { type: 'virtual', name: 'signal-B' },
+            copy_count_from_input: false,
+            constant: 11,
+          },
+          {
+            signal: { type: 'virtual', name: 'signal-everything' },
+            copy_count_from_input: false,
+            constant: -3,
+          },
+          {
+            signal: { type: 'virtual', name: 'signal-everything' },
+            copy_count_from_input: true,
+            networks: { red: true, green: true },
+          },
+        ],
+      },
+    },
+  },
 ];
 
 describe('blueprint Decider import source expressions', () => {
@@ -296,6 +366,50 @@ output += ${expression};`;
         };
       };
       expect(controlBehavior.decider_conditions).toEqual(remapBehaviorMasks(behavior, colors));
+    },
+  );
+
+  test.each([
+    ['Anything', 'signal-anything', 'anything'],
+    ['Everything', 'signal-everything', 'everything'],
+  ])(
+    'refuses a masked %s constant at its native JSON output row',
+    (_name, nativeName, wildcard) => {
+      const decoded = decodeBlueprintDeciderControlBehavior(
+        parseLosslessJson(
+          JSON.stringify({
+            decider_conditions: {
+              conditions: [
+                {
+                  first_signal: { type: 'virtual', name: 'signal-A' },
+                  comparator: '>',
+                  constant: 0,
+                },
+              ],
+              outputs: [
+                {
+                  signal: { type: 'virtual', name: nativeName },
+                  copy_count_from_input: false,
+                  constant: 7,
+                  networks: { red: true, green: false },
+                },
+              ],
+            },
+          }),
+        ),
+        { red: sourceRed, green: sourceGreen },
+      );
+      expect(decoded.state).toBe('complete');
+      if (decoded.state !== 'complete') throw new Error(decoded.diagnostics[0]?.message);
+      expect(decoded.configuration.outputs[0]).toMatchObject({
+        mode: 'constant',
+        signal: { kind: 'wildcard', value: wildcard },
+        value: 7,
+        input: { refKind: 'single', network: sourceRed },
+      });
+      expect(() =>
+        printBlueprintDeciderExpression(decoded.configuration, [sourceRed, sourceGreen]),
+      ).toThrowError('A masked constant-count Decider output cannot round-trip.');
     },
   );
 });

@@ -917,11 +917,43 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
         constantEachCandidate === undefined
           ? undefined
           : concreteCircuitConstant(constantEachCandidate);
-      if (mentionsEach && normalizedEachConstant === undefined) {
+      const constantWildcardCandidate =
+        ts.isBinaryExpression(unwrappedOutput) &&
+        unwrappedOutput.operatorToken.kind === ts.SyntaxKind.AsteriskToken
+          ? ts.isIdentifier(unwrappedOutput.left) &&
+            wildcardKind(unwrappedOutput.left.text) !== undefined
+            ? {
+                wildcard: wildcardKind(unwrappedOutput.left.text)!,
+                value: numericLiteral(unwrappedOutput.right),
+              }
+            : ts.isIdentifier(unwrappedOutput.right) &&
+                wildcardKind(unwrappedOutput.right.text) !== undefined
+              ? {
+                  wildcard: wildcardKind(unwrappedOutput.right.text)!,
+                  value: numericLiteral(unwrappedOutput.left),
+                }
+              : undefined
+          : undefined;
+      const mentionsWildcardCount =
+        ts.isBinaryExpression(unwrappedOutput) &&
+        unwrappedOutput.operatorToken.kind === ts.SyntaxKind.AsteriskToken &&
+        ((ts.isIdentifier(unwrappedOutput.left) &&
+          wildcardKind(unwrappedOutput.left.text) !== undefined) ||
+          (ts.isIdentifier(unwrappedOutput.right) &&
+            wildcardKind(unwrappedOutput.right.text) !== undefined));
+      const normalizedWildcardConstant =
+        constantWildcardCandidate?.value === undefined
+          ? undefined
+          : concreteCircuitConstant(constantWildcardCandidate.value);
+      if (
+        (mentionsEach && normalizedEachConstant === undefined) ||
+        (mentionsWildcardCount && normalizedWildcardConstant === undefined)
+      ) {
         diagnostics.push({
           code: 'CL1027',
           severity: 'error',
-          message: 'A constant EACH output must be a finite safe integer multiplied by EACH.',
+          message:
+            'A constant wildcard output must be a finite safe integer multiplied by EACH, ANYTHING, or EVERYTHING.',
           span: spanForNode(file, outputExpression),
         });
         return undefined;
@@ -948,7 +980,9 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
         return network?.kind === 'network' ? { network: network.network, wildcard } : undefined;
       })();
       const output =
-        constantEachCandidate === undefined && wildcardOutput === undefined
+        constantEachCandidate === undefined &&
+        constantWildcardCandidate === undefined &&
+        wildcardOutput === undefined
           ? lowerExpression(outputExpression, template, argumentNetworks, context)
           : undefined;
       const copyOutput =
@@ -956,6 +990,7 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
       if (
         condition === undefined ||
         (constantEachCandidate === undefined &&
+          constantWildcardCandidate === undefined &&
           wildcardOutput === undefined &&
           copyOutput === undefined)
       ) {
@@ -996,9 +1031,10 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
         return undefined;
       }
       if (
-        wildcardOutput !== undefined &&
+        (wildcardOutput !== undefined || constantWildcardCandidate !== undefined) &&
         (requestedOutputSignal !== undefined ||
-          (wildcardOutput.wildcard === 'everything' && conditionUsesEach(condition)))
+          ((wildcardOutput?.wildcard ?? constantWildcardCandidate?.wildcard) === 'everything' &&
+            conditionUsesEach(condition)))
       ) {
         diagnostics.push({
           code: 'CL1030',
@@ -1033,6 +1069,12 @@ export function compileDirectPlan(file: ParsedSourceFile): DirectPlanResult {
       let deciderOutput: DirectPlanDecider['output'];
       if (constantEachCandidate !== undefined) {
         deciderOutput = { kind: 'each-constant', value: normalizedEachConstant! };
+      } else if (constantWildcardCandidate !== undefined) {
+        deciderOutput = {
+          kind: 'wildcard-constant',
+          wildcard: constantWildcardCandidate.wildcard,
+          value: normalizedWildcardConstant!,
+        };
       } else if (wildcardOutput !== undefined) {
         deciderOutput = { kind: 'wildcard', refKind: 'single', ...wildcardOutput };
       } else if (copyOutput?.kind === 'signal') {

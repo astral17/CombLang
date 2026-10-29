@@ -508,6 +508,13 @@ describe('direct plan envelope validation', () => {
           output: { kind: 'each', refKind: 'single', network: 'input' },
           outputs: [
             { kind: 'each', refKind: 'single', network: 'input' },
+            { kind: 'wildcard-constant', wildcard: 'everything', value: -3 },
+            {
+              kind: 'wildcard-constant',
+              wildcard: 'everything',
+              value: 7,
+              input: { refKind: 'pair', networks: ['input', 'other'] },
+            },
             {
               kind: 'signal-constant',
               signal: { type: 'virtual', name: 'signal-B' },
@@ -538,7 +545,20 @@ describe('direct plan envelope validation', () => {
       ],
     };
 
-    expect(validateDirectPlanEnvelope(plan).diagnostics).toEqual([]);
+    const validated = validateDirectPlanEnvelope(plan);
+    expect(validated.diagnostics).toEqual([]);
+    const validatedProducer = validated.value?.plan.producers[0];
+    if (validatedProducer?.kind !== 'decider') throw new Error('Expected a Decider producer.');
+    expect(validatedProducer.outputs?.slice(0, 3)).toEqual([
+      { kind: 'each', refKind: 'single', network: 'input' },
+      { kind: 'wildcard-constant', wildcard: 'everything', value: -3 },
+      {
+        kind: 'wildcard-constant',
+        wildcard: 'everything',
+        value: 7,
+        input: { refKind: 'pair', networks: ['input', 'other'] },
+      },
+    ]);
   });
 
   test.each([
@@ -580,6 +600,37 @@ describe('direct plan envelope validation', () => {
         producer.outputs = [{ kind: 'each-constant', value: 2 ** 31 }];
       },
       path: '$.producers[0].outputs[0].value',
+      code: 'RT1001',
+    },
+    {
+      name: 'out-of-range wildcard constant count',
+      mutate: (producer: Record<string, unknown>) => {
+        producer.outputs = [{ kind: 'wildcard-constant', wildcard: 'anything', value: 2 ** 31 }];
+      },
+      path: '$.producers[0].outputs[0].value',
+      code: 'RT1001',
+    },
+    {
+      name: 'unknown wildcard constant input Network',
+      mutate: (producer: Record<string, unknown>) => {
+        producer.outputs = [
+          {
+            kind: 'wildcard-constant',
+            wildcard: 'anything',
+            value: 1,
+            input: { refKind: 'single', network: 'missing' },
+          },
+        ];
+      },
+      path: '$.producers[0].outputs[0].input',
+      code: 'RT1003',
+    },
+    {
+      name: 'unknown constant output wildcard',
+      mutate: (producer: Record<string, unknown>) => {
+        producer.outputs = [{ kind: 'wildcard-constant', wildcard: 'all', value: 1 }];
+      },
+      path: '$.producers[0].outputs[0].wildcard',
       code: 'RT1001',
     },
     {
@@ -852,7 +903,7 @@ describe('direct plan envelope validation', () => {
     ]);
   });
 
-  test('canonicalizes single Decider output and freezes only known payload fields', () => {
+  test('canonicalizes Decider outputs and freezes only known payload fields', () => {
     const output = { kind: 'each', refKind: 'single', network: 'input', ignored: true };
     const plan = {
       format: 'comblang-direct-plan',
@@ -900,6 +951,55 @@ describe('direct plan envelope validation', () => {
       kind: 'decider',
       output: { network: 'input' },
     });
+  });
+
+  test('canonicalizes an Anything constant row with exact optional input data', () => {
+    const result = validateDirectPlanEnvelope({
+      format: 'comblang-direct-plan',
+      networks: [
+        { name: 'input', source: span, instancePath: [] },
+        { name: 'output', source: span, instancePath: [] },
+      ],
+      producers: [
+        {
+          kind: 'decider',
+          condition: {
+            kind: 'compare-signal',
+            signal: { type: 'virtual', name: 'signal-A' },
+            comparator: '>',
+            constant: 0,
+            refKind: 'single',
+            network: 'input',
+          },
+          output: { kind: 'wildcard-constant', wildcard: 'anything', value: 7, ignored: true },
+          outputs: [
+            {
+              kind: 'wildcard-constant',
+              wildcard: 'anything',
+              value: 7,
+              input: { refKind: 'single', network: 'input' },
+              ignored: true,
+            },
+          ],
+          destinations: [{ network: 'output', source: span, instancePath: [] }],
+          source: span,
+          instancePath: [],
+        },
+      ],
+    });
+    const producer = result.value?.plan.producers[0];
+    expect(result.diagnostics).toEqual([]);
+    expect(producer?.kind).toBe('decider');
+    if (producer?.kind !== 'decider') throw new Error('Expected a Decider producer.');
+    expect(producer.outputs).toEqual([
+      {
+        kind: 'wildcard-constant',
+        wildcard: 'anything',
+        value: 7,
+        input: { refKind: 'single', network: 'input' },
+      },
+    ]);
+    expect(Object.isFrozen(producer.outputs?.[0])).toBe(true);
   });
 
   test('accepts and freezes nested debug values and related diagnostics', () => {

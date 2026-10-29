@@ -141,6 +141,12 @@ export interface DirectPlanDecider {
   readonly output:
     | ({ readonly kind: 'each' } & PlanNetworkRef)
     | { readonly kind: 'each-constant'; readonly value: number }
+    | {
+        readonly kind: 'wildcard-constant';
+        readonly wildcard: 'anything' | 'everything';
+        readonly value: number;
+        readonly input?: PlanNetworkRef;
+      }
     | { readonly kind: 'signal-constant'; readonly signal: SignalId; readonly value: number }
     | ({
         readonly kind: 'wildcard';

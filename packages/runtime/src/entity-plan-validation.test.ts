@@ -304,6 +304,79 @@ describe('canonical Entity plan validation', () => {
     });
   });
 
+  test('validates exact wildcard constant output fields and preserves an optional input ref', () => {
+    const deciderProfile: EntityProfile = {
+      ...structuredClone(syntheticZeroPortEntityProfile),
+      ref: {
+        ...syntheticZeroPortEntityProfile.ref,
+        prototypeKey: 'entity:decider-combinator',
+        profileId: 'profile:wildcard-constant-decider' as EntityProfile['ref']['profileId'],
+      },
+      prototypeType: 'decider-combinator',
+    };
+    const context = contextFor(deciderProfile);
+    const plan = planFor(context, entityFor(deciderProfile));
+    const source = sourceSpan(sourceFileId('wildcard-constant.entity.ts'), 0, 1);
+    plan.networks = [{ name: 'input', source, instancePath: [], generation: 0 }];
+    const condition = {
+      kind: 'compare-signal',
+      signal: { type: 'virtual', name: 'signal-A' },
+      comparator: '>' as const,
+      constant: 0,
+      refKind: 'single',
+      network: 'input',
+    };
+    const output = {
+      kind: 'wildcard-constant',
+      wildcard: 'anything',
+      value: 7,
+      input: { refKind: 'single', network: 'input' },
+    };
+    plan.entities[0]!.configuration = { mode: 'decider', condition, outputs: [output] };
+    plan.producers = [
+      {
+        kind: 'decider',
+        entityId: 'entity:1',
+        condition,
+        output,
+        outputs: [output],
+        destinations: [],
+        source,
+        instancePath: [],
+        outputOrigins: [
+          { branch: 'normal', ordinal: 0, source, instancePath: [], syntaxIntent: 'exact' },
+        ],
+      },
+    ];
+    const result = validatePlan(plan, context);
+    expect(result.diagnostics).toEqual([]);
+    expect(result.value?.plan.entities[0]?.configuration).toMatchObject({
+      mode: 'decider',
+      outputs: [
+        {
+          kind: 'wildcard-constant',
+          wildcard: 'anything',
+          value: 7,
+          input: { refKind: 'single', network: 'input' },
+        },
+      ],
+    });
+
+    const unexpectedField = jsonCopy(plan);
+    unexpectedField.entities[0].configuration.outputs[0].unexpected = true;
+    expect(validatePlan(unexpectedField, context).diagnostics[0]).toMatchObject({
+      code: 'RT3000',
+      message: expect.stringContaining('configuration.outputs[0].unexpected'),
+    });
+
+    const invalidWildcard = jsonCopy(plan);
+    invalidWildcard.entities[0].configuration.outputs[0].wildcard = 'all';
+    expect(validatePlan(invalidWildcard, context).diagnostics[0]).toMatchObject({
+      code: 'RT3003',
+      message: expect.stringContaining('configuration.outputs[0].wildcard'),
+    });
+  });
+
   test('rejects the removed opaque typed payload during replay', () => {
     const context = contextFor(syntheticSharedTwoColorEntityProfile);
     const result = validatePlan(

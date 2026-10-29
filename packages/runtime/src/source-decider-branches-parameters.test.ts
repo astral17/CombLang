@@ -92,6 +92,89 @@ describe('parameterized Decider branch construction', () => {
     ]);
   });
 
+  test.each(['ANYTHING', 'EVERYTHING'])(
+    'keeps direct parameter handles outside the %s constant output slot',
+    (wildcard) => {
+      const text = `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Count', 2);
+const input = new Network();
+const output = new Network();
+output += IF(input[A] > 0, amount * ${wildcard});`;
+      const compilation = compile(text);
+      const countStart = text.indexOf(`amount * ${wildcard}`);
+
+      expect(compilation.pipelineDiagnostics).toEqual([
+        expect.objectContaining({
+          code: 'RT2027',
+          span: {
+            fileId: compilation.fileId,
+            start: countStart,
+            end: countStart + `amount * ${wildcard}`.length,
+          },
+        }),
+      ]);
+      expect(compilation.resolvedCircuit).toBeUndefined();
+    },
+  );
+
+  test.each(['ANYTHING', 'EVERYTHING'])(
+    'keeps derived parameter expressions outside the %s constant output slot',
+    (wildcard) => {
+      const text = `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Count', 2);
+const derived = amount + 1;
+const input = new Network();
+const output = new Network();
+output += IF(input[A] > 0, derived * ${wildcard});`;
+      const compilation = compile(text);
+      const countStart = text.indexOf(`derived * ${wildcard}`);
+
+      expect(compilation.pipelineDiagnostics).toEqual([
+        expect.objectContaining({
+          code: 'RT2027',
+          span: {
+            fileId: compilation.fileId,
+            start: countStart,
+            end: countStart + `derived * ${wildcard}`.length,
+          },
+        }),
+      ]);
+      expect(compilation.resolvedCircuit).toBeUndefined();
+    },
+  );
+
+  test('parameter binding retains literal Anything and Everything constant rows', () => {
+    const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Threshold', 2);
+const input = new Network();
+const output = new Network();
+output += Decider({ condition: input[A] > amount, outputs: [7 * EVERYTHING, 3 * ANYTHING] });`);
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const parameter = listSourceCompilationParameters(compilation)[0]!.parameter;
+    const defaults = bindSourceCompilationCircuit(compilation);
+    const bound = bindSourceCompilationCircuit(compilation, [{ parameter, value: 5 }]);
+    expect(defaults.plan.producers).toMatchObject([
+      {
+        kind: 'decider',
+        condition: { constant: 2 },
+        outputs: [
+          { kind: 'wildcard-constant', wildcard: 'everything', value: 7 },
+          { kind: 'wildcard-constant', wildcard: 'anything', value: 3 },
+        ],
+      },
+    ]);
+    expect(bound.plan.producers).toMatchObject([
+      {
+        kind: 'decider',
+        condition: { constant: 5 },
+        outputs: [
+          { kind: 'wildcard-constant', wildcard: 'everything', value: 7 },
+          { kind: 'wildcard-constant', wildcard: 'anything', value: 3 },
+        ],
+      },
+    ]);
+  });
+
   test('captures late fluent branches after attachment and placement, with one producer and one source execution', () => {
     const counterKey = '__comblang_parameterized_decider_source_runs';
     const globals = globalThis as Record<string, unknown>;

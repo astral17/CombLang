@@ -763,6 +763,51 @@ output += exact;`,
     expect(structuredClone(response)).toEqual(response);
   });
 
+  test('transports Anything and Everything constant Decider rows through the Worker plan', async () => {
+    const host = exactDeciderHostContext();
+    const response = await new CompilerWorkerRuntime({
+      resolveEntityReplayContext: () => host,
+    }).handle({
+      kind: 'parse',
+      revision: 26,
+      file: {
+        path: 'worker-wildcard-constant.factorio.ts',
+        text: `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const exact: DeciderCombinator = Decider({
+  condition: Anything(input) > 0,
+  outputs: [7 * ANYTHING, 2 * ANY, Anything(input), 5 * EVERYTHING, Everything(input)],
+  elseOutputs: [-3 * ANYTHING, Anything(input), -5 * EVERYTHING, Everything(input)],
+});
+const output = new Network();
+output += exact;`,
+      },
+      entityReplayContext: host.entityReplayContext,
+    });
+
+    expect(response.result.compilerDiagnostics).toEqual([]);
+    expect(response.result.plan?.producers).toMatchObject([
+      {
+        kind: 'decider',
+        outputs: [
+          { kind: 'wildcard-constant', wildcard: 'anything', value: 7 },
+          { kind: 'wildcard-constant', wildcard: 'anything', value: 2 },
+          { kind: 'wildcard', wildcard: 'anything', refKind: 'single' },
+          { kind: 'wildcard-constant', wildcard: 'everything', value: 5 },
+          { kind: 'wildcard', wildcard: 'everything', refKind: 'single' },
+        ],
+        elseOutputs: [
+          { kind: 'wildcard-constant', wildcard: 'anything', value: -3 },
+          { kind: 'wildcard', wildcard: 'anything', refKind: 'single' },
+          { kind: 'wildcard-constant', wildcard: 'everything', value: -5 },
+          { kind: 'wildcard', wildcard: 'everything', refKind: 'single' },
+        ],
+      },
+    ]);
+    expect(response.result.resolvedCircuit?.ir.entities).toHaveLength(1);
+    expect(structuredClone(response)).toEqual(response);
+  });
+
   test('transports a linked exact Selector as profile-free v7 data', async () => {
     const host = exactSelectorHostContext();
     const runtime = new CompilerWorkerRuntime({

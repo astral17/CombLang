@@ -328,6 +328,16 @@ function validateDeciderOutput(
     return isCircuitValue(value.value)
       ? undefined
       : payloadFailure(`${path}.value`, 'expected a signed int32 circuit value.', span);
+  if (value.kind === 'wildcard-constant') {
+    if (value.wildcard !== 'anything' && value.wildcard !== 'everything')
+      return payloadFailure(`${path}.wildcard`, 'unknown Decider wildcard.', span);
+    if (!isCircuitValue(value.value))
+      return payloadFailure(`${path}.value`, 'expected a signed int32 circuit value.', span);
+    if (!Object.hasOwn(value, 'input')) return undefined;
+    if (!isRecord(value.input))
+      return payloadFailure(`${path}.input`, 'expected a Network reference.', span);
+    return validateNetworkRef(value.input, `${path}.input`, declarations, span);
+  }
   if (value.kind === 'signal-constant') {
     if (!isSignalId(value.signal))
       return payloadFailure(`${path}.signal`, 'expected a valid SignalID.', span);
@@ -759,6 +769,15 @@ function canonicalDeciderOutput(value: unknown): PlanDeciderOutput {
   const output = value as Record<string, unknown>;
   if (output.kind === 'each-constant')
     return Object.freeze({ kind: 'each-constant', value: output.value as number });
+  if (output.kind === 'wildcard-constant')
+    return Object.freeze({
+      kind: 'wildcard-constant',
+      wildcard: output.wildcard as 'anything' | 'everything',
+      value: output.value as number,
+      ...(output.input === undefined
+        ? {}
+        : { input: canonicalNetworkRef(output.input as Record<string, unknown>) }),
+    });
   if (output.kind === 'signal-constant')
     return Object.freeze({
       kind: 'signal-constant',

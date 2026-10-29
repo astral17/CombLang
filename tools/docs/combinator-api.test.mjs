@@ -463,7 +463,7 @@ describe('combinator API documentation', () => {
     ],
     ['no fluent branch', 'when(input[A] > 0)', 'RT2022'],
     ['empty then', 'when(input[A] > 0).then()', 'CL1014'],
-    ['Any constant output', 'IF(input[A] > 0, 1 * ANY)', 'EX1001'],
+    ['Everything output with Each condition', 'IF(Each(input) > 0, Everything(input))', 'RT2027'],
     ['mixed Section and row', 'CC(Section(1 * A), 2 * A)', 'RT2027'],
     ['right Section multiplier', 'CC(Section(1 * A) * 0.5)', 'EX1001'],
     ['repeated Section multiplier', 'CC(3 * (0.5 * Section(1 * A)))', 'EX1001'],

@@ -597,23 +597,39 @@ describe('canonical blueprint full-source assembly', () => {
         suffix: '.outputs[0]',
       },
       {
-        label: 'empty explicit else branch',
-        behavior: { ...base, else_outputs: [] },
-        suffix: '.else_outputs',
+        label: 'masked Everything constant output',
+        behavior: {
+          ...base,
+          outputs: [
+            {
+              signal: { type: 'virtual', name: 'signal-everything' },
+              copy_count_from_input: false,
+              constant: 7,
+              networks: { red: true, green: false },
+            },
+          ],
+        },
+        suffix: '.outputs[0]',
       },
       {
-        label: 'constant wildcard output',
+        label: 'masked Anything constant output',
         behavior: {
           ...base,
           outputs: [
             {
               signal: { type: 'virtual', name: 'signal-anything' },
               copy_count_from_input: false,
-              constant: 1,
+              constant: 7,
+              networks: { red: true, green: false },
             },
           ],
         },
-        suffix: '.outputs[0].signal',
+        suffix: '.outputs[0]',
+      },
+      {
+        label: 'empty explicit else branch',
+        behavior: { ...base, else_outputs: [] },
+        suffix: '.else_outputs',
       },
       {
         label: 'no output rows',

@@ -553,16 +553,6 @@ function deciderRepresentabilityRefusal(
           message: 'A masked constant-count Decider output cannot round-trip.',
         };
       }
-      if (
-        row.mode === 'constant' &&
-        row.signal.kind === 'wildcard' &&
-        row.signal.value !== 'each'
-      ) {
-        return {
-          path: `${path}.signal`,
-          message: 'Only EACH supports a constant-count Decider output.',
-        };
-      }
       if (row.mode === 'constant' && Object.is(row.value, -0)) {
         return {
           path: `${path}.constant`,

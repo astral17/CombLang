@@ -983,6 +983,342 @@ const output = new Network();
     );
   });
 
+  test('constructs Everything constants by default and keeps explicit Everything copy inputs', () => {
+    const source = `const red = new Network<R>();
+const green = new Network<G>();
+const inputs = pair(red, green);
+const output = new Network();
+output += IF(Anything(inputs) > 0,
+  [7 * EVERYTHING, Everything(inputs)],
+  [-3 * EVERYTHING, All(inputs)]);`;
+    const plan = exactPlan(source);
+    expect(plan.producers).toHaveLength(1);
+    expect(plan.entities).toHaveLength(1);
+    const producer = plan.producers[0];
+    if (producer?.kind !== 'decider') throw new Error('Expected one Decider producer.');
+    const pair = plan.networkPairs?.[0];
+    if (pair === undefined) throw new Error('Expected an explicit input Network pair.');
+    const [red, green] = pair.networks;
+    expect(producer.outputs).toEqual([
+      { kind: 'wildcard-constant', wildcard: 'everything', value: 7 },
+      {
+        kind: 'wildcard',
+        wildcard: 'everything',
+        refKind: 'pair',
+        networks: [red, green],
+      },
+    ]);
+    expect(producer.elseOutputs).toEqual([
+      { kind: 'wildcard-constant', wildcard: 'everything', value: -3 },
+      {
+        kind: 'wildcard',
+        wildcard: 'everything',
+        refKind: 'pair',
+        networks: [red, green],
+      },
+    ]);
+
+    const environment = exactEnvironment();
+    const lowered = tryElaborateDirectPlan(plan, environment.context);
+    expect(lowered.diagnostics).toEqual([]);
+    const ir = lowered.execution?.circuit.ir;
+    expect(ir?.producers).toHaveLength(1);
+    expect(ir?.entities).toHaveLength(1);
+    const logical = ir?.producers[0];
+    if (logical?.kind !== 'decider') throw new Error('Expected one lowered Decider.');
+    expect(logical.config.outputs).toMatchObject([
+      {
+        mode: 'constant',
+        signal: { kind: 'wildcard', value: 'everything' },
+        value: 7,
+      },
+      {
+        mode: 'copy',
+        signal: { kind: 'wildcard', value: 'everything' },
+        input: { refKind: 'pair', networks: [expect.any(String), expect.any(String)] },
+      },
+    ]);
+    expect(logical.config.elseOutputs).toMatchObject([
+      {
+        mode: 'constant',
+        signal: { kind: 'wildcard', value: 'everything' },
+        value: -3,
+      },
+      {
+        mode: 'copy',
+        signal: { kind: 'wildcard', value: 'everything' },
+        input: { refKind: 'pair', networks: [expect.any(String), expect.any(String)] },
+      },
+    ]);
+    const physical = generateBlueprintJson(ir!).blueprint.entities[0]?.control_behavior as {
+      decider_conditions: {
+        outputs: readonly Record<string, unknown>[];
+        else_outputs: readonly Record<string, unknown>[];
+      };
+    };
+    expect(physical.decider_conditions.outputs).toHaveLength(2);
+    expect(physical.decider_conditions.else_outputs).toHaveLength(2);
+    expect(physical.decider_conditions.outputs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          signal: { type: 'virtual', name: 'signal-everything' },
+          copy_count_from_input: false,
+          constant: 7,
+        }),
+        expect.objectContaining({
+          signal: { type: 'virtual', name: 'signal-everything' },
+          copy_count_from_input: true,
+        }),
+      ]),
+    );
+  });
+
+  test('constructs Anything constant and copy rows for computed counts, aliases, and ELSE', () => {
+    const source = `const red = new Network<R>();
+const green = new Network<G>();
+const inputs = pair(red, green);
+const count = 2 + 5;
+const output = new Network();
+output += IF(Anything(inputs) > 0,
+  [count * ANYTHING, 3 * ANY, Anything(inputs)],
+  [-2 * ANYTHING, Any(inputs)]);`;
+    const plan = exactPlan(source);
+    expect(plan.producers).toHaveLength(1);
+    expect(plan.entities).toHaveLength(1);
+    const producer = plan.producers[0];
+    if (producer?.kind !== 'decider') throw new Error('Expected one Decider producer.');
+    const pair = plan.networkPairs?.[0];
+    if (pair === undefined) throw new Error('Expected an explicit input Network pair.');
+    const [red, green] = pair.networks;
+    expect(producer.outputs).toEqual([
+      { kind: 'wildcard-constant', wildcard: 'anything', value: 7 },
+      { kind: 'wildcard-constant', wildcard: 'anything', value: 3 },
+      {
+        kind: 'wildcard',
+        wildcard: 'anything',
+        refKind: 'pair',
+        networks: [red, green],
+      },
+    ]);
+    expect(producer.elseOutputs).toEqual([
+      { kind: 'wildcard-constant', wildcard: 'anything', value: -2 },
+      {
+        kind: 'wildcard',
+        wildcard: 'anything',
+        refKind: 'pair',
+        networks: [red, green],
+      },
+    ]);
+    expect(plan.producers.map(({ kind }) => kind)).toEqual(['decider']);
+    expect(plan.entities).toHaveLength(1);
+
+    const lowered = tryElaborateDirectPlan(plan, exactEnvironment().context);
+    expect(lowered.diagnostics).toEqual([]);
+    const logical = lowered.execution?.circuit.ir.producers[0];
+    if (logical?.kind !== 'decider') throw new Error('Expected a lowered Decider.');
+    expect(logical.config.outputs.slice(0, 2)).toEqual([
+      {
+        mode: 'constant',
+        signal: { kind: 'wildcard', value: 'anything' },
+        value: 7,
+      },
+      {
+        mode: 'constant',
+        signal: { kind: 'wildcard', value: 'anything' },
+        value: 3,
+      },
+    ]);
+    expect(logical.config.elseOutputs?.[0]).toEqual({
+      mode: 'constant',
+      signal: { kind: 'wildcard', value: 'anything' },
+      value: -2,
+    });
+    expect(generateBlueprintJson(lowered.execution!.circuit.ir).blueprint.entities).toHaveLength(1);
+  });
+
+  test('constructs Anything constant rows through the fluent when builder', () => {
+    const source = `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const gate = when(input[A] > 0).then(2 * ANYTHING).else(3 * ANY);
+const output = new Network();
+output += gate;`;
+    const plan = exactPlan(source);
+    const producer = plan.producers[0];
+    if (producer?.kind !== 'decider') throw new Error('Expected a fluent Decider.');
+    expect(producer.outputs).toEqual([
+      { kind: 'wildcard-constant', wildcard: 'anything', value: 2 },
+    ]);
+    expect(producer.elseOutputs).toEqual([
+      { kind: 'wildcard-constant', wildcard: 'anything', value: 3 },
+    ]);
+    expect(plan.entities).toHaveLength(1);
+  });
+
+  test('captures Anything constant rows appended through a late fluent alias', () => {
+    const source = `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const gate = when(input[A] > 0).then(input[A]);
+const output = new Network();
+output += gate;
+const alias = gate;
+alias.then(7 * ANYTHING);
+alias.else(-2 * ANY);`;
+    const result = compileSourceProgram({ path: sourceFile, text: source }, exactEnvironment());
+    expect(result.pipelineDiagnostics).toEqual([]);
+    const producer = result.plan?.producers[0];
+    if (producer?.kind !== 'decider') throw new Error('Expected a fluent Decider.');
+    expect(producer.outputs).toMatchObject([
+      { kind: 'signal', signal: { type: 'virtual', name: 'signal-A' } },
+      { kind: 'wildcard-constant', wildcard: 'anything', value: 7 },
+    ]);
+    expect(producer.elseOutputs).toEqual([
+      { kind: 'wildcard-constant', wildcard: 'anything', value: -2 },
+    ]);
+    expect(result.plan?.entities).toHaveLength(1);
+  });
+
+  test('constructs Anything constant rows through exact Decider configuration', () => {
+    const source = `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const exact: DeciderCombinator = Decider({
+  condition: input[A] > 0,
+  outputs: [2 * ANYTHING],
+  elseOutputs: [3 * ANY],
+});
+const output = new Network();
+output += exact;`;
+    const plan = exactPlan(source);
+    const producer = plan.producers[0];
+    if (producer?.kind !== 'decider') throw new Error('Expected an exact Decider.');
+    expect(producer.outputs).toEqual([
+      { kind: 'wildcard-constant', wildcard: 'anything', value: 2 },
+    ]);
+    expect(producer.elseOutputs).toEqual([
+      { kind: 'wildcard-constant', wildcard: 'anything', value: 3 },
+    ]);
+    expect(plan.entities).toHaveLength(1);
+  });
+
+  test('normalizes safe-integer Anything counts and permits them with Each conditions', () => {
+    const source = `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output = new Network();
+output += IF(Each(input) > 0, 2147483648 * ANYTHING);`;
+    const plan = exactPlan(source);
+    const producer = plan.producers[0];
+    if (producer?.kind !== 'decider') throw new Error('Expected a Decider producer.');
+    expect(producer.outputs).toEqual([
+      { kind: 'wildcard-constant', wildcard: 'anything', value: -(2 ** 31) },
+    ]);
+  });
+
+  test.each([
+    ['Anything selector multiplication', '7 * Anything(input)'],
+    ['Any alias multiplication', '7 * Any(input)'],
+    ['Everything selector multiplication', '7 * Everything(input)'],
+    ['All pair multiplication', '7 * All(inputs)'],
+    ['reversed Anything selector multiplication', 'Anything(input) * 7'],
+    ['reversed Any pair multiplication', 'Any(inputs) * 7'],
+    ['reversed Everything selector multiplication', 'Everything(input) * 7'],
+    ['reversed All pair multiplication', 'All(inputs) * 7'],
+  ])('keeps %s outside Decider output syntax', (_name, expression) => {
+    const parsed = parseFile({
+      path: 'everything-selected-arithmetic.factorio.ts',
+      text: `const red = new Network<R>();
+const green = new Network<G>();
+const inputs = pair(red, green);
+const input = new Network();
+const output = new Network();
+output += IF(Anything(input) > 0, ${expression});`,
+    });
+    expect(() =>
+      executeElaborationProgram(transformElaborationModule(parsed), exactEnvironment()),
+    ).toThrowError('Anything/Everything cannot be arithmetic operands.');
+  });
+
+  test('normalizes safe-integer Everything counts through signed int32', () => {
+    const source = `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output = new Network();
+output += IF(input[A] > 0, 2147483648 * EVERYTHING);`;
+    const producer = exactPlan(source).producers[0];
+    if (producer?.kind !== 'decider') throw new Error('Expected a Decider producer.');
+    expect(producer.outputs).toEqual([
+      { kind: 'wildcard-constant', wildcard: 'everything', value: -(2 ** 31) },
+    ]);
+  });
+
+  test('constructs Everything constants through the fluent when builder', () => {
+    const source = `const red = new Network<R>();
+const green = new Network<G>();
+const inputs = pair(red, green);
+const gate = when(Anything(inputs) > 0)
+  .then(7 * EVERYTHING, Everything(inputs))
+  .else(-3 * EVERYTHING, All(inputs));
+const output = new Network();
+output += gate;`;
+    const plan = exactPlan(source);
+    expect(plan.producers).toHaveLength(1);
+    const producer = plan.producers[0];
+    if (producer?.kind !== 'decider') throw new Error('Expected one fluent Decider.');
+    expect(producer.outputs).toMatchObject([
+      { kind: 'wildcard-constant', wildcard: 'everything', value: 7 },
+      { kind: 'wildcard', wildcard: 'everything' },
+    ]);
+    expect(producer.elseOutputs).toMatchObject([
+      { kind: 'wildcard-constant', wildcard: 'everything', value: -3 },
+      { kind: 'wildcard', wildcard: 'everything' },
+    ]);
+    expect(plan.entities).toHaveLength(1);
+  });
+
+  test('rejects an Everything constant row when a final fluent alias condition uses Each', () => {
+    const source = `const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const gate = when(Each(input) > 0).then(input[A]);
+const alias = gate;
+const output = new Network();
+output += alias;
+alias.else(1 * EVERYTHING);`;
+    const result = compileSourceProgram({ path: sourceFile, text: source }, exactEnvironment());
+    const rowStart = source.indexOf('1 * EVERYTHING');
+
+    expect(result.plan).toBeUndefined();
+    expect(result.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'RT2027',
+        message: expect.stringContaining(
+          'A Decider Everything output is invalid when the final condition set uses Each.',
+        ),
+        span: { fileId: sourceFileId(sourceFile), start: rowStart, end: rowStart + 14 },
+      }),
+    ]);
+  });
+
+  test('rejects an Everything constant row in the normal branch with an Each condition', () => {
+    const source = `const input = new Network();
+const exact = Decider({ condition: Each(input) > 0, outputs: [1 * EVERYTHING] });
+const output = new Network();
+output += exact;`;
+    const result = compileSourceProgram({ path: sourceFile, text: source }, exactEnvironment());
+    const rowStart = source.indexOf('1 * EVERYTHING');
+
+    expect(result.plan).toBeUndefined();
+    expect(result.pipelineDiagnostics).toEqual([
+      expect.objectContaining({
+        code: 'RT2027',
+        message: expect.stringContaining(
+          'A Decider Everything output is invalid when the final condition set uses Each.',
+        ),
+        span: {
+          fileId: sourceFileId(sourceFile),
+          start: source.lastIndexOf('[', rowStart),
+          end: source.indexOf(']', rowStart) + 1,
+        },
+      }),
+    ]);
+  });
+
   test('retains branch, ordinal, span, and nested loop provenance for generated exact rows', () => {
     const source = `const A = Signal('virtual', 'signal-A');
 const input = new Network();

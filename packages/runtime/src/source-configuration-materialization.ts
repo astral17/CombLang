@@ -152,6 +152,28 @@ function materializeDeciderOutput(
     }
     return { ...planned, value: concrete.value };
   }
+  if (planned.kind === 'wildcard-constant') {
+    const sameInput =
+      planned.input === undefined
+        ? concrete.input === undefined
+        : concrete.input !== undefined &&
+          planned.input.refKind === concrete.input.refKind &&
+          (planned.input.refKind === 'single' && concrete.input.refKind === 'single'
+            ? planned.input.network === concrete.input.network
+            : planned.input.refKind === 'pair' &&
+              concrete.input.refKind === 'pair' &&
+              planned.input.networks[0] === concrete.input.networks[0] &&
+              planned.input.networks[1] === concrete.input.networks[1]);
+    if (
+      concrete.mode !== 'constant' ||
+      concrete.signal.kind !== 'wildcard' ||
+      concrete.signal.value !== planned.wildcard ||
+      !sameInput
+    ) {
+      return pairMaterializationFailure();
+    }
+    return { ...planned, value: concrete.value };
+  }
   if (planned.kind === 'signal-constant') {
     if (concrete.mode !== 'constant' || concrete.signal.kind !== 'signal') {
       return pairMaterializationFailure();

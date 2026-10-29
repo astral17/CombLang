@@ -219,6 +219,30 @@ output += gate;`,
     });
   });
 
+  test('executes Anything and Everything constant and copy rows through the CLI test runner', async () => {
+    const { prototypes } = await deciderPrototypeProvider();
+    const [source, tests] = await circuitTestFiles(
+      `const A = Signal('virtual', 'signal-A');
+const input: Network = CC(5 * A);
+const output = new Network();
+output += IF(Anything(input) > 0, [3 * ANYTHING, 7 * EVERYTHING, Anything(input), Everything(input)]);`,
+      `test('wildcard constant and copy rows add for one selected candidate', ({ network, tick, expectSignal }) => {
+  tick(2);
+  expectSignal(network('output'), Signal('virtual', 'signal-A')).toBe(20);
+});`,
+    );
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const exitCode = await run(['test', '--json', source, tests], { prototypes });
+    expect({ exitCode, report: JSON.parse(String(log.mock.calls[0]?.[0])) }).toMatchObject({
+      exitCode: 0,
+      report: {
+        diagnostics: [],
+        tests: { passed: 1, failed: 0, results: [{ status: 'passed' }] },
+      },
+    });
+  });
+
   test('rejects an unbound provider replay context before CLI source execution', async () => {
     const path = await sourceFile(`throw new Error('source executed');`);
     const { prototypes } = await loadPrototypeDatabase(syntheticPrototypeDatabase());

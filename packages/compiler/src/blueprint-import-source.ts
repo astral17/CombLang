@@ -812,18 +812,25 @@ function appendDeciderOutput(
     assertRecordKeys(
       record,
       'Decider constant output',
-      ['mode', 'signal', 'value'],
+      ['mode', 'signal', 'value', 'input'],
       ['mode', 'signal', 'value'],
     );
     const signal = readDeciderOutputSignal(dataProperty(record, 'signal'));
-    if (signal.kind === 'wildcard' && signal.value !== 'each') {
-      throw new TypeError('Only EACH supports a constant-count Decider output.');
+    if (Object.hasOwn(record, 'input')) {
+      throw new TypeError('A masked constant-count Decider output cannot round-trip.');
     }
     builder.append('(');
     appendDeciderInt32(builder, dataProperty(record, 'value'), 'Decider output count');
     builder.append(' * ');
-    if (signal.kind === 'signal') appendSignal(builder, signal.signal);
-    else builder.append('EACH');
+    if (signal.kind === 'signal') {
+      appendSignal(builder, signal.signal);
+    } else if (signal.value === 'each') {
+      builder.append('EACH');
+    } else if (signal.value === 'everything') {
+      builder.append('EVERYTHING');
+    } else {
+      builder.append('ANYTHING');
+    }
     builder.append(')');
     return;
   }

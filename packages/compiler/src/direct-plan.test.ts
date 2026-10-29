@@ -670,6 +670,36 @@ const output: Network = IF(input > 0, 2147483648 * EACH);`,
     );
   });
 
+  test('lowers constant Anything and Everything output rows without arithmetic producers', () => {
+    const parsed = parseFile({
+      path: 'constant-wildcard-output.factorio.ts',
+      text: `const A = Signal("virtual", "signal-A");
+const input = new Network();
+const anything: Network = IF(input[A] > 0, 7 * ANYTHING);
+const alias: Network = IF(input[A] > 0, 2 * ANY);
+const everything: Network = IF(input[A] > 0, 2147483648 * EVERYTHING);
+const eachAnything: Network = IF(input > 0, 3 * ANYTHING);`,
+    });
+    const result = compileDirectPlan(parsed);
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.plan?.producers.map(({ kind }) => kind)).toEqual([
+      'decider',
+      'decider',
+      'decider',
+      'decider',
+    ]);
+    expect(result.plan?.producers).toMatchObject([
+      { output: { kind: 'wildcard-constant', wildcard: 'anything', value: 7 } },
+      { output: { kind: 'wildcard-constant', wildcard: 'anything', value: 2 } },
+      { output: { kind: 'wildcard-constant', wildcard: 'everything', value: -(2 ** 31) } },
+      {
+        condition: { kind: 'compare-each' },
+        output: { kind: 'wildcard-constant', wildcard: 'anything', value: 3 },
+      },
+    ]);
+  });
+
   test('accepts explicit Each(network) and network[EACH] selections', () => {
     const parsed = parseFile({
       path: 'explicit-each.factorio.ts',

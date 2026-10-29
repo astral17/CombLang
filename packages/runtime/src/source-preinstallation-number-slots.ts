@@ -509,6 +509,7 @@ function addTemplateOutput(
 function addDeciderOutput(traversal: ProducerTraversal, output: DeciderOutput, path: string): void {
   switch (output.kind) {
     case 'each-constant':
+    case 'wildcard-constant':
     case 'signal-constant':
       pushSlot(traversal, 'decider', 'output-value', 'int32', `${path}.value`, output.value, 1);
       return;
