@@ -301,16 +301,21 @@ existing color solver selects the shared red/green lane:
 
 ```ts
 const input = new Network();
-const output = new Network();
+const second = new Network();
 const machine = Entity('assembling-machine-3');
-output += machine(input);
+const result = machine(input, second);
+input += result;
+second += result;
 ```
 
-This creates one physical Entity. Distinct input/output Networks use opposite
-wire colors; naming the same Network for both roles preserves both roles on one
-lane. No `.bind` call, hidden combinator, or default-readable input projection is
-added. This does not simulate crafting, recipes, or machine output, and it does
-not add multi-argument calls.
+This creates one physical Entity. The authorized shared connector accepts one or
+more readable Networks in that call; repeated aliases of the same resolved
+Network are idempotent, and capacity is two distinct resolved Networks after
+transfers. Distinct Networks use opposite wire colors; outputs may reuse either
+input while preserving both roles. No `.bind` call, hidden combinator, or
+default-readable input projection is added. This does not simulate crafting,
+recipes, or machine output. Fixed callable profiles retain their one-argument
+contract.
 
 `machine.port(connector, lane)` selects an explicit connector lane. The exact
 four-argument `machine.bind(connector, lane, network, direction)` form binds

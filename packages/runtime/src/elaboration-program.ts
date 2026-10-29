@@ -484,6 +484,7 @@ interface NetworkOwnershipSnapshot {
 interface TopologySnapshot {
   readonly networks: DirectElaborationPlan['networks'];
   readonly networkStates: ReadonlyMap<string, NetworkRuntimeState>;
+  readonly networkValues: ReadonlyMap<string, NetworkValue>;
   readonly networkNameCounts: ReadonlyMap<string, number>;
   readonly networkAliases: ReadonlyMap<string, PendingNetworkAlias>;
   readonly networkTransfersLength: number;
@@ -533,6 +534,7 @@ interface EntitySharedAttachmentAuthority {
   readonly direction: 'input' | 'output';
   readonly provenance: EntityConnectorBindingProvenance;
   readonly source: SourceSpan;
+  readonly logicalNetwork: NetworkValue;
   network: NetworkValue;
   locallyOwned: boolean;
 }
@@ -677,6 +679,7 @@ class ElaborationRecorder {
   readonly #fileId: SourceFileId;
   readonly #networks: DirectElaborationPlan['networks'][number][] = [];
   readonly #networkStates = new Map<string, NetworkRuntimeState>();
+  readonly #networkValues = new Map<string, NetworkValue>();
   readonly #networkTransfers: NonNullable<DirectElaborationPlan['networkTransfers']>[number][] = [];
   readonly #networkAliases = new Map<string, PendingNetworkAlias>();
   readonly #transparentNetworkParameters = new WeakMap<
@@ -3660,41 +3663,56 @@ class ElaborationRecorder {
           'RT2027',
         );
       }
-      if (args.length !== 1) {
+      const sharedConnector = profile.sharedCallConnector;
+      if (sharedConnector === undefined ? args.length !== 1 : args.length === 0) {
         throw new ElaborationExecutionError(
-          'Callable Entity invocation requires exactly one argument.',
+          sharedConnector === undefined
+            ? 'Callable Entity invocation requires exactly one argument.'
+            : 'Shared-call Entity invocation requires at least one input argument.',
           source,
           'RT2027',
         );
       }
-      const argument = args[0]!;
-      const readable = this.#readableNetworkFacet(argument.value, argument.source);
-      if (readable === undefined) {
-        throw new ElaborationExecutionError(
-          'Callable Entity input requires a readable Network or Producer output.',
-          this.#span(argument.source),
-          'RT2015',
+      if (sharedConnector === undefined) {
+        const argument = args[0]!;
+        const readable = this.#readableNetworkFacet(argument.value, argument.source);
+        if (readable === undefined) {
+          throw new ElaborationExecutionError(
+            'Callable Entity input requires a readable Network or Producer output.',
+            this.#span(argument.source),
+            'RT2015',
+          );
+        }
+        const result = this.#bindEntity(
+          entity,
+          profile.callProjection!.input.connector,
+          profile.callProjection!.input.lane,
+          readable,
+          'input',
+          rawSpan,
+        );
+        this.#entityInvocations.set(entity.id, source);
+        return result;
+      }
+      for (const argument of args) {
+        const readable = this.#readableNetworkFacet(argument.value, argument.source);
+        if (readable === undefined) {
+          throw new ElaborationExecutionError(
+            'Callable Entity input requires a readable Network or Producer output.',
+            this.#span(argument.source),
+            'RT2015',
+          );
+        }
+        this.#attachSharedEntity(
+          entity,
+          sharedConnector,
+          readable,
+          'input',
+          this.#rawSpan(argument.source),
         );
       }
-      const result =
-        profile.sharedCallConnector === undefined
-          ? this.#bindEntity(
-              entity,
-              profile.callProjection!.input.connector,
-              profile.callProjection!.input.lane,
-              readable,
-              'input',
-              rawSpan,
-            )
-          : this.#attachSharedEntity(
-              entity,
-              profile.sharedCallConnector,
-              readable,
-              'input',
-              rawSpan,
-            );
       this.#entityInvocations.set(entity.id, source);
-      return result;
+      return entity;
     });
   }
 
@@ -3822,19 +3840,6 @@ class ElaborationRecorder {
       }
       return authority.entity;
     }
-    if (direction === 'input') {
-      const previousInput = authority.sharedAttachments.find(
-        (attachment) => attachment.connector === connectorKey && attachment.direction === 'input',
-      );
-      if (previousInput !== undefined) {
-        throw new ElaborationExecutionError(
-          'A shared-call Entity connector accepts only one input Network.',
-          source,
-          'RT2030',
-          [{ message: 'The first Entity input originates here.', span: previousInput.source }],
-        );
-      }
-    }
     const frame = this.#currentFunctionFrame();
     const locallyOwned =
       frame !== undefined &&
@@ -3858,6 +3863,7 @@ class ElaborationRecorder {
       direction,
       provenance: this.#entityBindingProvenance(rawSpan),
       source,
+      logicalNetwork: network,
       network: attachmentNetwork,
       locallyOwned,
     });
@@ -5297,6 +5303,7 @@ class ElaborationRecorder {
       // Color requirements replace existing declarations as well as adding Networks.
       networks: [...this.#networks],
       networkStates: new Map(this.#networkStates),
+      networkValues: new Map(this.#networkValues),
       networkNameCounts: new Map(this.#networkNameCounts),
       networkAliases: new Map(this.#networkAliases),
       networkTransfersLength: this.#networkTransfers.length,
@@ -5340,6 +5347,8 @@ class ElaborationRecorder {
     this.#networkTransfers.length = snapshot.networkTransfersLength;
     this.#networkStates.clear();
     for (const [name, state] of snapshot.networkStates) this.#networkStates.set(name, state);
+    this.#networkValues.clear();
+    for (const [name, value] of snapshot.networkValues) this.#networkValues.set(name, value);
     this.#networkNameCounts.clear();
     for (const [name, count] of snapshot.networkNameCounts)
       this.#networkNameCounts.set(name, count);
@@ -5453,6 +5462,7 @@ class ElaborationRecorder {
 
   #networkValue<T extends NetworkValue>(value: T, state: NetworkRuntimeState): T {
     this.#networkStates.set(value.name, state);
+    if (value.capability === 'owned') this.#networkValues.set(value.name, value);
     return this.#runtimeValues.brandNetwork(value, state);
   }
 
@@ -5617,6 +5627,7 @@ class ElaborationRecorder {
   ): void {
     const authority = this.#entityAuthority(entity, source);
     if (frame === undefined || authority.owner !== frame.owner) return;
+    this.#rebaseTransferredSharedAttachments(authority, frame);
     for (const facet of authority.facets.values()) {
       if (facet.locallyOwned && facet.network.capability === 'ref') {
         throw new ElaborationExecutionError(
@@ -5724,7 +5735,13 @@ class ElaborationRecorder {
             },
             { ownership: this.#networkState(attachment.network).ownership },
           );
-      returnedAuthority.sharedAttachments.push({ ...attachment, network });
+      const logicalNetwork =
+        attachment.locallyOwned &&
+        this.#networkState(attachment.logicalNetwork).ownership ===
+          this.#networkState(attachment.network).ownership
+          ? network
+          : attachment.logicalNetwork;
+      returnedAuthority.sharedAttachments.push({ ...attachment, logicalNetwork, network });
     }
     authority.owner = 'retired';
     authority.retiredAt = source;
@@ -5733,6 +5750,48 @@ class ElaborationRecorder {
     this.#syncEntityBindings(returnedAuthority);
     this.#syncEntitySharedAttachments(returnedAuthority);
     return returnedEntity;
+  }
+
+  #rebaseTransferredSharedAttachments(
+    authority: EntityAuthorityView,
+    frame: FunctionOwnershipFrame,
+  ): void {
+    for (const attachment of authority.sharedAttachments) {
+      if (!attachment.locallyOwned) continue;
+      const logicalState = this.#networkState(attachment.logicalNetwork);
+      if (
+        logicalState.ownership.consumedAt === undefined ||
+        attachment.logicalNetwork.generation !== logicalState.ownership.generation
+      ) {
+        continue;
+      }
+      const target = this.#transferredNetworkTarget(attachment.logicalNetwork.name);
+      if (target === undefined) continue;
+      const targetState = this.#networkState(target);
+      if (
+        targetState.ownership.consumedAt !== undefined ||
+        targetState.ownership.owner !== frame.owner
+      ) {
+        continue;
+      }
+      attachment.network = target;
+    }
+  }
+
+  #transferredNetworkTarget(sourceName: string): NetworkValue | undefined {
+    let name = sourceName;
+    let moved = false;
+    const visited = new Set<string>();
+    while (true) {
+      if (visited.has(name)) return undefined;
+      visited.add(name);
+      const transfer = this.#networkTransfers.findLast((candidate) => candidate.source === name);
+      if (transfer === undefined) break;
+      moved = true;
+      name = transfer.destination;
+    }
+    if (!moved) return undefined;
+    return this.#networkValues.get(name);
   }
 
   #combinatorHandle(
@@ -7282,10 +7341,10 @@ class ElaborationRecorder {
   #syncEntitySharedAttachments(authority: EntityAuthorityView): void {
     this.#entityRegistry?.replaceSharedConnectorAttachments(
       authority.entity,
-      authority.sharedAttachments.map(({ connector, network, direction, provenance }) => ({
+      authority.sharedAttachments.map(({ connector, logicalNetwork, direction, provenance }) => ({
         connector,
-        network: network.name,
-        generation: network.generation,
+        network: logicalNetwork.name,
+        generation: logicalNetwork.generation,
         direction,
         provenance,
       })),

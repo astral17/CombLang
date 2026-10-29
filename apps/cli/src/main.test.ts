@@ -307,26 +307,29 @@ output += gate;`,
     });
   });
 
-  test('exports a real shared-call Entity through the selected CLI provider', async () => {
+  test('exports multiple shared-call Entity inputs through the selected CLI provider', async () => {
     const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
-    const path = await sourceFile(`const input = new Network();
-const output = new Network();
+    const path = await sourceFile(`const A = Signal('virtual', 'signal-A');
+const a = new Network();
+const b = new Network();
+a += CC(1 * A);
+b += CC(2 * A);
 const machine = Entity('assembling-machine-3');
-const alias = machine;
-output += alias(input);
-output += machine;`);
+const x = machine(a, b);
+a += x;
+b += x;`);
     const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
     const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     expect(await run(['blueprint', 'export', '--json', path], { prototypes })).toBe(0);
     const response = JSON.parse(String(log.mock.calls[0]?.[0]));
-    expect(response).toMatchObject({
-      ok: true,
-      document: {
-        blueprint: { entities: [{ name: 'assembling-machine-3' }] },
-      },
-    });
-    expect(response.document.blueprint.entities).toHaveLength(1);
+    expect(response.ok).toBe(true);
+    const blueprint = response.document.blueprint;
+    expect(
+      blueprint.entities.filter(({ name }: { name: string }) => name === 'assembling-machine-3'),
+    ).toHaveLength(1);
+    expect(blueprint.entities).toHaveLength(3);
+    expect(blueprint.wires).toHaveLength(2);
     expect(error).not.toHaveBeenCalled();
   });
 

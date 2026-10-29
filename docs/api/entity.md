@@ -18,7 +18,7 @@ Entity(nameOrCanonicalKeyOrExactProviderRecord, configuration?) -> Entity
 entity.at(x, y, direction?) -> same Entity
 entity.port(connector: string, lane: string) -> Network facet
 entity.bind(connector: string, lane: string, network, 'input' | 'output') -> same Entity
-entity(readableNetworkOrCombinator) -> same Entity
+entity(readableNetworkOrCombinator, ...moreReadableInputs) -> same Entity
 destinationNetwork += entity -> bind declared callable output
 ```
 
@@ -62,7 +62,7 @@ Complete source; requires the bundled Space Age 2.1.17 provider and its conserva
 Entity provisioning (available through the selected workbench/CLI environment).
 This is **export-only structural configuration**: it does not simulate Lab
 research or provide a default-readable projection. The bundled provider separately
-supplies the documented shared circuit connector and its one-argument call form.
+supplies the documented shared circuit connector and its multiple-input call form.
 
 ```ts
 const prototype = prototypes.entity['lab'];
@@ -114,19 +114,23 @@ shared calls. The bundled provider currently supplies that fact for
 `assembling-machine-3`, `iron-chest`, and `lab`:
 
 ```ts
-const input = new Network();
-const output = new Network();
+const a = new Network();
+const b = new Network();
 const machine = Entity('assembling-machine-3');
-output += machine(input);
+const x = machine(a, b);
+a += x;
+b += x;
 ```
 
-The call accepts exactly **one** readable Network (or primary Combinator output),
-records it as an input attachment and returns the same Entity. `output += entity`
-records a writable output attachment. Both attachments stay logical until the
-existing color solver selects the physical red/green lanes. Two distinct Networks
-must use opposite colors; the same Network on both roles occupies one lane and
-retains both roles. The exporter emits one physical Entity and no hidden
-combinator. This does not add a readable default projection, multiple arguments,
+The call accepts one or more readable Networks (or primary Combinator outputs)
+in one invocation, records them as input attachments and returns the same Entity.
+Repeated aliases of the same resolved Network identity are idempotent. The
+shared connector holds at most two distinct resolved Network identities after
+transfers; argument count alone does not consume capacity. Distinct Networks use
+opposite colors. `output += entity` records a writable output attachment, which
+may reuse either input Network while preserving both roles. The existing color
+solver selects the physical red/green lanes. The exporter emits one physical
+Entity and no hidden combinator. This does not add a readable default projection
 or machine crafting/output simulation.
 
 Only one successful invocation is allowed per physical Entity, including through
@@ -184,10 +188,12 @@ does not implement a native machine process or promise simulator signal output.
 
 ## Restrictions
 
-No `.enable` property setter, `.clone` API or multi-input callable form is released.
+No `.enable` property setter or `.clone` API is released. Fixed callable profiles
+still require exactly one input; multiple inputs are limited to profiles that
+authorize a shared connector.
 Generic Entity has no physical Combinator methods/configuration API merely because
-its prototype resembles a combinator. Shared-port free-output/multi-input ideas
-are not supported behavior. Not every game Entity/control field is simulated or
+its prototype resembles a combinator. Shared-port free-output projection is not
+supported behavior. Not every game Entity/control field is simulated or
 connectable. Reviewed typed rules and checked/raw structural payloads are distinct.
 
 See [Blueprint schema catalog](../blueprint-schema-catalog.md) for field coverage,

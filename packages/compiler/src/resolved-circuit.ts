@@ -851,7 +851,6 @@ function entity(
         candidate.network === undefined ||
         first.network !== candidate.network ||
         first.nativeConnector !== candidate.nativeConnector ||
-        first.generation !== candidate.generation ||
         first.direction === candidate.direction
       ) {
         invalid(

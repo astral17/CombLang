@@ -201,10 +201,17 @@ describe('canonical Entity plan validation', () => {
           direction: 'input',
           provenance,
         },
+        {
+          connector: 'shared' as EntityConnectorKey,
+          network: 'input-b',
+          generation: 0,
+          direction: 'input',
+          provenance: { ...provenance, operationOrdinal: 3 },
+        },
       ],
     };
     const plan = jsonCopy(planFor(context, entity));
-    plan.networks = ['input', 'output'].map((name) => ({
+    plan.networks = ['input', 'input-b', 'output'].map((name) => ({
       name,
       generation: 0,
       source: sourceSpan(sourceFileId('entity.ts'), 0, 1),
@@ -220,6 +227,13 @@ describe('canonical Entity plan validation', () => {
         generation: 0,
         direction: 'input',
         provenance,
+      },
+      {
+        connector: 'shared',
+        network: 'input-b',
+        generation: 0,
+        direction: 'input',
+        provenance: { ...provenance, operationOrdinal: 3 },
       },
       {
         connector: 'shared',
@@ -255,6 +269,16 @@ describe('canonical Entity plan validation', () => {
     expect(validatePlan(unknownField, context).diagnostics[0]).toMatchObject({
       code: 'RT3000',
       message: expect.stringContaining('unexpected'),
+    });
+
+    const duplicateInputOwner = jsonCopy(plan);
+    duplicateInputOwner.entities[0]!.sharedConnectorAttachments.push({
+      ...duplicateInputOwner.entities[0]!.sharedConnectorAttachments[0]!,
+      provenance: { ...provenance, operationOrdinal: 4 },
+    });
+    expect(validatePlan(duplicateInputOwner, context).diagnostics[0]).toMatchObject({
+      code: 'RT3003',
+      message: expect.stringContaining('repeated for the same Network role'),
     });
   });
 

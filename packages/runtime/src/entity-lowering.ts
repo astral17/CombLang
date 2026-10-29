@@ -1,4 +1,8 @@
-import type { EntityPlanRecord, EntityPhysicalRecord } from '@comblang/compiler/entity';
+import type {
+  EntityPlanRecord,
+  EntityPlanSharedConnectorAttachment,
+  EntityPhysicalRecord,
+} from '@comblang/compiler/entity';
 import type { NetworkId } from '@comblang/shared';
 import {
   EntityConfigurationError,
@@ -37,6 +41,60 @@ interface PreparedEntityRecord {
 
 export interface PreparedEntityRecords {
   readonly records: readonly PreparedEntityRecord[];
+}
+
+export interface ResolvedSharedConnectorAttachmentGroup {
+  readonly attachment: EntityPlanSharedConnectorAttachment;
+  readonly network: NetworkHandle;
+}
+
+/** Coalesces logical roles that resolve to the same electrical Network after transfers. */
+export function resolvedSharedConnectorAttachmentGroups(
+  record: EntityPlanRecord,
+  networks: ReadonlyMap<string, NetworkHandle>,
+): readonly ResolvedSharedConnectorAttachmentGroup[] {
+  const groups = new Map<
+    string,
+    {
+      attachment: EntityPlanSharedConnectorAttachment;
+      network: NetworkHandle;
+    }
+  >();
+  for (const attachment of record.sharedConnectorAttachments ?? []) {
+    const network = networks.get(attachment.network);
+    if (network === undefined) {
+      throw new RuntimeDiagnosticError({
+        code: 'RT1099',
+        severity: 'error',
+        message: `Internal Entity Network mapping is missing: ${attachment.network}.`,
+        span: attachment.provenance.source,
+      });
+    }
+    const key = JSON.stringify([attachment.connector, network.id, attachment.direction]);
+    const group = groups.get(key);
+    if (group === undefined) {
+      groups.set(key, { attachment, network });
+      continue;
+    }
+    if (compareAttachmentProvenance(attachment, group.attachment) < 0) {
+      group.attachment = attachment;
+    }
+  }
+  return [...groups.values()].map(({ attachment, network }) => ({
+    attachment,
+    network,
+  }));
+}
+
+function compareAttachmentProvenance(
+  left: EntityPlanSharedConnectorAttachment,
+  right: EntityPlanSharedConnectorAttachment,
+): number {
+  const ordinal = left.provenance.operationOrdinal - right.provenance.operationOrdinal;
+  if (ordinal !== 0) return ordinal;
+  const file = left.provenance.source.fileId.localeCompare(right.provenance.source.fileId);
+  if (file !== 0) return file;
+  return left.provenance.source.start - right.provenance.source.start;
 }
 
 /** Prepares all trusted Entity/profile/native metadata before runtime allocation. */
@@ -200,47 +258,41 @@ export function lowerPreparedEntityRecords(
           }
           return { ...rest, network: handle.id, nativeConnector };
         });
-        const sharedBindings = (record.sharedConnectorAttachments ?? []).map((attachment) => {
-          const handle = networks.get(attachment.network);
-          if (handle === undefined) {
-            throw new RuntimeDiagnosticError({
-              code: 'RT1099',
-              severity: 'error',
-              message: `Internal Entity Network mapping is missing: ${attachment.network}.`,
-              span: attachment.provenance.source,
-            });
-          }
-          const color = colors?.get(handle.id);
-          if (color === undefined) {
-            fail(
-              'Solved Network color is missing for shared Entity attachment.',
-              attachment.provenance.source,
-            );
-          }
-          const lane = sharedConnectorLanes?.find((candidate) => candidate.color === color);
-          if (lane === undefined) {
-            fail(
-              'Shared Entity connector has no lane for the solved Network color.',
-              attachment.provenance.source,
-            );
-          }
-          return {
-            endpoint: {
-              connector: attachment.connector,
-              lane: lane.key,
-              color,
-            },
-            network: handle.id,
-            nativeConnector: lane.nativeConnector,
-            generation: attachment.generation,
-            direction: attachment.direction,
-            provenance: attachment.provenance,
-          };
-        });
+        const sharedBindings = resolvedSharedConnectorAttachmentGroups(record, networks).map(
+          ({ attachment, network: handle }) => {
+            const color = colors?.get(handle.id);
+            if (color === undefined) {
+              fail(
+                'Solved Network color is missing for shared Entity attachment.',
+                attachment.provenance.source,
+              );
+            }
+            const lane = sharedConnectorLanes?.find((candidate) => candidate.color === color);
+            if (lane === undefined) {
+              fail(
+                'Shared Entity connector has no lane for the solved Network color.',
+                attachment.provenance.source,
+              );
+            }
+            return {
+              endpoint: {
+                connector: attachment.connector,
+                lane: lane.key,
+                color,
+              },
+              network: handle.id,
+              nativeConnector: lane.nativeConnector,
+              generation: attachment.generation,
+              direction: attachment.direction,
+              provenance: attachment.provenance,
+            };
+          },
+        );
         const connectorBindings: EntityPhysicalRecord['connectorBindings'][number][] = [
           ...fixedBindings,
           ...sharedBindings,
         ];
+        const sharedBindingSet = new Set(sharedBindings);
         const ownersByEndpoint = new Map<
           string,
           EntityPhysicalRecord['connectorBindings'][number][]
@@ -255,7 +307,8 @@ export function lowerPreparedEntityRecords(
               first.network === undefined ||
               binding.network === undefined ||
               first.network !== binding.network ||
-              first.generation !== binding.generation ||
+              (first.generation !== binding.generation &&
+                !(sharedBindingSet.has(first) && sharedBindingSet.has(binding))) ||
               first.direction === binding.direction
             ) {
               fail(

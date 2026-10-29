@@ -970,17 +970,22 @@ short.at(1, 2);`,
     expect(ordinary.result.resolvedCircuit?.format).toBe('comblang-resolved-circuit');
   });
 
-  test('compiles and exports a provider shared-call Entity through the Worker request path', async () => {
+  test('compiles multiple provider shared-call inputs through the Worker request path', async () => {
     const runtime = new CompilerWorkerRuntime();
     const response = await runtime.handle({
       kind: 'parse',
       revision: 75,
       file: {
         path: 'worker-shared-entity-call.factorio.ts',
-        text: `const input = new Network();
-const output = new Network();
+        text: `const A = Signal('virtual', 'signal-A');
+const a = new Network();
+const b = new Network();
 const machine = Entity('assembling-machine-3');
-output += machine(input);`,
+const x = machine(a, b);
+a += CC(1 * A);
+b += CC(2 * A);
+a += x;
+b += x;`,
       },
       prototypeProfile: {
         kind: 'builtin',
@@ -991,21 +996,37 @@ output += machine(input);`,
     });
 
     expect(response.result.compilerDiagnostics).toEqual([]);
-    expect(response.result.plan?.entities[0]?.sharedConnectorAttachments).toMatchObject([
-      { connector: 'circuit', network: 'input', direction: 'input' },
-      { connector: 'circuit', network: 'output', direction: 'output' },
+    const plannedMachine = response.result.plan?.entities.find(
+      ({ profile }) => profile.prototypeKey === 'entity:assembling-machine-3',
+    );
+    expect(plannedMachine?.sharedConnectorAttachments).toMatchObject([
+      { connector: 'circuit', network: 'a', direction: 'input' },
+      { connector: 'circuit', network: 'b', direction: 'input' },
+      { connector: 'circuit', network: 'a', direction: 'output' },
+      { connector: 'circuit', network: 'b', direction: 'output' },
     ]);
     const ir = response.result.resolvedCircuit?.ir;
-    expect(ir?.entities).toHaveLength(1);
-    expect(ir?.entities[0]?.prototypeName).toBe('assembling-machine-3');
-    expect(ir?.entities[0]?.connectorBindings).toHaveLength(2);
+    expect(ir?.entities).toHaveLength(3);
+    const physicalMachine = ir?.entities.find(
+      ({ prototypeName }) => prototypeName === 'assembling-machine-3',
+    );
+    expect(physicalMachine?.connectorBindings).toHaveLength(4);
+    expect(new Set(physicalMachine?.connectorBindings.map(({ network }) => network)).size).toBe(2);
+    expect(physicalMachine?.connectorBindings.map(({ direction }) => direction).sort()).toEqual([
+      'input',
+      'input',
+      'output',
+      'output',
+    ]);
     expect(
-      new Set(ir?.entities[0]?.connectorBindings.map(({ endpoint }) => endpoint.color)),
+      new Set(physicalMachine?.connectorBindings.map(({ endpoint }) => endpoint.color)),
     ).toEqual(new Set(['red', 'green']));
     expect(
-      ir?.entities[0]?.connectorBindings.every(({ nativeConnector }) => nativeConnector === 1),
+      physicalMachine?.connectorBindings.every(({ nativeConnector }) => nativeConnector === 1),
     ).toBe(true);
-    expect(generateBlueprintJson(ir!).blueprint.entities).toHaveLength(1);
+    const blueprint = generateBlueprintJson(ir!).blueprint;
+    expect(blueprint.entities).toHaveLength(3);
+    expect(blueprint.wires).toHaveLength(2);
     expect(structuredClone(response)).toEqual(response);
   });
 

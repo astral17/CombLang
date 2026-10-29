@@ -1047,12 +1047,24 @@ Attach(input);`);
     const source = blocks('entity')[2];
     const compilation = compile(source, await bundled);
     expect(compilation.plan.entities[0]?.sharedConnectorAttachments).toMatchObject([
-      { connector: 'circuit', network: 'input', direction: 'input' },
-      { connector: 'circuit', network: 'output', direction: 'output' },
+      { connector: 'circuit', network: 'a', direction: 'input' },
+      { connector: 'circuit', network: 'b', direction: 'input' },
+      { connector: 'circuit', network: 'a', direction: 'output' },
+      { connector: 'circuit', network: 'b', direction: 'output' },
     ]);
     expect(compilation.resolvedCircuit.ir.entities).toHaveLength(1);
     expect(compilation.resolvedCircuit.ir.entities[0]?.prototypeName).toBe('assembling-machine-3');
-    expect(compilation.resolvedCircuit.ir.entities[0]?.connectorBindings).toHaveLength(2);
+    expect(compilation.resolvedCircuit.ir.entities[0]?.connectorBindings).toHaveLength(4);
+    expect(
+      new Set(
+        compilation.resolvedCircuit.ir.entities[0]?.connectorBindings.map(({ network }) => network),
+      ).size,
+    ).toBe(2);
+    expect(
+      compilation.resolvedCircuit.ir.entities[0]?.connectorBindings
+        .map(({ direction }) => direction)
+        .sort(),
+    ).toEqual(['input', 'input', 'output', 'output']);
     expect(
       new Set(
         compilation.resolvedCircuit.ir.entities[0]?.connectorBindings.map(
@@ -1063,6 +1075,7 @@ Attach(input);`);
     expect(generateBlueprintJson(compilation.resolvedCircuit.ir).blueprint.entities).toHaveLength(
       1,
     );
+    expect(generateBlueprintJson(compilation.resolvedCircuit.ir).blueprint.wires).toEqual([]);
   });
   test('pins the actual synthetic callable endpoints, one construction/call and legal output reuse', () => {
     const source = blocks('entity')[3];

@@ -1186,7 +1186,7 @@ entity({});`,
   });
 
   test.each(['entity()', 'entity(1, 2)'])(
-    'requires exactly one callable Entity argument: %s',
+    'keeps fixed callable Entity arity at exactly one argument: %s',
     (call) => {
       const context = syntheticEntityExecutionContext();
       const parsed = parseFile({
@@ -1274,17 +1274,174 @@ output += result;`,
     expect(plan.networks.every(({ fixedColor }) => fixedColor === undefined)).toBe(true);
   });
 
+  test('attaches multiple shared-call inputs and deduplicates aliases by Network identity', () => {
+    const context = sharedCallEntityExecutionContext();
+    const parsed = parseFile({
+      path: 'entity-shared-call-multiple-inputs.factorio.ts',
+      text: `const first = new Network();
+const second = new Network();
+const alias = first;
+const entity = Entity('entity:synthetic-shared-two-color');
+const result = entity(first, alias, second, first);
+if (!Object.is(result, entity)) throw new Error('call changed Entity identity');
+first += result;
+second += result;`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+
+    const plan = executeElaborationProgram(transformElaborationModule(parsed), {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: syntheticEntityResolver(),
+    });
+    expect(plan.entities[0]?.sharedConnectorAttachments).toMatchObject([
+      { connector: 'shared', network: 'first', direction: 'input' },
+      { connector: 'shared', network: 'second', direction: 'input' },
+      { connector: 'shared', network: 'first', direction: 'output' },
+      { connector: 'shared', network: 'second', direction: 'output' },
+    ]);
+    expect(plan.entities[0]?.sharedConnectorAttachments).toHaveLength(4);
+    expect(
+      plan.entities[0]?.sharedConnectorAttachments
+        ?.filter(({ direction }) => direction === 'input')
+        .map(({ provenance }) => provenance.source.start),
+    ).toEqual([parsed.text.indexOf('first, alias'), parsed.text.indexOf('second, first')]);
+
+    const execution = elaborateDirectPlan(plan, context);
+    const physical = execution.entity(1);
+    expect(physical.connectorBindings).toHaveLength(4);
+    expect(new Set(physical.connectorBindings.map(({ network }) => network)).size).toBe(2);
+    expect(physical.connectorBindings.map(({ direction }) => direction).sort()).toEqual([
+      'input',
+      'input',
+      'output',
+      'output',
+    ]);
+    for (const attachment of plan.entities[0]!.sharedConnectorAttachments!) {
+      expect(
+        physical.connectorBindings.filter(
+          (binding) =>
+            binding.network === execution.network(attachment.network).id &&
+            binding.generation === attachment.generation &&
+            binding.direction === attachment.direction &&
+            JSON.stringify(binding.provenance) === JSON.stringify(attachment.provenance),
+        ),
+      ).toHaveLength(1);
+    }
+  });
+
+  test('requires at least one input for an authorized shared-call Entity', () => {
+    const parsed = parseFile({
+      path: 'entity-shared-call-empty-inputs.factorio.ts',
+      text: `const entity = Entity('entity:synthetic-shared-two-color');
+entity();`,
+    });
+    expect(() =>
+      executeElaborationProgram(transformElaborationModule(parsed), {
+        trustedEntityReplayContext: sharedCallEntityExecutionContext(),
+        entityPrototypeResolver: syntheticEntityResolver(),
+      }),
+    ).toThrowError(expect.objectContaining({ code: 'RT2027' }));
+  });
+
+  test('accepts multiple readonly Network inputs without creating writable aliases', () => {
+    const parsed = parseFile({
+      path: 'entity-shared-call-readonly-inputs.factorio.ts',
+      text: `function Read(input: Readonly<Network>): Readonly<Network> { return input; }
+const first = Read(new Network());
+const second = Read(new Network());
+const entity = Entity('entity:synthetic-shared-two-color');
+entity(first, second);`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+
+    const plan = executeElaborationProgram(transformElaborationModule(parsed), {
+      trustedEntityReplayContext: sharedCallEntityExecutionContext(),
+      entityPrototypeResolver: syntheticEntityResolver(),
+    });
+    expect(plan.entities[0]?.sharedConnectorAttachments?.map(({ direction }) => direction)).toEqual(
+      ['input', 'input'],
+    );
+    expect(
+      new Set(plan.entities[0]?.sharedConnectorAttachments?.map(({ network }) => network)).size,
+    ).toBe(2);
+    const physical = elaborateDirectPlan(plan, sharedCallEntityExecutionContext()).entity(1);
+    expect(physical.connectorBindings.map(({ direction }) => direction)).toEqual([
+      'input',
+      'input',
+    ]);
+  });
+
+  test('rolls back the first shared input when a later moved alias is invalid', () => {
+    const parsed = parseFile({
+      path: 'entity-shared-call-moved-later-input.factorio.ts',
+      text: `const stale = new Network();
+const first = new Network();
+const destination = new Network();
+destination.take(stale);
+const entity = Entity('entity:synthetic-shared-two-color');
+try { entity(first, stale); throw new Error('moved alias was readable'); } catch (error) {
+  if (error.code !== 'RT2012') throw error;
+}
+const result = entity(first, destination);
+first += result;
+destination += result;`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+
+    const plan = executeElaborationProgram(transformElaborationModule(parsed), {
+      trustedEntityReplayContext: sharedCallEntityExecutionContext(),
+      entityPrototypeResolver: syntheticEntityResolver(),
+    });
+    expect(plan.entities[0]?.sharedConnectorAttachments).toMatchObject([
+      { network: 'first', direction: 'input' },
+      { network: 'destination', direction: 'input' },
+      { network: 'first', direction: 'output' },
+      { network: 'destination', direction: 'output' },
+    ]);
+    expect(plan.entities[0]?.sharedConnectorAttachments).toHaveLength(4);
+  });
+
+  test('rejects an expired readonly alias as a later shared-call input', () => {
+    const parsed = parseFile({
+      path: 'entity-shared-call-expired-later-input.factorio.ts',
+      text: `function Capture(input: Readonly<Network>) { return () => input; }
+const expired = Capture(new Network())();
+const first = new Network();
+const second = new Network();
+const entity = Entity('entity:synthetic-shared-two-color');
+try { entity(first, expired); throw new Error('expired alias was readable'); } catch (error) {
+  if (error.code !== 'RT2017') throw error;
+}
+const result = entity(first, second);
+first += result;
+second += result;`,
+    });
+    expect(validateDslSemantics(parsed)).toEqual([]);
+    const plan = executeElaborationProgram(transformElaborationModule(parsed), {
+      trustedEntityReplayContext: sharedCallEntityExecutionContext(),
+      entityPrototypeResolver: syntheticEntityResolver(),
+    });
+    expect(plan.entities[0]?.sharedConnectorAttachments).toHaveLength(4);
+    expect(plan.entities[0]?.sharedConnectorAttachments).toMatchObject([
+      { network: 'first', direction: 'input' },
+      { network: 'second', direction: 'input' },
+      { network: 'first', direction: 'output' },
+      { network: 'second', direction: 'output' },
+    ]);
+  });
+
   test('rolls back a failed first shared-call invocation before a valid retry', () => {
     const parsed = parseFile({
       path: 'entity-shared-call-failed-first.factorio.ts',
       text: `const input = new Network();
+const second = new Network();
 const output = new Network();
 const entity = Entity('entity:synthetic-shared-two-color');
-try { entity(123); } catch (error) {
+try { entity(input, 123); } catch (error) {
   if (error.code !== 'RT2015') throw error;
 }
-const result = entity(input);
-output += result;`,
+const result = entity(input, second);
+input += result;`,
     });
     const plan = executeElaborationProgram(transformElaborationModule(parsed), {
       trustedEntityReplayContext: sharedCallEntityExecutionContext(),
@@ -1292,8 +1449,20 @@ output += result;`,
     });
     expect(plan.entities[0]?.sharedConnectorAttachments).toMatchObject([
       { network: 'input', direction: 'input' },
-      { network: 'output', direction: 'output' },
+      { network: 'second', direction: 'input' },
+      { network: 'input', direction: 'output' },
     ]);
+    expect(plan.entities[0]?.sharedConnectorAttachments).toHaveLength(3);
+    expect(
+      plan.entities[0]?.sharedConnectorAttachments?.find(
+        ({ network, direction }) => network === 'input' && direction === 'input',
+      )?.provenance.source.start,
+    ).toBe(parsed.text.indexOf('input, second'));
+    expect(
+      plan.entities[0]?.sharedConnectorAttachments?.find(
+        ({ network, direction }) => network === 'second' && direction === 'input',
+      )?.provenance.source.start,
+    ).toBe(parsed.text.indexOf('second);'));
   });
 
   test('does not let a shared Entity attachment escape a readonly Network borrow', () => {
@@ -1341,6 +1510,71 @@ loop += result;`,
       'output',
     ]);
     expect(physical.connectorBindings[0]?.network).toBe(physical.connectorBindings[1]?.network);
+  });
+
+  test('applies a fixed color requirement added after shared inputs were attached', () => {
+    const context = sharedCallEntityExecutionContext();
+    const parsed = parseFile({
+      path: 'entity-shared-call-late-color.factorio.ts',
+      text: `const first = new Network();
+const second = new Network();
+const red = new Network<R>();
+const entity = Entity('entity:synthetic-shared-two-color');
+entity(first, second);
+first.take(red);
+first += entity;
+second += entity;`,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed), {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: syntheticEntityResolver(),
+    });
+    const execution = elaborateDirectPlan(plan, context);
+    const physical = execution.entity(1);
+    const inputByNetwork = new Map(
+      physical.connectorBindings
+        .filter(({ direction }) => direction === 'input')
+        .map(({ network, endpoint }) => [network, endpoint.color]),
+    );
+    expect(inputByNetwork.get(execution.network('first').id)).toBe('red');
+    expect(new Set(inputByNetwork.values())).toEqual(new Set(['red', 'green']));
+  });
+
+  test('collapses two shared input intents after their Networks are transferred together', () => {
+    const context = sharedCallEntityExecutionContext();
+    const source = `const first = new Network();
+const second = new Network();
+const joined = new Network();
+const entity = Entity('entity:synthetic-shared-two-color');
+entity(first, second);
+joined.take(first);
+joined.take(second);
+joined += entity;`;
+    const parsed = parseFile({
+      path: 'entity-shared-call-take-collapse-pair.factorio.ts',
+      text: source,
+    });
+    const plan = executeElaborationProgram(transformElaborationModule(parsed), {
+      trustedEntityReplayContext: context,
+      entityPrototypeResolver: syntheticEntityResolver(),
+    });
+    const physical = elaborateDirectPlan(plan, context).entity(1);
+    expect(physical.connectorBindings).toHaveLength(2);
+    expect(physical.connectorBindings.map(({ direction }) => direction).sort()).toEqual([
+      'input',
+      'output',
+    ]);
+    expect(physical.connectorBindings[0]?.network).toBe(physical.connectorBindings[1]?.network);
+
+    const compilation = compileSourceProgram(
+      { path: 'entity-shared-call-take-collapse-pair.factorio.ts', text: source },
+      {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: syntheticEntityResolver(),
+      },
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    expect(compilation.resolvedCircuit?.ir.entities[0]?.connectorBindings).toHaveLength(2);
   });
 
   test('resolves an attached input through a later Network transfer without creating another lane', () => {
@@ -1468,6 +1702,15 @@ output += entity;
 extra += entity;`,
       code: 'RT2009',
     },
+    {
+      label: 'three distinct shared-call input arguments',
+      source: `const first = new Network();
+const second = new Network();
+const third = new Network();
+const entity = Entity('entity:synthetic-shared-two-color');
+entity(first, second, third);`,
+      code: 'RT2009',
+    },
   ])('rejects $label on the two-wire shared connector', ({ source, code }) => {
     const context = sharedCallEntityExecutionContext();
     const parsed = parseFile({ path: 'entity-shared-call-capacity.factorio.ts', text: source });
@@ -1523,6 +1766,77 @@ output += entity;`,
 
     expect(plan.entities[0]?.sharedConnectorAttachments).toHaveLength(2);
     expect(plan.entities[0]?.sharedConnectorAttachments?.[0]?.generation).toBe(2);
+  });
+
+  test('returns two locally owned shared-call Networks once each with every role intact', () => {
+    const source = `function Build() {
+  const first = new Network();
+  const second = new Network();
+  const entity = Entity('entity:synthetic-shared-two-color');
+  const result = entity(first, second);
+  first += result;
+  second += result;
+  return entity;
+}
+const entity = Build();`;
+    const compilation = compileSourceProgram(
+      { path: 'entity-shared-call-return-two-locals.factorio.ts', text: source },
+      {
+        trustedEntityReplayContext: sharedCallEntityExecutionContext(),
+        entityPrototypeResolver: syntheticEntityResolver(),
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const attachments = compilation.plan?.entities[0]?.sharedConnectorAttachments ?? [];
+    expect(attachments).toHaveLength(4);
+    expect(new Set(attachments.map(({ generation }) => generation))).toEqual(new Set([1]));
+    const physical = compilation.resolvedCircuit?.ir.entities[0];
+    expect(physical?.connectorBindings).toHaveLength(4);
+    expect(new Set(physical?.connectorBindings.map(({ network }) => network)).size).toBe(2);
+    expect(physical?.connectorBindings.map(({ direction }) => direction).sort()).toEqual([
+      'input',
+      'input',
+      'output',
+      'output',
+    ]);
+  });
+
+  test('rejects a second shared multi-input invocation through an Entity alias', () => {
+    const source = `const first = new Network();
+const second = new Network();
+const entity = Entity('entity:synthetic-shared-two-color');
+const alias = entity;
+entity(first, second);
+alias(first);`;
+    const parsed = parseFile({ path: 'entity-shared-call-repeat-alias.factorio.ts', text: source });
+    const firstStart = source.indexOf('entity(first, second)');
+    const secondStart = source.indexOf('alias(first)');
+    expect(() =>
+      executeElaborationProgram(transformElaborationModule(parsed), {
+        trustedEntityReplayContext: sharedCallEntityExecutionContext(),
+        entityPrototypeResolver: syntheticEntityResolver(),
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'RT2030',
+        span: {
+          fileId: sourceFileId('entity-shared-call-repeat-alias.factorio.ts'),
+          start: secondStart,
+          end: secondStart + 'alias(first)'.length,
+        },
+        related: [
+          {
+            message: 'The first Entity invocation originates here.',
+            span: {
+              fileId: sourceFileId('entity-shared-call-repeat-alias.factorio.ts'),
+              start: firstStart,
+              end: firstStart + 'entity(first, second)'.length,
+            },
+          },
+        ],
+      }),
+    );
   });
 
   test.each([

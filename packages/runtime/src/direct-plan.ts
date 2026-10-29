@@ -34,7 +34,11 @@ import type { ResolvedCircuit } from '@comblang/compiler/resolved-circuit';
 import { resolvedCircuitPlanFingerprint } from '@comblang/compiler/resolved-circuit';
 import { constantConfigurationFromOutputs } from '@comblang/factorio';
 import { validateCanonicalEntityPlanData } from './entity-plan-validation.js';
-import { lowerPreparedEntityRecords, prepareEntityRecords } from './entity-lowering.js';
+import {
+  lowerPreparedEntityRecords,
+  prepareEntityRecords,
+  resolvedSharedConnectorAttachmentGroups,
+} from './entity-lowering.js';
 import { entityObjectAdapter } from './entity-object-adapter.js';
 import {
   canonicalCircuitGraph,
@@ -1208,6 +1212,30 @@ function assertResolvedMapping(condition: boolean, detail: string): asserts cond
   }
 }
 
+function validateSharedAttachmentSources(plan: DirectElaborationPlan): void {
+  const declarations = new Map(plan.networks.map((declaration) => [declaration.name, declaration]));
+  const transferredSources = new Set((plan.networkTransfers ?? []).map(({ source }) => source));
+  for (const entity of plan.entities ?? []) {
+    for (const attachment of entity.sharedConnectorAttachments ?? []) {
+      const declaration = declarations.get(attachment.network);
+      assertResolvedMapping(
+        declaration !== undefined,
+        `Entity ${entity.id} shared attachment references an unknown Network.`,
+      );
+      assertResolvedMapping(
+        attachment.generation === (declaration.generation ?? 0),
+        `Entity ${entity.id} shared attachment source generation differs from its Network declaration.`,
+      );
+      if (declaration.consumedAt !== undefined) {
+        assertResolvedMapping(
+          transferredSources.has(attachment.network),
+          `Entity ${entity.id} shared attachment references a consumed source without a transfer.`,
+        );
+      }
+    }
+  }
+}
+
 function assertSamePhysicalRows<T extends { readonly id: string }>(
   expected: readonly T[],
   actual: readonly T[],
@@ -1253,7 +1281,8 @@ function validateResolvedEntityMapping(
       `Entity ${id} identity or provenance differs.`,
     );
     assertResolvedMapping(
-      planned.connectorBindings.length + (planned.sharedConnectorAttachments?.length ?? 0) ===
+      planned.connectorBindings.length +
+        resolvedSharedConnectorAttachmentGroups(planned, networks).length ===
         physical.connectorBindings.length,
       `Entity ${id} connector count differs.`,
     );
@@ -1294,9 +1323,10 @@ function validateResolvedEntityMapping(
         );
       }
     }
-    for (const attachment of planned.sharedConnectorAttachments ?? []) {
-      const handle = networks.get(attachment.network);
-      assertResolvedMapping(handle !== undefined, `Entity ${id} references an unknown Network.`);
+    for (const { attachment, network: handle } of resolvedSharedConnectorAttachmentGroups(
+      planned,
+      networks,
+    )) {
       const color = networkColors.get(handle.id);
       assertResolvedMapping(color !== undefined, `Entity ${id} Network color is missing.`);
       const matches = physical.connectorBindings.filter(
@@ -1326,6 +1356,7 @@ export function executeResolvedDirectPlan(
     hydrated.artifact.planFingerprint === resolvedCircuitPlanFingerprint(inputPlan),
     'plan fingerprint differs or the circuit is stale.',
   );
+  validateSharedAttachmentSources(inputPlan);
   const planEntities = inputPlan.entities ?? [];
   assertResolvedMapping(
     planEntities.length > 0 === hydrated.ir.entities.length > 0,

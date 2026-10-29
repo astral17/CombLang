@@ -472,9 +472,6 @@ function parseSharedConnectorAttachments(
   if (new Set(roleKeys).size !== roleKeys.length) {
     invalid('RT3003', path, 'shared connector attachment is repeated for the same Network role.');
   }
-  if (attachments.filter(({ direction }) => direction === 'input').length > 1) {
-    invalid('RT3003', path, 'a shared-call connector may have only one input attachment.');
-  }
   return Object.freeze(
     [...attachments].sort((left, right) => {
       const leftKey = `${left.connector}/${left.direction}/${left.network}`;
