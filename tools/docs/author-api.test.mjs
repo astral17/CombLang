@@ -962,13 +962,13 @@ Attach(input);`);
     else expect(provider.entityCircuitCapabilities('entity:lab')).toBe(lab.circuit);
   });
 
-  test.each([0, 1, 2, 3])(
+  test.each([0, 1, 2, 5])(
     'compiles literal Entity example %i without pretending it is a simulator device',
     async (index) => {
-      expect(blocks('entity')).toHaveLength(4);
+      expect(blocks('entity')).toHaveLength(6);
       const compilation = compile(
         blocks('entity')[index],
-        index === 3 ? syntheticHost : await bundled,
+        index === 5 ? syntheticHost : await bundled,
       );
       expect(compilation.plan.entities).toHaveLength(1);
       expect(compilation.plan.producers).toEqual([]);
@@ -1078,7 +1078,7 @@ Attach(input);`);
     expect(generateBlueprintJson(compilation.resolvedCircuit.ir).blueprint.wires).toEqual([]);
   });
   test('pins the actual synthetic callable endpoints, one construction/call and legal output reuse', () => {
-    const source = blocks('entity')[3];
+    const source = blocks('entity')[5];
     expect(source.match(/\bEntity\(/g)).toHaveLength(1);
     expect(source.match(/machine\(input\)/g)).toHaveLength(1);
     const compilation = compile(source, syntheticHost);
@@ -1122,12 +1122,12 @@ Attach(input);`);
     'const other = new Network(); other += machine;',
   ])('keeps callable restrictions: %s', (suffix) => {
     const code = 'RT2030';
-    expect(result(`${blocks('entity')[3]}\n${suffix}`, syntheticHost).pipelineDiagnostics).toEqual([
+    expect(result(`${blocks('entity')[5]}\n${suffix}`, syntheticHost).pipelineDiagnostics).toEqual([
       expect.objectContaining({ code, severity: 'error' }),
     ]);
   });
   test('rejects the documented repeated call with an identical input at the second invocation', () => {
-    const text = `${blocks('entity')[3]}\nmachine(input);`;
+    const text = `${blocks('entity')[5]}\nmachine(input);`;
     const first = text.indexOf('machine(input)');
     const second = text.lastIndexOf('machine(input)');
     expect(result(text, syntheticHost).pipelineDiagnostics).toEqual([

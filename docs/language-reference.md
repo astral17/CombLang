@@ -312,10 +312,46 @@ This creates one physical Entity. The authorized shared connector accepts one or
 more readable Networks in that call; repeated aliases of the same resolved
 Network are idempotent, and capacity is two distinct resolved Networks after
 transfers. Distinct Networks use opposite wire colors; outputs may reuse either
-input while preserving both roles. No `.bind` call, hidden combinator, or
-default-readable input projection is added. This does not simulate crafting,
-recipes, or machine output. Fixed callable profiles retain their one-argument
-contract.
+input while preserving both roles. No `.bind` call, hidden combinator, or fixed
+profile-wide read projection is added. This does not simulate crafting, recipes,
+or machine output. Fixed callable profiles retain their one-argument contract.
+
+### Reading a shared Entity output
+
+After one successful call, a shared-call Entity is readable through arithmetic,
+concrete Signal selection, a typed `Network` initializer, or a readonly
+`Network` parameter. A single recorded output is reused. If there is no output
+and exactly one distinct input after `.take` transfers, the first read creates
+one ordinary uncolored output Network on the same connector. The color solver
+places it opposite the input. This does not convert the input into an output.
+
+```ts
+const input = new Network();
+const machine = Entity('iron-chest');
+machine(input);
+const output: Network = machine;
+const doubled = machine[Signal('virtual', 'signal-A')] * 2;
+```
+
+Two distinct outputs, no attachments, or multiple distinct inputs with no
+output make the read ambiguous and report `RT2032` at the expression. The error
+includes the attachment locations. For example, this read is refused:
+
+```ts
+const first = new Network();
+const second = new Network();
+const machine = Entity('iron-chest');
+machine(first, second);
+const invalid = machine * 2; // RT2032
+```
+
+One explicit same-Network input/output remains readable as its declared output.
+Repeated input aliases count once, and connected inputs that were transferred
+through `.take` are resolved by their current electrical identity. Consumed
+source aliases remain invalid. A later distinct output still counts toward the
+connector's two-wire capacity. Unknown profiles and never-connected shared
+Entities do not gain an implicit read; profiles without `single-shared` keep
+their existing declared `defaultReadProjection` behavior.
 
 `machine.port(connector, lane)` selects an explicit connector lane. The exact
 four-argument `machine.bind(connector, lane, network, direction)` form binds

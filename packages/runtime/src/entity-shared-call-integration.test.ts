@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { loadPrototypeDatabase } from '@comblang/prototypes';
 import { describe, expect, test } from 'vitest';
 import { generateBlueprintJson } from '@comblang/compiler/blueprint-json';
@@ -13,7 +14,712 @@ import { lowerEntityRecords } from './entity-lowering.js';
 import { executeResolvedDirectPlan } from './direct-plan.js';
 import { compileSourceProgram } from './source-compilation.js';
 
+async function compileBundledSource(path: string, text: string) {
+  const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+  const provisioned = new EntityProvisioningService().provision(
+    prototypes,
+    conservativeEntityProvisioningPolicy,
+  );
+  const compilation = compileSourceProgram(
+    { path, text },
+    {
+      prototypes,
+      trustedEntityReplayContext: provisioned.trustedEntityReplayContext,
+      entityPrototypeResolver: provisioned.entityPrototypeResolver,
+    },
+  );
+  return { provisioned, compilation };
+}
+
+function extractExamplesFromHeading(page: string, heading: string): string[] {
+  const lines = page.split(/\r?\n/);
+  const start = lines.findIndex((line) => line === `### ${heading}`);
+  if (start < 0) throw new Error(`Missing documentation heading: ${heading}`);
+  const end = lines.findIndex((line, index) => index > start && /^#{1,3} /.test(line));
+  const section = lines.slice(start + 1, end < 0 ? undefined : end).join('\n');
+  return [...section.matchAll(/```ts\r?\n([\s\S]*?)\r?\n```/g)].map((match) => match[1]!);
+}
+
 describe('provider-backed shared Entity calls', () => {
+  test.each([
+    {
+      path: '../../../docs/api/entity.md',
+      heading: 'Reading a shared output',
+      stem: 'entity-api-doc-shared-read',
+    },
+    {
+      path: '../../../docs/language-reference.md',
+      heading: 'Reading a shared Entity output',
+      stem: 'language-reference-shared-read',
+    },
+  ])(
+    'keeps valid and ambiguous examples in $heading aligned with the compiler',
+    async ({ path, heading, stem }) => {
+      const page = readFileSync(new URL(path, import.meta.url), 'utf8');
+      const [valid, ambiguous] = extractExamplesFromHeading(page, heading);
+      expect(valid).toBeDefined();
+      expect(ambiguous).toBeDefined();
+
+      const validCompilation = await compileBundledSource(`${stem}-valid.factorio.ts`, valid!);
+      expect(
+        validCompilation.compilation.pipelineDiagnostics.filter(
+          ({ severity }) => severity === 'error',
+        ),
+      ).toEqual([]);
+
+      const ambiguousCompilation = await compileBundledSource(
+        `${stem}-ambiguous.factorio.ts`,
+        ambiguous!,
+      );
+      expect(ambiguousCompilation.compilation.pipelineDiagnostics).toContainEqual(
+        expect.objectContaining({ code: 'RT2032', severity: 'error' }),
+      );
+    },
+  );
+
+  test.each([
+    {
+      name: 'arithmetic',
+      path: 'entity-shared-read-arithmetic.factorio.ts',
+      source: `const input = new Network();
+const machine = Entity('iron-chest');
+const called = machine(input);
+const doubled = called * 2;
+const sink = new Network();
+sink += doubled;`,
+    },
+    {
+      name: 'concrete Signal selection',
+      path: 'entity-shared-read-selection.factorio.ts',
+      source: `const input = new Network();
+const machine = Entity('iron-chest');
+machine(input);
+const doubled = machine[Signal('virtual', 'signal-A')] * 2;
+const sink = new Network();
+sink += doubled;`,
+    },
+    {
+      name: 'typed Network initializer',
+      path: 'entity-shared-read-typed-network.factorio.ts',
+      source: `const input = new Network();
+const machine = Entity('iron-chest');
+machine(input);
+const output: Network = machine;
+const doubled = output * 2;
+const sink = new Network();
+sink += doubled;`,
+    },
+    {
+      name: 'Readonly<Network> argument',
+      path: 'entity-shared-readonly-argument.factorio.ts',
+      source: `function Double(input: Readonly<Network>) { return input * 2; }
+const input = new Network();
+const machine = Entity('iron-chest');
+machine(input);
+const doubled = Double(machine);
+const sink = new Network();
+sink += doubled;`,
+    },
+    {
+      name: 'existing output reuse',
+      path: 'entity-shared-read-existing-output.factorio.ts',
+      source: `const input = new Network();
+const output = new Network();
+const machine = Entity('iron-chest');
+output += machine(input);
+const doubled = machine * 2;
+const sink = new Network();
+sink += doubled;`,
+    },
+  ] as const)('reads the single shared output through $name', async ({ name, path, source }) => {
+    const { compilation } = await compileBundledSource(path, source);
+    expect(
+      compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error'),
+      name,
+    ).toEqual([]);
+    const plan = compilation.plan!;
+    const ir = compilation.resolvedCircuit!.ir;
+    const machines = ir.entities.filter(({ prototypeName }) => prototypeName === 'iron-chest');
+    expect(machines).toHaveLength(1);
+    expect(ir.producers).toHaveLength(1);
+    expect(ir.producers[0]?.kind).toBe('arithmetic');
+    const machine = machines[0]!;
+    expect(machine.connectorBindings.map(({ direction }) => direction).sort()).toEqual([
+      'input',
+      'output',
+    ]);
+    expect(new Set(machine.connectorBindings.map(({ network }) => network)).size).toBe(2);
+    expect(new Set(machine.connectorBindings.map(({ endpoint }) => endpoint.color))).toEqual(
+      new Set(['red', 'green']),
+    );
+    expect(
+      plan.entities?.find(({ id }) => id === machine.id)?.sharedConnectorAttachments,
+    ).toHaveLength(2);
+  });
+
+  test('coalesces transferred input aliases before lazily attaching the output', async () => {
+    const source = `const first = new Network();
+const second = new Network();
+const joined = new Network();
+const machine = Entity('iron-chest');
+machine(first, second);
+joined.take(first);
+joined.take(second);
+const doubled = machine * 2;
+const sink = new Network();
+sink += doubled;`;
+    const { compilation } = await compileBundledSource(
+      'entity-shared-read-transferred-inputs.factorio.ts',
+      source,
+    );
+
+    expect(compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error')).toEqual(
+      [],
+    );
+    expect(compilation.plan?.entities?.[0]?.sharedConnectorAttachments).toHaveLength(3);
+    const machine = compilation.resolvedCircuit?.ir.entities.find(
+      ({ prototypeName }) => prototypeName === 'iron-chest',
+    );
+    expect(machine?.connectorBindings.map(({ direction }) => direction).sort()).toEqual([
+      'input',
+      'output',
+    ]);
+    expect(new Set(machine?.connectorBindings.map(({ network }) => network)).size).toBe(2);
+  });
+
+  test.each([
+    { input: 'R', output: 'G', inputColor: 'red', outputColor: 'green' },
+    { input: 'G', output: 'R', inputColor: 'green', outputColor: 'red' },
+  ] as const)(
+    'solves lazy output colors in either orientation ($input/$output)',
+    async ({ input, output, inputColor, outputColor }) => {
+      const source = `const input = new Network<${input}>();
+const machine = Entity('iron-chest');
+machine(input);
+const output: Network<${output}> = machine;
+const doubled = output * 2;
+const sink = new Network();
+sink += doubled;`;
+      const { compilation } = await compileBundledSource(
+        `entity-shared-read-color-${input}-${output}.factorio.ts`,
+        source,
+      );
+
+      expect(
+        compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error'),
+      ).toEqual([]);
+      const machine = compilation.resolvedCircuit?.ir.entities.find(
+        ({ prototypeName }) => prototypeName === 'iron-chest',
+      );
+      expect(
+        machine?.connectorBindings.map(({ direction, endpoint }) => ({
+          direction,
+          color: endpoint.color,
+        })),
+      ).toEqual(
+        expect.arrayContaining([
+          { direction: 'input', color: inputColor },
+          { direction: 'output', color: outputColor },
+        ]),
+      );
+    },
+  );
+
+  test('refuses a lazy output that conflicts with the input color', async () => {
+    const source = `const input = new Network<R>();
+const machine = Entity('iron-chest');
+machine(input);
+const output: Network<R> = machine;
+const doubled = output * 2;
+const sink = new Network();
+sink += doubled;`;
+    const { compilation } = await compileBundledSource(
+      'entity-shared-read-color-conflict.factorio.ts',
+      source,
+    );
+
+    expect(compilation.pipelineDiagnostics).toContainEqual(
+      expect.objectContaining({ code: 'RT2010' }),
+    );
+  });
+
+  test('refuses ambiguous reads without leaving a private output behind', async () => {
+    const source = `const first = new Network();
+const second = new Network();
+const machine = Entity('iron-chest');
+machine(first, second);
+try {
+  const invalid = machine * 2;
+  throw new Error('ambiguous read was accepted');
+} catch (error) {
+  if (error.code !== 'RT2032') throw error;
+}
+first += machine;
+second += machine;`;
+    const { compilation } = await compileBundledSource(
+      'entity-shared-read-ambiguous-inputs.factorio.ts',
+      source,
+    );
+
+    expect(compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error')).toEqual(
+      [],
+    );
+    expect(compilation.plan?.networks).toHaveLength(2);
+    expect(compilation.plan?.entities?.[0]?.sharedConnectorAttachments).toHaveLength(4);
+    expect(compilation.resolvedCircuit?.ir.entities[0]?.connectorBindings).toHaveLength(4);
+  });
+
+  test.each([
+    { expression: 'machine + unconnected', caseName: 'left arithmetic operand' },
+    { expression: 'unconnected + machine', caseName: 'right arithmetic operand' },
+    { expression: 'machine > unconnected', caseName: 'comparison operand' },
+  ])(
+    'rolls back a lazy Entity output when the other $caseName is unreadable',
+    async ({ expression }) => {
+      const { compilation } = await compileBundledSource(
+        'entity-shared-read-invalid-operand-rollback.factorio.ts',
+        `const input = new Network();
+const machine = Entity('iron-chest');
+machine(input);
+const unconnected = Entity('iron-chest');
+try { const invalid = ${expression}; } catch (error) {
+  if (error.code !== 'RT2032') throw error;
+}
+const output = new Network();
+output += machine;`,
+      );
+      expect(
+        compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error'),
+      ).toEqual([]);
+      expect(compilation.plan?.networks).toHaveLength(2);
+      expect(compilation.plan?.entities?.[0]?.sharedConnectorAttachments).toHaveLength(2);
+    },
+  );
+
+  test('preserves an existing output when an Entity binary read fails', async () => {
+    const { compilation } = await compileBundledSource(
+      'entity-shared-read-invalid-operand-existing-output.factorio.ts',
+      `const input = new Network();
+const existing = new Network();
+const machine = Entity('iron-chest');
+machine(input);
+existing += machine;
+const unconnected = Entity('iron-chest');
+try { const invalid = machine + unconnected; } catch (error) {
+  if (error.code !== 'RT2032') throw error;
+}
+const output: Network = machine;`,
+    );
+
+    expect(compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error')).toEqual(
+      [],
+    );
+    expect(compilation.plan?.networks).toHaveLength(2);
+    expect(compilation.plan?.entities?.[0]?.sharedConnectorAttachments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ direction: 'input', network: 'input' }),
+        expect.objectContaining({ direction: 'output', network: 'existing' }),
+      ]),
+    );
+    expect(compilation.plan?.entities?.[0]?.sharedConnectorAttachments).toHaveLength(2);
+  });
+
+  test('refuses two output candidates without manufacturing a third attachment', async () => {
+    const source = `const first = new Network();
+const second = new Network();
+const machine = Entity('iron-chest');
+first += machine;
+second += machine;
+try {
+  const invalid = machine * 2;
+  throw new Error('ambiguous read was accepted');
+} catch (error) {
+  if (error.code !== 'RT2032') throw error;
+}`;
+    const { compilation } = await compileBundledSource(
+      'entity-shared-read-ambiguous-outputs.factorio.ts',
+      source,
+    );
+
+    expect(compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error')).toEqual(
+      [],
+    );
+    expect(compilation.plan?.networks).toHaveLength(2);
+    expect(compilation.plan?.entities?.[0]?.sharedConnectorAttachments).toHaveLength(2);
+    expect(compilation.plan?.entities?.[0]?.sharedConnectorAttachments).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ direction: 'output', network: 'first' }),
+        expect.objectContaining({ direction: 'output', network: 'second' }),
+      ]),
+    );
+  });
+
+  test('reads an explicitly declared same-Network input and output', async () => {
+    const source = `const input = new Network();
+const machine = Entity('iron-chest');
+machine(input);
+input += machine;
+const doubled = machine * 2;
+const sink = new Network();
+sink += doubled;`;
+    const { compilation } = await compileBundledSource(
+      'entity-shared-read-same-network-input-output.factorio.ts',
+      source,
+    );
+
+    expect(compilation.pipelineDiagnostics).not.toContainEqual(
+      expect.objectContaining({ code: 'RT2032' }),
+    );
+    expect(compilation.plan?.entities?.[0]?.sharedConnectorAttachments).toHaveLength(2);
+    const bindings = compilation.resolvedCircuit?.ir.entities[0]?.connectorBindings;
+    expect(bindings).toHaveLength(2);
+    expect(new Set(bindings?.map(({ network }) => network)).size).toBe(1);
+  });
+
+  test('returns an Entity without moving its same-Network roles twice', async () => {
+    const source = `function Build(input: Move<Network>) {
+  const machine = Entity('iron-chest');
+  machine(input);
+  input += machine;
+  return machine;
+}
+const machine = Build(new Network());
+const doubled = machine * 2;
+const sink = new Network();
+sink += doubled;`;
+    const { compilation } = await compileBundledSource(
+      'entity-shared-read-same-network-entity-return.factorio.ts',
+      source,
+    );
+
+    expect(compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error')).toEqual(
+      [],
+    );
+    const machine = compilation.resolvedCircuit?.ir.entities.find(
+      ({ prototypeName }) => prototypeName === 'iron-chest',
+    );
+    expect(machine?.connectorBindings).toHaveLength(2);
+    expect(new Set(machine?.connectorBindings.map(({ network }) => network)).size).toBe(1);
+    expect(() =>
+      executeResolvedDirectPlan(compilation.plan!, compilation.resolvedCircuit!),
+    ).not.toThrow();
+  });
+
+  test('keeps a later unrelated output subject to shared connector capacity', async () => {
+    const source = `const input = new Network();
+const unrelated = new Network();
+const machine = Entity('iron-chest');
+machine(input);
+const output: Network = machine;
+unrelated += machine;
+const doubled = output * 2;
+const sink = new Network();
+sink += doubled;`;
+    const { compilation } = await compileBundledSource(
+      'entity-shared-read-third-connection.factorio.ts',
+      source,
+    );
+
+    expect(compilation.pipelineDiagnostics).toContainEqual(
+      expect.objectContaining({ code: 'RT2009' }),
+    );
+    expect(compilation.plan?.entities?.[0]?.sharedConnectorAttachments).toHaveLength(3);
+    expect(
+      new Set(
+        compilation.plan?.entities?.[0]?.sharedConnectorAttachments?.map(({ network }) => network),
+      ).size,
+    ).toBe(3);
+  });
+
+  test('returns a locally created output with its Entity through nested functions', async () => {
+    const source = `function Build(input: Move<Network>) {
+  const machine = Entity('iron-chest');
+  machine(input);
+  const output: Network = machine;
+  return machine;
+}
+function Wrap(input: Move<Network>) { return Build(input); }
+const machine = Wrap(new Network());
+const doubled = machine * 2;
+const sink = new Network();
+sink += doubled;`;
+    const { compilation } = await compileBundledSource(
+      'entity-shared-read-nested-entity-return.factorio.ts',
+      source,
+    );
+
+    expect(compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error')).toEqual(
+      [],
+    );
+    const machine = compilation.resolvedCircuit?.ir.entities.find(
+      ({ prototypeName }) => prototypeName === 'iron-chest',
+    );
+    expect(machine?.connectorBindings.map(({ direction }) => direction).sort()).toEqual([
+      'input',
+      'output',
+    ]);
+    expect(new Set(machine?.connectorBindings.map(({ network }) => network)).size).toBe(2);
+  });
+
+  test.each(['machine', 'output'])(
+    'returns a locally created Entity output as a Network value through %s',
+    async (returned) => {
+      const source = `function Build(): Network {
+  const input = new Network();
+  const machine = Entity('iron-chest');
+  machine(input);
+  const output: Network = machine;
+  return ${returned};
+}
+const output = Build();
+const doubled = output * 2;
+const sink = new Network();
+sink += doubled;`;
+      const { compilation } = await compileBundledSource(
+        'entity-shared-read-network-return.factorio.ts',
+        source,
+      );
+
+      expect(
+        compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error'),
+      ).toEqual([]);
+      const machine = compilation.resolvedCircuit?.ir.entities.find(
+        ({ prototypeName }) => prototypeName === 'iron-chest',
+      );
+      expect(machine?.connectorBindings.map(({ direction }) => direction).sort()).toEqual([
+        'input',
+        'output',
+      ]);
+      expect(new Set(machine?.connectorBindings.map(({ network }) => network)).size).toBe(2);
+    },
+  );
+
+  test('rebases an explicit Entity output through a nested Move<Network> return', async () => {
+    const source = `function Pass(output: Move<Network>): Network {
+  return output;
+}
+function Build(): Network {
+  const input = new Network();
+  const machine = Entity('iron-chest');
+  machine(input);
+  const output = new Network();
+  output += machine;
+  return Pass(output);
+}
+const output = Build();
+const doubled = output * 2;
+const sink = new Network();
+sink += doubled;`;
+    const { compilation } = await compileBundledSource(
+      'entity-shared-read-move-network-return.factorio.ts',
+      source,
+    );
+
+    expect(compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error')).toEqual(
+      [],
+    );
+    const machine = compilation.resolvedCircuit?.ir.entities.find(
+      ({ prototypeName }) => prototypeName === 'iron-chest',
+    );
+    expect(machine?.connectorBindings.map(({ direction }) => direction).sort()).toEqual([
+      'input',
+      'output',
+    ]);
+    expect(new Set(machine?.connectorBindings.map(({ network }) => network)).size).toBe(2);
+    expect(() =>
+      executeResolvedDirectPlan(compilation.plan!, compilation.resolvedCircuit!),
+    ).not.toThrow();
+  });
+
+  test.each([
+    { returned: 'output', access: 'built' },
+    { returned: '{ output }', access: 'built.output' },
+    { returned: '[output]', access: 'built[0]' },
+  ])(
+    'preserves Entity wiring when returning a projected Network through $returned',
+    async ({ returned, access }) => {
+      const { compilation } = await compileBundledSource(
+        'entity-shared-read-aliased-return.factorio.ts',
+        `function Build() {
+  const input = new Network();
+  const machine = Entity('iron-chest');
+  machine(input);
+  const output: Network = machine;
+  return ${returned};
+}
+const built = Build();
+const sink = new Network();
+sink += ${access} * 2;`,
+      );
+      expect(
+        compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error'),
+      ).toEqual([]);
+      expect(
+        compilation.resolvedCircuit?.ir.entities.filter(
+          ({ prototypeName }) => prototypeName === 'iron-chest',
+        ),
+      ).toHaveLength(1);
+      expect(() =>
+        executeResolvedDirectPlan(compilation.plan!, compilation.resolvedCircuit!),
+      ).not.toThrow();
+    },
+  );
+
+  test.each(['Entity', 'Combinator'] as const)(
+    'retains physical %s wiring when a moved output is consumed by a helper',
+    async (kind) => {
+      const { compilation } = await compileBundledSource(
+        'entity-shared-output-consumed-by-helper.factorio.ts',
+        `function Scale(input: Move<Network>) { return input * 2; }
+${
+  kind === 'Entity'
+    ? `const input = new Network();
+const machine = Entity('iron-chest');
+machine(input);
+const output: Network = machine;`
+    : `const output: Network = CC(1 * Signal('virtual', 'signal-A'));`
+}
+const scaled = Scale(output);
+const sink = new Network();
+sink += scaled;`,
+      );
+      expect(
+        compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error'),
+      ).toEqual([]);
+      if (kind === 'Entity') {
+        const machine = compilation.resolvedCircuit!.ir.entities.find(
+          ({ prototypeName }) => prototypeName === 'iron-chest',
+        )!;
+        expect(machine.connectorBindings.map(({ direction }) => direction).sort()).toEqual([
+          'input',
+          'output',
+        ]);
+        expect(new Set(machine.connectorBindings.map(({ network }) => network))).toHaveLength(2);
+      }
+      const replayed = executeResolvedDirectPlan(compilation.plan!, compilation.resolvedCircuit!);
+      expect(replayed).toBeDefined();
+      const blueprint = generateBlueprintJson(compilation.resolvedCircuit!.ir).blueprint;
+      if (kind === 'Entity') {
+        expect(blueprint.entities.some(({ name }) => name === 'iron-chest')).toBe(true);
+      }
+      expect(blueprint.wires.length).toBeGreaterThan(0);
+    },
+  );
+
+  test.each([
+    {
+      name: 'explicit Entity output',
+      source: `function Scale(input: Move<Network>) { return input * 2; }
+const input = new Network();
+const machine = Entity('iron-chest');
+machine(input);
+const output = new Network();
+output += machine;
+const scaled = Scale(output);
+const sink = new Network();
+sink += scaled;`,
+      directions: ['input', 'output'],
+    },
+    {
+      name: 'Entity input',
+      source: `function Scale(input: Move<Network>) { return input * 2; }
+const input = new Network();
+const machine = Entity('iron-chest');
+machine(input);
+const scaled = Scale(input);
+const sink = new Network();
+sink += scaled;`,
+      directions: ['input'],
+    },
+    {
+      name: 'nested Move helper',
+      source: `function Scale(input: Move<Network>) { return input * 2; }
+function Nested(input: Move<Network>) { return Scale(input); }
+const input = new Network();
+const machine = Entity('iron-chest');
+machine(input);
+const output: Network = machine;
+const scaled = Nested(output);
+const sink = new Network();
+sink += scaled;`,
+      directions: ['input', 'output'],
+    },
+  ])(
+    'preserves physical Entity wiring when a Move is consumed by $name',
+    async ({ name, source, directions }) => {
+      const { compilation } = await compileBundledSource(
+        `entity-shared-output-consumed-${name.replaceAll(' ', '-')}.factorio.ts`,
+        source,
+      );
+      expect(
+        compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error'),
+      ).toEqual([]);
+      const machine = compilation.resolvedCircuit!.ir.entities.find(
+        ({ prototypeName }) => prototypeName === 'iron-chest',
+      )!;
+      expect(machine.connectorBindings.map(({ direction }) => direction).sort()).toEqual(
+        [...directions].sort(),
+      );
+      expect(() =>
+        executeResolvedDirectPlan(compilation.plan!, compilation.resolvedCircuit!),
+      ).not.toThrow();
+      const blueprint = generateBlueprintJson(compilation.resolvedCircuit!.ir).blueprint;
+      expect(
+        blueprint.entities.filter(({ name: prototype }) => prototype === 'iron-chest'),
+      ).toHaveLength(1);
+      expect(blueprint.wires.length).toBeGreaterThan(0);
+    },
+  );
+
+  test.each([
+    {
+      name: 'stale caller alias',
+      read: 'stale * 2',
+      declaration: 'const stale = output;',
+    },
+    {
+      name: 'lost Entity output',
+      read: 'machine * 2',
+      declaration: '',
+    },
+  ])('rejects $name after a Move helper consumes the output', async ({ read, declaration }) => {
+    const { compilation } = await compileBundledSource(
+      'entity-shared-output-consumed-invalid-read.factorio.ts',
+      `function Scale(input: Move<Network>) { return input * 2; }
+const input = new Network();
+const machine = Entity('iron-chest');
+machine(input);
+const output: Network = machine;
+${declaration}
+const scaled = Scale(output);
+const sink = new Network();
+sink += scaled;
+const invalid = ${read};`,
+    );
+    expect(compilation.pipelineDiagnostics).toContainEqual(
+      expect.objectContaining({ code: 'RT2019', severity: 'error' }),
+    );
+  });
+
+  test('does not return an auto-readable Entity through a borrowed Ref input', async () => {
+    const source = `function Escape(input: Ref<Network>) {
+  const machine = Entity('iron-chest');
+  machine(input);
+  const output: Network = machine;
+  return machine;
+}
+const input = new Network();
+Escape(input);`;
+    const { compilation } = await compileBundledSource(
+      'entity-shared-read-ref-escape.factorio.ts',
+      source,
+    );
+
+    expect(compilation.pipelineDiagnostics).toContainEqual(
+      expect.objectContaining({ code: 'RT2017' }),
+    );
+  });
+
   test.each([
     {
       callOrder: 'a,b',

@@ -130,8 +130,8 @@ transfers; argument count alone does not consume capacity. Distinct Networks use
 opposite colors. `output += entity` records a writable output attachment, which
 may reuse either input Network while preserving both roles. The existing color
 solver selects the physical red/green lanes. The exporter emits one physical
-Entity and no hidden combinator. This does not add a readable default projection
-or machine crafting/output simulation.
+Entity and no hidden combinator. This does not add a fixed profile-wide read
+projection or machine crafting/output simulation.
 
 Only one successful invocation is allowed per physical Entity, including through
 aliases, containers and returned views. A second call reports `RT2030` at that
@@ -142,12 +142,51 @@ outputs. Repeating an output attachment to the same Network is idempotent. A
 second independent output is allowed only while the shared connector still fits
 its two physical wires; Networks are never implicitly merged.
 
-Using an Entity as an arithmetic input or readonly Network argument requires an
-unambiguous declared default read projection. That projection is not necessarily
-the callable output, and neither is inferred from the prototype's circuit flags.
-Select an explicit `.port` when appropriate. Shared-call provisioning does not
-select the input as a read projection. A fallback without a `single-shared` fact
-remains non-callable and has no connector profile.
+For a shared-call Entity, arithmetic, concrete Signal selection, a typed `Network`
+initializer, and a readonly `Network` argument resolve reads from its recorded
+attachments. One distinct output is reused, including an explicit fixed output
+facet. If there is no output and exactly one distinct input after recorded
+transfers, the first read lazily creates one uncolored output Network on the same
+shared connector; the solver chooses its opposite color. Repeated aliases of one
+input count once. The read does not choose or promote an input Network.
+
+Two distinct outputs, no attachments, or multiple distinct inputs without an
+output report `RT2032` at the read with attachment locations. A deliberately
+declared same-Network input/output is readable as that output and keeps both
+roles. Later unrelated connections still use the connector's two-wire capacity.
+Direct access through a consumed alias remains invalid even though attachment
+resolution follows a proven transfer. This conversion preserves readonly/ref/move
+and borrow lifetime checks. Profiles without `single-shared` keep their declared
+`defaultReadProjection`; an unknown profile or a never-connected shared Entity
+does not gain an implicit read.
+
+### Reading a shared output
+
+Valid source for a bundled `single-shared` profile:
+
+```ts
+const input = new Network();
+const machine = Entity('iron-chest');
+machine(input);
+const output: Network = machine;
+const doubled = machine[Signal('virtual', 'signal-A')] * 2;
+```
+
+With two distinct inputs and no output, the read is intentionally ambiguous:
+
+```ts
+const first = new Network();
+const second = new Network();
+const machine = Entity('iron-chest');
+machine(first, second);
+const invalid = machine * 2; // RT2032
+first += machine;
+second += machine;
+```
+
+The call remains limited to one successful invocation. Reuse its returned
+Entity handle for output attachments and later reads; an inferred output counts
+as the connector's second distinct Network.
 
 ## Explicit profile example
 
@@ -193,8 +232,9 @@ still require exactly one input; multiple inputs are limited to profiles that
 authorize a shared connector.
 Generic Entity has no physical Combinator methods/configuration API merely because
 its prototype resembles a combinator. Shared-port free-output projection is not
-supported behavior. Not every game Entity/control field is simulated or
-connectable. Reviewed typed rules and checked/raw structural payloads are distinct.
+general behavior: only a connected shared-call profile can infer one output under
+the rules above. Not every game Entity/control field is simulated or connectable.
+Reviewed typed rules and checked/raw structural payloads are distinct.
 
 See [Blueprint schema catalog](../blueprint-schema-catalog.md) for field coverage,
 [pinned control-behavior inventory](../../tools/factorio-api/README.md) for the

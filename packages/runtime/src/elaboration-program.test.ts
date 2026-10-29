@@ -1248,6 +1248,39 @@ if (!Object.is(first, entity)) {
     });
   });
 
+  test('preserves a fixed Entity facet after its attached Network is consumed by Move', () => {
+    const context = syntheticEntityExecutionContext();
+    const compilation = compileSourceProgram(
+      {
+        path: 'entity-fixed-facet-consumed-move.factorio.ts',
+        text: `function Drop(input: Move<Network>): void {}
+const input = new Network();
+const entity = Entity('entity:synthetic-shared-two-color');
+entity.bind('shared', 'shared-red', input, 'input');
+Drop(input);`,
+      },
+      {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: syntheticEntityResolver(),
+      },
+    );
+
+    expect(compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error')).toEqual(
+      [],
+    );
+    expect(compilation.plan?.networks.find(({ name }) => name === 'input')?.generation).toBe(2);
+    expect(compilation.plan?.entities[0]?.connectorBindings).toMatchObject([
+      {
+        endpoint: { connector: 'shared', lane: 'shared-red', color: 'red' },
+        network: 'input',
+        generation: 2,
+        direction: 'input',
+      },
+    ]);
+    expect(compilation.resolvedCircuit?.ir.entities[0]?.connectorBindings[0]?.generation).toBe(2);
+    expect(() => elaborateDirectPlan(compilation.plan!, context)).not.toThrow();
+  });
+
   test('records provider-authorized shared calls without preselecting a lane', () => {
     const context = sharedCallEntityExecutionContext();
     const parsed = parseFile({
@@ -1608,6 +1641,123 @@ output += result;`,
       'input',
       'output',
     ]);
+  });
+
+  test('reads one repeated shared input identity through a single lazy output', () => {
+    const context = sharedCallEntityExecutionContext();
+    const source = `const input = new Network();
+const entity = Entity('entity:synthetic-shared-two-color');
+entity(input, input);
+const output: Network = entity;
+const doubled = output * 2;
+const sink = new Network();
+sink += doubled;`;
+    const compilation = compileSourceProgram(
+      { path: 'entity-shared-call-repeated-input-read.factorio.ts', text: source },
+      { trustedEntityReplayContext: context, entityPrototypeResolver: syntheticEntityResolver() },
+    );
+
+    expect(compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error')).toEqual(
+      [],
+    );
+    expect(compilation.plan?.entities[0]?.sharedConnectorAttachments).toMatchObject([
+      { network: 'input', direction: 'input' },
+      { direction: 'output' },
+    ]);
+    expect(compilation.plan?.entities[0]?.sharedConnectorAttachments).toHaveLength(2);
+    expect(compilation.resolvedCircuit?.ir.entities[0]?.connectorBindings).toHaveLength(2);
+  });
+
+  test('locates ambiguous shared input reads and cites both attachment sources', () => {
+    const context = sharedCallEntityExecutionContext();
+    const source = `const first = new Network();
+const second = new Network();
+const entity = Entity('entity:synthetic-shared-two-color');
+entity(first, second);
+const doubled = entity * 2;`;
+    const path = 'entity-shared-call-ambiguous-read.factorio.ts';
+    const parsed = parseFile({ path, text: source });
+    const inputStart = source.indexOf('first, second');
+    const secondStart = source.indexOf('second);');
+    const readStart = source.indexOf('entity * 2');
+
+    expect(() =>
+      executeElaborationProgram(transformElaborationModule(parsed), {
+        trustedEntityReplayContext: context,
+        entityPrototypeResolver: syntheticEntityResolver(),
+      }),
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'RT2032',
+        span: expect.objectContaining({
+          fileId: sourceFileId(path),
+          start: readStart,
+        }),
+        related: expect.arrayContaining([
+          expect.objectContaining({
+            message: 'Input attachment originates here.',
+            span: expect.objectContaining({ fileId: sourceFileId(path), start: inputStart }),
+          }),
+          expect.objectContaining({
+            message: 'Input attachment originates here.',
+            span: expect.objectContaining({ fileId: sourceFileId(path), start: secondStart }),
+          }),
+        ]),
+      }),
+    );
+  });
+
+  test('reuses a fixed shared output facet for Entity readable contexts', () => {
+    const context = sharedCallEntityExecutionContext();
+    const source = `const input = new Network();
+const output = new Network();
+const entity = Entity('entity:synthetic-shared-two-color');
+entity.bind('shared', 'shared-red', output, 'output');
+entity(input);
+const doubled = entity * 2;
+const sink = new Network();
+sink += doubled;`;
+    const compilation = compileSourceProgram(
+      { path: 'entity-shared-call-fixed-output-read.factorio.ts', text: source },
+      { trustedEntityReplayContext: context, entityPrototypeResolver: syntheticEntityResolver() },
+    );
+
+    expect(compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error')).toEqual(
+      [],
+    );
+    expect(compilation.plan?.entities[0]?.connectorBindings).toMatchObject([
+      { network: 'output', direction: 'output' },
+    ]);
+    expect(compilation.plan?.entities[0]?.sharedConnectorAttachments).toMatchObject([
+      { network: 'input', direction: 'input' },
+    ]);
+    expect(compilation.resolvedCircuit?.ir.entities[0]?.connectorBindings).toHaveLength(2);
+  });
+
+  test('rebases a fixed Entity facet when its Network is returned', () => {
+    const context = sharedCallEntityExecutionContext();
+    const source = `function Build(): Network {
+  const output = new Network();
+  const entity = Entity('entity:synthetic-shared-two-color');
+  entity.bind('shared', 'shared-red', output, 'output');
+  return output;
+}
+const output = Build();
+const doubled = output * 2;
+const sink = new Network();
+sink += doubled;`;
+    const compilation = compileSourceProgram(
+      { path: 'entity-shared-call-fixed-output-return.factorio.ts', text: source },
+      { trustedEntityReplayContext: context, entityPrototypeResolver: syntheticEntityResolver() },
+    );
+
+    expect(compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error')).toEqual(
+      [],
+    );
+    expect(compilation.plan?.entities[0]?.connectorBindings).toMatchObject([
+      { network: 'output', direction: 'output' },
+    ]);
+    expect(compilation.resolvedCircuit?.ir.entities[0]?.connectorBindings).toHaveLength(1);
   });
 
   test.each([

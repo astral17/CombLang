@@ -333,6 +333,30 @@ b += x;`);
     expect(error).not.toHaveBeenCalled();
   });
 
+  test('exports a shared Entity lazy output through the selected CLI provider', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const path = await sourceFile(`const input = new Network();
+const machine = Entity('iron-chest');
+machine(input);
+const output: Network = machine;
+const doubled = output * 2;`);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    expect(await run(['blueprint', 'export', '--json', path], { prototypes })).toBe(0);
+    const response = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(response.ok).toBe(true);
+    const blueprint = response.document.blueprint;
+    expect(
+      blueprint.entities.filter(({ name }: { name: string }) => name === 'iron-chest'),
+    ).toHaveLength(1);
+    expect(
+      blueprint.entities.filter(({ name }: { name: string }) => name === 'arithmetic-combinator'),
+    ).toHaveLength(1);
+    expect(blueprint.wires).toHaveLength(1);
+    expect(error).not.toHaveBeenCalled();
+  });
+
   test('rejects a host-bound Entity context for a different selected provider before execution', async () => {
     const path = await sourceFile(`throw new Error('source executed');`);
     const firstDatabase = syntheticPrototypeDatabase();

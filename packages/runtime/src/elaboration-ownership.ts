@@ -62,7 +62,7 @@ function assertReadable(
       ],
     );
   }
-  if (network.generation !== state.ownership.generation) {
+  if (state.ownership.owner === 'lost' || network.generation !== state.ownership.generation) {
     const move = state.ownership.lastMove;
     throw new ElaborationExecutionError(
       state.ownership.owner === 'lost'

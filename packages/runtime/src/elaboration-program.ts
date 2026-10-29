@@ -969,7 +969,14 @@ class ElaborationRecorder {
         throw new Error('Executed provenance stack underflow.');
       }
       if (frame !== undefined) {
-        this.#ownership.releaseFrame(frame, isRawSpan(rawSpan) ? this.#span(rawSpan) : undefined);
+        const releasedAt = isRawSpan(rawSpan) ? this.#span(rawSpan) : undefined;
+        const movedOwnerships = new Set(frame.moves.map(({ ownership }) => ownership));
+        this.#ownership.releaseFrame(frame, releasedAt);
+        for (const ownership of movedOwnerships) {
+          if (ownership.owner === 'lost' && ownership.consumedAt === undefined) {
+            this.#refreshEntityConnectionsForOwnership(ownership);
+          }
+        }
       }
     },
     instantiate: (...args: unknown[]): unknown => {
@@ -1650,29 +1657,31 @@ class ElaborationRecorder {
       // Untyped functions remain ordinary JavaScript for non-Network values.
       // In particular, do not turn generic Producer arguments into Networks.
       if (!requiresNetwork && !this.#isNetwork(value)) return value;
-      const network = bindNetworkReferenceParameter(
-        value,
-        {
-          functionName: this.#currentFunctionName(),
-          parameter,
-          requiredType: 'Network',
-          ...(fixedColor === undefined ? {} : { fixedColor }),
-          source: this.#span(argumentSpan),
-        },
-        {
-          networkFacet: (candidate) => this.#readableNetworkFacet(candidate, argumentSpan),
-          recordDslCall: () => this.#recordDslCall(),
-          acceptUnrestricted: (candidate) =>
-            this.#acceptUnrestrictedNetwork(candidate, declarationSpan, parameter),
-          requireColor: (candidate, color, source) =>
-            this.#requireNetworkColor(candidate, 'readonly', color, {
-              start: source.start,
-              end: source.end,
-            }),
-        },
-      );
-      this.#recordUnrestrictedReferenceWarning(declarationSpan, parameter);
-      return network;
+      return this.#withEntityReadTransaction(value, argumentSpan, () => {
+        const network = bindNetworkReferenceParameter(
+          value,
+          {
+            functionName: this.#currentFunctionName(),
+            parameter,
+            requiredType: 'Network',
+            ...(fixedColor === undefined ? {} : { fixedColor }),
+            source: this.#span(argumentSpan),
+          },
+          {
+            networkFacet: (candidate) => this.#readableNetworkFacet(candidate, argumentSpan),
+            recordDslCall: () => this.#recordDslCall(),
+            acceptUnrestricted: (candidate) =>
+              this.#acceptUnrestrictedNetwork(candidate, declarationSpan, parameter),
+            requireColor: (candidate, color, source) =>
+              this.#requireNetworkColor(candidate, 'readonly', color, {
+                start: source.start,
+                end: source.end,
+              }),
+          },
+        );
+        this.#recordUnrestrictedReferenceWarning(declarationSpan, parameter);
+        return network;
+      });
     },
     parameterContract: (
       value: unknown,
@@ -1688,56 +1697,58 @@ class ElaborationRecorder {
       ) {
         throw new Error('Invalid executed parameter contract.');
       }
-      const result = bindParameterContract(
-        value,
-        contract,
-        {
-          functionName: this.#currentFunctionName(),
-          parameter,
-          source: this.#span(argumentSpan),
-          frame: this.#currentFunctionFrame(),
-        },
-        {
-          networkFacet: (candidate) => this.#networkFacet(candidate),
-          readableNetworkFacet: (candidate, source) =>
-            this.#readableNetworkFacet(candidate, source),
-          isConcreteNetworkSignal: (candidate) => this.#isConcreteNetworkSignal(candidate),
-          bindNetworkSignal: (candidate, parameter, source) =>
-            this.#networkSignalParameter(candidate, parameter, this.#rawSpan(source)),
-          isNetwork: (candidate): candidate is NetworkValue => this.#isNetwork(candidate),
-          isCombinator: (candidate): candidate is CombinatorValue => this.#isCombinator(candidate),
-          selectCombinatorMove: (candidate, source) =>
-            this.#selectCombinatorMove(candidate, source),
-          isPair: (candidate): candidate is PairValue => this.#isPair(candidate),
-          isPairSelection: (candidate): candidate is PairSelectedValue =>
-            this.#isPairSelection(candidate),
-          recordDslCall: () => this.#recordDslCall(),
-          stateFor: (network) => this.#networkState(network),
-          assertReadable: (network, source) => this.#ownership.assertReadable(network, source),
-          assertConsumable: (network, source, role) =>
-            this.#ownership.assertConsumable(network, source, role),
-          requireColor: (network, capability, color, source) =>
-            this.#requireNetworkColor(network, capability, color, {
-              start: source.start,
-              end: source.end,
-            }),
-          borrow: (network, capability, name, source, frame) =>
-            this.#ownership.borrow(network, capability, name, source, frame),
-          moveToFrame: (network, source, frame) =>
-            this.#ownership.moveToFrame(network, source, frame),
-          brandNetwork: (network, state) => this.#networkValue(network, state),
-          bindCombinator: (candidate, producerType, _name, source) =>
-            this.#combinatorHandle(candidate, producerType, source),
-          bindNetwork: (candidate, capability, name, color, source) =>
-            this.#networkParameter(candidate, capability, name, color, {
-              start: source.start,
-              end: source.end,
-            }),
-          acceptUnrestricted: (network) =>
-            this.#acceptUnrestrictedNetwork(network, declarationSpan, parameter),
-        },
+      return this.#withEntityReadTransaction(value, argumentSpan, () =>
+        bindParameterContract(
+          value,
+          contract,
+          {
+            functionName: this.#currentFunctionName(),
+            parameter,
+            source: this.#span(argumentSpan),
+            frame: this.#currentFunctionFrame(),
+          },
+          {
+            networkFacet: (candidate) => this.#networkFacet(candidate),
+            readableNetworkFacet: (candidate, source) =>
+              this.#readableNetworkFacet(candidate, source),
+            isConcreteNetworkSignal: (candidate) => this.#isConcreteNetworkSignal(candidate),
+            bindNetworkSignal: (candidate, parameter, source) =>
+              this.#networkSignalParameter(candidate, parameter, this.#rawSpan(source)),
+            isNetwork: (candidate): candidate is NetworkValue => this.#isNetwork(candidate),
+            isCombinator: (candidate): candidate is CombinatorValue =>
+              this.#isCombinator(candidate),
+            selectCombinatorMove: (candidate, source) =>
+              this.#selectCombinatorMove(candidate, source),
+            isPair: (candidate): candidate is PairValue => this.#isPair(candidate),
+            isPairSelection: (candidate): candidate is PairSelectedValue =>
+              this.#isPairSelection(candidate),
+            recordDslCall: () => this.#recordDslCall(),
+            stateFor: (network) => this.#networkState(network),
+            assertReadable: (network, source) => this.#ownership.assertReadable(network, source),
+            assertConsumable: (network, source, role) =>
+              this.#ownership.assertConsumable(network, source, role),
+            requireColor: (network, capability, color, source) =>
+              this.#requireNetworkColor(network, capability, color, {
+                start: source.start,
+                end: source.end,
+              }),
+            borrow: (network, capability, name, source, frame) =>
+              this.#ownership.borrow(network, capability, name, source, frame),
+            moveToFrame: (network, source, frame) =>
+              this.#moveNetworkToFrame(network, source, frame),
+            brandNetwork: (network, state) => this.#networkValue(network, state),
+            bindCombinator: (candidate, producerType, _name, source) =>
+              this.#combinatorHandle(candidate, producerType, source),
+            bindNetwork: (candidate, capability, name, color, source) =>
+              this.#networkParameter(candidate, capability, name, color, {
+                start: source.start,
+                end: source.end,
+              }),
+            acceptUnrestricted: (network) =>
+              this.#acceptUnrestrictedNetwork(network, declarationSpan, parameter),
+          },
+        ),
       );
-      return result;
     },
     borrowParameter: (
       value: unknown,
@@ -1814,46 +1825,48 @@ class ElaborationRecorder {
           'A function Network return must be Network or Readonly<Network>, optionally with R/G.',
         );
       }
-      return returnNetworkValue(
-        value,
-        {
-          capability,
-          ...(fixedColor === undefined ? {} : { fixedColor }),
-          source: this.#span(rawSpan),
-        },
-        {
-          networkFacet: (candidate) => this.#networkFacet(candidate),
-          requireColor: (network, requiredCapability, color) =>
-            this.#requireNetworkColor(network, requiredCapability, color, rawSpan),
-          transferToCaller: (network) => this.#returnOwnedNetwork(network, rawSpan),
-          assertReadable: (network, source) => this.#ownership.assertReadable(network, source),
-          readonlyAliasState: (network) => {
-            const frame = this.#currentFunctionFrame();
-            const state = this.#networkState(network);
-            if (
-              frame === undefined ||
-              network.capability !== 'readonly' ||
-              state.borrow?.capability === 'ref' ||
-              state.ownership.owner === frame.owner ||
-              (state.ownership.owner !== 'top-level' &&
-                !this.#ownershipFrames.some(
-                  (ancestor) => ancestor?.owner === state.ownership.owner,
-                ))
-            ) {
-              return undefined;
-            }
-            // The source was validated before this seam. Do not alter its borrow token:
-            // closures retain the original view and still expire on frame release.
-            const { borrow, ...aliasState } = state;
-            return borrow !== undefined && !frame.borrows.includes(borrow)
-              ? { ...aliasState, borrow }
-              : aliasState;
+      return this.#withEntityReadTransaction(value, rawSpan, () =>
+        returnNetworkValue(
+          value,
+          {
+            capability,
+            ...(fixedColor === undefined ? {} : { fixedColor }),
+            source: this.#span(rawSpan),
           },
-          isTransparentAlias: (network) => this.#isTransparentNetwork(network),
-          returnTransparent: (network) => network,
-          stateFor: (network) => this.#networkState(network),
-          brandNetwork: (network, state) => this.#networkValue(network, state),
-        },
+          {
+            networkFacet: (candidate) => this.#readableNetworkFacet(candidate, rawSpan),
+            requireColor: (network, requiredCapability, color) =>
+              this.#requireNetworkColor(network, requiredCapability, color, rawSpan),
+            transferToCaller: (network) => this.#returnOwnedNetwork(network, rawSpan),
+            assertReadable: (network, source) => this.#ownership.assertReadable(network, source),
+            readonlyAliasState: (network) => {
+              const frame = this.#currentFunctionFrame();
+              const state = this.#networkState(network);
+              if (
+                frame === undefined ||
+                network.capability !== 'readonly' ||
+                state.borrow?.capability === 'ref' ||
+                state.ownership.owner === frame.owner ||
+                (state.ownership.owner !== 'top-level' &&
+                  !this.#ownershipFrames.some(
+                    (ancestor) => ancestor?.owner === state.ownership.owner,
+                  ))
+              ) {
+                return undefined;
+              }
+              // The source was validated before this seam. Do not alter its borrow token:
+              // closures retain the original view and still expire on frame release.
+              const { borrow, ...aliasState } = state;
+              return borrow !== undefined && !frame.borrows.includes(borrow)
+                ? { ...aliasState, borrow }
+                : aliasState;
+            },
+            isTransparentAlias: (network) => this.#isTransparentNetwork(network),
+            returnTransparent: (network) => network,
+            stateFor: (network) => this.#networkState(network),
+            brandNetwork: (network, state) => this.#networkValue(network, state),
+          },
+        ),
       );
     },
     networkArgument: (
@@ -1873,25 +1886,27 @@ class ElaborationRecorder {
       ) {
         throw new Error('Invalid Network call-argument descriptor.');
       }
-      return resolveNetworkArgument(
-        value,
-        {
-          functionName,
-          parameter,
-          capability: capability as NetworkValue['capability'],
-          ...(fixedColor === undefined ? {} : { fixedColor }),
-          source: this.#span(rawSpan),
-        },
-        {
-          networkFacet: (candidate) =>
-            capability === 'readonly'
-              ? this.#readableNetworkFacet(candidate, rawSpan)
-              : this.#networkFacet(candidate),
-          assertReadable: (network, source, role) =>
-            this.#ownership.assertReadable(network, source, role),
-          stateFor: (network) => this.#networkState(network),
-          brandNetwork: (network, state) => this.#networkValue(network, state),
-        },
+      return this.#withEntityReadTransaction(value, rawSpan, () =>
+        resolveNetworkArgument(
+          value,
+          {
+            functionName,
+            parameter,
+            capability: capability as NetworkValue['capability'],
+            ...(fixedColor === undefined ? {} : { fixedColor }),
+            source: this.#span(rawSpan),
+          },
+          {
+            networkFacet: (candidate) =>
+              capability === 'readonly'
+                ? this.#readableNetworkFacet(candidate, rawSpan)
+                : this.#networkFacet(candidate),
+            assertReadable: (network, source, role) =>
+              this.#ownership.assertReadable(network, source, role),
+            stateFor: (network) => this.#networkState(network),
+            brandNetwork: (network, state) => this.#networkValue(network, state),
+          },
+        ),
       );
     },
     take: (...args: unknown[]): unknown => {
@@ -1944,22 +1959,40 @@ class ElaborationRecorder {
       rawSpan: RawSpan,
       readBinding?: () => unknown,
     ): unknown => {
-      let result: unknown;
-      if (this.#isCombinator(value)) {
-        const network = this.#rawNetworkFacet(value)!;
-        this.#combinators.bindName(value, name);
-        if (fixedColor !== undefined) {
-          this.#requireNetworkColor(network, 'readonly', fixedColor, rawSpan);
+      const bind = (): unknown => {
+        let result: unknown;
+        if (this.#isCombinator(value)) {
+          const network = this.#rawNetworkFacet(value)!;
+          this.#combinators.bindName(value, name);
+          if (fixedColor !== undefined) {
+            this.#requireNetworkColor(network, 'readonly', fixedColor, rawSpan);
+          }
+          result = networkNarrowing ? network : value;
+        } else if (this.#isEntity(value) && networkNarrowing) {
+          const network = this.#readableNetworkFacet(value, rawSpan);
+          if (network === undefined) {
+            throw new ElaborationExecutionError(
+              'Entity has no readable Network projection.',
+              this.#span(rawSpan),
+              'RT2032',
+            );
+          }
+          if (fixedColor !== undefined) {
+            this.#requireNetworkColor(network, 'readonly', fixedColor, rawSpan);
+          }
+          result = network;
+        } else {
+          if (this.#isNetwork(value) && fixedColor !== undefined) {
+            this.#requireNetworkColor(value, 'readonly', fixedColor, rawSpan);
+          }
+          result = value;
         }
-        result = networkNarrowing ? network : value;
-      } else {
-        if (this.#isNetwork(value) && fixedColor !== undefined) {
-          this.#requireNetworkColor(value, 'readonly', fixedColor, rawSpan);
-        }
-        result = value;
-      }
-      if (readBinding !== undefined) this.#captureNetworkAlias(name, readBinding, rawSpan);
-      return result;
+        if (readBinding !== undefined) this.#captureNetworkAlias(name, readBinding, rawSpan);
+        return result;
+      };
+      return this.#isEntity(value) && networkNarrowing
+        ? this.#withTopologyTransaction(rawSpan, bind)
+        : bind();
     },
     narrowNetwork: (
       value: unknown,
@@ -2226,7 +2259,9 @@ class ElaborationRecorder {
         this.#deciderParameterSlots.set(result.condition as object, prepared.root);
         return result;
       }
-      return operators.dispatchComparison(operator, left, right, rawSpan, this.#operatorContext);
+      return this.#withEntityReadOperandsTransaction(left, right, rawSpan, () =>
+        operators.dispatchComparison(operator, left, right, rawSpan, this.#operatorContext),
+      );
     },
     controlTest: (value: unknown, rawSpan: RawSpan): unknown => {
       this.#rejectParameterControlValue(value, rawSpan);
@@ -2526,6 +2561,23 @@ class ElaborationRecorder {
       }
       if (this.#isCombinator(value) && (key === 'then' || key === 'else')) {
         return this.#member(value, key, rawSpan);
+      }
+      if (this.#isEntity(value) && (this.#isSignal(key) || this.#isWildcardToken(key))) {
+        const profile = this.#entityProfile(value, this.#span(rawSpan));
+        if (profile.sharedCallConnector !== undefined) {
+          return this.#withEntityReadTransaction(value, rawSpan, () => {
+            this.#recordDslCall();
+            const network = this.#readableNetworkFacet(value, rawSpan);
+            if (network === undefined) {
+              throw new ElaborationExecutionError(
+                'Shared Entity selection requires one unambiguous output Network.',
+                this.#span(rawSpan),
+                'RT2032',
+              );
+            }
+            return this.#select(network, key, rawSpan);
+          });
+        }
       }
       if (
         this.#isNetwork(value) ||
@@ -2827,7 +2879,9 @@ class ElaborationRecorder {
         );
       }
       if (!sourceExpression) {
-        return operators.dispatchBinary(operator, left, right, rawSpan, this.#operatorContext);
+        return this.#withEntityReadOperandsTransaction(left, right, rawSpan, () =>
+          operators.dispatchBinary(operator, left, right, rawSpan, this.#operatorContext),
+        );
       }
       if (operator === '*' && this.#parameterCapture !== undefined) {
         const leftParameter = findBlueprintParameterHandle(left);
@@ -2880,7 +2934,9 @@ class ElaborationRecorder {
         !leftParameterLike &&
         !rightParameterLike
       ) {
-        return operators.dispatchBinary(operator, left, right, rawSpan, this.#operatorContext);
+        return this.#withEntityReadOperandsTransaction(left, right, rawSpan, () =>
+          operators.dispatchBinary(operator, left, right, rawSpan, this.#operatorContext),
+        );
       }
       try {
         if (this.#parameterCapture === undefined) {
@@ -3110,12 +3166,16 @@ class ElaborationRecorder {
       for (const authority of this.#entityAuthorityList) {
         if (authority.owner === 'retired') continue;
         for (const facet of authority.facets.values()) {
-          this.#assertReadableNetworkAt(facet.network, facet.source, 'Entity facet');
+          this.#assertPhysicalEntityConnectionAtFinalization(
+            facet.network,
+            facet.source,
+            'Entity facet',
+          );
         }
         for (const attachment of authority.sharedAttachments) {
           const state = this.#networkState(attachment.network);
           if (state.ownership.consumedAt === undefined) {
-            this.#assertReadableNetworkAt(
+            this.#assertPhysicalEntityConnectionAtFinalization(
               attachment.network,
               attachment.source,
               'Entity connector attachment',
@@ -3124,7 +3184,7 @@ class ElaborationRecorder {
             attachment.network.generation !== state.ownership.generation ||
             !this.#networkTransfers.some(({ source }) => source === attachment.network.name)
           ) {
-            this.#assertReadableNetworkAt(
+            this.#assertPhysicalEntityConnectionAtFinalization(
               attachment.network,
               attachment.source,
               'Entity connector attachment',
@@ -5420,6 +5480,27 @@ class ElaborationRecorder {
     }
   }
 
+  #withEntityReadTransaction<T>(
+    value: unknown,
+    source: RawSpan | SourceSpan,
+    operation: () => T,
+  ): T {
+    return this.#isEntity(value)
+      ? this.#withTopologyTransaction(this.#rawSpan(source), operation)
+      : operation();
+  }
+
+  #withEntityReadOperandsTransaction<T>(
+    left: unknown,
+    right: unknown,
+    rawSpan: RawSpan,
+    operation: () => T,
+  ): T {
+    return this.#isEntity(left) || this.#isEntity(right)
+      ? this.#withTopologyTransaction(rawSpan, operation)
+      : operation();
+  }
+
   #withTopologyTransaction<T>(rawSpan: RawSpan, operation: () => T): T {
     const snapshot = this.#topologySnapshot();
     try {
@@ -5479,6 +5560,24 @@ class ElaborationRecorder {
   #assertReadableNetworkAt(network: NetworkValue, source: SourceSpan, role = 'Network'): void {
     this.#ownership.assertReadable(network, source, role);
     this.#markOutputUsed(network);
+  }
+
+  #assertPhysicalEntityConnectionAtFinalization(
+    network: NetworkValue,
+    source: SourceSpan,
+    role: string,
+  ): void {
+    const state = this.#networkState(network);
+    if (
+      network.capability === 'ref' &&
+      state.ownership.owner === 'lost' &&
+      state.ownership.consumedAt === undefined &&
+      network.generation === state.ownership.generation
+    ) {
+      this.#markOutputUsed(network);
+      return;
+    }
+    this.#assertReadableNetworkAt(network, source, role);
   }
 
   #markOutputUsed(network: NetworkValue): void {
@@ -5557,8 +5656,7 @@ class ElaborationRecorder {
             }),
           borrow: (network, borrowCapability, name, source, frame) =>
             this.#ownership.borrow(network, borrowCapability, name, source, frame),
-          moveToFrame: (network, source, frame) =>
-            this.#ownership.moveToFrame(network, source, frame),
+          moveToFrame: (network, source, frame) => this.#moveNetworkToFrame(network, source, frame),
           brandNetwork: (network, state) => this.#networkValue(network, state),
         },
       );
@@ -5705,43 +5803,57 @@ class ElaborationRecorder {
       return returned;
     };
     for (const facet of authority.facets.values()) {
-      const network = facet.locallyOwned
-        ? returnConnectionNetwork(facet.network)
-        : this.#networkValue(
-            {
-              kind: 'network',
-              name: facet.network.name,
-              declaration: facet.network.declaration,
-              capability: 'readonly',
-              generation: facet.network.generation,
-            },
-            { ownership: this.#networkState(facet.network).ownership },
-          );
+      const ownership = this.#networkState(facet.network).ownership;
+      const alreadyReturned = returnedNetworks.get(ownership);
+      const network =
+        alreadyReturned ??
+        (facet.locallyOwned
+          ? returnConnectionNetwork(facet.network)
+          : this.#networkValue(
+              {
+                kind: 'network',
+                name: facet.network.name,
+                declaration: facet.network.declaration,
+                capability: 'readonly',
+                generation: facet.network.generation,
+              },
+              { ownership: this.#networkState(facet.network).ownership },
+            ));
       returnedAuthority.facets.set(this.#entityEndpointKey(facet.endpoint), {
         ...facet,
         network,
+        locallyOwned: this.#networkState(network).ownership.owner === returnedAuthority.owner,
       });
     }
     for (const attachment of authority.sharedAttachments) {
-      const network = attachment.locallyOwned
-        ? returnConnectionNetwork(attachment.network)
-        : this.#networkValue(
-            {
-              kind: 'network',
-              name: attachment.network.name,
-              declaration: attachment.network.declaration,
-              capability: 'readonly',
-              generation: attachment.network.generation,
-            },
-            { ownership: this.#networkState(attachment.network).ownership },
-          );
+      const ownership = this.#networkState(attachment.network).ownership;
+      const alreadyReturned = returnedNetworks.get(ownership);
+      const network =
+        alreadyReturned ??
+        (attachment.locallyOwned
+          ? returnConnectionNetwork(attachment.network)
+          : this.#networkValue(
+              {
+                kind: 'network',
+                name: attachment.network.name,
+                declaration: attachment.network.declaration,
+                capability: 'readonly',
+                generation: attachment.network.generation,
+              },
+              { ownership: this.#networkState(attachment.network).ownership },
+            ));
       const logicalNetwork =
         attachment.locallyOwned &&
         this.#networkState(attachment.logicalNetwork).ownership ===
           this.#networkState(attachment.network).ownership
           ? network
           : attachment.logicalNetwork;
-      returnedAuthority.sharedAttachments.push({ ...attachment, logicalNetwork, network });
+      returnedAuthority.sharedAttachments.push({
+        ...attachment,
+        logicalNetwork,
+        network,
+        locallyOwned: this.#networkState(network).ownership.owner === returnedAuthority.owner,
+      });
     }
     authority.owner = 'retired';
     authority.retiredAt = source;
@@ -5776,6 +5888,87 @@ class ElaborationRecorder {
       }
       attachment.network = target;
     }
+  }
+
+  #rebaseEntityConnectionsToNetwork(network: NetworkValue): void {
+    const ownership = this.#networkState(network).ownership;
+    for (const authority of this.#entityAuthorityList) {
+      if (authority.owner === 'retired') continue;
+      let changed = false;
+      for (const facet of authority.facets.values()) {
+        if (this.#networkState(facet.network).ownership !== ownership) continue;
+        facet.network = network;
+        facet.locallyOwned = ownership.owner === authority.owner;
+        changed = true;
+      }
+      for (const [index, attachment] of authority.sharedAttachments.entries()) {
+        const logicalMatches =
+          this.#networkState(attachment.logicalNetwork).ownership === ownership;
+        const attachedMatches = this.#networkState(attachment.network).ownership === ownership;
+        if (!logicalMatches && !attachedMatches) continue;
+        authority.sharedAttachments[index] = {
+          ...attachment,
+          ...(logicalMatches ? { logicalNetwork: network } : {}),
+          ...(attachedMatches ? { network } : {}),
+          locallyOwned: ownership.owner === authority.owner,
+        };
+        changed = true;
+      }
+      if (changed) {
+        this.#syncEntityBindings(authority);
+        this.#syncEntitySharedAttachments(authority);
+      }
+    }
+  }
+
+  #moveNetworkToFrame(
+    network: NetworkValue,
+    source: SourceSpan,
+    frame: FunctionOwnershipFrame,
+  ): void {
+    this.#ownership.moveToFrame(network, source, frame);
+    this.#refreshEntityConnectionsForOwnership(this.#networkState(network).ownership, network);
+  }
+
+  #refreshEntityConnectionsForOwnership(
+    ownership: NetworkRuntimeState['ownership'],
+    preferred?: NetworkValue,
+  ): void {
+    let candidate =
+      preferred !== undefined && this.#networkState(preferred).ownership === ownership
+        ? preferred
+        : [...this.#networkValues.values()].find(
+            (network) => this.#networkState(network).ownership === ownership,
+          );
+    if (candidate === undefined) {
+      for (const authority of this.#entityAuthorityList) {
+        if (authority.owner === 'retired') continue;
+        candidate = [...authority.facets.values()]
+          .map(({ network }) => network)
+          .find((network) => this.#networkState(network).ownership === ownership);
+        candidate ??= authority.sharedAttachments
+          .flatMap(({ logicalNetwork, network }) => [logicalNetwork, network])
+          .find((network) => this.#networkState(network).ownership === ownership);
+        if (candidate !== undefined) break;
+      }
+    }
+    if (candidate === undefined) return;
+
+    const state = this.#networkState(candidate);
+    const connection = this.#networkValue(
+      {
+        kind: 'network',
+        name: candidate.name,
+        declaration: candidate.declaration,
+        capability: 'ref',
+        generation: ownership.generation,
+      },
+      {
+        ownership,
+        ...(state.borrow === undefined ? {} : { borrow: state.borrow }),
+      },
+    );
+    this.#rebaseEntityConnectionsToNetwork(connection);
   }
 
   #transferredNetworkTarget(sourceName: string): NetworkValue | undefined {
@@ -5850,7 +6043,7 @@ class ElaborationRecorder {
     const caller = this.#parentFunctionFrame();
     const state = this.#networkState(value);
     this.#ownership.returnToCaller(value, this.#span(rawSpan), frame, caller);
-    return this.#networkValue(
+    const returned = this.#networkValue(
       {
         kind: 'network',
         name: value.name,
@@ -5863,6 +6056,8 @@ class ElaborationRecorder {
         ...(state.borrow === undefined ? {} : { borrow: state.borrow }),
       },
     );
+    this.#rebaseEntityConnectionsToNetwork(returned);
+    return returned;
   }
 
   #path(): readonly string[] {
@@ -7484,11 +7679,127 @@ class ElaborationRecorder {
     return authority.entity;
   }
 
+  #sharedEntityReadableNetworkFacet(
+    entity: EntityValue,
+    profile: EntityProfile,
+    rawSpan: RawSpan,
+  ): NetworkValue {
+    const source = this.#span(rawSpan);
+    const authority = this.#entityAuthority(entity, source);
+    const connectorKey = profile.sharedCallConnector;
+    if (connectorKey === undefined || !profile.connectors.some(({ key }) => key === connectorKey)) {
+      throw new ElaborationExecutionError(
+        'Entity profile does not authorize its shared connector read projection.',
+        source,
+        'RT2031',
+      );
+    }
+
+    const attachments = [
+      ...authority.sharedAttachments
+        .filter((attachment) => attachment.connector === connectorKey)
+        .map((attachment) => ({
+          direction: attachment.direction,
+          logicalNetwork: attachment.logicalNetwork,
+          network: attachment.network,
+          source: attachment.source,
+        })),
+      ...[...authority.facets.values()]
+        .filter((facet) => facet.endpoint.connector === connectorKey)
+        .map((facet) => ({
+          direction: facet.direction,
+          logicalNetwork: facet.network,
+          network: facet.network,
+          source: facet.source,
+        })),
+    ];
+    const byDirection: Record<
+      'input' | 'output',
+      Map<NetworkOwnershipState, { network: NetworkValue; sources: SourceSpan[] }>
+    > = {
+      input: new Map(),
+      output: new Map(),
+    };
+
+    for (const attachment of attachments) {
+      const attachmentState = this.#networkState(attachment.network);
+      let network = attachment.network;
+      if (
+        attachmentState.ownership.consumedAt !== undefined ||
+        network.generation !== attachmentState.ownership.generation
+      ) {
+        const target =
+          this.#transferredNetworkTarget(attachment.logicalNetwork.name) ??
+          this.#transferredNetworkTarget(network.name);
+        if (target !== undefined) {
+          const targetState = this.#networkState(target);
+          network = this.#networkValue(
+            {
+              kind: 'network',
+              name: target.name,
+              declaration: target.declaration,
+              capability: attachment.network.capability,
+              generation: target.generation,
+            },
+            {
+              ownership: targetState.ownership,
+              ...(targetState.borrow === undefined ? {} : { borrow: targetState.borrow }),
+            },
+          );
+        }
+      }
+      this.#assertReadableNetworkAt(network, source, 'Entity connector attachment');
+      const ownership = this.#networkState(network).ownership;
+      const role = byDirection[attachment.direction];
+      const existing = role.get(ownership);
+      if (existing === undefined) {
+        role.set(ownership, { network, sources: [attachment.source] });
+      } else {
+        existing.sources.push(attachment.source);
+      }
+    }
+
+    const outputs = [...byDirection.output.values()];
+    if (outputs.length > 1) {
+      throw new ElaborationExecutionError(
+        'Shared Entity has more than one distinct output Network.',
+        source,
+        'RT2032',
+        outputs.flatMap(({ sources }) =>
+          sources.map((span) => ({ message: 'Output attachment originates here.', span })),
+        ),
+      );
+    }
+    if (outputs.length === 1) return outputs[0]!.network;
+
+    const inputs = [...byDirection.input.values()];
+    if (inputs.length === 1) {
+      const output = this.#network(`$entity-read:${authority.entity.id}`, rawSpan);
+      this.#attachSharedEntity(authority.entity, connectorKey, output, 'output', rawSpan);
+      return output;
+    }
+
+    throw new ElaborationExecutionError(
+      inputs.length === 0
+        ? 'Shared Entity has no connected Network from which to infer an output.'
+        : 'Shared Entity input attachments do not identify one unambiguous output Network.',
+      source,
+      'RT2032',
+      inputs.flatMap(({ sources }) =>
+        sources.map((span) => ({ message: 'Input attachment originates here.', span })),
+      ),
+    );
+  }
+
   #readableNetworkFacet(value: unknown, source: RawSpan | SourceSpan): NetworkValue | undefined {
     if (this.#isEntity(value)) {
-      const profile = this.#entityContext?.profiles.find(
-        ({ ref }) => ref.profileId === value.profile.profileId,
-      );
+      const rawSpan = this.#rawSpan(source);
+      const profile = this.#entityProfile(value, this.#sourceSpan(source));
+      if (profile.sharedCallConnector !== undefined) {
+        return this.#withTopologyTransaction(rawSpan, () =>
+          this.#sharedEntityReadableNetworkFacet(value, profile, rawSpan),
+        );
+      }
       const projection = profile?.defaultReadProjection;
       if (projection === null || projection === undefined) {
         throw new ElaborationExecutionError(

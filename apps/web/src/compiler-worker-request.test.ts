@@ -464,6 +464,35 @@ const output = Scale(input[A]);`,
     expect(request).not.toHaveProperty('prototypes');
   });
 
+  test('exports a lazily inferred shared Entity output through the Worker boundary', async () => {
+    const response = await handleCompilerWorkerRequest({
+      kind: 'parse',
+      revision: 81,
+      file: {
+        path: 'worker-shared-entity-readable-output.factorio.ts',
+        text: `const input = new Network();
+const machine = Entity('iron-chest');
+machine(input);
+const output: Network = machine;
+const doubled = output * 2;`,
+      },
+      prototypeProfile: { source: builtinPrototypeDatabaseSource },
+      blueprintExport: { parameters: false, label: '' },
+    });
+
+    expect(
+      response.result.pipelineDiagnostics.filter(({ severity }) => severity === 'error'),
+    ).toEqual([]);
+    expect(response.result.plan?.entities[0]?.sharedConnectorAttachments).toHaveLength(2);
+    expect(response.result.blueprintExport).toMatchObject({ ok: true });
+    if (response.result.blueprintExport?.ok !== true) {
+      throw new Error('Expected Worker blueprint export to succeed.');
+    }
+    const entities = response.result.blueprintExport.document.blueprint.entities;
+    expect(entities.filter(({ name }) => name === 'iron-chest')).toHaveLength(1);
+    expect(entities.filter(({ name }) => name === 'arithmetic-combinator')).toHaveLength(1);
+  });
+
   test('normalizes raw input in the Worker and reports warnings without source-side parsing', async () => {
     const response = await handleCompilerWorkerRequest({
       kind: 'parse',
