@@ -4076,13 +4076,14 @@ ${outputSource}`,
   });
 
   test.each([
-    ['ANY token', 'amount * ANY'],
-    ['ALL token', 'amount * ALL'],
-    ['Anything selection', 'amount * Anything(input)'],
-    ['Everything selection', 'amount * Everything(input)'],
+    ['qualified Anything selection', 'amount * Anything(input)'],
+    ['qualified Everything selection', 'amount * Everything(input)'],
+    ['reversed qualified Anything selection', 'Anything(input) * amount'],
+    ['reversed qualified Everything selection', 'Everything(input) * amount'],
     ['derived numeric expression', '(amount + 1) * EACH'],
+    ['derived wildcard numeric expression', '(amount + 1) * ANYTHING'],
     ['Signal parameter', 'channel * EACH'],
-  ])('does not accept %s as a parameterized EACH count output', (_kind, expression) => {
+  ])('does not accept %s as a parameterized Decider count output', (_kind, expression) => {
     const text = `const amount = Param.number('Count', 5);
 const channel = Param.signal('Channel', Signal('virtual', 'signal-A'));
 const input = new Network();
@@ -4156,6 +4157,61 @@ output += laterReservation;`,
         elseOutputs: [{ kind: 'each-constant', value: 9 }],
       },
       { outputs: [{ kind: 'each-constant', value: 1 }] },
+    ]);
+    expect(reset.plan).toEqual(original.plan);
+    expect(overridden.plan.entities.map(({ id }) => id)).toEqual(
+      original.plan.entities.map(({ id }) => id),
+    );
+    expect(sourceExecutions).toBe(1);
+  });
+
+  test('reserves later quantifier constant counts before choosing an automatic parameter default', () => {
+    let sourceExecutions = 0;
+    const compilation = compileSourceProgram(
+      {
+        path: 'automatic-parameter-quantifier-output.factorio.ts',
+        text: `const amount = Param.number('Count');
+const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output = new Network();
+const gate = when(input[A] > 0).then(amount * ANYTHING);
+output += gate;
+gate.else(ALL * amount);
+const laterReservation = Decider({ condition: input[A] > 0, outputs: [1 * EVERYTHING] });
+output += laterReservation;`,
+      },
+      parameterHost(),
+      [],
+      (stage) => {
+        if (stage === 'execute') sourceExecutions += 1;
+      },
+    );
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const parameter = listSourceCompilationParameters(compilation)[0]!;
+    expect(parameter).toMatchObject({ kind: 'number', defaultValue: 2 });
+
+    const original = bindSourceCompilationCircuit(compilation);
+    const overridden = bindSourceCompilationCircuit(compilation, [
+      { parameter: parameter.parameter, value: 9 },
+    ]);
+    const reset = bindSourceCompilationCircuit(compilation, []);
+    expect(original.plan.producers).toMatchObject([
+      {
+        kind: 'decider',
+        outputs: [{ kind: 'wildcard-constant', wildcard: 'anything', value: 2 }],
+        elseOutputs: [{ kind: 'wildcard-constant', wildcard: 'everything', value: 2 }],
+      },
+      {
+        kind: 'decider',
+        outputs: [{ kind: 'wildcard-constant', wildcard: 'everything', value: 1 }],
+      },
+    ]);
+    expect(overridden.plan.producers).toMatchObject([
+      {
+        outputs: [{ kind: 'wildcard-constant', wildcard: 'anything', value: 9 }],
+        elseOutputs: [{ kind: 'wildcard-constant', wildcard: 'everything', value: 9 }],
+      },
+      { outputs: [{ kind: 'wildcard-constant', wildcard: 'everything', value: 1 }] },
     ]);
     expect(reset.plan).toEqual(original.plan);
     expect(overridden.plan.entities.map(({ id }) => id)).toEqual(

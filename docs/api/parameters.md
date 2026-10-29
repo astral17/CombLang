@@ -40,17 +40,17 @@ Use parameters in these exact configurations. Arithmetic operands, Constant
 numeric slots, Decider thresholds, and Selector select indices also accept the
 limited derived source expressions described below:
 
-| Constructor                           | Field                                                                               | Accepted source value                      |
-| ------------------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------ |
-| `Arithmetic`                          | `left`, `right` as constant operands                                                | Number or local numeric expression         |
-| `Arithmetic`                          | `output`                                                                            | Signal                                     |
-| `Constant`                            | `sections[].filters[].value`                                                        | Number or local numeric expression         |
-| `Constant`                            | `sections[].filters[].signal`                                                       | Signal                                     |
-| `Constant`                            | `sections[].multiplier`                                                             | Number or local numeric expression         |
-| `Decider`, `when`, or `IF`            | Right-hand numeric comparison threshold in `condition`, including nested conditions | Number or local numeric expression         |
-| `Decider`, `when`, or `IF`            | Constant output row written as `number * Signal` or `number * EACH`                 | Direct number parameter or finite number   |
-| `Selector` with `operation: 'select'` | `index`                                                                             | Number, Signal or local numeric expression |
-| `Selector` with `operation: 'count'`  | `output`                                                                            | Signal                                     |
+| Constructor                           | Field                                                                                                       | Accepted source value                      |
+| ------------------------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
+| `Arithmetic`                          | `left`, `right` as constant operands                                                                        | Number or local numeric expression         |
+| `Arithmetic`                          | `output`                                                                                                    | Signal                                     |
+| `Constant`                            | `sections[].filters[].value`                                                                                | Number or local numeric expression         |
+| `Constant`                            | `sections[].filters[].signal`                                                                               | Signal                                     |
+| `Constant`                            | `sections[].multiplier`                                                                                     | Number or local numeric expression         |
+| `Decider`, `when`, or `IF`            | Right-hand numeric comparison threshold in `condition`, including nested conditions                         | Number or local numeric expression         |
+| `Decider`, `when`, or `IF`            | Constant output row written as `number * Signal`, `EACH`, `ANYTHING`, or `EVERYTHING` (`ANY`/`ALL` aliases) | Direct number parameter or finite number   |
+| `Selector` with `operation: 'select'` | `index`                                                                                                     | Number, Signal or local numeric expression |
+| `Selector` with `operation: 'count'`  | `output`                                                                                                    | Signal                                     |
 
 For native typed-formula export, a registered expression in an exact Arithmetic
 constant `left`/`right` operand, Constant filter `value`, constant-right
@@ -392,12 +392,16 @@ output += Constant({
 Listing and initial binding show Count = 3. Binding it to 9 changes only the
 first filter; Reset restores 3 without executing the source again.
 
-Direct Decider constant output rows (`amount * A` or `amount * EACH`) also
+Direct Decider constant output rows (`amount * A`, `amount * EACH`,
+`amount * ANYTHING`, or `amount * EVERYTHING`; with `ANY`/`ALL` aliases) also
 participate in automatic numeric allocation and local binding. A direct number
 parameter is retained in native parameter metadata and projected to the exact
 normal or else output row using its effective original count. This is a numeric
-original, not a native formula slot. Derived output-count expressions are not
-accepted by the source compiler.
+original, not a native formula slot. Derived output-count expressions and
+qualified selections such as `amount * Anything(input)` or
+`Anything(input) * amount` are not accepted in either operand order. Anything
+output counts remain compatible with Each conditions; Everything output counts
+do not.
 
 ## Complete circuit example
 

@@ -92,28 +92,57 @@ describe('parameterized Decider branch construction', () => {
     ]);
   });
 
-  test.each(['ANYTHING', 'EVERYTHING'])(
-    'keeps direct parameter handles outside the %s constant output slot',
-    (wildcard) => {
+  test('compiles and binds the documented parameterized Anything/Everything output-count example', () => {
+    const documentation = readFileSync(
+      new URL('../../../docs/api/decider.md', import.meta.url),
+      'utf8',
+    );
+    const example = documentation.match(
+      /## Parameterized Anything and Everything output counts[\s\S]*?```ts\r?\n([\s\S]*?)```/,
+    )?.[1];
+    if (example === undefined) throw new Error('Expected the wildcard output-count example.');
+    const compilation = compile(example);
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+    const bound = bindSourceCompilationCircuit(compilation);
+    expect(bound.plan.producers).toMatchObject([
+      {
+        kind: 'decider',
+        outputs: [{ kind: 'wildcard-constant', wildcard: 'anything', value: 2 }],
+        elseOutputs: [{ kind: 'wildcard-constant', wildcard: 'everything', value: 2 }],
+      },
+    ]);
+  });
+
+  test.each([
+    ['ANYTHING', 'anything'],
+    ['ANY', 'anything'],
+    ['EVERYTHING', 'everything'],
+    ['ALL', 'everything'],
+  ] as const)(
+    'binds direct parameter count for %s constant output slots',
+    (wildcard, normalizedWildcard) => {
       const text = `const A = Signal('virtual', 'signal-A');
 const amount = Param.number('Count', 2);
 const input = new Network();
 const output = new Network();
 output += IF(input[A] > 0, amount * ${wildcard});`;
       const compilation = compile(text);
-      const countStart = text.indexOf(`amount * ${wildcard}`);
-
-      expect(compilation.pipelineDiagnostics).toEqual([
-        expect.objectContaining({
-          code: 'RT2027',
-          span: {
-            fileId: compilation.fileId,
-            start: countStart,
-            end: countStart + `amount * ${wildcard}`.length,
-          },
-        }),
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      const parameter = listSourceCompilationParameters(compilation)[0]!.parameter;
+      const defaults = bindSourceCompilationCircuit(compilation);
+      const overridden = bindSourceCompilationCircuit(compilation, [{ parameter, value: 9 }]);
+      expect(defaults.plan.producers).toMatchObject([
+        {
+          kind: 'decider',
+          outputs: [{ kind: 'wildcard-constant', wildcard: normalizedWildcard, value: 2 }],
+        },
       ]);
-      expect(compilation.resolvedCircuit).toBeUndefined();
+      expect(overridden.plan.producers).toMatchObject([
+        {
+          kind: 'decider',
+          outputs: [{ kind: 'wildcard-constant', wildcard: normalizedWildcard, value: 9 }],
+        },
+      ]);
     },
   );
 
@@ -174,6 +203,138 @@ output += Decider({ condition: input[A] > amount, outputs: [7 * EVERYTHING, 3 * 
       },
     ]);
   });
+
+  test('preserves parameterized wildcard count rows across exact containers and late fluent aliases', () => {
+    const compilation = compile(`const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Count', 2);
+const input = new Network();
+const output = new Network();
+const exact = Decider({
+  condition: input[A] > 0,
+  outputs: [[amount * ANYTHING, 3 * EVERYTHING], { duplicate: ANY * amount }],
+  elseOutputs: [ALL * amount],
+});
+output += exact;
+const gate = when(input[A] > 0).then(2 * EVERYTHING);
+output += gate;
+const alias = gate;
+alias.then(amount * ANY);
+gate.else(4 * ALL);`);
+    expect(compilation.pipelineDiagnostics).toEqual([]);
+
+    const parameter = listSourceCompilationParameters(compilation)[0]!.parameter;
+    const defaults = bindSourceCompilationCircuit(compilation);
+    const overridden = bindSourceCompilationCircuit(compilation, [{ parameter, value: 9 }]);
+    const deciders = (pair: typeof defaults) =>
+      pair.plan.producers.filter((producer) => producer.kind === 'decider');
+    expect(deciders(defaults)).toMatchObject([
+      {
+        outputs: [
+          { kind: 'wildcard-constant', wildcard: 'anything', value: 2 },
+          { kind: 'wildcard-constant', wildcard: 'everything', value: 3 },
+          { kind: 'wildcard-constant', wildcard: 'anything', value: 2 },
+        ],
+        elseOutputs: [{ kind: 'wildcard-constant', wildcard: 'everything', value: 2 }],
+      },
+      {
+        outputs: [
+          { kind: 'wildcard-constant', wildcard: 'everything', value: 2 },
+          { kind: 'wildcard-constant', wildcard: 'anything', value: 2 },
+        ],
+        elseOutputs: [{ kind: 'wildcard-constant', wildcard: 'everything', value: 4 }],
+      },
+    ]);
+    expect(deciders(overridden)).toMatchObject([
+      {
+        outputs: [
+          { kind: 'wildcard-constant', wildcard: 'anything', value: 9 },
+          { kind: 'wildcard-constant', wildcard: 'everything', value: 3 },
+          { kind: 'wildcard-constant', wildcard: 'anything', value: 9 },
+        ],
+        elseOutputs: [{ kind: 'wildcard-constant', wildcard: 'everything', value: 9 }],
+      },
+      {
+        outputs: [
+          { kind: 'wildcard-constant', wildcard: 'everything', value: 2 },
+          { kind: 'wildcard-constant', wildcard: 'anything', value: 9 },
+        ],
+        elseOutputs: [{ kind: 'wildcard-constant', wildcard: 'everything', value: 4 }],
+      },
+    ]);
+  });
+
+  test.each(['ANYTHING', 'ANY'])(
+    'allows parameterized %s outputs with an Each condition',
+    (wildcard) => {
+      const compilation = compile(`const amount = Param.number('Count', 0);
+const input = new Network();
+const output = new Network();
+output += IF(input[EACH] > 0, amount * ${wildcard});`);
+
+      expect(compilation.pipelineDiagnostics).toEqual([]);
+      expect(bindSourceCompilationCircuit(compilation).plan.producers).toMatchObject([
+        {
+          kind: 'decider',
+          outputs: [{ kind: 'wildcard-constant', wildcard: 'anything', value: 0 }],
+        },
+      ]);
+    },
+  );
+
+  test('rejects a zero-default Everything count appended through a fluent alias under Each', () => {
+    const expression = 'amount * EVERYTHING';
+    const text = `const A = Signal('virtual', 'signal-A');
+const amount = Param.number('Count', 0);
+const input = new Network();
+const output = new Network();
+const gate = when(input[EACH] > 0).then(1 * A);
+output += gate;
+const alias = gate;
+alias.else(${expression});`;
+    const compilation = compile(text);
+    const diagnostic = compilation.pipelineDiagnostics.find(({ code }) => code === 'RT2027');
+
+    expect(diagnostic).toMatchObject({
+      severity: 'error',
+      span: {
+        fileId: compilation.fileId,
+        start: text.indexOf(expression),
+        end: text.indexOf(expression) + expression.length,
+      },
+    });
+    expect(compilation.resolvedCircuit).toBeUndefined();
+  });
+
+  test.each([
+    [
+      'exact normal branch',
+      `output += Decider({ condition: input[EACH] > amount, outputs: [amount * EVERYTHING] });`,
+    ],
+    ['IF else branch', `output += IF(input[EACH] > 0, 1 * A, { fallback: amount * EVERYTHING });`],
+    [
+      'late fluent normal branch through alias',
+      `const gate = when(input[EACH] > 0).then(1 * A);\noutput += gate;\nconst alias = gate;\nalias.then(amount * EVERYTHING);`,
+    ],
+  ] as const)(
+    'rejects a zero-default Everything count in %s with a located diagnostic',
+    (_form, body) => {
+      const expression = 'amount * EVERYTHING';
+      const text = `const A = Signal('virtual', 'signal-A');\nconst amount = Param.number('Count', 0);\nconst input = new Network();\nconst output = new Network();\n${body}`;
+      const compilation = compile(text);
+      const diagnostic = compilation.pipelineDiagnostics.find(({ code }) => code === 'RT2027');
+
+      expect(diagnostic).toMatchObject({
+        severity: 'error',
+        span: { fileId: compilation.fileId },
+      });
+      expect(diagnostic?.span?.start).toBeLessThanOrEqual(text.indexOf(expression));
+      expect(diagnostic?.span?.end).toBeGreaterThanOrEqual(
+        text.indexOf(expression) + expression.length,
+      );
+      expect(text.slice(diagnostic?.span?.start, diagnostic?.span?.end)).toContain(expression);
+      expect(compilation.resolvedCircuit).toBeUndefined();
+    },
+  );
 
   test('captures late fluent branches after attachment and placement, with one producer and one source execution', () => {
     const counterKey = '__comblang_parameterized_decider_source_runs';

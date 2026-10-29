@@ -2012,8 +2012,8 @@ export function exportSourceCompilationNativeBlueprint(
         sourceOutput?.signal.kind === 'signal'
           ? signalKey(sourceOutput.signal.signal as SignalId)
           : undefined;
-      const expectedEach =
-        sourceOutput?.signal.kind === 'wildcard' && sourceOutput.signal.value === 'each';
+      const expectedWildcard =
+        sourceOutput?.signal.kind === 'wildcard' ? sourceOutput.signal.value : undefined;
       const nativeBehavior = readRecord(entity.native.control_behavior);
       const nativeDecider = readRecord(nativeBehavior?.decider_conditions);
       const nativeRows =
@@ -2025,9 +2025,9 @@ export function exportSourceCompilationNativeBlueprint(
       const signalProjectionMatches =
         expectedSignalKey !== undefined
           ? nativeSignalKey(nativeOutput?.signal) === expectedSignalKey
-          : expectedEach &&
+          : expectedWildcard !== undefined &&
             projectedSignal?.type === 'virtual' &&
-            projectedSignal.name === 'signal-each';
+            projectedSignal.name === `signal-${expectedWildcard}`;
       if (
         sourceRows === undefined ||
         sourceOutput?.mode !== 'constant' ||
@@ -2037,7 +2037,7 @@ export function exportSourceCompilationNativeBlueprint(
         nativeRows.length !== sourceRows.length ||
         nativeOutput?.constant !== expected ||
         nativeOutput?.copy_count_from_input !== false ||
-        (expectedSignalKey === undefined && !expectedEach) ||
+        (expectedSignalKey === undefined && expectedWildcard === undefined) ||
         !signalProjectionMatches
       ) {
         reject(

@@ -111,19 +111,23 @@ it meets that mode's dependency and metadata requirements. This is structural
 template projection only: it does not establish Factorio formula evaluation or
 placement acceptance. Unsupported shapes remain a located `CP1002`.
 
-Decider constant output rows also accept a direct number parameter, for example
-`amount * A` or `amount * EACH`, in exact, fluent, and `IF` configurations.
-The native parameter template retains that declaration and projects its
-effective original count into the exact output row. This is not a formula slot
-and does not establish Factorio placement or evaluation. Binding locally still
-supports these rows, including rows appended after attaching a fluent builder.
-An omitted numeric default uses the source-wide automatic allocator; its
-supported-family coverage rules are documented in the [Param API](parameters.md).
-Derived numeric output-count expressions are not accepted by the source
-compiler; these rows do not support native formula expressions. Anything and
-Everything constant rows accept ordinary compile-time numeric counts, including
-computed counts. Numeric parameter handles and derived parameter expressions
-remain outside the wildcard output-slot matrix.
+Decider constant output rows accept a direct number parameter with a concrete
+Signal or the unqualified `EACH`, `ANYTHING`, and `EVERYTHING` tokens; `ANY` and
+`ALL` are aliases for the latter two. This works in exact, fluent, and `IF`
+configurations, including nested output containers and rows appended after a
+fluent builder is attached. Native parameter templates retain the declaration
+and project its effective original count into each exact output row. These are
+numeric original slots, not formula slots, and do not establish Factorio
+placement or evaluation. An omitted numeric default uses the source-wide
+automatic allocator; see the [Param API](parameters.md) for supported families.
+Derived numeric output-count expressions are rejected by the source compiler.
+Qualified selections such as `amount * Anything(input)` and
+`Anything(input) * amount` are rejected in either operand order; ordinary
+compile-time counts may still use computed expressions.
+
+`ANYTHING` output counts remain compatible with an `EACH` condition, while
+`EVERYTHING` counts are rejected with an `EACH` condition even when their
+parameter default is zero.
 
 ## Parameterized EACH output counts
 
@@ -139,6 +143,28 @@ output += Decider({ condition: input[EACH] > 0, outputs: [amount * EACH] });
 
 Native-template export keeps the original count `2` and number metadata;
 local binding can override it and Reset restores `2` without rerunning source.
+
+## Parameterized Anything and Everything output counts
+
+Complete source; requires trusted canonical Decider authority. The number
+parameter appears in both branches and the aliases normalize to the same
+unqualified wildcard output rows:
+
+```ts
+const amount = Param.number('Count', 2);
+const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output = new Network();
+output += Decider({
+  condition: input[A] > 0,
+  outputs: [amount * ANYTHING],
+  elseOutputs: [ALL * amount],
+});
+```
+
+Native-template export keeps Count = 2 and projects it to the normal
+`signal-anything` and else `signal-everything` rows. Local binding changes both
+rows; Reset restores 2 without rerunning source.
 
 ## Compact example
 

@@ -107,7 +107,7 @@ describe('combinator API documentation', () => {
 
   test.each([
     ['arithmetic', [3, 2, 2], [false, true, true]],
-    ['decider', [2, 1, 2, 2, 2, 2], [true, true, false, false, true, false]],
+    ['decider', [2, 1, 1, 2, 2, 2, 2], [true, true, true, false, false, true, false]],
     ['constant', [1, 1, 1, 1, 1], [false, false, true, true, true]],
     ['selector', [4, 3, 3], [true, true, true]],
   ])(

@@ -76,7 +76,10 @@ export interface SignalValue {
 }
 
 export type ParameterDeciderOutputSelection =
-  { readonly kind: 'signal'; readonly signal: SignalId } | { readonly kind: 'each' };
+  | { readonly kind: 'signal'; readonly signal: SignalId }
+  | { readonly kind: 'each' }
+  | { readonly kind: 'anything' }
+  | { readonly kind: 'everything' };
 
 /** Internal Decider constant output whose value is resolved at the host binding boundary. */
 export interface ParameterSignalValue {

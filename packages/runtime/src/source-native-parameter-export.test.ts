@@ -4421,6 +4421,96 @@ output += Decider({ condition: input[EACH] > 0, outputs: [EACH * amount] });`);
     expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(originalArtifact);
   });
 
+  test('exports direct number parameters in ANYTHING and EVERYTHING rows on both branches', () => {
+    const compilation =
+      compile(`const amount = Param.number('Count', -2147483648, { variable: 'x' });
+const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output = new Network();
+output += Decider({
+  condition: input[A] > 0,
+  outputs: [amount * ANYTHING, 3 * EVERYTHING, ANY * amount],
+  elseOutputs: [ALL * amount],
+});`);
+    const originalArtifact = structuredClone(sourceApi.sourceCompilationArtifact(compilation));
+    const parameter = sourceApi.listSourceCompilationParameters(compilation)[0]!.parameter;
+    const defaults = sourceApi.bindSourceCompilationCircuit(compilation);
+    const overridden = sourceApi.bindSourceCompilationCircuit(compilation, [
+      { parameter, value: 2147483647 },
+    ]);
+    const reset = sourceApi.bindSourceCompilationCircuit(compilation, []);
+    const foreign = compile(`const amount = Param.number('Count', 5);
+const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output = new Network();
+output += IF(input[A] > 0, amount * ANYTHING);`);
+    expect(() =>
+      sourceApi.bindSourceCompilationCircuit(compilation, [
+        { parameter: sourceApi.listSourceCompilationParameters(foreign)[0]!.parameter, value: 9 },
+      ]),
+    ).toThrow('different parameter session');
+    expect(() =>
+      sourceApi.bindSourceCompilationCircuit(compilation, [
+        { parameter: { ...parameter } as never, value: 9 },
+      ]),
+    ).toThrow('registered parameter handle');
+
+    expect(defaults.plan.producers[0]).toMatchObject({
+      kind: 'decider',
+      outputs: [
+        { kind: 'wildcard-constant', wildcard: 'anything', value: -2147483648 },
+        { kind: 'wildcard-constant', wildcard: 'everything', value: 3 },
+        { kind: 'wildcard-constant', wildcard: 'anything', value: -2147483648 },
+      ],
+      elseOutputs: [{ kind: 'wildcard-constant', wildcard: 'everything', value: -2147483648 }],
+    });
+    expect(overridden.plan.producers[0]).toMatchObject({
+      kind: 'decider',
+      outputs: [
+        { kind: 'wildcard-constant', wildcard: 'anything', value: 2147483647 },
+        { kind: 'wildcard-constant', wildcard: 'everything', value: 3 },
+        { kind: 'wildcard-constant', wildcard: 'anything', value: 2147483647 },
+      ],
+      elseOutputs: [{ kind: 'wildcard-constant', wildcard: 'everything', value: 2147483647 }],
+    });
+    expect(reset.plan).toEqual(defaults.plan);
+    expect(defaults.plan.entities).toHaveLength(1);
+    const native = emitNativeBlueprintJson(
+      sourceApi.exportSourceCompilationNativeBlueprint(compilation, options),
+    ).blueprint;
+    expect(native.parameters).toEqual([
+      { type: 'number', number: '-2147483648', name: 'Count', variable: 'x' },
+    ]);
+    expect(
+      native.entities.find(({ name }) => name === 'decider-combinator')?.control_behavior,
+    ).toMatchObject({
+      decider_conditions: {
+        outputs: [
+          { signal: { type: 'virtual', name: 'signal-anything' }, constant: -2147483648 },
+          { signal: { type: 'virtual', name: 'signal-everything' }, constant: 3 },
+          { signal: { type: 'virtual', name: 'signal-anything' }, constant: -2147483648 },
+        ],
+        else_outputs: [
+          { signal: { type: 'virtual', name: 'signal-everything' }, constant: -2147483648 },
+        ],
+      },
+    });
+    const concrete = generateBlueprintJson(overridden.resolvedCircuit.ir);
+    expect(concrete.blueprint.entities[0]?.control_behavior).toMatchObject({
+      decider_conditions: {
+        outputs: [
+          { signal: { type: 'virtual', name: 'signal-anything' }, constant: 2147483647 },
+          { signal: { type: 'virtual', name: 'signal-everything' }, constant: 3 },
+          { signal: { type: 'virtual', name: 'signal-anything' }, constant: 2147483647 },
+        ],
+        else_outputs: [
+          { signal: { type: 'virtual', name: 'signal-everything' }, constant: 2147483647 },
+        ],
+      },
+    });
+    expect(sourceApi.sourceCompilationArtifact(compilation)).toEqual(originalArtifact);
+  });
+
   test.each([
     [
       'exact Decider',

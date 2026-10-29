@@ -382,7 +382,7 @@ output += Constant({ sections: [{ filters: [
     }
   });
 
-  test('lists, exports, overrides and resets an output-only Decider count', async () => {
+  test('lists, exports, overrides and resets output-only quantifier Decider counts', async () => {
     const { environment } = await parameterHost();
     const key = '__comblang_cli_decider_output_count_runs';
     const globals = globalThis as Record<string, unknown>;
@@ -390,9 +390,10 @@ output += Constant({ sections: [{ filters: [
     globals[key] = 0;
     const path = await sourceFile(`globalThis.${key} = Number(globalThis.${key} ?? 0) + 1;
 const amount = Param.number('Count', 2, { variable: 'x' });
+const A = Signal('virtual', 'signal-A');
 const input = new Network();
 const output = new Network();
-output += Decider({ condition: input[EACH] > 0, outputs: [EACH * amount], elseOutputs: [amount * EACH] });`);
+output += Decider({ condition: input[A] > 0, outputs: [amount * ANYTHING, ANY * amount], elseOutputs: [ALL * amount] });`);
     const overridesPath = await temporaryFile(
       'decider-count-overrides.json',
       '[{"id":0,"value":9}]',
@@ -416,8 +417,11 @@ output += Decider({ condition: input[EACH] > 0, outputs: [EACH * amount], elseOu
         { type: 'number', number: '2', name: 'Count', variable: 'x' },
       ]);
       expect(template.entities[0]!.control_behavior.decider_conditions).toMatchObject({
-        outputs: [{ signal: { type: 'virtual', name: 'signal-each' }, constant: 2 }],
-        else_outputs: [{ signal: { type: 'virtual', name: 'signal-each' }, constant: 2 }],
+        outputs: [
+          { signal: { type: 'virtual', name: 'signal-anything' }, constant: 2 },
+          { signal: { type: 'virtual', name: 'signal-anything' }, constant: 2 },
+        ],
+        else_outputs: [{ signal: { type: 'virtual', name: 'signal-everything' }, constant: 2 }],
       });
       expect(globals[key]).toBe(2);
 
@@ -430,8 +434,11 @@ output += Decider({ condition: input[EACH] > 0, outputs: [EACH * amount], elseOu
       ).toBe(0);
       const overridden = JSON.parse(String(log.mock.calls[0]?.[0])).document.blueprint;
       expect(overridden.entities[0]!.control_behavior.decider_conditions).toMatchObject({
-        outputs: [{ signal: { type: 'virtual', name: 'signal-each' }, constant: 9 }],
-        else_outputs: [{ signal: { type: 'virtual', name: 'signal-each' }, constant: 9 }],
+        outputs: [
+          { signal: { type: 'virtual', name: 'signal-anything' }, constant: 9 },
+          { signal: { type: 'virtual', name: 'signal-anything' }, constant: 9 },
+        ],
+        else_outputs: [{ signal: { type: 'virtual', name: 'signal-everything' }, constant: 9 }],
       });
       expect(overridden).not.toHaveProperty('parameters');
       expect(globals[key]).toBe(3);
@@ -442,8 +449,11 @@ output += Decider({ condition: input[EACH] > 0, outputs: [EACH * amount], elseOu
       ).toBe(0);
       const reset = JSON.parse(String(log.mock.calls[0]?.[0])).document.blueprint;
       expect(reset.entities[0]!.control_behavior.decider_conditions).toMatchObject({
-        outputs: [{ signal: { type: 'virtual', name: 'signal-each' }, constant: 2 }],
-        else_outputs: [{ signal: { type: 'virtual', name: 'signal-each' }, constant: 2 }],
+        outputs: [
+          { signal: { type: 'virtual', name: 'signal-anything' }, constant: 2 },
+          { signal: { type: 'virtual', name: 'signal-anything' }, constant: 2 },
+        ],
+        else_outputs: [{ signal: { type: 'virtual', name: 'signal-everything' }, constant: 2 }],
       });
       expect(globals[key]).toBe(4);
       expect(error).not.toHaveBeenCalled();

@@ -494,7 +494,7 @@ combinations are rejected before a circuit is produced.
 
 `Any` is an exact source alias of `Anything`, and `All` is an alias of `Everything`. Their element-access spellings are `ANY` and `ALL`. The aliases do not change selection order, topology, or generated hardware.
 
-An `Anything` or `Everything` condition can emit a specific signal, for example `IF(Anything(input) > 0, input[A])`, or a compatible Anything/Everything output, including supported constant-count rows. A constant-count Anything output is compatible with an `Each` condition; an Everything output is not. Native `Each` output requires an `Each` condition and is rejected for quantifier conditions.
+An `Anything` or `Everything` condition can emit a specific signal, for example `IF(Anything(input) > 0, input[A])`, or a compatible Anything/Everything output, including constant-count rows with direct number parameters. A constant-count Anything output is compatible with an `Each` condition; an Everything output is not, including when its parameter default is zero. Native `Each` output requires an `Each` condition and is rejected for quantifier conditions.
 
 ## Arithmetic combinators
 
@@ -621,10 +621,13 @@ fails atomically before a producer or Entity is allocated.
 
 Constant-count wildcard rows are written `count * ANYTHING` or
 `count * EVERYTHING` and read the default red and green input wires.
+The count may be a direct `Param.number` handle; `ANY` and `ALL` are aliases.
+Derived parameter expressions remain unsupported in output-count slots, while
+ordinary compile-time numeric expressions remain legal.
 `Anything(input)` and `Everything(input)` remain copied-count rows with their
-explicit selected input. `count * Anything(input)` and
-`count * Everything(input)` are rejected: qualified selections cannot be
-arithmetic operands.
+explicit selected input. `count * Anything(input)`, `Anything(input) * count`,
+`count * Everything(input)`, and `Everything(input) * count` are rejected:
+qualified selections cannot be arithmetic operands.
 
 With trusted canonical `entity:decider-combinator` authority, exact `Decider`
 and provider-backed ergonomic `IF`/`when` share one physical linked Decider

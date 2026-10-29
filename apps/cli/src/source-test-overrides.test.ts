@@ -660,6 +660,43 @@ output += Constant({ sections: [{ filters: [
     }
   });
 
+  test('uses run and per-case overrides for parameterized quantifier output counts', async () => {
+    const { environment } = await parameterHost();
+    const sourceKey = '__comblang_cli_quantifier_output_source_runs';
+    const testsKey = '__comblang_cli_quantifier_output_test_runs';
+    vi.stubGlobal(sourceKey, 0);
+    vi.stubGlobal(testsKey, 0);
+    const expressionSource = `globalThis.${sourceKey} = Number(globalThis.${sourceKey} ?? 0) + 1;
+const amount = Param.number('Count', 2);
+const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output = new Network();
+output += Decider({ condition: input[A] > 0, outputs: [amount * ANYTHING, 3 * EVERYTHING, ANY * amount], elseOutputs: [ALL * amount] });`;
+    const testSource = `globalThis.${testsKey} = Number(globalThis.${testsKey} ?? 0) + 1;
+function assertCounts(execution, expected) {
+  const entity = execution.circuit.ir.entities.find(({ configuration }) => configuration?.mode === 'decider');
+  const config = entity?.configuration;
+  if (JSON.stringify(config?.outputs?.map(({ value }) => value)) !== JSON.stringify([expected, 3, expected]) ||
+      JSON.stringify(config?.elseOutputs?.map(({ value }) => value)) !== JSON.stringify([expected])) {
+    throw new Error('The case used incorrect wildcard output counts.');
+  }
+}
+test('inherits run count', ({ execution }) => assertCounts(execution, 7));
+test('uses explicit case count', ({ execution }) => assertCounts(execution, 9), { parameters: [{ id: 0, value: 9 }] });
+test('empty case snapshot resets count', ({ execution }) => assertCounts(execution, 2), { parameters: [] });`;
+    const f = await files(expressionSource, testSource, [{ id: 0, value: 7 }]);
+    const c = capture();
+    expect(
+      await run(
+        ['test', '--json', '--overrides', f.valuesPath, f.sourcePath, f.testPath],
+        environment,
+      ),
+    ).toBe(0);
+    expect(c.report().tests).toMatchObject({ passed: 3, failed: 0 });
+    expect(globals[sourceKey]).toBe(1);
+    expect(globals[testsKey]).toBe(1);
+  });
+
   test('replays a bound Entity-bearing source through the matching host authority', async () => {
     const { environment } = await parameterHost();
     const entitySource = `${source}\nconst structural = Entity('structural');\nvoid structural;`;

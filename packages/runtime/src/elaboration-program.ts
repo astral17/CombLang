@@ -401,7 +401,7 @@ interface DeciderOutputCandidate {
   readonly syntaxIntent: DeciderOutputSyntaxIntent;
 }
 
-function conditionUsesEach(condition: PlanDeciderCondition): boolean {
+function conditionUsesEach(condition: RuntimeDeciderCondition): boolean {
   if (condition.kind === 'and' || condition.kind === 'or') {
     return condition.conditions.some(conditionUsesEach);
   }
@@ -3054,6 +3054,7 @@ class ElaborationRecorder {
       );
       this.#finalizeUnusedCombinators();
       const producerDescriptors = this.#preparePendingDeciderTemplates();
+      this.#validateFinalDeciderModes();
       const capturedDeclarations = this.#parameterCapture?.declarations() ?? [];
       const missingSignal = capturedDeclarations.find(
         ({ registration }) =>
@@ -4436,27 +4437,19 @@ class ElaborationRecorder {
   #validateFinalDeciderModes(): void {
     for (const state of this.#combinators.states()) {
       if (state.descriptor.kind !== 'decider') continue;
-      if ('pendingConfiguration' in state.descriptor) {
-        throw new Error('A pending Decider reached final mode validation.');
-      }
       const descriptor = state.descriptor;
-      const usesEach = conditionUsesEach(
-        this.#requireConcreteDeciderCondition(descriptor.condition),
-      );
+      const usesEach = conditionUsesEach(descriptor.condition);
       const branches = [
         {
-          outputs: (
+          outputs:
             descriptor.outputs ??
             (descriptor.output === undefined || descriptor.elseOutputs !== undefined
               ? []
-              : [descriptor.output])
-          ).map((output) => this.#requireConcreteDeciderOutput(output)),
+              : [descriptor.output]),
           origins: descriptor.outputOrigins,
         },
         {
-          outputs: (descriptor.elseOutputs ?? []).map((output) =>
-            this.#requireConcreteDeciderOutput(output),
-          ),
+          outputs: descriptor.elseOutputs ?? [],
           origins: descriptor.elseOutputOrigins,
         },
       ] as const;
@@ -4465,7 +4458,8 @@ class ElaborationRecorder {
           const eachOutput = output.kind === 'each';
           const everythingOutput =
             (output.kind === 'wildcard-constant' && output.wildcard === 'everything') ||
-            (output.kind === 'wildcard' && output.wildcard === 'everything');
+            (output.kind === 'wildcard' && output.wildcard === 'everything') ||
+            (output.kind === 'parameter-signal-constant' && output.selection.kind === 'everything');
           const origin = origins?.[index];
           const diagnosticSource = origin?.source ?? descriptor.source;
           const related = [
@@ -6127,8 +6121,10 @@ class ElaborationRecorder {
     if (this.#isSignal(value)) {
       return Object.freeze({ kind: 'signal', signal: this.#signalSnapshot(value) });
     }
-    if (this.#isWildcardToken(value) && value.value === 'each') {
-      return Object.freeze({ kind: 'each' });
+    if (this.#isWildcardToken(value)) {
+      if (value.value === 'each') return Object.freeze({ kind: 'each' });
+      if (value.value === 'anything') return Object.freeze({ kind: 'anything' });
+      if (value.value === 'everything') return Object.freeze({ kind: 'everything' });
     }
     return undefined;
   }
@@ -6688,7 +6684,7 @@ class ElaborationRecorder {
         signal:
           output.selection.kind === 'signal'
             ? { kind: 'signal', signal: this.#signalSnapshot(output.selection.signal) }
-            : { kind: 'wildcard', value: 'each' },
+            : { kind: 'wildcard', value: output.selection.kind },
         value: output.parameter,
       };
     }

@@ -1365,6 +1365,108 @@ gate.else(amount * EACH);`,
     }
   });
 
+  test('routes per-case Worker overrides through parameterized quantifier output rows', async () => {
+    const globals = globalThis as Record<string, unknown>;
+    const previous = globals[localExpressionRunKey];
+    globals[localExpressionRunKey] = 0;
+    try {
+      const runtime = parameterRuntime();
+      const parsed = structuredClone(
+        await runtime.handle(
+          parseRequest(232, {
+            file: {
+              path: 'worker-decider-quantifier-output.factorio.ts',
+              text: `globalThis.${localExpressionRunKey} = Number(globalThis.${localExpressionRunKey} ?? 0) + 1;
+const amount = Param.number('Count', 2, { variable: 'x' });
+const A = Signal('virtual', 'signal-A');
+const input = new Network();
+const output = new Network();
+output += Decider({ condition: input[A] > 0, outputs: [amount * ANYTHING, 3 * EVERYTHING], elseOutputs: [ALL * amount] });`,
+            },
+            parameterBinding: true,
+            blueprintExport: { parameters: true },
+          }),
+        ),
+      );
+      expect(globals[localExpressionRunKey]).toBe(1);
+      expect(parsed.result.pipelineDiagnostics).toEqual([]);
+      const exported = parsed.result.blueprintExport;
+      if (exported?.ok !== true) {
+        throw new Error('Expected the Worker quantifier-count native template.');
+      }
+      expect(exported.document.blueprint.entities[0]?.control_behavior).toMatchObject({
+        decider_conditions: {
+          outputs: [
+            { signal: { type: 'virtual', name: 'signal-anything' }, constant: 2 },
+            { signal: { type: 'virtual', name: 'signal-everything' }, constant: 3 },
+          ],
+          else_outputs: [{ signal: { type: 'virtual', name: 'signal-everything' }, constant: 2 }],
+        },
+      });
+      const binding = parsed.parameterBinding;
+      if (binding?.ok !== true || binding.token === undefined) {
+        throw new Error('Expected the retained Worker quantifier-count session.');
+      }
+      let revision = parsed.revision;
+      const plans: Array<readonly { kind: string }[]> = [];
+      const run = await runWebTestsWithExecutionResolver(
+        async (parameters) => {
+          const response = structuredClone(
+            runtime.handleBinding({
+              kind: 'bind-parameters',
+              revision: ++revision,
+              sourceRevision: parsed.revision,
+              token: binding.token!,
+              ...(parameters === undefined ? {} : { overrides: parameters }),
+            }),
+          );
+          if (!response.result.ok) {
+            throw new Error(response.result.diagnostics[0]?.message ?? 'Worker bind failed.');
+          }
+          plans.push(response.result.plan.producers);
+          return {
+            plan: response.result.plan,
+            resolvedCircuit: response.result.resolvedCircuit,
+          };
+        },
+        `test('default quantifier counts', () => {});
+test('overridden quantifier counts', () => {}, { parameters: [{ id: 0, value: 9 }] });
+test('empty case snapshot resets quantifier counts', () => {}, { parameters: [] });`,
+      );
+
+      expect(run).toMatchObject({ passed: 3, failed: 0 });
+      expect(
+        plans.map((producers) => producers.find(({ kind }) => kind === 'decider')),
+      ).toMatchObject([
+        {
+          outputs: [
+            { kind: 'wildcard-constant', wildcard: 'anything', value: 2 },
+            { kind: 'wildcard-constant', wildcard: 'everything', value: 3 },
+          ],
+          elseOutputs: [{ kind: 'wildcard-constant', wildcard: 'everything', value: 2 }],
+        },
+        {
+          outputs: [
+            { kind: 'wildcard-constant', wildcard: 'anything', value: 9 },
+            { kind: 'wildcard-constant', wildcard: 'everything', value: 3 },
+          ],
+          elseOutputs: [{ kind: 'wildcard-constant', wildcard: 'everything', value: 9 }],
+        },
+        {
+          outputs: [
+            { kind: 'wildcard-constant', wildcard: 'anything', value: 2 },
+            { kind: 'wildcard-constant', wildcard: 'everything', value: 3 },
+          ],
+          elseOutputs: [{ kind: 'wildcard-constant', wildcard: 'everything', value: 2 }],
+        },
+      ]);
+      expect(globals[localExpressionRunKey]).toBe(1);
+    } finally {
+      if (previous === undefined) delete globals[localExpressionRunKey];
+      else globals[localExpressionRunKey] = previous;
+    }
+  });
+
   test('preserves Signal quality and retries invalid derived counts on retained Worker sessions', async () => {
     const globals = globalThis as Record<string, unknown>;
     const previous = globals[localExpressionRunKey];
