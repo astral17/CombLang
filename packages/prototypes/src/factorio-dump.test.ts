@@ -240,6 +240,87 @@ describe('Factorio data-raw-dump normalizer', () => {
     );
   });
 
+  test('normalizes complete single-definition lamp connectors without matching the prototype name', () => {
+    const dump = dumpFixture() as MutableRawDump;
+    dump.lamp = {
+      'small-lamp': {
+        type: 'lamp',
+        name: 'small-lamp',
+        circuit_connector: wireConnector(),
+      },
+      'modded-status-lamp': {
+        type: 'lamp',
+        name: 'modded-status-lamp',
+        circuit_connector: wireConnector(),
+      },
+    };
+
+    const entities = normalizeFactorioDataDump(dump, metadata).database.entities;
+    for (const name of ['small-lamp', 'modded-status-lamp']) {
+      expect(entities.find((entity) => entity.name === name)?.circuitConnectorTopology).toBe(
+        'single-shared',
+      );
+    }
+  });
+
+  test.each([
+    ['no connector', {}],
+    ['missing points', { circuit_connector: {} }],
+    ['red only', { circuit_connector: { points: { wire: { red: [1, 2] } } } }],
+    [
+      'sprite, shadow and draw flags only',
+      {
+        draw_circuit_wires: true,
+        sprites: { connector_main: { filename: 'connector.png' } },
+        circuit_connector: { points: { shadow: { red: [1, 2], green: [3, 4] } } },
+      },
+    ],
+  ] as const)('leaves lamp topology unknown with %s', (_label, fields) => {
+    const dump = dumpFixture() as MutableRawDump;
+    dump.lamp = {
+      'unwired-lamp': { type: 'lamp', name: 'unwired-lamp', ...fields },
+    };
+
+    const lamp = normalizeFactorioDataDump(dump, metadata).database.entities.find(
+      (entity) => entity.name === 'unwired-lamp',
+    );
+    expect(lamp).not.toHaveProperty('circuitConnectorTopology');
+  });
+
+  test.each([
+    ['short red vector', [1], 'lamp.bad-lamp.circuit_connector.points.wire.red'],
+    [
+      'non-finite green coordinate',
+      [1, Number.POSITIVE_INFINITY],
+      'lamp.bad-lamp.circuit_connector.points.wire.green[1]',
+    ],
+  ] as const)('rejects malformed lamp %s at its raw field path', (_label, vector, path) => {
+    const dump = dumpFixture() as MutableRawDump;
+    dump.lamp = {
+      'bad-lamp': {
+        type: 'lamp',
+        name: 'bad-lamp',
+        circuit_connector: {
+          points: {
+            wire: {
+              red: [1, 2],
+              green: [3, 4],
+            },
+          },
+        },
+      },
+    };
+    const connector = dump.lamp['bad-lamp']!.circuit_connector as {
+      points: { wire: { red: unknown; green: unknown } };
+    };
+    if (path.endsWith('.red')) connector.points.wire.red = vector;
+    else connector.points.wire.green = vector;
+
+    expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
+      expect.objectContaining({ code: 'PD1001', path }),
+    );
+  });
+
   test('leaves connector topology unknown when points or any declared orientation are incomplete', () => {
     const dump = dumpFixture() as MutableRawDump;
     const assembler = dump['assembling-machine']!.assembler!;

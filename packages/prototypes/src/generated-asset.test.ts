@@ -33,6 +33,24 @@ const dumpSource = JSON.stringify({
       circuit_connector: { points: { wire: { red: [1, 2], green: [3, 4] } } },
     },
   },
+  lamp: {
+    'small-lamp': {
+      type: 'lamp',
+      name: 'small-lamp',
+      circuit_connector: { points: { wire: { red: [1, 2], green: [3, 4] } } },
+    },
+    'custom-status-lamp': {
+      type: 'lamp',
+      name: 'custom-status-lamp',
+      circuit_connector: { points: { wire: { red: [1, 2], green: [3, 4] } } },
+    },
+    'unwired-lamp': {
+      type: 'lamp',
+      name: 'unwired-lamp',
+      draw_circuit_wires: true,
+      sprites: { connector_main: { filename: 'connector.png' } },
+    },
+  },
 });
 
 const metadataSource = JSON.stringify({
@@ -60,6 +78,11 @@ describe('generated prototype assets', () => {
     expect(loaded.prototypes.identity).toBe(first.manifest.databaseIdentity);
     expect(loaded.prototypes.item.plate).toMatchObject({ name: 'plate', stackSize: 100 });
     expect(loaded.prototypes.entity.lab?.circuitConnectorTopology).toBe('single-shared');
+    expect(loaded.prototypes.entity['small-lamp']?.circuitConnectorTopology).toBe('single-shared');
+    expect(loaded.prototypes.entity['custom-status-lamp']?.circuitConnectorTopology).toBe(
+      'single-shared',
+    );
+    expect(loaded.prototypes.entity['unwired-lamp']).not.toHaveProperty('circuitConnectorTopology');
   });
 
   test.each([

@@ -6101,6 +6101,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:small-lamp",
       "name": "small-lamp",
       "tileHeight": 1,

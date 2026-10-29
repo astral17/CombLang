@@ -581,7 +581,7 @@ function circuitConnectorTopology(
     return connectorComplete && flippedComplete ? 'single-shared' : undefined;
   }
 
-  if (type !== 'container' && type !== 'lab') return undefined;
+  if (type !== 'container' && type !== 'lab' && type !== 'lamp') return undefined;
   const connectorField = ownDataField(record, 'circuit_connector', `${path}.circuit_connector`);
   if (!connectorField.present || connectorField.value === undefined) return undefined;
 
@@ -602,7 +602,7 @@ function circuitConnectorTopology(
       : undefined;
   }
 
-  if (type === 'lab') {
+  if (type === 'lab' || type === 'lamp') {
     return hasRedGreenWirePoints(connectorField.value, `${path}.circuit_connector`)
       ? 'single-shared'
       : undefined;

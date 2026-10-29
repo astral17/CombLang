@@ -357,6 +357,46 @@ const doubled = output * 2;`);
     expect(error).not.toHaveBeenCalled();
   });
 
+  test('exports a callable bundled small-lamp through the CLI provider', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const path = await sourceFile(
+      [
+        "const signal = Signal('virtual', 'signal-A');",
+        'const state = new Network<R>();',
+        'state += CC(1 * signal);',
+        "const lamp = Lamp('small-lamp', {",
+        '  control_behavior: {',
+        '    circuit_enabled: true,',
+        "    circuit_condition: { first_signal: signal, comparator: '>', constant: 0 },",
+        '  },',
+        '}).at(4, 5, 8);',
+        'lamp(state);',
+      ].join('\n'),
+    );
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    expect(await run(['blueprint', 'export', '--json', path], { prototypes })).toBe(0);
+    const response = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(response.ok).toBe(true);
+    const blueprint = response.document.blueprint;
+    expect(
+      blueprint.entities.filter(({ name }: { name: string }) => name === 'small-lamp'),
+    ).toEqual([
+      expect.objectContaining({
+        name: 'small-lamp',
+        position: { x: 4, y: 5 },
+        direction: 8,
+        control_behavior: expect.objectContaining({ circuit_enabled: true }),
+      }),
+    ]);
+    expect(
+      blueprint.entities.filter(({ name }: { name: string }) => name === 'constant-combinator'),
+    ).toHaveLength(1);
+    expect(blueprint.wires).toHaveLength(1);
+    expect(error).not.toHaveBeenCalled();
+  });
+
   test('rejects a host-bound Entity context for a different selected provider before execution', async () => {
     const path = await sourceFile(`throw new Error('source executed');`);
     const firstDatabase = syntheticPrototypeDatabase();

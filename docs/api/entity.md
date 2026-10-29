@@ -111,7 +111,7 @@ A fixed callable profile may still declare one input and one output endpoint.
 For provider prototypes whose normalized topology is `single-shared`, provisioning
 instead declares one bidirectional connector with red and green lanes and authorizes
 shared calls. The bundled provider currently supplies that fact for
-`assembling-machine-3`, `iron-chest`, and `lab`:
+`assembling-machine-3`, `iron-chest`, `lab`, and `small-lamp`:
 
 ```ts
 const a = new Network();
@@ -187,6 +187,27 @@ second += machine;
 The call remains limited to one successful invocation. Reuse its returned
 Entity handle for output attachments and later reads; an inferred output counts
 as the connector's second distinct Network.
+
+### Callable Lamp
+
+The bundled Space Age 2.1.17 provider exposes the lamp's shared circuit connector.
+Profiles without complete red and green wire-point evidence keep unknown topology
+and do not acquire a callable projection. A lamp call attaches the supplied
+Network to the physical lamp; it does not add a hidden combinator or simulate
+lamp state.
+
+```ts
+const signal = Signal('virtual', 'signal-A');
+const state = new Network<R>();
+state += CC(1 * signal);
+const lamp = Lamp('small-lamp', {
+  control_behavior: {
+    circuit_enabled: true,
+    circuit_condition: { first_signal: signal, comparator: '>', constant: 0 },
+  },
+}).at(4, 5, 8);
+lamp(state);
+```
 
 ## Explicit profile example
 

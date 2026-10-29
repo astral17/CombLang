@@ -493,6 +493,45 @@ const doubled = output * 2;`,
     expect(entities.filter(({ name }) => name === 'arithmetic-combinator')).toHaveLength(1);
   });
 
+  test('exports a callable bundled small-lamp through the Worker boundary', async () => {
+    const response = await handleCompilerWorkerRequest({
+      kind: 'parse',
+      revision: 82,
+      file: {
+        path: 'worker-small-lamp-call.factorio.ts',
+        text: [
+          "const signal = Signal('virtual', 'signal-A');",
+          'const state = new Network<G>();',
+          'state += CC(1 * signal);',
+          "const lamp = Lamp('small-lamp', {",
+          '  control_behavior: {',
+          '    circuit_enabled: true,',
+          "    circuit_condition: { first_signal: signal, comparator: '>', constant: 0 },",
+          '  },',
+          '}).at(4, 5, 8);',
+          'lamp(state);',
+        ].join('\n'),
+      },
+      prototypeProfile: {
+        kind: 'builtin',
+        source: builtinPrototypeDatabaseSource,
+        assetManifest: JSON.stringify(builtinPrototypeManifest),
+        expectedIdentity: builtinPrototypeManifest.databaseIdentity,
+      },
+      blueprintExport: { parameters: false, label: '' },
+    });
+
+    expect(response.result.compilerDiagnostics).toEqual([]);
+    expect(response.result.blueprintExport).toMatchObject({ ok: true });
+    if (response.result.blueprintExport?.ok !== true) {
+      throw new Error('Expected the Worker lamp Blueprint export to succeed.');
+    }
+    const blueprint = response.result.blueprintExport.document.blueprint;
+    expect(blueprint.entities.filter(({ name }) => name === 'small-lamp')).toHaveLength(1);
+    expect(blueprint.entities.filter(({ name }) => name === 'constant-combinator')).toHaveLength(1);
+    expect(blueprint.wires).toHaveLength(1);
+  });
+
   test('normalizes raw input in the Worker and reports warnings without source-side parsing', async () => {
     const response = await handleCompilerWorkerRequest({
       kind: 'parse',

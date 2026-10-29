@@ -116,6 +116,36 @@ describe('Entity construction provisioning contract', () => {
     ).toBe('single-shared');
   });
 
+  test('provisions normalized custom lamp connectors and keeps lamps without evidence unknown', () => {
+    const lamp = {
+      key: 'entity:modded-status-lamp',
+      name: 'modded-status-lamp',
+      type: 'lamp',
+      blueprintEligible: true,
+      circuitConnectorTopology: 'single-shared',
+    } as const;
+    const provisioned = createEntityFallbackProfile(lamp, database);
+    const unknown = createEntityFallbackProfile(
+      { ...lamp, circuitConnectorTopology: undefined },
+      database,
+    );
+
+    expect(provisioned).toMatchObject({
+      prototypeType: 'lamp',
+      connectorStructure: 'complete',
+      sharedCallConnector: 'circuit',
+      synthetic: false,
+    });
+    expect(unknown).toMatchObject({
+      prototypeType: 'lamp',
+      connectorStructure: 'unknown',
+      connectors: [],
+      defaultReadProjection: null,
+      synthetic: false,
+    });
+    expect(unknown).not.toHaveProperty('sharedCallConnector');
+  });
+
   test('keeps unknown structure distinct from a complete verified empty profile', () => {
     expect(syntheticZeroPortEntityProfile.connectorStructure).toBe('complete');
     const fallback = createEntityFallbackProfile(assemblingMachine, database);
