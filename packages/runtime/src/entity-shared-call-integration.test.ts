@@ -78,6 +78,109 @@ describe('provider-backed shared Entity calls', () => {
   );
 
   test.each([
+    { name: 'accumulator' },
+    { name: 'assembling-machine-3' },
+    { name: 'asteroid-collector' },
+    { name: 'electric-furnace' },
+    {
+      name: 'inserter',
+      configuration: '{ control_behavior: { circuit_read_hand_contents: true } }',
+    },
+    { name: 'passive-provider-chest' },
+    { name: 'express-transport-belt' },
+    { name: 'express-loader' },
+    { name: 'heat-pipe' },
+    { name: 'gun-turret' },
+    { name: 'railgun-turret' },
+  ])(
+    'constructs, shares and exports one provider-backed $name Entity with two wires',
+    async ({ name, configuration }) => {
+      const configArgument = configuration === undefined ? '' : ', ' + configuration;
+      const source = [
+        "const A = Signal('virtual', 'signal-A');",
+        'const input = CC(1 * A);',
+        'const output = CC(2 * A);',
+        "const device = Entity('" + name + "'" + configArgument + ').at(4, 5, 8);',
+        'device(input);',
+        'output += device;',
+      ].join('\n');
+      const { compilation } = await compileBundledSource(
+        'provider-shared-entity-' + name + '.factorio.ts',
+        source,
+      );
+
+      expect(
+        compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error'),
+      ).toEqual([]);
+      const ir = compilation.resolvedCircuit!.ir;
+      expect(ir.entities).toHaveLength(3);
+      const devices = ir.entities.filter(({ prototypeName }) => prototypeName === name);
+      expect(devices).toHaveLength(1);
+      expect(devices[0]?.connectorBindings.map(({ direction }) => direction).sort()).toEqual([
+        'input',
+        'output',
+      ]);
+
+      const blueprint = generateBlueprintJson(ir).blueprint;
+      expect(blueprint.entities).toHaveLength(3);
+      expect(blueprint.wires).toHaveLength(2);
+      const exportedDevice = blueprint.entities.find(
+        ({ name: prototypeName }) => prototypeName === name,
+      );
+      expect(exportedDevice).toMatchObject({
+        name,
+        position: { x: 4, y: 5 },
+        direction: 8,
+        ...(configuration === undefined
+          ? {}
+          : { control_behavior: { circuit_read_hand_contents: true } }),
+      });
+      const entityNumber = exportedDevice?.entity_number;
+      const nativeConnectorIds = blueprint.wires.flatMap(
+        ([from, fromConnector, to, toConnector]) =>
+          from === entityNumber ? [fromConnector] : to === entityNumber ? [toConnector] : [],
+      );
+      expect(nativeConnectorIds.sort()).toEqual([1, 2]);
+    },
+  );
+
+  test.each(['small-lamp', 'express-transport-belt', 'inserter'])(
+    'allows the input-only consumer path for %s',
+    async (name) => {
+      const source = [
+        "const A = Signal('virtual', 'signal-A');",
+        'const input = CC(1 * A);',
+        "const device = Entity('" + name + "');",
+        'device(input);',
+      ].join('\n');
+      const { compilation } = await compileBundledSource(
+        'provider-input-only-' + name + '.factorio.ts',
+        source,
+      );
+
+      expect(
+        compilation.pipelineDiagnostics.filter(({ severity }) => severity === 'error'),
+      ).toEqual([]);
+      const blueprint = generateBlueprintJson(compilation.resolvedCircuit!.ir).blueprint;
+      expect(blueprint.entities).toHaveLength(2);
+      expect(
+        blueprint.entities.filter(({ name: prototypeName }) => prototypeName === name),
+      ).toHaveLength(1);
+      expect(blueprint.wires).toHaveLength(1);
+    },
+  );
+
+  test('keeps unknown-family provider Entities blocked with RT2027', async () => {
+    const { compilation } = await compileBundledSource(
+      'provider-unknown-entity-family.factorio.ts',
+      "const input = new Network();\nconst signal = Entity('rail-signal');\nsignal(input);",
+    );
+    expect(compilation.pipelineDiagnostics).toContainEqual(
+      expect.objectContaining({ code: 'RT2027', severity: 'error' }),
+    );
+  });
+
+  test.each([
     {
       name: 'arithmetic',
       path: 'entity-shared-read-arithmetic.factorio.ts',

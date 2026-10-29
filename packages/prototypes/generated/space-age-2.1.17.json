@@ -20,6 +20,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:accumulator",
       "name": "accumulator",
       "tileHeight": 2,
@@ -174,6 +175,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:active-provider-chest",
       "name": "active-provider-chest",
       "tileHeight": 1,
@@ -196,6 +198,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:agricultural-tower",
       "name": "agricultural-tower",
       "tileHeight": 3,
@@ -270,6 +273,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:artillery-turret",
       "name": "artillery-turret",
       "tileHeight": 3,
@@ -430,6 +434,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:asteroid-collector",
       "name": "asteroid-collector",
       "tileHeight": 3,
@@ -1100,6 +1105,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:big-mining-drill",
       "name": "big-mining-drill",
       "tileHeight": 5,
@@ -1491,6 +1497,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:boiler",
       "name": "boiler",
       "tileHeight": 2,
@@ -1542,6 +1549,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:buffer-chest",
       "name": "buffer-chest",
       "tileHeight": 1,
@@ -1564,6 +1572,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:bulk-inserter",
       "name": "bulk-inserter",
       "tileHeight": 1,
@@ -1594,6 +1603,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:burner-inserter",
       "name": "burner-inserter",
       "tileHeight": 1,
@@ -1616,6 +1626,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:burner-mining-drill",
       "name": "burner-mining-drill",
       "tileHeight": 2,
@@ -1768,6 +1779,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:cargo-landing-pad",
       "name": "cargo-landing-pad",
       "tileHeight": 8,
@@ -2421,6 +2433,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:display-panel",
       "name": "display-panel",
       "tileHeight": 1,
@@ -2563,6 +2576,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "crafting": {
         "categories": [
           "smelting"
@@ -2597,6 +2611,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:electric-mining-drill",
       "name": "electric-mining-drill",
       "tileHeight": 3,
@@ -2756,6 +2771,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:express-loader",
       "name": "express-loader",
       "tileHeight": 2,
@@ -2764,6 +2780,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:express-splitter",
       "name": "express-splitter",
       "tileHeight": 1,
@@ -2786,6 +2803,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:express-transport-belt",
       "name": "express-transport-belt",
       "tileHeight": 1,
@@ -2872,6 +2890,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:fast-inserter",
       "name": "fast-inserter",
       "tileHeight": 1,
@@ -2894,6 +2913,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:fast-loader",
       "name": "fast-loader",
       "tileHeight": 2,
@@ -2902,6 +2922,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:fast-splitter",
       "name": "fast-splitter",
       "tileHeight": 1,
@@ -2924,6 +2945,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:fast-transport-belt",
       "name": "fast-transport-belt",
       "tileHeight": 1,
@@ -3012,6 +3034,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:flamethrower-turret",
       "name": "flamethrower-turret",
       "tileHeight": 3,
@@ -3367,6 +3390,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:gun-turret",
       "name": "gun-turret",
       "tileHeight": 2,
@@ -3419,6 +3443,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:heat-exchanger",
       "name": "heat-exchanger",
       "tileHeight": 2,
@@ -3449,6 +3474,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:heat-pipe",
       "name": "heat-pipe",
       "tileHeight": 1,
@@ -3471,6 +3497,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:heating-tower",
       "name": "heating-tower",
       "tileHeight": 3,
@@ -3587,6 +3614,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:infinity-chest",
       "name": "infinity-chest",
       "tileHeight": 1,
@@ -3603,6 +3631,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:inserter",
       "name": "inserter",
       "tileHeight": 1,
@@ -3737,6 +3766,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:land-mine",
       "name": "land-mine",
       "tileHeight": 1,
@@ -3793,6 +3823,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:laser-turret",
       "name": "laser-turret",
       "tileHeight": 2,
@@ -3901,6 +3932,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:linked-chest",
       "name": "linked-chest",
       "tileHeight": 1,
@@ -3933,6 +3965,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:loader",
       "name": "loader",
       "tileHeight": 2,
@@ -3993,6 +4026,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:long-handed-inserter",
       "name": "long-handed-inserter",
       "tileHeight": 1,
@@ -4759,6 +4793,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:nuclear-reactor",
       "name": "nuclear-reactor",
       "tileHeight": 5,
@@ -4817,6 +4852,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:offshore-pump",
       "name": "offshore-pump",
       "tileHeight": 1,
@@ -4980,6 +5016,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:passive-provider-chest",
       "name": "passive-provider-chest",
       "tileHeight": 1,
@@ -5038,6 +5075,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:pipe-to-ground",
       "name": "pipe-to-ground",
       "tileHeight": 1,
@@ -5106,6 +5144,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:programmable-speaker",
       "name": "programmable-speaker",
       "tileHeight": 1,
@@ -5166,6 +5205,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:pump",
       "name": "pump",
       "tileHeight": 2,
@@ -5188,6 +5228,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:pumpjack",
       "name": "pumpjack",
       "tileHeight": 3,
@@ -5210,6 +5251,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:radar",
       "name": "radar",
       "tileHeight": 3,
@@ -5350,6 +5392,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:railgun-turret",
       "name": "railgun-turret",
       "tileHeight": 5,
@@ -5372,6 +5415,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "crafting": {
         "categories": [
           "recycling"
@@ -5409,6 +5453,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:requester-chest",
       "name": "requester-chest",
       "tileHeight": 1,
@@ -5431,6 +5476,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:roboport",
       "name": "roboport",
       "tileHeight": 4,
@@ -5465,6 +5511,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "crafting": {
         "categories": [
           "rocket-building"
@@ -5509,6 +5556,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:rocket-turret",
       "name": "rocket-turret",
       "tileHeight": 3,
@@ -6346,6 +6394,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:space-platform-hub",
       "name": "space-platform-hub",
       "tileHeight": 8,
@@ -6474,6 +6523,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:splitter",
       "name": "splitter",
       "tileHeight": 1,
@@ -6496,6 +6546,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:stack-inserter",
       "name": "stack-inserter",
       "tileHeight": 1,
@@ -6585,6 +6636,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "crafting": {
         "categories": [
           "smelting"
@@ -6629,6 +6681,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "crafting": {
         "categories": [
           "smelting"
@@ -6657,6 +6710,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:stone-wall",
       "name": "stone-wall",
       "tileHeight": 1,
@@ -6665,6 +6719,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:storage-chest",
       "name": "storage-chest",
       "tileHeight": 1,
@@ -6687,6 +6742,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:storage-tank",
       "name": "storage-tank",
       "tileHeight": 3,
@@ -6811,6 +6867,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:tesla-turret",
       "name": "tesla-turret",
       "tileHeight": 4,
@@ -6889,6 +6946,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:train-stop",
       "name": "train-stop",
       "tileHeight": 2,
@@ -6911,6 +6969,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:transport-belt",
       "name": "transport-belt",
       "tileHeight": 1,
@@ -7159,6 +7218,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:turbo-loader",
       "name": "turbo-loader",
       "tileHeight": 2,
@@ -7167,6 +7227,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:turbo-splitter",
       "name": "turbo-splitter",
       "tileHeight": 1,
@@ -7189,6 +7250,7 @@
     },
     {
       "blueprintEligible": true,
+      "circuitConnectorTopology": "single-shared",
       "key": "entity:turbo-transport-belt",
       "name": "turbo-transport-belt",
       "tileHeight": 1,

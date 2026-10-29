@@ -31,6 +31,12 @@ The current repository implements the completed Phase 0–7 foundation, from the
 - [x] Phase 5 — deterministic testbench, external-world adapters, traces and interactive timelines; browser-first prototype environments with reproducible `factorio.exe --dump-data` normalization, bundled and custom modpack profiles, identity-bound provenance, persistence, integrity checks, and offline lifecycle.
 - [x] Phase 6 — persistent physical Entity identity, provider-authorized generic and modded construction, explicit connector binding and placement, profile-free replay transport, bounded raw and schema-checked Blueprint configuration, structural family facades, and separately tracked structural/implementation/native evidence.
 - [x] Phase 7 — exact Constant/Arithmetic/Decider and deterministic Selector computation; linked physical Entity transport; ergonomic Constant sections; generated one-device condition/output configurations; bounded provenance, replay, blueprint, CLI/Worker, and model acceptance with native-evidence limits kept explicit.
+
+The bundled provider also enables structural shared-call wiring for complete,
+reviewed circuit-connector records across single-definition, orientation-array,
+four-orientation and turret families. This adds no device simulation or native
+game acceptance claim; see the [Entity connector matrix](docs/api/entity.md#connections-and-readable-projections).
+
 - [ ] Phase 8 — complete blueprint parameterization and its native export.
   - [x] Add bounded lossless JSON/exchange handling and verified canonical source reconstruction for supported Constant, Arithmetic, Decider, and Selector Select/Count configurations, with shared CLI/Worker/web import and explicit refusals.
   - [x] Keep one immutable native export projection, preserve supported masks, qualities and parameter metadata, and pin the API schema independently of bundled prototype data.

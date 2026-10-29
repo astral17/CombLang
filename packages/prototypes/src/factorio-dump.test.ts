@@ -264,6 +264,340 @@ describe('Factorio data-raw-dump normalizer', () => {
   });
 
   test.each([
+    'accumulator',
+    'agricultural-tower',
+    'artillery-turret',
+    'cargo-landing-pad',
+    'lab',
+    'lamp',
+    'land-mine',
+    'linked-container',
+    'programmable-speaker',
+    'radar',
+    'reactor',
+    'roboport',
+    'space-platform-hub',
+    'wall',
+  ])('normalizes complete single connector definitions for the %s type', (type) => {
+    const dump = dumpFixture() as MutableRawDump;
+    const name = `custom-${type}`;
+    dump[type] = {
+      [name]: { type, name, circuit_connector: wireConnector() },
+    };
+
+    const entity = normalizeFactorioDataDump(dump, metadata).database.entities.find(
+      (candidate) => candidate.name === name,
+    );
+    expect(entity?.circuitConnectorTopology).toBe('single-shared');
+  });
+
+  test.each([
+    'assembling-machine',
+    'asteroid-collector',
+    'boiler',
+    'display-panel',
+    'furnace',
+    'inserter',
+    'mining-drill',
+    'offshore-pump',
+    'pipe-to-ground',
+    'pump',
+    'rocket-silo',
+    'splitter',
+    'storage-tank',
+    'train-stop',
+  ])('normalizes four-orientation connector definitions for the %s type', (type) => {
+    const dump = dumpFixture() as MutableRawDump;
+    const name = `custom-${type}`;
+    dump[type] = {
+      [name]: { type, name, circuit_connector: Array.from({ length: 4 }, wireConnector) },
+    };
+
+    const entity = normalizeFactorioDataDump(dump, metadata).database.entities.find(
+      (candidate) => candidate.name === name,
+    );
+    expect(entity?.circuitConnectorTopology).toBe('single-shared');
+  });
+
+  test.each(['assembling-machine', 'rocket-silo', 'furnace', 'inserter', 'mining-drill'])(
+    'requires every declared flipped connector orientation for %s',
+    (type) => {
+      const dump = dumpFixture() as MutableRawDump;
+      const name = `custom-${type}`;
+      dump[type] = {
+        [name]: {
+          type,
+          name,
+          circuit_connector: Array.from({ length: 4 }, wireConnector),
+          circuit_connector_flipped: [
+            wireConnector(),
+            wireConnector(),
+            { points: { wire: { red: [1, 2] } } },
+            wireConnector(),
+          ],
+        },
+      };
+
+      const entity = normalizeFactorioDataDump(dump, metadata).database.entities.find(
+        (candidate) => candidate.name === name,
+      );
+      expect(entity).not.toHaveProperty('circuitConnectorTopology');
+    },
+  );
+
+  test.each([
+    ['transport-belt', 7],
+    ['loader', 8],
+    ['loader-1x1', 8],
+    ['heat-pipe', 16],
+  ] as const)('normalizes %s with %i documented orientations', (type, count) => {
+    const dump = dumpFixture() as MutableRawDump;
+    const name = `custom-${type}`;
+    dump[type] = {
+      [name]: { type, name, circuit_connector: Array.from({ length: count }, wireConnector) },
+    };
+
+    const entity = normalizeFactorioDataDump(dump, metadata).database.entities.find(
+      (candidate) => candidate.name === name,
+    );
+    expect(entity?.circuitConnectorTopology).toBe('single-shared');
+  });
+
+  test.each([
+    ['transport-belt', 6],
+    ['loader', 7],
+    ['loader-1x1', 7],
+    ['heat-pipe', 15],
+  ] as const)('rejects the wrong orientation count for %s', (type, count) => {
+    const dump = dumpFixture() as MutableRawDump;
+    const name = 'wrong-count-' + type;
+    dump[type] = {
+      [name]: { type, name, circuit_connector: Array.from({ length: count }, wireConnector) },
+    };
+
+    expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
+      expect.objectContaining({
+        code: 'PD1001',
+        path: type + '.' + name + '.circuit_connector',
+      }),
+    );
+  });
+
+  test.each([
+    ['transport-belt', 7],
+    ['loader', 8],
+    ['loader-1x1', 8],
+    ['heat-pipe', 16],
+  ] as const)('requires red and green points in every %s orientation', (type, count) => {
+    const dump = dumpFixture() as MutableRawDump;
+    const name = 'incomplete-' + type;
+    const orientations = Array.from({ length: count }, wireConnector);
+    orientations[count - 1] = { points: { wire: { red: [1, 2] } } };
+    dump[type] = { [name]: { type, name, circuit_connector: orientations } };
+
+    const entity = normalizeFactorioDataDump(dump, metadata).database.entities.find(
+      (candidate) => candidate.name === name,
+    );
+    expect(entity).not.toHaveProperty('circuitConnectorTopology');
+  });
+
+  test('reports malformed coordinates inside a declared flipped orientation', () => {
+    const dump = dumpFixture() as MutableRawDump;
+    dump['assembling-machine'] = {
+      'bad-flipped-orientation': {
+        type: 'assembling-machine',
+        name: 'bad-flipped-orientation',
+        circuit_connector: Array.from({ length: 4 }, wireConnector),
+        circuit_connector_flipped: [
+          wireConnector(),
+          wireConnector(),
+          wireConnector(),
+          { points: { wire: { red: [1, 2], green: [3, Number.NaN] } } },
+        ],
+      },
+    };
+
+    expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
+      expect.objectContaining({
+        code: 'PD1001',
+        path: 'assembling-machine.bad-flipped-orientation.circuit_connector_flipped[3].points.wire.green[1]',
+      }),
+    );
+  });
+
+  test('uses the inherited default and override direction_count for container families', () => {
+    const dump = dumpFixture() as MutableRawDump;
+    dump.container = {
+      'default-container': {
+        type: 'container',
+        name: 'default-container',
+        circuit_connector: [wireConnector()],
+      },
+    };
+    dump['logistic-container'] = {
+      'custom-logistic-container': {
+        type: 'logistic-container',
+        name: 'custom-logistic-container',
+        direction_count: 2,
+        circuit_connector: [wireConnector(), wireConnector()],
+      },
+    };
+    dump['infinity-container'] = {
+      'custom-infinity-container': {
+        type: 'infinity-container',
+        name: 'custom-infinity-container',
+        circuit_connector: [wireConnector()],
+      },
+    };
+    dump['temporary-container'] = {
+      'custom-temporary-container': {
+        type: 'temporary-container',
+        name: 'custom-temporary-container',
+        circuit_connector: [wireConnector()],
+      },
+    };
+
+    const entities = normalizeFactorioDataDump(dump, metadata).database.entities;
+    for (const name of [
+      'default-container',
+      'custom-logistic-container',
+      'custom-infinity-container',
+      'custom-temporary-container',
+    ]) {
+      expect(entities.find((entity) => entity.name === name)?.circuitConnectorTopology).toBe(
+        'single-shared',
+      );
+    }
+  });
+
+  test('keeps version-discrepant and semantically distinct connector shapes unknown', () => {
+    const dump = dumpFixture() as MutableRawDump;
+    dump['proxy-container'] = {
+      'proxy-sample': {
+        type: 'proxy-container',
+        name: 'proxy-sample',
+        circuit_connector: wireConnector(),
+      },
+    };
+    dump['infinity-pipe'] = {
+      'infinity-pipe-sample': {
+        type: 'infinity-pipe',
+        name: 'infinity-pipe-sample',
+        circuit_connector: Array.from({ length: 16 }, wireConnector),
+      },
+    };
+    dump['rail-signal'] = {
+      'rail-signal-sample': {
+        type: 'rail-signal',
+        name: 'rail-signal-sample',
+        circuit_connector: wireConnector(),
+      },
+    };
+
+    const entities = normalizeFactorioDataDump(dump, metadata).database.entities;
+    for (const name of ['proxy-sample', 'infinity-pipe-sample', 'rail-signal-sample']) {
+      expect(entities.find((entity) => entity.name === name)).not.toHaveProperty(
+        'circuitConnectorTopology',
+      );
+    }
+  });
+
+  test.each([
+    ['building-direction-8-way', false, 8],
+    ['building-direction-16-way', false, 16],
+    ['both directional flags (8-way priority)', true, 8],
+    ['turret_base_has_direction', true, 4],
+    ['default selectors', false, 1],
+  ] as const)(
+    'selects the documented turret orientation count for %s',
+    (selector, turretBaseHasDirection, count) => {
+      const dump = dumpFixture() as MutableRawDump;
+      const flags = selector.includes('8-way')
+        ? [
+            'building-direction-8-way',
+            ...(selector.startsWith('both') ? ['building-direction-16-way'] : []),
+          ]
+        : selector === 'building-direction-16-way'
+          ? ['building-direction-16-way']
+          : [];
+      const name = 'custom-turret';
+      dump.turret = {
+        [name]: {
+          type: 'turret',
+          name,
+          flags,
+          ...(selector === 'turret_base_has_direction' ? { turret_base_has_direction: true } : {}),
+          ...(selector === 'both directional flags (8-way priority)'
+            ? { turret_base_has_direction: true }
+            : {}),
+          circuit_connector: Array.from({ length: count }, wireConnector),
+        },
+      };
+
+      const entity = normalizeFactorioDataDump(dump, metadata).database.entities.find(
+        (candidate) => candidate.name === name,
+      );
+      expect(entity?.circuitConnectorTopology).toBe('single-shared');
+    },
+  );
+
+  test.each([
+    ['building-direction-8-way', ['building-direction-8-way'], false, 4],
+    ['building-direction-16-way', ['building-direction-16-way'], false, 8],
+    ['turret_base_has_direction', [], true, 1],
+  ] as const)(
+    'rejects the wrong orientation count for turret selector %s',
+    (_selector, flags, turretBaseHasDirection, count) => {
+      const dump = dumpFixture() as MutableRawDump;
+      const name = 'wrong-count-turret';
+      dump['ammo-turret'] = {
+        [name]: {
+          type: 'ammo-turret',
+          name,
+          flags,
+          turret_base_has_direction: turretBaseHasDirection,
+          circuit_connector: Array.from({ length: count }, wireConnector),
+        },
+      };
+
+      expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
+        expect.objectContaining({
+          code: 'PD1001',
+          path: 'ammo-turret.wrong-count-turret.circuit_connector',
+        }),
+      );
+    },
+  );
+
+  test.each([
+    ['non-array turret flags', { flags: 'building-direction-8-way' }, 'turret.bad-selector.flags'],
+    [
+      'non-string turret flag',
+      { flags: ['building-direction-8-way', 8] },
+      'turret.bad-selector.flags[1]',
+    ],
+    [
+      'non-boolean turret direction selector',
+      { flags: [], turret_base_has_direction: 'yes' },
+      'turret.bad-selector.turret_base_has_direction',
+    ],
+  ] as const)('diagnoses malformed turret selector data: %s', (_label, selector, path) => {
+    const dump = dumpFixture() as MutableRawDump;
+    dump.turret = {
+      'bad-selector': {
+        type: 'turret',
+        name: 'bad-selector',
+        circuit_connector: [wireConnector()],
+        ...selector,
+      },
+    };
+
+    expect(() => normalizeFactorioDataDump(dump, metadata)).toThrowError(
+      expect.objectContaining({ code: 'PD1001', path }),
+    );
+  });
+
+  test.each([
     ['no connector', {}],
     ['missing points', { circuit_connector: {} }],
     ['red only', { circuit_connector: { points: { wire: { red: [1, 2] } } } }],

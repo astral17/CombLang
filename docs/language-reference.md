@@ -72,11 +72,13 @@ const redPort = machine.port('circuit', 'red');
 
 Unknown-topology profiles support `Entity(...)` construction and `.at(...)`
 placement. They have no connectors, call authority, configuration rules or
-native behavior. The bundled provider additionally carries a normalized
-`single-shared` fact for `assembling-machine-3`, `iron-chest`, and `lab`. Those
-prototypes receive one bidirectional red/green connector profile and support the
-single-argument call below. Other profiles still need matching reviewed authority
-for `port`, `bind`, or fixed-lane callable behavior. An omitted
+native behavior. The bundled provider carries a normalized `single-shared` fact
+for complete records in the reviewed families listed in the
+[Entity connector matrix](api/entity.md#connections-and-readable-projections).
+Such a record receives one bidirectional red/green connector profile and supports
+the single-argument call below. Records without that fact still have no call
+authority; other profiles need matching reviewed authority for `port`, `bind`, or
+fixed-lane callable behavior. An omitted
 `blueprintEligible` fact in legacy normalized input is unknown and does not
 authorize construction.
 

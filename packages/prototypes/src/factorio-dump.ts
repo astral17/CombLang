@@ -460,16 +460,15 @@ function hasFluidBoxes(value: unknown): boolean {
   return typeof value === 'object' && value !== null && Object.keys(value).length > 0;
 }
 
-function blueprintEligibility(record: JsonObject, path: string): boolean | undefined {
+function prototypeFlags(record: JsonObject, path: string): ReadonlySet<string> | undefined {
   // In raw prototype data the optional flags field defaults to an empty set.
-  // Unknown is reserved for older already-normalized databases which predate
-  // the blueprintEligible fact entirely.
-  if (record.flags === undefined) return false;
-  if (!Array.isArray(record.flags)) {
+  const flagsField = ownDataField(record, 'flags', `${path}.flags`);
+  if (!flagsField.present || flagsField.value === undefined) return undefined;
+  if (!Array.isArray(flagsField.value)) {
     throw new FactorioDumpError(`${path}.flags`, 'expected an array of flag names.');
   }
   const flags = new Set<string>();
-  for (const [index, value] of record.flags.entries()) {
+  for (const [index, value] of flagsField.value.entries()) {
     if (typeof value !== 'string' || value.length === 0) {
       throw new FactorioDumpError(`${path}.flags[${index}]`, 'expected a non-empty flag name.');
     }
@@ -478,7 +477,12 @@ function blueprintEligibility(record: JsonObject, path: string): boolean | undef
     }
     flags.add(value);
   }
-  return flags.has('player-creation') && !flags.has('not-blueprintable');
+  return flags;
+}
+
+function blueprintEligibility(flags: ReadonlySet<string> | undefined): boolean {
+  // Missing raw flags do not grant placement authority.
+  return flags?.has('player-creation') === true && !flags.has('not-blueprintable');
 }
 
 interface OwnDataField {
@@ -552,40 +556,107 @@ function connectorOrientationsComplete(entries: readonly unknown[], path: string
   return complete;
 }
 
+const SINGLE_CIRCUIT_CONNECTOR_TYPES = new Set([
+  'accumulator',
+  'agricultural-tower',
+  'artillery-turret',
+  'cargo-landing-pad',
+  'lab',
+  'lamp',
+  'land-mine',
+  'linked-container',
+  'programmable-speaker',
+  'radar',
+  'reactor',
+  'roboport',
+  'space-platform-hub',
+  'wall',
+]);
+
+const FOUR_CIRCUIT_CONNECTOR_TYPES = new Set([
+  'assembling-machine',
+  'asteroid-collector',
+  'boiler',
+  'display-panel',
+  'furnace',
+  'inserter',
+  'mining-drill',
+  'offshore-pump',
+  'pipe-to-ground',
+  'pump',
+  'rocket-silo',
+  'splitter',
+  'storage-tank',
+  'train-stop',
+]);
+
+const FOUR_CIRCUIT_CONNECTOR_FLIPPED_TYPES = new Set([
+  'assembling-machine',
+  'furnace',
+  'inserter',
+  'mining-drill',
+  'rocket-silo',
+]);
+
+const DIRECTIONAL_CONTAINER_TYPES = new Set([
+  'container',
+  'logistic-container',
+  'infinity-container',
+  'temporary-container',
+]);
+
+const FIXED_ORIENTATION_COUNTS = new Map([
+  ['transport-belt', 7],
+  ['loader', 8],
+  ['loader-1x1', 8],
+  ['heat-pipe', 16],
+]);
+
+const TURRET_TYPES = new Set(['turret', 'ammo-turret', 'electric-turret', 'fluid-turret']);
+
 function circuitConnectorTopology(
   type: string,
   record: JsonObject,
   path: string,
+  flags: ReadonlySet<string> | undefined,
 ): EntityPrototype['circuitConnectorTopology'] {
-  if (type === 'assembling-machine') {
+  if (SINGLE_CIRCUIT_CONNECTOR_TYPES.has(type)) {
     const connectorField = ownDataField(record, 'circuit_connector', `${path}.circuit_connector`);
-    const flippedField = ownDataField(
-      record,
-      'circuit_connector_flipped',
-      `${path}.circuit_connector_flipped`,
-    );
+    if (!connectorField.present || connectorField.value === undefined) return undefined;
+    return hasRedGreenWirePoints(connectorField.value, `${path}.circuit_connector`)
+      ? 'single-shared'
+      : undefined;
+  }
+
+  if (FOUR_CIRCUIT_CONNECTOR_TYPES.has(type)) {
+    const connectorField = ownDataField(record, 'circuit_connector', `${path}.circuit_connector`);
     const connectorPresent = connectorField.present && connectorField.value !== undefined;
-    const flippedPresent = flippedField.present && flippedField.value !== undefined;
     const connectorComplete = connectorPresent
       ? connectorOrientationsComplete(
           tupleEntries(connectorField.value, 4, `${path}.circuit_connector`),
           `${path}.circuit_connector`,
         )
       : false;
-    const flippedComplete = flippedPresent
-      ? connectorOrientationsComplete(
+    let flippedComplete = true;
+    if (FOUR_CIRCUIT_CONNECTOR_FLIPPED_TYPES.has(type)) {
+      const flippedField = ownDataField(
+        record,
+        'circuit_connector_flipped',
+        `${path}.circuit_connector_flipped`,
+      );
+      if (flippedField.present && flippedField.value !== undefined) {
+        flippedComplete = connectorOrientationsComplete(
           tupleEntries(flippedField.value, 4, `${path}.circuit_connector_flipped`),
           `${path}.circuit_connector_flipped`,
-        )
-      : true;
+        );
+      }
+    }
     return connectorComplete && flippedComplete ? 'single-shared' : undefined;
   }
 
-  if (type !== 'container' && type !== 'lab' && type !== 'lamp') return undefined;
-  const connectorField = ownDataField(record, 'circuit_connector', `${path}.circuit_connector`);
-  if (!connectorField.present || connectorField.value === undefined) return undefined;
-
-  if (type === 'container') {
+  if (DIRECTIONAL_CONTAINER_TYPES.has(type)) {
+    const connectorField = ownDataField(record, 'circuit_connector', `${path}.circuit_connector`);
+    if (!connectorField.present || connectorField.value === undefined) return undefined;
     const directionCountField = ownDataField(record, 'direction_count', `${path}.direction_count`);
     const directionCount =
       !directionCountField.present || directionCountField.value === undefined
@@ -602,8 +673,36 @@ function circuitConnectorTopology(
       : undefined;
   }
 
-  if (type === 'lab' || type === 'lamp') {
-    return hasRedGreenWirePoints(connectorField.value, `${path}.circuit_connector`)
+  const orientationCount = FIXED_ORIENTATION_COUNTS.get(type);
+  if (orientationCount !== undefined) {
+    const connectorField = ownDataField(record, 'circuit_connector', `${path}.circuit_connector`);
+    if (!connectorField.present || connectorField.value === undefined) return undefined;
+    return connectorOrientationsComplete(
+      tupleEntries(connectorField.value, orientationCount, `${path}.circuit_connector`),
+      `${path}.circuit_connector`,
+    )
+      ? 'single-shared'
+      : undefined;
+  }
+
+  if (TURRET_TYPES.has(type)) {
+    const connectorField = ownDataField(record, 'circuit_connector', `${path}.circuit_connector`);
+    if (!connectorField.present || connectorField.value === undefined) return undefined;
+    const turretBaseHasDirection =
+      optionalBoolean(record.turret_base_has_direction, `${path}.turret_base_has_direction`) ??
+      false;
+    const orientationCount =
+      flags?.has('building-direction-8-way') === true
+        ? 8
+        : flags?.has('building-direction-16-way') === true
+          ? 16
+          : turretBaseHasDirection
+            ? 4
+            : 1;
+    return connectorOrientationsComplete(
+      tupleEntries(connectorField.value, orientationCount, `${path}.circuit_connector`),
+      `${path}.circuit_connector`,
+    )
       ? 'single-shared'
       : undefined;
   }
@@ -756,8 +855,9 @@ export function normalizeFactorioDataDump(
         );
       }
       const size = dimensions(record, `${table}.${name}`);
-      const blueprintEligible = blueprintEligibility(record, `${table}.${name}`);
-      const topology = circuitConnectorTopology(table, record, `${table}.${name}`);
+      const flags = prototypeFlags(record, `${table}.${name}`);
+      const blueprintEligible = blueprintEligibility(flags);
+      const topology = circuitConnectorTopology(table, record, `${table}.${name}`, flags);
       const categories = Array.isArray(record.crafting_categories)
         ? record.crafting_categories.map((category, index) =>
             nonEmptyString(category, `${table}.${name}.crafting_categories[${index}]`),

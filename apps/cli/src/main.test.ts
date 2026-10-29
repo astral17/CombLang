@@ -421,6 +421,43 @@ const doubled = output * 2;`);
     expect(error).not.toHaveBeenCalled();
   });
 
+  test('exports a configured provider-backed inserter with its shared input and output wires', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const path = await sourceFile(
+      [
+        "const A = Signal('virtual', 'signal-A');",
+        'const input = CC(1 * A);',
+        'const output = CC(2 * A);',
+        "const inserter = Entity('inserter', {",
+        '  control_behavior: { circuit_read_hand_contents: true },',
+        '}).at(7, 8, 4);',
+        'inserter(input);',
+        'output += inserter;',
+      ].join('\n'),
+    );
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    expect(await run(['blueprint', 'export', '--json', path], { prototypes })).toBe(0);
+    const response = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(response.ok).toBe(true);
+    const blueprint = response.document.blueprint;
+    const inserters = blueprint.entities.filter(
+      ({ name }: { name: string }) => name === 'inserter',
+    );
+    expect(inserters).toEqual([
+      expect.objectContaining({
+        name: 'inserter',
+        position: { x: 7, y: 8 },
+        direction: 4,
+        control_behavior: { circuit_read_hand_contents: true },
+      }),
+    ]);
+    expect(blueprint.entities).toHaveLength(3);
+    expect(blueprint.wires).toHaveLength(2);
+    expect(error).not.toHaveBeenCalled();
+  });
+
   test('rejects a host-bound Entity context for a different selected provider before execution', async () => {
     const path = await sourceFile(`throw new Error('source executed');`);
     const firstDatabase = syntheticPrototypeDatabase();

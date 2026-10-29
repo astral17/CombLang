@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from 'vitest';
 
+import builtinPrototypeDatabase from '../generated/space-age-2.1.17.json';
 import { syntheticPrototypeDatabase } from './fixtures.js';
 import { loadPrototypeDatabase } from './provider.js';
 import type { RecipePrototype } from './schema.js';
@@ -35,6 +36,65 @@ function mutableFixture(): MutableDatabase {
 }
 
 describe('PrototypeDatabase v1', () => {
+  test('bundled provider carries reviewed connector facts and leaves deferred families unknown', async () => {
+    const { prototypes } = await loadPrototypeDatabase(builtinPrototypeDatabase);
+    const supported = [
+      'accumulator',
+      'agricultural-tower',
+      'artillery-turret',
+      'cargo-landing-pad',
+      'lab',
+      'small-lamp',
+      'land-mine',
+      'linked-chest',
+      'programmable-speaker',
+      'radar',
+      'nuclear-reactor',
+      'roboport',
+      'space-platform-hub',
+      'stone-wall',
+      'assembling-machine-3',
+      'asteroid-collector',
+      'boiler',
+      'display-panel',
+      'electric-furnace',
+      'inserter',
+      'electric-mining-drill',
+      'offshore-pump',
+      'pipe-to-ground',
+      'pump',
+      'rocket-silo',
+      'splitter',
+      'storage-tank',
+      'train-stop',
+      'iron-chest',
+      'infinity-chest',
+      'passive-provider-chest',
+      'express-transport-belt',
+      'express-loader',
+      'heat-pipe',
+      'gun-turret',
+      'railgun-turret',
+      'flamethrower-turret',
+    ];
+    for (const name of supported) {
+      expect(prototypes.getEntity(name)?.circuitConnectorTopology, name).toBe('single-shared');
+    }
+
+    for (const name of [
+      'proxy-container',
+      'infinity-pipe',
+      'rail-signal',
+      'rail-chain-signal',
+      'power-switch',
+      'big-electric-pole',
+      'loader-1x1',
+      'cargo-pod-container',
+    ]) {
+      expect(prototypes.getEntity(name), name).not.toHaveProperty('circuitConnectorTopology');
+    }
+  });
+
   test('canonicalizes identity and collections without locale-sensitive collation', async () => {
     const raw = mutableFixture();
     const names = ['z', 'a_b', 'a0', 'a-b', 'a', 'A'];
